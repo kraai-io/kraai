@@ -1,0 +1,3 @@
+[workspace]
+members = ["ai-agent", "openwebui-client"]
+resolver = "3"

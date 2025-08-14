@@ -1,0 +1,26 @@
+[dependencies]
+reqwest = {version = "0.12", features = ["json"]}
+tokio = {version = "1.47", features = ["full"]}
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+anyhow = "1.0"
+url = "2.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[package]
+name = "openwebui-client"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.85.1"
+description = "A Rust client library for communicating with the Open WebUI API to use Large Language Models (LLMs)"
+license = "MIT"
+repository = "https://github.com/ominit/ai-agent"
+keywords = ["open-webui", "api", "llm", "chat", "ai"]
+categories = ["api-bindings", "web-programming"]

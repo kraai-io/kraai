@@ -1,0 +1,19 @@
+[[bin]]
+name = "ai-agent"
+path = "src/main.rs"
+
+[dependencies]
+openwebui-client = {path = "../openwebui-client"}
+tokio = {version = "1.47", features = ["full"]}
+anyhow = "1.0"
+dotenv = "0.15"
+regex = "1.11"
+serde_json = "1.0"
+
+[package]
+name = "ai-agent"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.85.1"
+description = "AI Agent application"
