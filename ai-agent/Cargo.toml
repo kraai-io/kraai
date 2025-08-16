@@ -1,9 +1,6 @@
-[[bin]]
-name = "ai-agent"
-path = "src/main.rs"
-
 [dependencies]
-openwebui-client = {path = "../openwebui-client"}
+llm-api-openwebui = {path = "../llm-api-openwebui"}
+llm-api-core = {path = "../llm-api-core"}
 tokio = {version = "1.47", features = ["full"]}
 anyhow = "1.0"
 dotenv = "0.15"

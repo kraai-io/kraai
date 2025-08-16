@@ -15,6 +15,7 @@
           cargo-edit
           cargo-msrv
           rust-bin.stable.latest.default
+          bun
 
           pkg-config
           openssl

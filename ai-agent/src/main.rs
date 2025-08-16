@@ -1,7 +1,8 @@
 mod tools;
 
 use anyhow::Result;
-use openwebui_client::{ChatCompletionRequest, ChatMessage, ChatRole, OpenWebUIClient};
+use llm_api_core::{ChatMessage, ChatRole, LLMClient};
+use llm_api_openwebui::OpenWebuiClient;
 
 struct AgentConfig {
     pub base_path: String,
@@ -10,13 +11,13 @@ struct AgentConfig {
 struct Agent {
     config: AgentConfig,
     messages: Vec<ChatMessage>,
-    client: OpenWebUIClient,
+    client: OpenWebuiClient,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Self {
-        let client = OpenWebUIClient::with_api_key(
-            std::env::var("OPEN_WEBUI_HOST").unwrap(),
+        let client = OpenWebuiClient::with_api_key(
+            &std::env::var("OPEN_WEBUI_HOST").unwrap(),
             std::env::var("OPEN_WEBUI_API_KEY").unwrap(),
         );
 
@@ -42,35 +43,24 @@ impl Agent {
             content: message.into(),
         });
 
-        let request = ChatCompletionRequest {
-            model: "gemma3:4b".to_string(),
-            // model: "qwen3:4b".to_string(),
-            // model: "models/gemini-2.5-flash".to_string(),
-            messages: messages.clone(),
-            temperature: None,
-            max_tokens: None,
-            stream: Some(false),
-        };
-
         let mut tool_called = false;
 
-        match self.client.chat_completion(request).await {
-            Ok(response) => {
-                if let Some(choice) = response.choices.first() {
+        match self
+            .client
+            .generate_reply("gemma3:4b".to_string(), messages.clone())
+            .await
+        {
+            Ok(message) => {
+                let tools = tools::parse_tool_calls(&message.content).unwrap();
+                messages.push(message);
+                tool_called = !tools.is_empty();
+                for (tool, params) in tools {
+                    // TODO: request tool call activation from user
+                    let res = tools::call_tool(&self.config, tool, params).await.unwrap();
                     messages.push(ChatMessage {
-                        role: ChatRole::Assistant,
-                        content: choice.message.content.clone(),
+                        role: ChatRole::User,
+                        content: res,
                     });
-                    let tools = tools::parse_tool_calls(&choice.message.content).unwrap();
-                    tool_called = !tools.is_empty();
-                    for (tool, params) in tools {
-                        // TODO: request tool call activation from user
-                        let res = tools::call_tool(&self.config, tool, params).await.unwrap();
-                        messages.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: res,
-                        });
-                    }
                 }
             }
             Err(e) => println!("Chat completion failed: {}", e),
@@ -90,35 +80,24 @@ impl Agent {
         }];
         messages.append(&mut self.messages);
 
-        let request = ChatCompletionRequest {
-            model: "gemma3:4b".to_string(),
-            // model: "qwen3:4b".to_string(),
-            // model: "models/gemini-2.5-flash".to_string(),
-            messages: messages.clone(),
-            temperature: None,
-            max_tokens: None,
-            stream: Some(false),
-        };
-
         let mut tool_called = false;
 
-        match self.client.chat_completion(request).await {
-            Ok(response) => {
-                if let Some(choice) = response.choices.first() {
+        match self
+            .client
+            .generate_reply("gemma3:4b".to_string(), messages.clone())
+            .await
+        {
+            Ok(message) => {
+                let tools = tools::parse_tool_calls(&message.content).unwrap();
+                messages.push(message);
+                tool_called = !tools.is_empty();
+                for (tool, params) in tools {
+                    // TODO: request tool call activation from user
+                    let res = tools::call_tool(&self.config, tool, params).await.unwrap();
                     messages.push(ChatMessage {
-                        role: ChatRole::Assistant,
-                        content: choice.message.content.clone(),
+                        role: ChatRole::User,
+                        content: res,
                     });
-                    let tools = tools::parse_tool_calls(&choice.message.content).unwrap();
-                    tool_called = !tools.is_empty();
-                    for (tool, params) in tools {
-                        // TODO: request tool call activation from user
-                        let res = tools::call_tool(&self.config, tool, params).await.unwrap();
-                        messages.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: res,
-                        });
-                    }
                 }
             }
             Err(e) => println!("Chat completion failed: {}", e),
