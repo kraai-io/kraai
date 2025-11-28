@@ -1,5 +1,5 @@
 {
-  description = "umm - universal mod manager";
+  description = "agent";
 
   outputs = inputs:
     inputs.flake-parts.lib.mkFlake {inherit inputs;} {
