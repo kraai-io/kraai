@@ -1,0 +1,163 @@
+.App {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  padding: 20px;
+  box-sizing: border-box;
+  gap: 20px;
+}
+
+h1 {
+  text-align: center;
+  margin: 0;
+  color: #333;
+}
+
+.main-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  min-height: 0;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 20px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.response-section {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  min-height: 0;
+}
+
+.response-container {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-height: 0;
+}
+
+.response-text {
+  flex-grow: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: #666;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+label {
+  margin-bottom: 5px;
+  font-weight: bold;
+  color: #555;
+}
+
+input[type="text"],
+textarea {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  padding: 10px 15px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+button:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.error {
+  color: red;
+  margin-top: 20px;
+}
+
+.response-container h2 {
+  color: #333;
+  margin-top: 0;
+}
+
+/* Dark Mode Styles */
+body.dark-mode {
+  background-color: #282c34;
+  color: #f0f0f0;
+}
+
+body.dark-mode h1,
+body.dark-mode h2 {
+  color: #f0f0f0;
+}
+
+body.dark-mode form,
+body.dark-mode .response-section {
+  background-color: #3a3f47;
+  border-color: #555;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+body.dark-mode label {
+  color: #ccc;
+}
+
+body.dark-mode input[type="text"],
+body.dark-mode textarea {
+  background-color: #4a4f57;
+  border-color: #666;
+  color: #f0f0f0;
+}
+
+body.dark-mode button {
+  background-color: #61dafb;
+  color: #282c34;
+}
+
+body.dark-mode button:hover:not(:disabled) {
+  background-color: #21a1f1;
+}
+
+body.dark-mode .response-container h2 {
+  color: #f0f0f0;
+}
+
+body.dark-mode .response-text {
+  color: #ccc;
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    grid-template-columns: 1fr;
+  }
+}

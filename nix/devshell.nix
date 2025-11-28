@@ -16,6 +16,7 @@
           cargo-msrv
           rust-bin.stable.latest.default
           bun
+          nodejs
 
           pkg-config
           openssl

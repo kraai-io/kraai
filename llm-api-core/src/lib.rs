@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
@@ -50,6 +51,16 @@ impl LLMManager {
         let client = self.clients.get(&client_id).unwrap();
         client.generate_reply(model_id, messages).await
     }
+
+    pub async fn generate_reply_stream<'a>(
+        &'a self,
+        client_id: ClientId,
+        model_id: ModelId,
+        messages: Vec<ChatMessage>,
+    ) -> Result<BoxStream<'a, Result<String>>> {
+        let client = self.clients.get(&client_id).unwrap();
+        client.generate_reply_stream(model_id, messages).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -61,6 +72,12 @@ pub trait LLMClient: Send + Sync {
         model_id: ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage>;
+
+    async fn generate_reply_stream<'a>(
+        &'a self,
+        model_id: ModelId,
+        messages: Vec<ChatMessage>,
+    ) -> Result<BoxStream<'a, Result<String>>>;
 
     async fn get_models(&self) -> Result<Vec<Model>>;
 }
