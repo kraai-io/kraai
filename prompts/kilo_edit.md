@@ -118,7 +118,7 @@ Parameters:
 
 - path: (required) The path of the directory to search in (relative to the current workspace directory c:\Users\ominit\Desktop\code\ai-agent). This directory will be recursively searched.
 - regex: (required) The regular expression pattern to search for. Uses Rust regex syntax.
-- file_pattern: (optional) Glob pattern to filter files (e.g., '_.ts' for TypeScript files). If not provided, it will search all files (_).
+- file*pattern: (optional) Glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (\_).
   Usage:
   <search_files>
   <path>Directory path here</path>
@@ -127,10 +127,10 @@ Parameters:
   </search_files>
 
 Example: Requesting to search for all .ts files in the current directory
-<search_files>
+<search*files>
 <path>.</path>
-<regex>._</regex>
-<file_pattern>_.ts</file_pattern>
+<regex>.*</regex>
+<file*pattern>*.ts</file_pattern>
 </search_files>
 
 ## list_files

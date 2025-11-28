@@ -1,16 +1,16 @@
-[dependencies]
-llm-api-openwebui = {path = "../llm-api-openwebui"}
-llm-api-core = {path = "../llm-api-core"}
-tokio = {version = "1.47", features = ["full"]}
-anyhow = "1.0"
-dotenv = "0.15"
-regex = "1.11"
-serde_json = "1.0"
-
 [package]
-name = "ai-agent"
-version = "0.1.0"
+description = "AI Agent application"
 edition = "2024"
+name = "ai-agent"
 publish = false
 rust-version = "1.85.1"
-description = "AI Agent application"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0"
+dotenv = "0.15"
+llm-api-core = { path = "../llm-api-core" }
+llm-api-openwebui = { path = "../llm-api-openwebui" }
+regex = "1.11"
+serde_json = "1.0"
+tokio = { features = ["full"], version = "1.47" }

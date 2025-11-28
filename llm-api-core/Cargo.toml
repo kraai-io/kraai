@@ -1,13 +1,13 @@
+[package]
+description = "Generic interface for LLM Usage"
+edition = "2024"
+name = "llm-api-core"
+publish = false
+rust-version = "1.85.1"
+version = "0.1.0"
+
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
 futures = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-
-[package]
-name = "llm-api-core"
-version = "0.1.0"
-edition = "2024"
-publish = false
-rust-version = "1.85.1"
-description = "Generic interface for LLM Usage"
+serde = { features = ["derive"], version = "1.0" }

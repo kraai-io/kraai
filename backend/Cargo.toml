@@ -1,20 +1,20 @@
-[dependencies]
-llm-api-openwebui = { path = "../llm-api-openwebui" }
-llm-api-core = { path = "../llm-api-core" }
-tokio = { version = "1.47", features = ["full"] }
-anyhow = "1.0"
-dotenv = "0.15"
-regex = "1.11"
-futures = "0.3"
-serde_json = "1.0"
-axum = { version = "0.8", features = ["macros"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1.0", features = ["derive"] }
-
 [package]
-name = "backend"
-version = "0.1.0"
 edition = "2024"
+name = "backend"
 publish = false
 rust-version = "1.85.1"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0"
+axum = { features = ["macros"], version = "0.8" }
+dotenv = "0.15"
+futures = "0.3"
+llm-api-core = { path = "../llm-api-core" }
+llm-api-openwebui = { path = "../llm-api-openwebui" }
+regex = "1.11"
+serde = { features = ["derive"], version = "1.0" }
+serde_json = "1.0"
+tokio = { features = ["full"], version = "1.47" }
+tracing = "0.1"
+tracing-subscriber = { features = ["env-filter"], version = "0.3" }

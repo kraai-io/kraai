@@ -1,36 +1,38 @@
-import { useState, useEffect } from 'react';
-import './App.css';
+import { useState, useEffect } from "react";
+import "./App.css";
 
 function App() {
   const [isDarkMode] = useState(true);
 
   useEffect(() => {
     if (isDarkMode) {
-      document.body.classList.add('dark-mode');
+      document.body.classList.add("dark-mode");
     } else {
-      document.body.classList.remove('dark-mode');
+      document.body.classList.remove("dark-mode");
     }
   }, [isDarkMode]);
 
-  const [client, setClient] = useState('open-webui');
-  const [model, setModel] = useState('gemma3:4b');
-  const [systemPrompt, setSystemPrompt] = useState('You are a helpful AI assistant.');
-  const [userMessage, setUserMessage] = useState('Hello, how are you?');
-  const [response, setResponse] = useState('');
+  const [client, setClient] = useState("open-webui");
+  const [model, setModel] = useState("gemma3:4b");
+  const [systemPrompt, setSystemPrompt] = useState(
+    "You are a helpful AI assistant.",
+  );
+  const [userMessage, setUserMessage] = useState("Hello, how are you?");
+  const [response, setResponse] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
-    setResponse('');
+    setError("");
+    setResponse("");
 
     try {
-      const res = await fetch('http://localhost:8080/api/generate-stream', {
-        method: 'POST',
+      const res = await fetch("http://localhost:8080/api/generate-stream", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           client,
@@ -46,11 +48,11 @@ function App() {
 
       const reader = res.body?.getReader();
       if (!reader) {
-        throw new Error('Failed to get reader from response body.');
+        throw new Error("Failed to get reader from response body.");
       }
 
       const decoder = new TextDecoder();
-      let accumulatedResponse = '';
+      let accumulatedResponse = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -60,20 +62,22 @@ function App() {
         const chunk = decoder.decode(value, { stream: true });
         // SSE events are prefixed with "data: " and end with "\\n\\n"
         // We need to parse each event
-        chunk.split('\n').forEach(eventString => {
-          if (eventString.startsWith('data: ')) {
+        chunk.split("\n").forEach((eventString) => {
+          if (eventString.startsWith("data: ")) {
             const data = eventString.substring(6);
-            if (data === '[DONE]') {
+            if (data === "[DONE]") {
               // This is the end of the stream
               return;
             }
             accumulatedResponse += data;
             setResponse(accumulatedResponse);
-          } else if (eventString.startsWith('event: complete')) {
+          } else if (eventString.startsWith("event: complete")) {
             // This is the custom 'complete' event from the backend
             return;
-          } else if (eventString.startsWith('event: error')) {
-            const errorData = eventString.substring(eventString.indexOf('data: ') + 6);
+          } else if (eventString.startsWith("event: error")) {
+            const errorData = eventString.substring(
+              eventString.indexOf("data: ") + 6,
+            );
             setError(`Stream error: ${errorData}`);
             return;
           }
@@ -132,7 +136,7 @@ function App() {
             ></textarea>
           </div>
           <button type="submit" disabled={loading}>
-            {loading ? 'Generating...' : 'Generate Response'}
+            {loading ? "Generating..." : "Generate Response"}
           </button>
         </form>
 
@@ -141,7 +145,7 @@ function App() {
           {error && <p className="error">Error: {error}</p>}
           <div className="response-container">
             <p className="response-text">
-              {response || 'Waiting for response...'}
+              {response || "Waiting for response..."}
             </p>
           </div>
         </div>

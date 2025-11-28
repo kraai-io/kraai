@@ -1,3 +1,3 @@
 [workspace]
-members = ["ai-agent", "llm-api-core", "llm-api-openwebui", "backend"]
+members = ["ai-agent", "backend", "llm-api-core", "llm-api-openwebui"]
 resolver = "3"
