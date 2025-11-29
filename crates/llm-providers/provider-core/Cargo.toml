@@ -1,8 +1,8 @@
 [package]
 description = "Generic interface for LLM Usage"
+edition.workspace = true
 name = "provider-core"
 publish = false
-edition.workspace = true
 rust-version.workspace = true
 version = "0.1.0"
 
