@@ -15,6 +15,7 @@
           cargo-edit
           cargo-msrv
           rust-bin.stable.latest.default
+          rust-analyzer
           bun
           nodejs
 

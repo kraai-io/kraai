@@ -10,7 +10,7 @@ version = "0.1.0"
 anyhow = "1.0"
 dotenv = "0.15"
 llm-api-core = { path = "../llm-api-core" }
-llm-api-openwebui = { path = "../llm-api-openwebui" }
-regex = "1.11"
+llm-api-local = { path = "../llm-api-local" }
+regex = "1.12"
 serde_json = "1.0"
-tokio = { features = ["full"], version = "1.47" }
+tokio = { features = ["full"], version = "1.48" }

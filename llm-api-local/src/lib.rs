@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use futures::stream::{BoxStream, StreamExt};
-use llm_api_core::{ChatMessage, ClientId, LLMClient, Model, ModelId};
+use llm_api_core::{ChatMessage, ClientId, Model, ModelId, Provider};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -96,7 +96,7 @@ impl OpenWebuiClient {
 }
 
 #[async_trait::async_trait]
-impl LLMClient for OpenWebuiClient {
+impl Provider for OpenWebuiClient {
     fn get_client_id(&self) -> ClientId {
         OPEN_WEBUI_CLIENT_ID.to_string()
     }

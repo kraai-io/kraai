@@ -7,7 +7,9 @@ rust-version = "1.85.1"
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0"
 async-trait = "0.1"
+color-eyre = "0.6.5"
 futures = "0.3"
 serde = { features = ["derive"], version = "1.0" }
+toml = "0.9.8"
+toon-format = "0.4.0"
