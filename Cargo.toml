@@ -1,3 +1,7 @@
 [workspace]
-members = ["cli", "llm-api-core", "llm-api-local"]
+members = [
+	"crates/cli",
+	"crates/llm-providers/provider-core",
+	"crates/llm-providers/provider-mistralrs",
+]
 resolver = "3"

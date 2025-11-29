@@ -1,6 +1,6 @@
 [package]
 edition = "2024"
-name = "llm-api-local"
+name = "provider-mistralrs"
 publish = false
 rust-version = "1.85.1"
 version = "0.1.0"
@@ -9,7 +9,7 @@ version = "0.1.0"
 anyhow = "1.0"
 async-trait = "0.1"
 futures = "0.3"
-llm-api-core = { path = "../llm-api-core" }
+provider-core = { path = "../provider-core" }
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }
 reqwest = { features = ["json", "stream"], version = "0.12" }
 serde = { features = ["derive"], version = "1.0" }

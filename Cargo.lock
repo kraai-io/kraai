@@ -51,19 +51,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dotenv",
- "llm-api-core",
- "llm-api-local",
- "regex",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "akin"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,6 +564,17 @@ name = "clap_lex"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
+
+[[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenv",
+ "regex",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "clipboard-win"
@@ -2325,35 +2323,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llm-api-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "color-eyre",
- "futures",
- "serde",
- "toml 0.9.8",
- "toon-format",
-]
-
-[[package]]
-name = "llm-api-local"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "llm-api-core",
- "mistralrs",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-test",
- "url",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3347,6 +3316,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "provider-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "futures",
+ "serde",
+ "toml 0.9.8",
+ "toon-format",
+]
+
+[[package]]
+name = "provider-mistralrs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "mistralrs",
+ "provider-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "url",
 ]
 
 [[package]]
