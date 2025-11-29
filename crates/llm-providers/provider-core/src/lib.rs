@@ -30,19 +30,19 @@ pub struct ProviderManagerConfig {
 
 #[derive(Deserialize, Serialize)]
 pub struct ModelConfig {
-    id: ModelId,
+    pub id: ModelId,
     provider_id: ProviderId,
-    max_context: Option<usize>,
+    pub max_context: Option<usize>,
     #[serde(flatten)]
-    config: toml::Value,
+    pub config: toml::Value,
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct ProviderConfig {
-    id: ProviderId,
+    pub id: ProviderId,
     r#type: String,
     #[serde(flatten)]
-    config: toml::Value,
+    pub config: toml::Value,
 }
 
 pub trait ProviderFactory {
@@ -133,12 +133,12 @@ impl ProviderManager {
 
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
-    /// Unique identifier for this provider (ex: openai, mistral_local).
+    ///Unique identifier for this provider (ex: openai, mistral_local).
     fn get_provider_id(&self) -> ProviderId;
 
     async fn list_models(&self) -> Result<Vec<Model>>;
 
-    async fn register_model(&mut self, model: ModelConfig);
+    async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
     async fn generate_reply(
         &self,
@@ -162,7 +162,6 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
-    pub supports_streaming: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
