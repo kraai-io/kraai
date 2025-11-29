@@ -1,15 +1,14 @@
 [package]
 description = "Generic interface for LLM Usage"
-edition = "2024"
 name = "provider-core"
 publish = false
-rust-version = "1.85.1"
+edition.workspace = true
+rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-async-trait = "0.1"
-color-eyre = "0.6.5"
-futures = "0.3"
-serde = { features = ["derive"], version = "1.0" }
-toml = "0.9.8"
-toon-format = "0.4.0"
+async-trait = { workspace = true }
+color-eyre = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

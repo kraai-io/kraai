@@ -1,16 +1,11 @@
 [package]
 description = "AI Agent application"
-edition = "2024"
 name = "cli"
 publish = false
-rust-version = "1.85.1"
+edition.workspace = true
+rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0"
-dotenv = "0.15"
-# llm-api-core = { path = "../llm-api-core" }
-# llm-api-local = { path = "../llm-api-local" }
-regex = "1.12"
-serde_json = "1.0"
-tokio = { features = ["full"], version = "1.48" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
