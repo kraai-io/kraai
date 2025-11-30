@@ -1,12 +1,12 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use color_eyre::Result;
 use futures::stream::{self, BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 pub struct ProviderManager {
-    providers: BTreeMap<ProviderId, Arc<dyn Provider>>,
-    models: BTreeMap<ModelId, Model>,
+    pub providers: BTreeMap<ProviderId, Box<dyn Provider>>,
+    pub models: BTreeMap<ModelId, Model>,
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
@@ -24,7 +24,9 @@ type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn P
 
 #[derive(Deserialize, Serialize)]
 pub struct ProviderManagerConfig {
+    #[serde(default, rename = "provider")]
     providers: Vec<ProviderConfig>,
+    #[serde(default, rename = "model")]
     models: Vec<ModelConfig>,
 }
 
@@ -74,7 +76,7 @@ impl ProviderManager {
             .map(|x| {
                 Ok((
                     x.id.clone(),
-                    Arc::from(self
+                    Box::from(self
                         .factory_registry
                         .get(&x.r#type)
                         .expect(&format!("unknown provider: {:#?}", x.r#type))(
@@ -82,17 +84,20 @@ impl ProviderManager {
                     )?),
                 ))
             })
-            .collect::<Result<Vec<(ProviderId, Arc<dyn Provider>)>>>()?;
+            .collect::<Result<Vec<(ProviderId, Box<dyn Provider>)>>>()?;
         self.providers.extend(providers);
+
+        for m in config.models {
+            self.providers
+                .get_mut(&m.provider_id)
+                .unwrap()
+                .register_model(m)
+                .await?;
+        }
 
         self.update_models_list().await;
 
         Ok(())
-    }
-
-    pub fn add_provider(&mut self, client: impl Provider + 'static) {
-        let provider_id = client.get_provider_id();
-        self.providers.insert(provider_id, Arc::new(client));
     }
 
     pub fn list_all_models(&self) -> Vec<&Model> {
@@ -111,22 +116,22 @@ impl ProviderManager {
     }
 
     pub async fn generate_reply(
-        &self,
+        &mut self,
         client_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let client = self.providers.get(&client_id).unwrap();
+        let client = self.providers.get_mut(&client_id).unwrap();
         client.generate_reply(model_id, messages).await
     }
 
     pub async fn generate_reply_stream<'a>(
-        &'a self,
+        &'a mut self,
         client_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'a, Result<String>>> {
-        let client = self.providers.get(&client_id).unwrap();
+        let client = self.providers.get_mut(&client_id).unwrap();
         client.generate_reply_stream(model_id, messages).await
     }
 }
@@ -141,13 +146,13 @@ pub trait Provider: Send + Sync {
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
     async fn generate_reply(
-        &self,
+        &mut self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage>;
 
     async fn generate_reply_stream(
-        &self,
+        &mut self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>>;
