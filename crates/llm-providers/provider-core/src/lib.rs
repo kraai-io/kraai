@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 pub struct ProviderManager {
     pub providers: BTreeMap<ProviderId, Box<dyn Provider>>,
-    pub models: BTreeMap<ModelId, Model>,
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
@@ -14,7 +13,6 @@ impl Default for ProviderManager {
     fn default() -> Self {
         Self {
             providers: BTreeMap::new(),
-            models: BTreeMap::new(),
             factory_registry: BTreeMap::new(),
         }
     }
@@ -32,9 +30,7 @@ pub struct ProviderManagerConfig {
 
 #[derive(Deserialize, Serialize)]
 pub struct ModelConfig {
-    pub id: ModelId,
     provider_id: ProviderId,
-    pub max_context: Option<usize>,
     #[serde(flatten)]
     pub config: toml::Value,
 }
@@ -95,24 +91,23 @@ impl ProviderManager {
                 .await?;
         }
 
-        self.update_models_list().await;
+        self.update_models_list().await?;
 
         Ok(())
     }
 
-    pub fn list_all_models(&self) -> Vec<&Model> {
-        self.models.values().collect()
+    pub fn list_all_models(&self) -> Vec<Model> {
+        self.providers
+            .values()
+            .flat_map(|x| x.list_models())
+            .collect()
     }
 
-    pub async fn update_models_list(&mut self) {
-        self.models = stream::iter(self.providers.values())
-            .map(|x| x.list_models())
-            .buffer_unordered(self.providers.len())
-            .flat_map(stream::iter)
-            .flat_map(stream::iter)
-            .map(|x| (x.id.clone(), x))
-            .collect::<BTreeMap<ModelId, Model>>()
-            .await;
+    pub async fn update_models_list(&mut self) -> Result<()> {
+        for p in self.providers.values_mut() {
+            p.cache_models().await?;
+        }
+        Ok(())
     }
 
     pub async fn generate_reply(
@@ -141,7 +136,9 @@ pub trait Provider: Send + Sync {
     ///Unique identifier for this provider (ex: openai, mistral_local).
     fn get_provider_id(&self) -> ProviderId;
 
-    async fn list_models(&self) -> Result<Vec<Model>>;
+    fn list_models(&self) -> Vec<Model>;
+
+    async fn cache_models(&mut self) -> Result<()>;
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 

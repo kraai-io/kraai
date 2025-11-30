@@ -14,7 +14,13 @@ rust-version = "1.87.0"
 provider-core = { path = "./crates/llm-providers/provider-core" }
 provider-google = { path = "./crates/llm-providers/provider-google" }
 
-llm = { version = "1.3.6", features = ["google"] }
+async-openai = { version = "0.31.1", features = [
+	"byot",
+	"chat-completion",
+	"image",
+	"embedding",
+	"model",
+] }
 llm-toolkit = "0.58.0"
 async-trait = "0.1.89"
 color-eyre = "0.6.5"

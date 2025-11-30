@@ -1,24 +1,22 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
-use color_eyre::eyre::{Result, eyre};
+use async_openai::{Client, config::OpenAIConfig};
+use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
 use provider_core::{
-    ChatMessage, ChatRole, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
+    ChatMessage, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
 };
 use serde::Deserialize;
 
-const PROVIDER_ID: &str = "google";
-
 pub struct GoogleProvider {
     id: ProviderId,
-    models: BTreeMap<ModelId, GoogleModel>,
+    cached_models: BTreeMap<ModelId, Model>,
+    model_configs: BTreeMap<ModelId, GoogleModelConfig>,
     config: GoogleConfig,
+    client: Client<OpenAIConfig>,
 }
 
-pub struct GoogleModel {
-    model: Model,
-    config: GoogleModelConfig,
-}
+impl GoogleProvider {}
 
 #[async_trait::async_trait]
 impl Provider for GoogleProvider {
@@ -26,19 +24,44 @@ impl Provider for GoogleProvider {
         self.id.clone()
     }
 
-    async fn list_models(&self) -> Result<Vec<Model>> {
-        Ok(self.models.values().map(|x| x.model.clone()).collect())
+    fn list_models(&self) -> Vec<Model> {
+        self.cached_models.values().cloned().collect()
+    }
+
+    async fn cache_models(&mut self) -> Result<()> {
+        self.cached_models.clear();
+        let models_raw: ListGeminiModelResponse = self.client.models().list_byot().await?;
+
+        for model in models_raw.data {
+            let id = model.id.replace("models/", "");
+            let contains = self.model_configs.contains_key(&id);
+            if self.config.only_listed_models && !contains {
+                continue;
+            }
+            let mut name = model.display_name;
+            let mut max_context = None;
+            if contains {
+                let m = self.model_configs.get(&id).unwrap();
+                max_context = m.max_context;
+                if m.name.is_some() {
+                    name = m.name.as_ref().unwrap().clone();
+                }
+            }
+            self.cached_models.insert(
+                id.clone(),
+                Model {
+                    id,
+                    name,
+                    max_context,
+                },
+            );
+        }
+        Ok(())
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
-        let config = model.config.try_into()?;
-        let model = Model {
-            id: model.id.clone(),
-            name: model.id,
-            max_context: model.max_context,
-        };
-        self.models
-            .insert(model.id.clone(), GoogleModel { model, config });
+        let config: GoogleModelConfig = model.config.try_into()?;
+        self.model_configs.insert(config.id.clone(), config);
         Ok(())
     }
 
@@ -47,7 +70,8 @@ impl Provider for GoogleProvider {
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let model = self.models.get_mut(model_id).unwrap();
+        println!("{:#?}", self.cached_models.values());
+        let model = self.cached_models.get_mut(model_id).unwrap();
         todo!()
     }
 
@@ -62,25 +86,49 @@ impl Provider for GoogleProvider {
 
 #[derive(Deserialize)]
 pub struct GoogleModelConfig {
-    path: String,
+    pub id: ModelId,
+    pub name: Option<String>,
+    pub max_context: Option<usize>,
 }
 
 #[derive(Deserialize)]
-pub struct GoogleConfig {}
+pub struct GoogleConfig {
+    #[serde(default)]
+    pub only_listed_models: bool,
+}
 
 pub struct GoogleFactory {}
 
 impl ProviderFactory for GoogleFactory {
-    const TYPE: &'static str = PROVIDER_ID;
+    const TYPE: &'static str = "google";
 
     type Config = GoogleConfig;
 
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
+        let base_url = "https://generativelanguage.googleapis.com/v1beta/openai";
+        let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
+        let cconfig = OpenAIConfig::new()
+            .with_api_base(base_url)
+            .with_api_key(api_key);
+        let client = Client::with_config(cconfig);
         let provider = GoogleProvider {
             id,
-            models: BTreeMap::new(),
+            cached_models: BTreeMap::new(),
+            model_configs: BTreeMap::new(),
             config,
+            client,
         };
         Ok(Box::new(provider))
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListGeminiModelResponse {
+    pub data: Vec<GeminiModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiModel {
+    pub id: String,
+    pub display_name: String,
 }

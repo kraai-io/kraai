@@ -6,7 +6,7 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-llm = { workspace = true }
+async-openai = { workspace = true }
 provider-core = { workspace = true }
 async-trait = { workspace = true }
 color-eyre = { workspace = true }

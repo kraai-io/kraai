@@ -10,10 +10,12 @@ async fn main() -> Result<()> {
     let config = toml::from_slice(&config_slice)?;
     manager.load_config(config).await?;
 
-    println!("{:#?}", manager.list_all_models());
-
     let result = manager
-        .generate_reply("google".to_string(), &"gemini".to_string(), vec![])
+        .generate_reply(
+            "google".to_string(),
+            &"gemini-2.0-flash".to_string(),
+            vec![],
+        )
         .await?;
     println!("{:#?}", result);
     Ok(())
