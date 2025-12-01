@@ -1,14 +1,10 @@
 use std::collections::BTreeMap;
 
-use async_openai::{
-    Client,
-    config::OpenAIConfig,
-    types::chat::{ChatCompletionRequestMessage, CreateChatCompletionRequestArgs},
-};
+use async_openai::{Client, config::OpenAIConfig};
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use provider_core::{
-    ChatMessage, ChatRole, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
+    ChatMessage, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
 };
 use serde::Deserialize;
 

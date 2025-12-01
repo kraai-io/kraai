@@ -941,7 +941,6 @@ dependencies = [
  "provider-core",
  "serde",
  "serde_json",
- "toml",
 ]
 
 [[package]]

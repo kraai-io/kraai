@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use color_eyre::Result;
-use futures::stream::{self, BoxStream, StreamExt};
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 pub struct ProviderManager {
