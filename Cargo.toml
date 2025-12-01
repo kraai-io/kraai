@@ -17,8 +17,6 @@ provider-google = { path = "./crates/llm-providers/provider-google" }
 async-openai = { version = "0.31.1", features = [
 	"byot",
 	"chat-completion",
-	"image",
-	"embedding",
 	"model",
 ] }
 llm-toolkit = "0.58.0"

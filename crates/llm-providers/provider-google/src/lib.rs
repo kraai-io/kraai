@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
 
-use async_openai::{Client, config::OpenAIConfig};
+use async_openai::{
+    Client,
+    config::OpenAIConfig,
+    types::chat::{ChatCompletionRequestMessage, CreateChatCompletionRequestArgs},
+};
 use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
 use provider_core::{
-    ChatMessage, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
+    ChatMessage, ChatRole, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
 };
 use serde::Deserialize;
 
@@ -70,8 +74,13 @@ impl Provider for GoogleProvider {
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        println!("{:#?}", self.cached_models.values());
         let model = self.cached_models.get_mut(model_id).unwrap();
+
+        let request = serde_json::json!({
+            "model": model_id,
+            "messages": serde_json::to_value(messages)?
+        });
+        let response = self.client.chat().create_byot(request).await?;
         todo!()
     }
 

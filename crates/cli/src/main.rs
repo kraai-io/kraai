@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use provider_core::ProviderManager;
+use provider_core::{ChatMessage, ChatRole, ProviderManager};
 use provider_google::GoogleFactory;
 
 #[tokio::main]
@@ -14,7 +14,10 @@ async fn main() -> Result<()> {
         .generate_reply(
             "google".to_string(),
             &"gemini-2.0-flash".to_string(),
-            vec![],
+            vec![ChatMessage {
+                role: ChatRole::User,
+                content: "hi".to_string(),
+            }],
         )
         .await?;
     println!("{:#?}", result);
