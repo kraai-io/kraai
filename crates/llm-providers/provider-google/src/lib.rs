@@ -5,7 +5,7 @@ use async_openai::{
     config::OpenAIConfig,
     types::chat::{ChatCompletionRequestMessage, CreateChatCompletionRequestArgs},
 };
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use provider_core::{
     ChatMessage, ChatRole, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
@@ -74,14 +74,29 @@ impl Provider for GoogleProvider {
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let model = self.cached_models.get_mut(model_id).unwrap();
+        if !self.cached_models.contains_key(model_id) {
+            self.cache_models().await?;
+            if !self.cached_models.contains_key(model_id) {
+                return Err(eyre!("unable to find model {}", model_id));
+            }
+        }
 
         let request = serde_json::json!({
             "model": model_id,
             "messages": serde_json::to_value(messages)?
         });
-        let response = self.client.chat().create_byot(request).await?;
-        todo!()
+        let response: serde_json::Value = self.client.chat().create_byot(request).await?;
+        let message = response["choices"][0]["message"].as_object().unwrap();
+        let content = message
+            .get("content")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let role = serde_json::from_value(message.get("role").unwrap().clone())?;
+        let message = ChatMessage { content, role };
+
+        Ok(message)
     }
 
     async fn generate_reply_stream(
