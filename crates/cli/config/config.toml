@@ -1,7 +1,7 @@
 [[provider]]
 id = "google"
-type = "google"
 only_listed_models = true
+type = "google"
 
 [[model]]
 id = "gemini-2.0-flash"
