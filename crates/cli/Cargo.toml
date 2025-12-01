@@ -8,6 +8,7 @@ version = "0.1.0"
 
 [dependencies]
 color-eyre = { workspace = true }
+futures = { workspace = true }
 provider-core = { workspace = true }
 provider-google = { workspace = true }
 tokio = { workspace = true }

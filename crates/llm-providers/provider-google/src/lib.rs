@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use async_openai::{Client, config::OpenAIConfig};
 use color_eyre::eyre::{Result, eyre};
-use futures::stream::BoxStream;
+use futures::{StreamExt, stream::BoxStream};
 use provider_core::{
     ChatMessage, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
 };
@@ -97,10 +97,37 @@ impl Provider for GoogleProvider {
 
     async fn generate_reply_stream(
         &mut self,
-        _model_id: &ModelId,
-        _messages: Vec<ChatMessage>,
+        model_id: &ModelId,
+        messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>> {
-        todo!()
+        if !self.cached_models.contains_key(model_id) {
+            self.cache_models().await?;
+            if !self.cached_models.contains_key(model_id) {
+                return Err(eyre!("unable to find model {}", model_id));
+            }
+        }
+
+        let request = serde_json::json!({
+            "model": model_id,
+            "messages": serde_json::to_value(messages)?,
+            "stream": true
+        });
+        let stream: BoxStream<Result<String>> = self
+            .client
+            .chat()
+            .create_stream_byot(request)
+            .await?
+            .map(|x| {
+                x.map_err(|e| eyre!(e)).and_then(|x: serde_json::Value| {
+                    Ok(x["choices"][0]["delta"]["content"]
+                        .as_str()
+                        .unwrap()
+                        .to_string())
+                })
+            })
+            .boxed();
+
+        Ok(stream)
     }
 }
 

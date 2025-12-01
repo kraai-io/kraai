@@ -1,4 +1,5 @@
 use color_eyre::eyre::Result;
+use futures::StreamExt;
 use provider_core::{ChatMessage, ChatRole, ProviderManager};
 use provider_google::GoogleFactory;
 
@@ -10,8 +11,8 @@ async fn main() -> Result<()> {
     let config = toml::from_slice(&config_slice)?;
     manager.load_config(config).await?;
 
-    let result = manager
-        .generate_reply(
+    let mut result = manager
+        .generate_reply_stream(
             "google".to_string(),
             &"gemini-2.0-flash".to_string(),
             vec![ChatMessage {
@@ -20,6 +21,8 @@ async fn main() -> Result<()> {
             }],
         )
         .await?;
-    println!("{:#?}", result);
+    while let Some(s) = result.next().await {
+        println!("{:#?}", s?);
+    }
     Ok(())
 }
