@@ -1,7 +1,8 @@
 use color_eyre::eyre::Result;
 use futures::StreamExt;
-use provider_core::{ChatMessage, ChatRole, ProviderManager};
+use provider_core::ProviderManager;
 use provider_google::GoogleFactory;
+use types::{ChatMessage, ChatRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use color_eyre::Result;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+use types::ChatMessage;
 
 #[derive(Default)]
 pub struct ProviderManager {
@@ -156,22 +157,4 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ChatRole {
-    #[serde(rename = "system")]
-    System,
-    #[serde(rename = "user")]
-    User,
-    #[serde(rename = "assistant")]
-    Assistant,
-    #[serde(rename = "tool")]
-    Tool,
 }

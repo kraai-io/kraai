@@ -3,6 +3,8 @@ members = [
   "crates/cli",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
+  "crates/tools/tool-core",
+  "crates/types",
 ]
 resolver = "3"
 
@@ -11,8 +13,10 @@ edition = "2024"
 rust-version = "1.87.0"
 
 [workspace.dependencies]
-provider-core = { path = "./crates/llm-providers/provider-core" }
-provider-google = { path = "./crates/llm-providers/provider-google" }
+provider-core = { path = "crates/llm-providers/provider-core" }
+provider-google = { path = "crates/llm-providers/provider-google" }
+tool-core = { path = "crates/tools/tool-core" }
+types = { path = "crates/types" }
 
 async-openai = { version = "0.31.1", features = [
   "byot",

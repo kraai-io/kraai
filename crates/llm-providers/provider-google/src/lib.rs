@@ -3,10 +3,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_openai::{Client, config::OpenAIConfig};
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
-use provider_core::{
-    ChatMessage, Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId,
-};
+use provider_core::{Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId};
 use serde::Deserialize;
+use types::ChatMessage;
 
 pub struct GoogleProvider {
     id: ProviderId,
