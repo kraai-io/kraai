@@ -4,19 +4,12 @@ use color_eyre::Result;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+#[derive(Default)]
 pub struct ProviderManager {
     pub providers: BTreeMap<ProviderId, Box<dyn Provider>>,
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
-impl Default for ProviderManager {
-    fn default() -> Self {
-        Self {
-            providers: BTreeMap::new(),
-            factory_registry: BTreeMap::new(),
-        }
-    }
-}
 
 type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>>>;
 
@@ -72,10 +65,10 @@ impl ProviderManager {
             .map(|x| {
                 Ok((
                     x.id.clone(),
-                    Box::from(self
+                    (self
                         .factory_registry
                         .get(&x.r#type)
-                        .expect(&format!("unknown provider: {:#?}", x.r#type))(
+                        .unwrap_or_else(|| panic!("unknown provider: {:#?}", x.r#type))(
                         x.id, x.config,
                     )?),
                 ))

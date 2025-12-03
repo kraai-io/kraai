@@ -118,12 +118,10 @@ impl Provider for GoogleProvider {
             .create_stream_byot(request)
             .await?
             .map(|x| {
-                x.map_err(|e| eyre!(e)).and_then(|x: serde_json::Value| {
-                    Ok(x["choices"][0]["delta"]["content"]
+                x.map_err(|e| eyre!(e)).map(|x: serde_json::Value| x["choices"][0]["delta"]["content"]
                         .as_str()
                         .unwrap()
                         .to_string())
-                })
             })
             .boxed();
 
