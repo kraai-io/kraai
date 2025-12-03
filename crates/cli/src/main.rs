@@ -13,8 +13,8 @@ async fn main() -> Result<()> {
 
     let mut result = manager
         .generate_reply_stream(
-            "google".to_string(),
-            &"gemini-2.0-flash".to_string(),
+            "google".to_string().into(),
+            &"gemini-2.0-flash".to_string().into(),
             vec![ChatMessage {
                 role: ChatRole::User,
                 content: "hi".to_string(),

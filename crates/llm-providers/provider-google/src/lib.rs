@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_openai::{Client, config::OpenAIConfig};
 use color_eyre::eyre::{Result, eyre};
@@ -33,7 +33,7 @@ impl Provider for GoogleProvider {
         let models_raw: ListGeminiModelResponse = self.client.models().list_byot().await?;
 
         for model in models_raw.data {
-            let id = model.id.replace("models/", "");
+            let id = Arc::new(model.id.replace("models/", ""));
             let contains = self.model_configs.contains_key(&id);
             if self.config.only_listed_models && !contains {
                 continue;
@@ -118,10 +118,12 @@ impl Provider for GoogleProvider {
             .create_stream_byot(request)
             .await?
             .map(|x| {
-                x.map_err(|e| eyre!(e)).map(|x: serde_json::Value| x["choices"][0]["delta"]["content"]
+                x.map_err(|e| eyre!(e)).map(|x: serde_json::Value| {
+                    x["choices"][0]["delta"]["content"]
                         .as_str()
                         .unwrap()
-                        .to_string())
+                        .to_string()
+                })
             })
             .boxed();
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use color_eyre::Result;
 use futures::stream::BoxStream;
@@ -9,7 +9,6 @@ pub struct ProviderManager {
     pub providers: BTreeMap<ProviderId, Box<dyn Provider>>,
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
-
 
 type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>>>;
 
@@ -148,9 +147,9 @@ pub trait Provider: Send + Sync {
     ) -> Result<BoxStream<'static, Result<String>>>;
 }
 
-pub type ProviderId = String;
+pub type ProviderId = Arc<String>;
 
-pub type ModelId = String;
+pub type ModelId = Arc<String>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
