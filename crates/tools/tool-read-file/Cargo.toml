@@ -1,10 +1,11 @@
 [package]
-edition.workspace = true
-name = "tool-core"
-rust-version.workspace = true
+name = "tool-read-file"
 version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
+tool-core = { workspace = true }
 toon-format = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }

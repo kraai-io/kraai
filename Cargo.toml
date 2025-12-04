@@ -3,7 +3,7 @@ members = [
   "crates/cli",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
-  "crates/tools/tool-core",
+  "crates/tools/tool-core", "crates/tools/tool-read-file",
   "crates/types",
 ]
 resolver = "3"
@@ -16,6 +16,7 @@ rust-version = "1.87.0"
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-google = { path = "crates/llm-providers/provider-google" }
 tool-core = { path = "crates/tools/tool-core" }
+tool-read-file = {path = "crates/tools/tool-read-file"}
 types = { path = "crates/types" }
 
 async-openai = { version = "0.31.1", features = [

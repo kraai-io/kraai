@@ -6,4 +6,3 @@ version = "0.1.0"
 
 [dependencies]
 serde = { workspace = true }
-toon-format = { workspace = true }
