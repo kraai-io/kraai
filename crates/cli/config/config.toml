@@ -1,8 +1,19 @@
+# [[provider]]
+# id = "google"
+# only_listed_models = true
+# type = "google"
+
+# [[model]]
+# id = "gemini-2.5-flash-lite"
+# provider_id = "google"
+
 [[provider]]
-id = "google"
+id = "open-webui"
 only_listed_models = true
-type = "google"
+type = "openai"
+env_var_api_key = "OPEN_WEBUI_API_KEY"
+base_url = "https://open-webui.42nd.net/api"
 
 [[model]]
-id = "gemini-2.0-flash"
-provider_id = "google"
+id = "qwen3:0.6b"
+provider_id = "open-webui"

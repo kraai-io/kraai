@@ -1,38 +1,54 @@
 [workspace]
 members = [
-  "crates/cli",
-  "crates/llm-providers/provider-core",
-  "crates/llm-providers/provider-google",
-  "crates/tools/tool-core",
-  "crates/tools/tool-read-file",
-  "crates/types",
+    "crates/cli",
+    "crates/llm-providers/provider-core",
+    "crates/llm-providers/provider-google",
+    "crates/llm-providers/provider-openai",
+    "crates/tools/tool-core",
+    "crates/tools/tool-read-file",
+    "crates/types",
 ]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.87.0"
+rust-version = "1.88.0"
+
+[profile.release]
+codegen-units = 1 # Allows compiler to perform better optimization.
+lto = true        # Enables Link-time Optimization.
+opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
+strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-google = { path = "crates/llm-providers/provider-google" }
+provider-openai = { path = "crates/llm-providers/provider-openai" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
 types = { path = "crates/types" }
 
 async-openai = { version = "0.31.1", features = [
-  "byot",
-  "chat-completion",
-  "model",
+    "byot",
+    "chat-completion",
+    "model",
 ] }
 async-trait = "0.1.89"
+textwrap = "0.16"
 color-eyre = "0.6.5"
 futures = "0.3.31"
 llm-toolkit = "0.58.0"
+ratatui = { version = "0.29.0", features = [
+    "all-widgets",
+    "macros",
+    "scrolling-regions",
+    "serde",
+] }
 regex = "1.12.2"
 reqwest = { features = ["json", "stream"], version = "0.12.24" }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.145"
+tachyonfx = "0.21.0"
 tokio = { features = ["full"], version = "1.48.0" }
 toml = "0.9.8"
 toon-format = "0.4.0"
