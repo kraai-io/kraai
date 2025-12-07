@@ -5,7 +5,7 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-toon-format = { workspace = true }
-serde = { workspace = true }
 async-trait = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+toon-format = { workspace = true }
