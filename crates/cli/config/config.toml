@@ -8,11 +8,11 @@
 # provider_id = "google"
 
 [[provider]]
+base_url = "https://open-webui.42nd.net/api"
+env_var_api_key = "OPEN_WEBUI_API_KEY"
 id = "open-webui"
 only_listed_models = true
 type = "openai"
-env_var_api_key = "OPEN_WEBUI_API_KEY"
-base_url = "https://open-webui.42nd.net/api"
 
 [[model]]
 id = "qwen3:0.6b"
