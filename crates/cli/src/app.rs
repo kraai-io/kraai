@@ -41,7 +41,7 @@ pub struct AppState {
 impl AppState {
     fn from(app: &App) -> Self {
         Self {
-            chat_scroll: app.chat_scroll.clone(),
+            chat_scroll: app.chat_scroll,
             input: app.input.clone(),
             chat_history: app.agent.chat_history.clone(),
         }
@@ -185,15 +185,14 @@ impl AppState {
     }
 
     fn chat_message_widget(&self, chat_message: &ChatMessage) -> impl Widget {
-        let paragraph = Paragraph::new(chat_message.content.clone())
+        Paragraph::new(chat_message.content.clone())
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(serde_json::to_string(&chat_message.role).unwrap()),
             )
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        paragraph
+            .wrap(ratatui::widgets::Wrap { trim: false })
     }
 
     // fn render_input(&self, frame: &mut Frame) {

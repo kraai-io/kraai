@@ -156,7 +156,7 @@ impl ProviderFactory for OpenAIFactory {
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
         let base_url = config.base_url.clone();
         let api_key = std::env::var(config.env_var_api_key.clone())
-            .expect(&format!("{} must be set", &config.env_var_api_key));
+            .unwrap_or_else(|_| panic!("{} must be set", &config.env_var_api_key));
         let cconfig = async_openai::config::OpenAIConfig::new()
             .with_api_base(base_url)
             .with_api_key(api_key);
