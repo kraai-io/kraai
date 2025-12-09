@@ -25,27 +25,16 @@ impl Agent {
 
 pub struct App {
     providers: ProviderManager,
-    exit: bool,
-    input: String,
     agent: Agent,
-    chat_scroll: u16,
+    state: AppState,
 }
 
 #[derive(Clone)]
 pub struct AppState {
+    exit: bool,
     chat_scroll: u16,
     input: String,
     chat_history: Vec<ChatMessage>,
-}
-
-impl AppState {
-    fn from(app: &App) -> Self {
-        Self {
-            chat_scroll: app.chat_scroll,
-            input: app.input.clone(),
-            chat_history: app.agent.chat_history.clone(),
-        }
-    }
 }
 
 impl App {
@@ -64,42 +53,39 @@ impl App {
             content: "what are the best tui options in rust".to_string(),
         });
 
-        agent.chat_history.push(
-            providers
-                .generate_reply(
-                    "open-webui".to_string().into(),
-                    &"qwen3:0.6b".to_string().into(),
-                    agent.chat_history.clone(),
-                )
-                .await?,
-        );
         agent.chat_history.push(ChatMessage {
             role: ChatRole::User,
             content: "what about ratatui?".to_string(),
         });
-        agent.chat_history.push(
-            providers
-                .generate_reply(
-                    "open-webui".to_string().into(),
-                    &"qwen3:0.6b".to_string().into(),
-                    agent.chat_history.clone(),
-                )
-                .await?,
-        );
-        let input = "".to_string();
+        // agent.chat_history.push(
+        //     providers
+        //         .generate_reply(
+        //             "open-webui".to_string().into(),
+        //             &"gemma3n:e4b".to_string().into(),
+        //             agent.chat_history.clone(),
+        //         )
+        //         .await?,
+        // );
+        let input = "hi".to_string();
+
+        let state = AppState {
+            exit: false,
+            input,
+
+            chat_scroll: 0,
+            chat_history: agent.chat_history.clone(),
+        };
 
         Ok(Self {
             providers,
-            exit: false,
-            input,
             agent,
-            chat_scroll: 0,
+            state,
         })
     }
 
     pub async fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        while !self.exit {
-            terminal.draw(|frame| frame.render_widget(AppState::from(self), frame.area()))?;
+        while !self.state.exit {
+            terminal.draw(|frame| frame.render_widget(self.state.clone(), frame.area()))?;
             self.handle_events()?;
         }
         Ok(())
@@ -121,17 +107,17 @@ impl App {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
             KeyCode::Down => {
-                if self.chat_scroll > 0 {
-                    self.chat_scroll -= 1
+                if self.state.chat_scroll > 0 {
+                    self.state.chat_scroll -= 1
                 }
             }
-            KeyCode::Up => self.chat_scroll += 1,
+            KeyCode::Up => self.state.chat_scroll += 1,
             _ => {}
         }
     }
 
     fn exit(&mut self) {
-        self.exit = true;
+        self.state.exit = true;
     }
 }
 
@@ -140,9 +126,11 @@ impl Widget for AppState {
     where
         Self: Sized,
     {
-        let layout = Layout::vertical([Constraint::Percentage(100)]);
-        let [chat_history_area] = layout.areas(area);
-        self.render_chat_history(chat_history_area, buf);
+        let layout = Layout::vertical([Constraint::Min(area.height - 12), Constraint::Max(12)])
+            .flex(Flex::End);
+        let [chat_history_area, input_area] = layout.areas(area);
+        self.clone().render_chat_history(chat_history_area, buf);
+        self.render_input(input_area, buf);
     }
 }
 
@@ -195,25 +183,16 @@ impl AppState {
             .wrap(ratatui::widgets::Wrap { trim: false })
     }
 
-    // fn render_input(&self, frame: &mut Frame) {
-    // let height = textwrap::wrap(&chat_history, (frame.area().width - 2) as usize).len() as u16;
-    // let input_height = 10.min(height);
-    // let paragraph = Paragraph::new(chat_history)
-    //     .block(
-    //         Block::default()
-    //             .borders(Borders::ALL)
-    //             .border_type(BorderType::Rounded)
-    //             .title("Chat"),
-    //     )
-    //     .wrap(ratatui::widgets::Wrap { trim: false });
-    // frame.render_widget(
-    //     paragraph,
-    //     Rect::new(
-    //         0,
-    //         frame.area().height - (input_height + 2),
-    //         frame.area().width,
-    //         input_height + 2,
-    //     ),
-    // );
-    // }
+    fn render_input(self, area: Rect, buf: &mut Buffer) {
+        // let height = textwrap::wrap(&self.input, (area.width - 2) as usize).len() as u16;
+        // let input_height = 10.min(height);
+        let paragraph = Paragraph::new(self.input)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        paragraph.render(area, buf);
+    }
 }

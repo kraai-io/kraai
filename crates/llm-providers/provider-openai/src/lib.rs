@@ -37,7 +37,7 @@ impl Provider for OpenAIProvider {
             if self.config.only_listed_models && !contains {
                 continue;
             }
-            let mut name = model.name;
+            let mut name = id.clone().to_string();
             let mut max_context = None;
             if contains {
                 let m = self.model_configs.get(&id).unwrap();
@@ -180,5 +180,4 @@ struct ListOpenAIModelResponse {
 #[derive(Debug, Deserialize)]
 struct OpenAIModel {
     pub id: String,
-    pub name: String,
 }
