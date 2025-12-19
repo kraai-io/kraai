@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/agent",
   "crates/cli",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
@@ -21,6 +22,7 @@ opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
+agent = { path = "crates/agent" }
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-google = { path = "crates/llm-providers/provider-google" }
 provider-openai = { path = "crates/llm-providers/provider-openai" }
@@ -34,6 +36,7 @@ async-openai = { version = "0.31.1", features = [
   "model",
 ] }
 async-trait = "0.1.89"
+chrono = { version = "0.4.40", features = ["serde"] }
 color-eyre = "0.6.5"
 futures = "0.3.31"
 llm-toolkit = "0.58.0"

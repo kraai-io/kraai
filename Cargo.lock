@@ -18,6 +18,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "color-eyre",
+ "futures",
+ "provider-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tool-core",
+ "types",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -328,6 +345,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
