@@ -12,7 +12,7 @@ futures = { workspace = true }
 provider-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tool-core = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
+tool-core = { workspace = true }
 types = { workspace = true }
