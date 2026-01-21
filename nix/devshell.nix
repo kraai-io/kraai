@@ -17,6 +17,8 @@
           rust-bin.stable.latest.default
           rust-analyzer
 
+          bun
+
           pkg-config
           openssl
         ];
