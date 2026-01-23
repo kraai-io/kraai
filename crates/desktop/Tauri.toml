@@ -1,0 +1,28 @@
+identifier = "com.agent"
+
+[build]
+dev-url = "http://localhost:1420"
+before-build-command = "cd ./../frontend/ && bun run build"
+before-dev-command = "cd ./frontend/ && bun run dev"
+frontend-dist = "./frontend/dist"
+
+[bundle]
+active = true
+icon = [
+	"icons/32x32.png",
+	"icons/128x128.png",
+	"icons/128x128@2x.png",
+	"icons/icon.icns",
+	"icons/icon.ico",
+]
+
+[[app.windows]]
+title = "MyApp"
+
+[plugins.updater]
+pubkey = "updater pub key"
+endpoints = [
+	"https://github.com/ominit/agent/releases/latest/download/latest.json",
+]
+active = true
+dialog = true
