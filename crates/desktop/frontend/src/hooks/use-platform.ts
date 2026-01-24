@@ -1,14 +1,14 @@
-import { platform, type Platform } from '@tauri-apps/plugin-os'
-import { logger } from '@/lib/logger'
+import { type Platform, platform } from "@tauri-apps/plugin-os";
+import { logger } from "@/lib/logger";
 
 /**
  * Supported desktop platforms for this template.
  * Other platforms (iOS, Android) are not supported.
  */
-export type AppPlatform = 'macos' | 'windows' | 'linux'
+export type AppPlatform = "macos" | "windows" | "linux";
 
 // Module-level cache for platform detection
-let cachedPlatform: AppPlatform | null = null
+let cachedPlatform: AppPlatform | null = null;
 
 /**
  * Reset the platform cache.
@@ -16,7 +16,7 @@ let cachedPlatform: AppPlatform | null = null
  * @internal
  */
 export function __resetPlatformCache(): void {
-  cachedPlatform = null
+	cachedPlatform = null;
 }
 
 /**
@@ -24,9 +24,9 @@ export function __resetPlatformCache(): void {
  * Linux and any other Unix-like systems are treated as 'linux'.
  */
 function mapPlatform(p: Platform): AppPlatform {
-  if (p === 'macos') return 'macos'
-  if (p === 'windows') return 'windows'
-  return 'linux'
+	if (p === "macos") return "macos";
+	if (p === "windows") return "windows";
+	return "linux";
 }
 
 /**
@@ -34,16 +34,16 @@ function mapPlatform(p: Platform): AppPlatform {
  * Called on first access and caches the result.
  */
 function initPlatform(): AppPlatform {
-  if (cachedPlatform === null) {
-    try {
-      cachedPlatform = mapPlatform(platform())
-    } catch {
-      // Fallback if platform() fails (e.g., in non-Tauri environment during tests)
-      logger.warn('Platform detection failed, defaulting to macOS')
-      cachedPlatform = 'macos'
-    }
-  }
-  return cachedPlatform
+	if (cachedPlatform === null) {
+		try {
+			cachedPlatform = mapPlatform(platform());
+		} catch {
+			// Fallback if platform() fails (e.g., in non-Tauri environment during tests)
+			logger.warn("Platform detection failed, defaulting to macOS");
+			cachedPlatform = "macos";
+		}
+	}
+	return cachedPlatform;
 }
 
 /**
@@ -58,7 +58,7 @@ function initPlatform(): AppPlatform {
  * }
  */
 export function getPlatform(): AppPlatform {
-  return initPlatform()
+	return initPlatform();
 }
 
 /**
@@ -74,8 +74,8 @@ export function getPlatform(): AppPlatform {
  * }
  */
 export function usePlatform(): AppPlatform {
-  // Platform is constant - just return the cached value
-  return initPlatform()
+	// Platform is constant - just return the cached value
+	return initPlatform();
 }
 
 /**
@@ -83,7 +83,7 @@ export function usePlatform(): AppPlatform {
  * Convenience hook for platform-specific rendering.
  */
 export function useIsMacOS(): boolean {
-  return usePlatform() === 'macos'
+	return usePlatform() === "macos";
 }
 
 /**
@@ -91,7 +91,7 @@ export function useIsMacOS(): boolean {
  * Convenience hook for platform-specific rendering.
  */
 export function useIsWindows(): boolean {
-  return usePlatform() === 'windows'
+	return usePlatform() === "windows";
 }
 
 /**
@@ -99,5 +99,5 @@ export function useIsWindows(): boolean {
  * Convenience hook for platform-specific rendering.
  */
 export function useIsLinux(): boolean {
-  return usePlatform() === 'linux'
+	return usePlatform() === "linux";
 }

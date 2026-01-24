@@ -1,6 +1,5 @@
 {
   "app.name": "Tauri Template",
-
   "menu.about": "À propos de {{appName}}",
   "menu.checkForUpdates": "Vérifier les mises à jour...",
   "menu.preferences": "Préférences...",
@@ -11,13 +10,11 @@
   "menu.view": "Affichage",
   "menu.toggleLeftSidebar": "Afficher/Masquer la barre latérale gauche",
   "menu.toggleRightSidebar": "Afficher/Masquer la barre latérale droite",
-
   "preferences.title": "Préférences",
   "preferences.description": "Personnalisez les préférences de votre application ici.",
   "preferences.general": "Général",
   "preferences.appearance": "Apparence",
   "preferences.advanced": "Avancé",
-
   "preferences.general.keyboardShortcuts": "Raccourcis clavier",
   "preferences.general.quickPaneShortcut": "Raccourci du panneau rapide",
   "preferences.general.quickPaneShortcutDescription": "Raccourci clavier global pour afficher le panneau rapide depuis n'importe quelle application",
@@ -27,7 +24,6 @@
   "preferences.general.exampleTextPlaceholder": "Saisissez un texte d'exemple",
   "preferences.general.exampleToggle": "Paramètre de bascule d'exemple",
   "preferences.general.exampleToggleDescription": "Ceci est un exemple de paramètre de bascule (non persisté)",
-
   "preferences.appearance.theme": "Thème",
   "preferences.appearance.colorTheme": "Thème de couleur",
   "preferences.appearance.colorThemeDescription": "Choisissez votre thème de couleur préféré",
@@ -38,7 +34,6 @@
   "preferences.appearance.language": "Langue",
   "preferences.appearance.languageDescription": "Choisissez votre langue d'affichage préférée",
   "preferences.appearance.language.system": "Système",
-
   "preferences.advanced.title": "Paramètres avancés d'exemple",
   "preferences.advanced.toggle": "Bascule avancée d'exemple",
   "preferences.advanced.toggleDescription": "Ceci est un exemple de paramètre de bascule avancé (non persisté)",
@@ -47,18 +42,15 @@
   "preferences.advanced.option1": "Option 1 d'exemple",
   "preferences.advanced.option2": "Option 2 d'exemple",
   "preferences.advanced.option3": "Option 3 d'exemple",
-
   "common.enabled": "Activé",
   "common.disabled": "Désactivé",
   "common.reset": "Réinitialiser",
-
   "commands.group.navigation": "Navigation",
   "commands.group.settings": "Paramètres",
   "commands.group.window": "Fenêtre",
   "commands.group.notification": "Notifications",
   "commands.group.debug": "Débogage",
   "commands.group.other": "Autre",
-
   "commands.showLeftSidebar.label": "Afficher la barre latérale gauche",
   "commands.showLeftSidebar.description": "Afficher la barre latérale gauche",
   "commands.hideLeftSidebar.label": "Masquer la barre latérale gauche",
@@ -69,7 +61,6 @@
   "commands.hideRightSidebar.description": "Masquer la barre latérale droite",
   "commands.openPreferences.label": "Ouvrir les préférences",
   "commands.openPreferences.description": "Ouvrir les préférences de l'application",
-
   "commands.windowClose.label": "Fermer la fenêtre",
   "commands.windowClose.description": "Fermer la fenêtre actuelle",
   "commands.windowMinimize.label": "Réduire la fenêtre",
@@ -80,21 +71,17 @@
   "commands.windowFullscreen.description": "Passer en mode plein écran",
   "commands.windowExitFullscreen.label": "Quitter le plein écran",
   "commands.windowExitFullscreen.description": "Quitter le mode plein écran",
-
   "commands.testToast.label": "Tester la notification toast",
   "commands.testToast.description": "Afficher une notification toast de test",
-
   "commandPalette.title": "Palette de commandes",
   "commandPalette.placeholder": "Tapez une commande ou recherchez...",
   "commandPalette.noResults": "Aucun résultat trouvé.",
-
   "titlebar.default": "Application Tauri",
   "titlebar.showLeftSidebar": "Afficher la barre latérale gauche",
   "titlebar.hideLeftSidebar": "Masquer la barre latérale gauche",
   "titlebar.showRightSidebar": "Afficher la barre latérale droite",
   "titlebar.hideRightSidebar": "Masquer la barre latérale droite",
   "titlebar.settings": "Paramètres",
-
   "toast.success.preferencesSaved": "Préférences enregistrées",
   "toast.success.testToast": "Toast de test",
   "toast.success.testToastDescription": "Ceci est une notification de test",

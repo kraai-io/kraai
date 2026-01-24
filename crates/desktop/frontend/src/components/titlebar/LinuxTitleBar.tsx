@@ -1,13 +1,13 @@
-import { cn } from '@/lib/utils'
+import { cn } from "@/lib/utils";
 import {
-  TitleBarLeftActions,
-  TitleBarRightActions,
-  TitleBarTitle,
-} from './TitleBarContent'
+	TitleBarLeftActions,
+	TitleBarRightActions,
+	TitleBarTitle,
+} from "./TitleBarContent";
 
 interface LinuxTitleBarProps {
-  className?: string
-  title?: string
+	className?: string;
+	title?: string;
 }
 
 /**
@@ -21,25 +21,25 @@ interface LinuxTitleBarProps {
  * toolbar buttons and the title.
  */
 export function LinuxTitleBar({ className, title }: LinuxTitleBarProps) {
-  return (
-    <div
-      className={cn(
-        'relative flex h-8 w-full shrink-0 items-center justify-between border-b bg-background',
-        className
-      )}
-    >
-      {/* Left side - Actions */}
-      <div className="flex items-center pl-2">
-        <TitleBarLeftActions />
-      </div>
+	return (
+		<div
+			className={cn(
+				"relative flex h-8 w-full shrink-0 items-center justify-between border-b bg-background",
+				className,
+			)}
+		>
+			{/* Left side - Actions */}
+			<div className="flex items-center pl-2">
+				<TitleBarLeftActions />
+			</div>
 
-      {/* Center - Title */}
-      <TitleBarTitle title={title} />
+			{/* Center - Title */}
+			<TitleBarTitle title={title} />
 
-      {/* Right side - Actions */}
-      <div className="flex items-center pr-2">
-        <TitleBarRightActions />
-      </div>
-    </div>
-  )
+			{/* Right side - Actions */}
+			<div className="flex items-center pr-2">
+				<TitleBarRightActions />
+			</div>
+		</div>
+	);
 }

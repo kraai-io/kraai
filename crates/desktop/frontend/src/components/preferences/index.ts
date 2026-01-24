@@ -1,1 +1,1 @@
-export { PreferencesDialog } from './PreferencesDialog'
+export { PreferencesDialog } from "./PreferencesDialog";

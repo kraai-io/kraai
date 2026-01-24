@@ -1,4 +1,4 @@
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{Builder, collect_commands};
 
 pub fn generate_bindings() -> Builder<tauri::Wry> {
     use crate::commands::{notifications, preferences, quick_pane, recovery};

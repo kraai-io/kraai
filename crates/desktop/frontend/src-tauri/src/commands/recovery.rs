@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
-use crate::types::{validate_filename, RecoveryError, MAX_RECOVERY_DATA_BYTES};
+use crate::types::{MAX_RECOVERY_DATA_BYTES, RecoveryError, validate_filename};
 
 /// Gets the path to the recovery directory, creating it if necessary.
 fn get_recovery_dir(app: &AppHandle) -> Result<PathBuf, String> {

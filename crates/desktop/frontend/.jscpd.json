@@ -1,6 +1,9 @@
 {
   "threshold": 0,
-  "reporters": ["json", "console"],
+  "reporters": [
+    "json",
+    "console"
+  ],
   "output": "jscpd-report",
   "pattern": "**/*.{ts,tsx,rs}",
   "ignore": [
