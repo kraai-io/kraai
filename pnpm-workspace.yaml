@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - crates/ts-bindings
+
+minimumReleaseAge: 1440
+
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - esbuild

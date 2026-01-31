@@ -1,0 +1,14 @@
+{
+  "name": "agent",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.5.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  }
+}

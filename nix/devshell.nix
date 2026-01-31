@@ -17,7 +17,8 @@
           rust-bin.stable.latest.default
           rust-analyzer
 
-          bun
+          pnpm
+          nodejs
 
           pkg-config
           openssl

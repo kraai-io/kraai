@@ -1,1 +1,0 @@
-export { PreferencesDialog } from "./PreferencesDialog";
