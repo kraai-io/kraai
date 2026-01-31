@@ -6,7 +6,28 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignoreUnknown": true
+    "ignoreUnknown": true,
+    "ignore": [
+      "node_modules/**",
+      "target/**",
+      "dist/**",
+      "build/**",
+      "out/**",
+      "*.min.js",
+      "*.min.css",
+      "coverage/**",
+      ".nyc_output/**",
+      "*.lock",
+      "pnpm-lock.yaml",
+      "Cargo.lock",
+      "crates/ts-bindings/index.js",
+      "crates/ts-bindings/index.d.ts",
+      "crates/ts-bindings/browser.js",
+      "crates/ts-bindings/browser.d.ts",
+      "crates/ts-bindings/*.wasm",
+      "crates/ts-bindings/wasi-worker.mjs",
+      "crates/ts-bindings/wasi-worker-browser.mjs"
+    ]
   },
   "linter": {
     "enabled": true,
