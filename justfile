@@ -48,7 +48,6 @@ lint:
 
 check: format lint test-all
 
-
 reset: clean
     pnpm install
 
@@ -62,4 +61,3 @@ _system := `nix eval --raw --impure --expr 'builtins.currentSystem'`
 localCI:
     nix flake check
     nix build .#devShells.{{ _system }}.default --no-link
-

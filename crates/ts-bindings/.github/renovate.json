@@ -6,15 +6,27 @@
     ":preserveSemverRanges",
     ":disablePeerDependencies"
   ],
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "packageRules": [
     {
-      "matchPackageNames": ["@napi/cli", "napi", "napi-build", "napi-derive"],
-      "addLabels": ["napi-rs"],
+      "matchPackageNames": [
+        "@napi/cli",
+        "napi",
+        "napi-build",
+        "napi-derive"
+      ],
+      "addLabels": [
+        "napi-rs"
+      ],
       "groupName": "napi-rs"
     },
     {
-      "matchPackagePatterns": ["^eslint", "^@typescript-eslint"],
+      "matchPackagePatterns": [
+        "^eslint",
+        "^@typescript-eslint"
+      ],
       "groupName": "linter"
     }
   ],

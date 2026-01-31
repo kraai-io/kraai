@@ -325,7 +325,6 @@ impl AppState {
     }
 
     fn chat_message_widget(&self, chat_message: &ChatMessage) -> impl Widget {
-        
         Text::new(chat_message.content.clone())
     }
 

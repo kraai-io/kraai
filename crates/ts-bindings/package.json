@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "main": "index.js",
   "browser": "browser.js",
-  "files": ["index.d.ts", "index.js", "browser.js"],
+  "files": [
+    "index.d.ts",
+    "index.js",
+    "browser.js"
+  ],
   "napi": {
     "binaryName": "agent-ts-bindings",
     "targets": [
@@ -54,8 +58,12 @@
     "typescript": "^5.9.3"
   },
   "lint-staged": {
-    "*.@(js|ts|tsx|json|yml|yaml|md)": ["biome check --write --no-errors-on-unmatched"],
-    "*.toml": ["taplo format"]
+    "*.@(js|ts|tsx|json|yml|yaml|md)": [
+      "biome check --write --no-errors-on-unmatched"
+    ],
+    "*.toml": [
+      "taplo format"
+    ]
   },
   "ava": {
     "extensions": {
@@ -66,7 +74,10 @@
     "environmentVariables": {
       "OXC_TSCONFIG_PATH": "./__test__/tsconfig.json"
     },
-    "nodeArguments": ["--import", "@oxc-node/core/register"]
+    "nodeArguments": [
+      "--import",
+      "@oxc-node/core/register"
+    ]
   },
   "prettier": {
     "printWidth": 120,
