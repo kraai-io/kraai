@@ -128,3 +128,11 @@ Cargo.lock
 !.yarn/sdks
 !.yarn/versions
 /npm
+
+*.wasi-browser.js
+*.wasi.cjs
+browser.js
+index.d.ts
+index.js
+wasi-worker-browser.mjs
+wasi-worker.mjs

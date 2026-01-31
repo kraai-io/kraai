@@ -31,6 +31,7 @@
     "bench": "node benchmark/bench.ts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "clean": "cargo clean && rm -rf node_modules dist",
     "format": "run-p format:biome format:rs format:toml",
     "format:biome": "biome format --write .",
     "format:toml": "taplo format",
