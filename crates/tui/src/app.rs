@@ -149,7 +149,7 @@ impl App {
         let mut providers = ProviderManager::new();
         providers.register_factory::<GoogleFactory>();
         providers.register_factory::<OpenAIFactory>();
-        let config_slice = std::fs::read("crates/cli/config/config.toml")?;
+        let config_slice = std::fs::read("crates/tui/config/config.toml")?;
         let config = toml::from_slice(&config_slice)?;
         providers.load_config(config).await?;
 
