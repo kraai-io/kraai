@@ -1,22 +1,8 @@
 {
   "name": "agent-ts-bindings",
-  "version": "1.0.0",
-  "description": "Template project for writing node package with napi-rs",
+  "version": "0.1.0",
   "main": "index.js",
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/napi-rs/package-template.git"
-  },
-  "license": "MIT",
   "browser": "browser.js",
-  "keywords": [
-    "napi-rs",
-    "NAPI",
-    "N-API",
-    "Rust",
-    "node-addon",
-    "node-addon-api"
-  ],
   "files": [
     "index.d.ts",
     "index.js",
@@ -44,10 +30,6 @@
   "engines": {
     "node": ">= 12.22.0 < 13 || >= 14.17.0 < 15 || >= 15.12.0 < 16 || >= 16.0.0"
   },
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
-    "access": "public"
-  },
   "scripts": {
     "artifacts": "napi artifacts",
     "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
@@ -58,11 +40,7 @@
     "format:toml": "taplo format",
     "format:rs": "cargo fmt",
     "lint": "oxlint .",
-    "prepublishOnly": "napi prepublish -t npm",
-    "test": "ava",
-    "preversion": "napi build --platform && git add .",
-    "version": "napi version",
-    "prepare": "husky"
+    "test": "ava"
   },
   "devDependencies": {
     "@emnapi/core": "^1.5.0",
@@ -73,7 +51,6 @@
     "@tybys/wasm-util": "^0.10.0",
     "ava": "^6.4.1",
     "chalk": "^5.6.2",
-    "husky": "^9.1.7",
     "lint-staged": "^16.1.6",
     "npm-run-all2": "^8.0.4",
     "oxlint": "^1.14.0",
@@ -112,6 +89,5 @@
     "trailingComma": "all",
     "singleQuote": true,
     "arrowParens": "always"
-  },
-  "packageManager": "yarn@4.12.0"
+  }
 }

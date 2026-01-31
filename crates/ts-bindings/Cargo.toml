@@ -1,9 +1,8 @@
-
 [package]
-authors = ["LongYinan <lynweklm@gmail.com>"]
-edition = "2021"
-name = "agent_ts_bindings"
+edition.workspace = true
+rust-version.workspace = true
 version = "0.1.0"
+name = "agent_ts_bindings"
 
 [lib]
 crate-type = ["cdylib"]
