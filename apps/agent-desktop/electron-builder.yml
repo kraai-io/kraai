@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: com.ominit.agent
 productName: agent-desktop
 directories:
   buildResources: build
@@ -33,7 +33,7 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
+  maintainer: ominit
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}

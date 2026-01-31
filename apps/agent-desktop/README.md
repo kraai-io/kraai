@@ -1,6 +1,6 @@
-# agent-desktop
+# Agent Desktop
 
-An Electron application with React and TypeScript
+Agent Demo - Desktop application for AI agent interaction
 
 ## Recommended IDE Setup
 
