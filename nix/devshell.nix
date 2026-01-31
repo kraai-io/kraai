@@ -20,6 +20,8 @@
           pnpm
           nodejs
 
+          just
+
           pkg-config
           openssl
           at-spi2-atk

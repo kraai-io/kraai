@@ -7,7 +7,7 @@ use ratatui::{
     buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Constraint, Flex, Layout, Rect},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Widget},
+    widgets::{Block, BorderType, Widget},
 };
 use types::{ChatMessage, ChatRole};
 
@@ -325,8 +325,8 @@ impl AppState {
     }
 
     fn chat_message_widget(&self, chat_message: &ChatMessage) -> impl Widget {
-        let text = Text::new(chat_message.content.clone());
-        text
+        
+        Text::new(chat_message.content.clone())
     }
 
     fn render_input(self, area: Rect, buf: &mut Buffer) {

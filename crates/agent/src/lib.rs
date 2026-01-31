@@ -52,7 +52,7 @@ impl Agent {
 
     pub fn get_history(&mut self) -> Vec<ChatMessage> {
         let mut messages = self.history.clone();
-        messages.extend(self.temporary_messages.drain(..));
+        messages.append(&mut self.temporary_messages);
         messages
     }
 }
