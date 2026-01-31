@@ -8,8 +8,8 @@ name = "agent_ts_bindings"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = "3.0.0"
-napi-derive = "3.0.0"
+napi = "3.8.2"
+napi-derive = "3.5.1"
 
 [build-dependencies]
 napi-build = "2"
