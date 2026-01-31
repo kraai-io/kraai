@@ -1,8 +1,8 @@
 [package]
 edition.workspace = true
+name = "agent_ts_bindings"
 rust-version.workspace = true
 version = "0.1.0"
-name = "agent_ts_bindings"
 
 [lib]
 crate-type = ["cdylib"]

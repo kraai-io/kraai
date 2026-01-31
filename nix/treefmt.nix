@@ -8,7 +8,7 @@
       programs.deadnix.enable = true;
       programs.jsonfmt.enable = true;
       programs.just.enable = true;
-      programs.prettier.enable = true;
+      programs.biome.enable = true;
       programs.rustfmt.enable = true;
       programs.taplo = {
         enable = true;

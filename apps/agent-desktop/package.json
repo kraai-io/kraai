@@ -6,8 +6,9 @@
   "author": "ominit",
   "homepage": "https://electron-vite.org",
   "scripts": {
-    "format": "prettier --write .",
-    "lint": "eslint --cache .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome check .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -27,8 +28,7 @@
     "electron-updater": "^6.7.3"
   },
   "devDependencies": {
-    "@electron-toolkit/eslint-config-prettier": "^3.0.0",
-    "@electron-toolkit/eslint-config-ts": "^3.1.0",
+    "@biomejs/biome": "1.9.4",
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@types/node": "^22.19.7",
     "@types/react": "^19.2.10",
@@ -37,11 +37,6 @@
     "electron": "^39.4.0",
     "electron-builder": "^26.4.0",
     "electron-vite": "^5.0.0",
-    "eslint": "^9.39.2",
-    "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.4.26",
-    "prettier": "^3.8.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "typescript": "^5.9.3",
