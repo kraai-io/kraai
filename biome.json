@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.3.11/schema.json",
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -7,26 +7,28 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": [
-      "node_modules/**",
-      "target/**",
-      "dist/**",
-      "build/**",
-      "out/**",
-      "*.min.js",
-      "*.min.css",
-      "coverage/**",
-      ".nyc_output/**",
-      "*.lock",
-      "pnpm-lock.yaml",
-      "Cargo.lock",
-      "crates/ts-bindings/index.js",
-      "crates/ts-bindings/index.d.ts",
-      "crates/ts-bindings/browser.js",
-      "crates/ts-bindings/browser.d.ts",
-      "crates/ts-bindings/*.wasm",
-      "crates/ts-bindings/wasi-worker.mjs",
-      "crates/ts-bindings/wasi-worker-browser.mjs"
+    "includes": [
+      "**",
+      "!node_modules",
+      "!target",
+      "!dist",
+      "!build",
+      "!out",
+      "!*.min.js",
+      "!*.min.css",
+      "!coverage",
+      "!.nyc_output",
+      "!*.lock",
+      "!pnpm-lock.yaml",
+      "!Cargo.lock",
+      "!crates/ts-bindings/index.js",
+      "!crates/ts-bindings/index.d.ts",
+      "!crates/ts-bindings/browser.js",
+      "!crates/ts-bindings/browser.d.ts",
+      "!crates/ts-bindings/*.wasm",
+      "!crates/ts-bindings/wasi-worker.mjs",
+      "!crates/ts-bindings/wasi-worker-browser.mjs",
+      "!apps/agent-desktop/src/styles/globals.css"
     ]
   },
   "linter": {
@@ -76,6 +78,12 @@
   "json": {
     "formatter": {
       "enabled": true
+    }
+  },
+  "css": {
+    "parser": {
+      "cssModules": true,
+      "tailwindDirectives": true
     }
   }
 }
