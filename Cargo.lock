@@ -38,9 +38,21 @@ dependencies = [
 name = "agent_ts_bindings"
 version = "0.1.0"
 dependencies = [
+ "agent",
+ "color-eyre",
+ "futures",
  "napi",
  "napi-build",
  "napi-derive",
+ "provider-core",
+ "provider-google",
+ "provider-openai",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tool-core",
+ "types",
 ]
 
 [[package]]
@@ -1760,6 +1772,7 @@ dependencies = [
  "napi-sys",
  "nohash-hasher",
  "rustc-hash 2.1.1",
+ "tokio",
 ]
 
 [[package]]

@@ -1,0 +1,33 @@
+# Example configuration for agent-ts-bindings
+# Copy and modify this file for your setup
+
+# [[provider]]
+# id = "google"
+# only_listed_models = true
+# type = "google"
+
+# [[model]]
+# id = "gemini-2.5-flash-lite"
+# provider_id = "google"
+
+[[provider]]
+base_url = "https://open-webui.42nd.net/api"
+env_var_api_key = "OPEN_WEBUI_API_KEY"
+id = "open-webui"
+only_listed_models = true
+type = "openai"
+
+[[model]]
+id = "qwen3:0.6b"
+provider_id = "open-webui"
+
+[[model]]
+id = "gemma3n:e4b"
+provider_id = "open-webui"
+
+[[provider]]
+base_url = "https://api.groq.com/openai/v1"
+env_var_api_key = "GROQ_API_KEY"
+id = "groq"
+only_listed_models = false
+type = "openai"
