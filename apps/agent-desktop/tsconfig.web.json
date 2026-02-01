@@ -4,6 +4,7 @@
     "src/env.d.ts",
     "src/**/*",
     "src/**/*.tsx",
+    "components/**/*",
     "electron/preload/*.d.ts"
   ],
   "compilerOptions": {
@@ -11,9 +12,8 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@renderer/*": [
-        "src/*"
-      ]
+      "@/*": ["./*"],
+      "@renderer/*": ["src/*"]
     }
   }
 }
