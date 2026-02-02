@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use color_eyre::eyre::{Result, eyre};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
@@ -112,36 +111,51 @@ unsafe impl Sync for AgentAPI {}
 #[napi]
 impl AgentAPI {
   #[napi(constructor)]
-  pub fn new() -> Result<Self> {
-    let rt = tokio::runtime::Runtime::new()
-      .map_err(|e| eyre!(format!("Failed to create runtime: {}", e),))?;
-
-    let providers = rt.block_on(async {
-      let mut providers = ProviderManager::new();
-      providers.register_factory::<GoogleFactory>();
-      providers.register_factory::<OpenAIFactory>();
-
-      // Load config from file
-      let config_slice = match std::fs::read("crates/ts-bindings/config/config.toml") {
-        Ok(data) => data,
-        Err(e) => {
-          return Err(eyre!(format!("Failed to read config: {}", e),));
-        }
-      };
-
-      let config: ProviderManagerConfig = match toml::from_slice(&config_slice) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-          return Err(eyre!(format!("Failed to parse config: {}", e),));
-        }
-      };
-
-      if let Err(e) = providers.load_config(config).await {
-        return Err(eyre!(format!("Failed to load config: {}", e),));
-      }
-
-      Ok(providers)
+  pub fn new() -> napi::Result<Self> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+      Error::new(
+        Status::GenericFailure,
+        format!("Failed to create runtime: {}", e),
+      )
     })?;
+
+    let providers = rt
+      .block_on(async {
+        let mut providers = ProviderManager::new();
+        providers.register_factory::<GoogleFactory>();
+        providers.register_factory::<OpenAIFactory>();
+
+        // Load config from file
+        let config_slice = match std::fs::read("crates/ts-bindings/config/config.toml") {
+          Ok(data) => data,
+          Err(e) => {
+            return Err::<_, napi::Error>(Error::new(
+              Status::GenericFailure,
+              format!("Failed to read config: {}", e),
+            ));
+          }
+        };
+
+        let config: ProviderManagerConfig = match toml::from_slice(&config_slice) {
+          Ok(cfg) => cfg,
+          Err(e) => {
+            return Err::<_, napi::Error>(Error::new(
+              Status::GenericFailure,
+              format!("Failed to parse config: {}", e),
+            ));
+          }
+        };
+
+        if let Err(e) = providers.load_config(config).await {
+          return Err::<_, napi::Error>(Error::new(
+            Status::GenericFailure,
+            format!("Failed to load config: {}", e),
+          ));
+        }
+
+        Ok::<_, napi::Error>(providers)
+      })
+      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
     Ok(AgentAPI {
       providers: Arc::new(Mutex::new(providers)),

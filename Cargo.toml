@@ -7,7 +7,7 @@ members = [
   "crates/tools/tool-core",
   "crates/tools/tool-read-file",
   "crates/ts-bindings",
-  "crates/tui",
+  # "crates/tui",
   "crates/types",
 ]
 resolver = "3"

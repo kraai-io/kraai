@@ -1,10 +1,11 @@
 import { electronAPI } from "@electron-toolkit/preload";
+import { AgentApi, plus100 } from "agent-ts-bindings";
 import { contextBridge } from "electron";
-import { plus100 } from "agent-ts-bindings";
 
 // Custom APIs for renderer
 const api = {
 	plus100,
+	AgentApi,
 };
 
 // Use `contextBridge` APIs to expose Electron APIs to
