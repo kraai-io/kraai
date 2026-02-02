@@ -126,7 +126,14 @@ impl AgentAPI {
         providers.register_factory::<OpenAIFactory>();
 
         // Load config from file
-        let config_slice = match std::fs::read("crates/ts-bindings/config/config.toml") {
+        // for a in std::fs::read_dir("/").unwrap() {
+        //   return Err::<_, napi::Error>(Error::new(
+        //     Status::GenericFailure,
+        //     format!("Failed to read config: {:#?}", a),
+        //   ));
+        // }
+        let config_slice = match std::fs::read("~/code/agent/crates/ts-bindings/config/config.toml")
+        {
           Ok(data) => data,
           Err(e) => {
             return Err::<_, napi::Error>(Error::new(
@@ -164,86 +171,86 @@ impl AgentAPI {
     })
   }
 
-  // #[napi]
-  // pub fn list_models(&self) -> Result<Vec<ModelInfo>> {
-  //   let providers = self
-  //     .providers
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+  #[napi]
+  pub fn list_models(&self) -> napi::Result<Vec<ModelInfo>> {
+    let providers = self
+      .providers
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
 
-  //   let models = providers.list_all_models();
-  //   Ok(
-  //     models
-  //       .into_iter()
-  //       .map(|m| ModelInfo {
-  //         id: (*m.id).clone(),
-  //         name: m.name,
-  //         max_context: m.max_context.map(|n| n as u32),
-  //       })
-  //       .collect(),
-  //   )
-  // }
+    let models = providers.list_all_models();
+    Ok(
+      models
+        .into_iter()
+        .map(|m| ModelInfo {
+          id: (*m.id).clone(),
+          name: m.name,
+          max_context: m.max_context.map(|n| n as u32),
+        })
+        .collect(),
+    )
+  }
 
-  // #[napi]
-  // pub fn create_agent(&self, system_prompt: String) -> Result<AgentHandle> {
-  //   let mut agents = self
-  //     .agents
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-  //   let mut next_id = self
-  //     .next_agent_id
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+  #[napi]
+  pub fn create_agent(&self, system_prompt: String) -> napi::Result<AgentHandle> {
+    let mut agents = self
+      .agents
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+    let mut next_id = self
+      .next_agent_id
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
 
-  //   let id = format!("agent_{}", *next_id);
-  //   *next_id += 1;
+    let id = format!("agent_{}", *next_id);
+    *next_id += 1;
 
-  //   let agent = AgentState {
-  //     id: id.clone(),
-  //     system_prompt: system_prompt.clone(),
-  //     history: vec![RustChatMessage {
-  //       role: RustChatRole::System,
-  //       content: system_prompt,
-  //     }],
-  //   };
+    let agent = AgentState {
+      id: id.clone(),
+      system_prompt: system_prompt.clone(),
+      history: vec![RustChatMessage {
+        role: RustChatRole::System,
+        content: system_prompt,
+      }],
+    };
 
-  //   agents.insert(id.clone(), agent);
+    agents.insert(id.clone(), agent);
 
-  //   Ok(AgentHandle { id })
-  // }
+    Ok(AgentHandle { id })
+  }
 
-  // #[napi]
-  // pub fn get_agent(&self, id: String) -> Result<Option<AgentHandle>> {
-  //   let agents = self
-  //     .agents
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+  #[napi]
+  pub fn get_agent(&self, id: String) -> napi::Result<Option<AgentHandle>> {
+    let agents = self
+      .agents
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
 
-  //   if agents.contains_key(&id) {
-  //     Ok(Some(AgentHandle { id }))
-  //   } else {
-  //     Ok(None)
-  //   }
-  // }
+    if agents.contains_key(&id) {
+      Ok(Some(AgentHandle { id }))
+    } else {
+      Ok(None)
+    }
+  }
 
-  // #[napi]
-  // pub fn list_agents(&self) -> Result<Vec<AgentInfo>> {
-  //   let agents = self
-  //     .agents
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+  #[napi]
+  pub fn list_agents(&self) -> napi::Result<Vec<AgentInfo>> {
+    let agents = self
+      .agents
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
 
-  //   Ok(
-  //     agents
-  //       .values()
-  //       .map(|a| AgentInfo {
-  //         id: a.id.clone(),
-  //         system_prompt: a.system_prompt.clone(),
-  //         message_count: a.history.len() as u32,
-  //       })
-  //       .collect(),
-  //   )
-  // }
+    Ok(
+      agents
+        .values()
+        .map(|a| AgentInfo {
+          id: a.id.clone(),
+          system_prompt: a.system_prompt.clone(),
+          message_count: a.history.len() as u32,
+        })
+        .collect(),
+    )
+  }
 
   // #[napi]
   // pub async fn send_message(
@@ -255,126 +262,31 @@ impl AgentAPI {
   //   on_token: ThreadsafeFunction<String>,
   //   on_complete: ThreadsafeFunction<ChatMessage>,
   //   on_error: ThreadsafeFunction<String>,
-  // ) -> Result<ChatMessage> {
-  //   use futures::StreamExt;
-
-  //   // Clone Arcs for use in async block
-  //   let agents_arc = self.agents.clone();
-  //   let providers_arc = self.providers.clone();
-
-  //   // Add user message to history
-  //   {
-  //     let mut agents = agents_arc
-  //       .lock()
-  //       .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-
-  //     let agent = agents
-  //       .get_mut(&agent_id)
-  //       .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
-
-  //     let user_msg = RustChatMessage {
-  //       role: RustChatRole::User,
-  //       content: message,
-  //     };
-  //     agent.history.push(user_msg);
-  //   }
-
-  //   // Get history and generate response
-  //   let history = {
-  //     let agents = agents_arc
-  //       .lock()
-  //       .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-
-  //     let agent = agents
-  //       .get(&agent_id)
-  //       .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
-
-  //     agent.history.clone()
-  //   };
-
-  //   let mut providers = providers_arc
-  //     .lock()
-  //     .map_err(|e| eyre!(format!("Lock error: {}", e)))?;
-  //   // Generate streaming response
-  //   let mut stream = {
-  //     let provider_id_arc = Arc::new(provider_id);
-  //     let model_id_arc = Arc::new(model_id);
-
-  //     match providers
-  //       .generate_reply_stream(provider_id_arc, &model_id_arc, history)
-  //       .await
-  //     {
-  //       Ok(s) => s,
-  //       Err(e) => {
-  //         let error_msg = format!("Failed to generate response: {}", e);
-  //         on_error.call(Ok(error_msg), ThreadsafeFunctionCallMode::NonBlocking);
-  //         return Err(eyre!(e.to_string()));
-  //       }
-  //     }
-  //   };
-
-  //   // Collect streaming response
-  //   let mut full_response = String::new();
-
-  //   while let Some(chunk_result) = stream.next().await {
-  //     match chunk_result {
-  //       Ok(chunk) => {
-  //         full_response.push_str(&chunk);
-  //         // Stream token to JavaScript
-  //         on_token.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
-  //       }
-  //       Err(e) => {
-  //         let error_msg = format!("Stream error: {}", e);
-  //         on_error.call(Ok(error_msg), ThreadsafeFunctionCallMode::NonBlocking);
-  //         return Err(eyre!(e.to_string()));
-  //       }
-  //     }
-  //   }
-
-  //   // Create assistant message and update history
-  //   let assistant_msg = RustChatMessage {
-  //     role: RustChatRole::Assistant,
-  //     content: full_response.clone(),
-  //   };
-
-  //   {
-  //     let mut agents = agents_arc
-  //       .lock()
-  //       .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-
-  //     let agent = agents
-  //       .get_mut(&agent_id)
-  //       .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
-
-  //     agent.history.push(assistant_msg.clone());
-  //   }
-
-  //   // Convert to JS type and call complete callback
-  //   let js_msg = ChatMessage::from(assistant_msg);
-  //   on_complete.call(Ok(js_msg.clone()), ThreadsafeFunctionCallMode::NonBlocking);
-
-  //   Ok(js_msg)
+  // ) -> napi::Result<ChatMessage> {
+  //   // TODO: Implement streaming with proper Send bounds
+  //   // This requires making ProviderManager Send or restructuring the code
+  //   unimplemented!("Streaming not yet implemented due to Send requirements")
   // }
 
-  // #[napi]
-  // pub fn get_history(&self, agent_id: String) -> Result<Vec<ChatMessage>> {
-  //   let agents = self
-  //     .agents
-  //     .lock()
-  //     .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+  #[napi]
+  pub fn get_history(&self, agent_id: String) -> napi::Result<Vec<ChatMessage>> {
+    let agents = self
+      .agents
+      .lock()
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
 
-  //   let agent = agents
-  //     .get(&agent_id)
-  //     .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
+    let agent = agents
+      .get(&agent_id)
+      .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
 
-  //   Ok(
-  //     agent
-  //       .history
-  //       .iter()
-  //       .map(|m| ChatMessage::from(m.clone()))
-  //       .collect(),
-  //   )
-  // }
+    Ok(
+      agent
+        .history
+        .iter()
+        .map(|m| ChatMessage::from(m.clone()))
+        .collect(),
+    )
+  }
 }
 
 // AgentHandle class
