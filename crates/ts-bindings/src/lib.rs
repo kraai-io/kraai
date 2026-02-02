@@ -126,12 +126,12 @@ impl AgentAPI {
         providers.register_factory::<OpenAIFactory>();
 
         // Load config from file
-        // for a in std::fs::read_dir("/").unwrap() {
-        //   return Err::<_, napi::Error>(Error::new(
-        //     Status::GenericFailure,
-        //     format!("Failed to read config: {:#?}", a),
-        //   ));
-        // }
+        for a in std::fs::read_dir("/").unwrap() {
+          return Err::<_, napi::Error>(Error::new(
+            Status::GenericFailure,
+            format!("Failed to read config: {:#?}", a),
+          ));
+        }
         let config_slice = match std::fs::read("~/code/agent/crates/ts-bindings/config/config.toml")
         {
           Ok(data) => data,
