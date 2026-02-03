@@ -111,6 +111,29 @@ function App(): React.JSX.Element {
 		}
 	};
 
+	// HTTP Request Test
+	const [httpResult, setHttpResult] = useState<string | null>(null);
+	const [httpLoading, setHttpLoading] = useState(false);
+
+	const handleTestHttp = async () => {
+		setHttpLoading(true);
+		setError(null);
+		try {
+			// Test with httpbin.org
+			const result = await window.api.testHttpRequest(
+				"https://example.com/",
+			);
+			setHttpResult(result);
+			console.log("HTTP Result:", result);
+		} catch (err) {
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			setError(`HTTP Test Error: ${errorMsg}`);
+			console.error("HTTP Test failed:", err);
+		} finally {
+			setHttpLoading(false);
+		}
+	};
+
 	return (
 		<div className="p-4 max-w-4xl">
 			<h1 className="underline text-2xl font-bold mb-4">Agent Demo</h1>
@@ -130,6 +153,22 @@ function App(): React.JSX.Element {
 						<p className="mt-2 text-green-600">
 							Rust says: 42 + 100 = {result}
 						</p>
+					)}
+				</div>
+
+				<div className="p-4 border rounded">
+					<h2 className="font-bold mb-2">HTTP Test</h2>
+					<Button
+						onClick={handleTestHttp}
+						variant="outline"
+						disabled={httpLoading}
+					>
+						{httpLoading ? "Testing..." : "Test HTTP Request (Rust)"}
+					</Button>
+					{httpResult && (
+						<div className="mt-2 p-2 rounded text-xs overflow-auto max-h-40">
+							<pre>{httpResult}</pre>
+						</div>
 					)}
 				</div>
 

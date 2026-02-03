@@ -17,6 +17,23 @@ pub fn plus_100(input: u32) -> u32 {
   input + 100
 }
 
+// Simple HTTP request test
+#[napi]
+pub async fn test_http_request(url: String) -> napi::Result<String> {
+  let client = reqwest::Client::new();
+  match client.get(&url).send().await {
+    Ok(response) => {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      Ok(format!("Status: {}\nBody: {}", status, body))
+    }
+    Err(e) => Err(Error::new(
+      Status::GenericFailure,
+      format!("HTTP request failed: {}", e),
+    )),
+  }
+}
+
 // File error types for callback-based file operations
 #[napi]
 #[derive(Clone, Debug)]
