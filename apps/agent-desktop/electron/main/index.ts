@@ -1,7 +1,36 @@
 import { join } from "node:path";
 import { electronApp, is, optimizer } from "@electron-toolkit/utils";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import icon from "../../resources/icon.png?asset";
+import { ConfigWatcher } from "./config-watcher";
+import { FileHandler } from "./file-handler";
+
+// Initialize file handler
+const fileHandler = new FileHandler();
+fileHandler.ensureDefaultConfig();
+
+// Set up IPC handlers for file operations
+ipcMain.on("file:read", (event, filePath: string) => {
+	fileHandler.readFile(filePath).then((result) => {
+		event.returnValue = result;
+	});
+});
+
+ipcMain.on("file:write", (event, filePath: string, data: number[]) => {
+	const uint8Array = new Uint8Array(data);
+	fileHandler.writeFile(filePath, uint8Array).then((result) => {
+		event.returnValue = result;
+	});
+});
+
+ipcMain.on("file:listDir", (event, dirPath: string) => {
+	fileHandler.listDir(dirPath).then((result) => {
+		event.returnValue = result;
+	});
+});
+
+// Initialize config watcher
+let configWatcher: ConfigWatcher | null = null;
 
 function createWindow(): void {
 	// Create the browser window.
@@ -51,11 +80,27 @@ app.whenReady().then(() => {
 
 	createWindow();
 
+	// Start config watcher
+	configWatcher = new ConfigWatcher(fileHandler, (data) => {
+		console.log("Config file changed, reloading...");
+		// Notify renderer process to reload config
+		const windows = BrowserWindow.getAllWindows();
+		windows.forEach((win) => {
+			win.webContents.send("config:reload", Array.from(data));
+		});
+	});
+	configWatcher.start();
+
 	app.on("activate", () => {
 		// On macOS it's common to re-create a window in the app when the
 		// dock icon is clicked and there are no other windows open.
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
 	});
+});
+
+// Stop config watcher when quitting
+app.on("before-quit", () => {
+	configWatcher?.stop();
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common

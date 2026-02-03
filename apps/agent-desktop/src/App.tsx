@@ -3,7 +3,7 @@ import type {
 	AgentHandle,
 	AgentInfo,
 	ChatMessage,
-	ModelInfo,
+	// ModelInfo,
 } from "agent-ts-bindings";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ function App(): React.JSX.Element {
 	const [agentApiStatus, setAgentApiStatus] =
 		useState<string>("Not initialized");
 	const [agentApi, setAgentApi] = useState<AgentApi | null>(null);
-	const [models, setModels] = useState<ModelInfo[]>([]);
+	// const [models, setModels] = useState<ModelInfo[]>([]);
 	const [agents, setAgents] = useState<AgentInfo[]>([]);
 	const [currentAgent, setCurrentAgent] = useState<AgentHandle | null>(null);
 	const [history, setHistory] = useState<ChatMessage[]>([]);
@@ -27,7 +27,7 @@ function App(): React.JSX.Element {
 	const handleCreateAgentApi = () => {
 		try {
 			setError(null);
-			const api = new window.api.AgentApi();
+			const api = window.api.createAgentApi();
 			setAgentApi(api);
 			setAgentApiStatus("AgentAPI created successfully!");
 			console.log("AgentAPI instance:", api);
@@ -39,22 +39,23 @@ function App(): React.JSX.Element {
 		}
 	};
 
-	const handleListModels = () => {
-		if (!agentApi) {
-			setError("AgentAPI not initialized");
-			return;
-		}
-		try {
-			setError(null);
-			const modelList = agentApi.listModels();
-			setModels(modelList);
-			console.log("Models:", modelList);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(errorMsg);
-			console.error("Failed to list models:", err);
-		}
-	};
+	// TODO: Re-enable when listModels is implemented
+	// const handleListModels = () => {
+	// 	if (!agentApi) {
+	// 		setError("AgentAPI not initialized");
+	// 		return;
+	// 	}
+	// 	try {
+	// 		setError(null);
+	// 		const modelList = agentApi.listModels();
+	// 		setModels(modelList);
+	// 		console.log("Models:", modelList);
+	// 	} catch (err) {
+	// 		const errorMsg = err instanceof Error ? err.message : String(err);
+	// 		setError(errorMsg);
+	// 		console.error("Failed to list models:", err);
+	// 	}
+	// };
 
 	const handleCreateAgent = () => {
 		if (!agentApi) {
@@ -148,9 +149,11 @@ function App(): React.JSX.Element {
 					<div className="p-4 border rounded">
 						<h2 className="font-bold mb-2">Agent Management</h2>
 						<div className="space-x-2">
+							{/* TODO: Re-enable when listModels is implemented
 							<Button onClick={handleListModels} variant="outline">
 								List Models
 							</Button>
+							*/}
 							<Button onClick={handleCreateAgent} variant="outline">
 								Create Agent
 							</Button>
@@ -164,6 +167,7 @@ function App(): React.JSX.Element {
 							)}
 						</div>
 
+						{/* TODO: Re-enable when listModels is implemented
 						{models.length > 0 && (
 							<div className="mt-4">
 								<h3 className="font-semibold">Available Models:</h3>
@@ -176,6 +180,7 @@ function App(): React.JSX.Element {
 								</ul>
 							</div>
 						)}
+						*/}
 
 						{agents.length > 0 && (
 							<div className="mt-4">

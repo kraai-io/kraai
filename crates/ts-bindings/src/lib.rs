@@ -6,15 +6,33 @@ use std::sync::{Arc, Mutex};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
-use provider_core::{ProviderManager, ProviderManagerConfig};
-use provider_google::GoogleFactory;
-use provider_openai::OpenAIFactory;
+// use provider_core::{ProviderManager, ProviderManagerConfig};
+// use provider_google::GoogleFactory;
+// use provider_openai::OpenAIFactory;
 use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
 
 // Re-export the simple function for testing
 #[napi]
 pub fn plus_100(input: u32) -> u32 {
   input + 100
+}
+
+// File error types for callback-based file operations
+#[napi]
+#[derive(Clone, Debug)]
+pub enum FileError {
+  NotFound { path: String },
+  PermissionDenied { path: String, operation: String },
+  InvalidPath { path: String, reason: String },
+  IoError { path: String, message: String },
+  UserCancelled,
+  ParseError { path: String, message: String },
+}
+
+impl FileError {
+  fn to_napi_error(&self) -> napi::Error {
+    Error::new(Status::GenericFailure, format!("{:?}", self))
+  }
 }
 
 // Enums
@@ -94,102 +112,50 @@ struct AgentState {
   history: Vec<RustChatMessage>,
 }
 
+// File operation result types
+type FileReadResult = Either<FileError, Uint8Array>;
+type FileWriteResult = Either<FileError, ()>;
+type ListDirResult = Either<FileError, Vec<String>>;
+
 // AgentAPI class - uses Arc<Mutex<>> for interior mutability
-// Mark as Send since we need to use it across async boundaries
+// File access is done through callbacks to TypeScript
 #[napi]
 pub struct AgentAPI {
-  providers: Arc<Mutex<ProviderManager>>,
   agents: Arc<Mutex<BTreeMap<String, AgentState>>>,
   next_agent_id: Arc<Mutex<u32>>,
+  // File operation callbacks (wrapped in Arc for Clone)
+  read_file_callback: Arc<ThreadsafeFunction<String, FileReadResult>>,
+  write_file_callback: Arc<ThreadsafeFunction<(String, Uint8Array), FileWriteResult>>,
+  list_dir_callback: Arc<ThreadsafeFunction<String, ListDirResult>>,
 }
 
-// Manual Send implementation since ProviderManager is not automatically Send
-// This is safe because we use Mutex for all access
+// Manual Send implementation
 unsafe impl Send for AgentAPI {}
 unsafe impl Sync for AgentAPI {}
 
 #[napi]
 impl AgentAPI {
   #[napi(constructor)]
-  pub fn new() -> napi::Result<Self> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-      Error::new(
-        Status::GenericFailure,
-        format!("Failed to create runtime: {}", e),
-      )
-    })?;
-
-    let providers = rt
-      .block_on(async {
-        let mut providers = ProviderManager::new();
-        providers.register_factory::<GoogleFactory>();
-        providers.register_factory::<OpenAIFactory>();
-
-        // Load config from file
-        for a in std::fs::read_dir("/").unwrap() {
-          return Err::<_, napi::Error>(Error::new(
-            Status::GenericFailure,
-            format!("Failed to read config: {:#?}", a),
-          ));
-        }
-        let config_slice = match std::fs::read("~/code/agent/crates/ts-bindings/config/config.toml")
-        {
-          Ok(data) => data,
-          Err(e) => {
-            return Err::<_, napi::Error>(Error::new(
-              Status::GenericFailure,
-              format!("Failed to read config: {}", e),
-            ));
-          }
-        };
-
-        let config: ProviderManagerConfig = match toml::from_slice(&config_slice) {
-          Ok(cfg) => cfg,
-          Err(e) => {
-            return Err::<_, napi::Error>(Error::new(
-              Status::GenericFailure,
-              format!("Failed to parse config: {}", e),
-            ));
-          }
-        };
-
-        if let Err(e) = providers.load_config(config).await {
-          return Err::<_, napi::Error>(Error::new(
-            Status::GenericFailure,
-            format!("Failed to load config: {}", e),
-          ));
-        }
-
-        Ok::<_, napi::Error>(providers)
-      })
-      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
-
+  pub fn new(
+    read_file_callback: ThreadsafeFunction<String, Either<FileError, Uint8Array>>,
+    write_file_callback: ThreadsafeFunction<(String, Uint8Array), Either<FileError, ()>>,
+    list_dir_callback: ThreadsafeFunction<String, Either<FileError, Vec<String>>>,
+  ) -> napi::Result<Self> {
+    // Create AgentAPI with file callbacks
     Ok(AgentAPI {
-      providers: Arc::new(Mutex::new(providers)),
       agents: Arc::new(Mutex::new(BTreeMap::new())),
       next_agent_id: Arc::new(Mutex::new(0)),
+      read_file_callback: Arc::new(read_file_callback),
+      write_file_callback: Arc::new(write_file_callback),
+      list_dir_callback: Arc::new(list_dir_callback),
     })
   }
 
-  #[napi]
-  pub fn list_models(&self) -> napi::Result<Vec<ModelInfo>> {
-    let providers = self
-      .providers
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-
-    let models = providers.list_all_models();
-    Ok(
-      models
-        .into_iter()
-        .map(|m| ModelInfo {
-          id: (*m.id).clone(),
-          name: m.name,
-          max_context: m.max_context.map(|n| n as u32),
-        })
-        .collect(),
-    )
-  }
+  // TODO: Re-enable when ProviderManager is set up
+  // #[napi]
+  // pub fn list_models(&self) -> napi::Result<Vec<ModelInfo>> {
+  //   Ok(vec![])
+  // }
 
   #[napi]
   pub fn create_agent(&self, system_prompt: String) -> napi::Result<AgentHandle> {
@@ -287,6 +253,44 @@ impl AgentAPI {
         .collect(),
     )
   }
+
+  // File operation methods
+  #[napi]
+  pub async fn read_file(&self, path: String) -> napi::Result<Either<FileError, Uint8Array>> {
+    self
+      .read_file_callback
+      .call_async(Ok(path))
+      .await
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+  }
+
+  #[napi]
+  pub async fn write_file(
+    &self,
+    path: String,
+    data: Uint8Array,
+  ) -> napi::Result<Either<FileError, ()>> {
+    self
+      .write_file_callback
+      .call_async(Ok((path, data)))
+      .await
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+  }
+
+  #[napi]
+  pub async fn list_dir(&self, path: String) -> napi::Result<Either<FileError, Vec<String>>> {
+    self
+      .list_dir_callback
+      .call_async(Ok(path))
+      .await
+      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+  }
+
+  // TODO: Re-enable when ProviderManager is set up
+  // #[napi]
+  // pub async fn reload_config(&self) -> napi::Result<()> {
+  //   Ok(())
+  // }
 }
 
 // AgentHandle class
