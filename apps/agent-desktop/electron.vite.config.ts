@@ -10,6 +10,7 @@ export default defineConfig({
 				input: {
 					index: resolve(__dirname, "electron/main/index.ts"),
 				},
+				external: ["chokidar"],
 			},
 		},
 	},
