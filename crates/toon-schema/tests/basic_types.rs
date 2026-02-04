@@ -17,58 +17,71 @@ struct Person {
 #[test]
 fn test_basic_types() {
     let schema = Person::toon_schema();
+    let lines: Vec<&str> = schema.lines().collect();
 
-    // Check that schema contains expected parts
-    assert!(
-        schema.contains("tool: Person"),
-        "Schema should contain tool name"
+    // Verify exact schema structure line by line
+    // # A simple person struct
+    // tool: Person
+    // # Person's name
+    // name[1:1]: string
+    // # Person's age
+    // age[1:1]: integer
+    // # Is person active
+    // active[1:1]: boolean
+    // <blank>
+    // Example:
+    // tool: Person
+    // name: Alice
+    // age: 30
+    // active: true
+    assert_eq!(
+        lines[0], "# A simple person struct",
+        "First line should be description comment"
     );
-    assert!(
-        schema.contains("# A simple person struct"),
-        "Schema should contain description as comment"
+    assert_eq!(lines[1], "tool: Person", "Second line should be tool name");
+    assert_eq!(
+        lines[2], "# Person's name",
+        "Third line should be name description"
     );
-    assert!(
-        schema.contains("# Person's name"),
-        "Schema should contain name description"
+    assert_eq!(
+        lines[3], "name[1:1]: string",
+        "Fourth line should be name field with type"
     );
-    assert!(
-        schema.contains("name[1:1]: string"),
-        "Schema should contain name field with type"
+    assert_eq!(
+        lines[4], "# Person's age",
+        "Fifth line should be age description"
     );
-    assert!(
-        schema.contains("# Person's age"),
-        "Schema should contain age description"
+    assert_eq!(
+        lines[5], "age[1:1]: integer",
+        "Sixth line should be age field with type"
     );
-    assert!(
-        schema.contains("age[1:1]: integer"),
-        "Schema should contain age field with type"
+    assert_eq!(
+        lines[6], "# Is person active",
+        "Seventh line should be active description"
     );
-    assert!(
-        schema.contains("# Is person active"),
-        "Schema should contain active description"
-    );
-    assert!(
-        schema.contains("active[1:1]: boolean"),
-        "Schema should contain active field with type"
+    assert_eq!(
+        lines[7], "active[1:1]: boolean",
+        "Eighth line should be active field with type"
     );
 
     // Check example section
-    assert!(
-        schema.contains("Example:"),
-        "Schema should contain example section"
+    assert_eq!(lines[8], "", "Ninth line should be empty separator");
+    assert_eq!(lines[9], "Example:", "Tenth line should be example header");
+    assert_eq!(
+        lines[10], "tool: Person",
+        "Eleventh line should be example tool name"
     );
-    assert!(
-        schema.contains("tool: Person"),
-        "Example should contain tool name"
+    assert_eq!(
+        lines[11], "name: Alice",
+        "Twelfth line should be example name"
     );
-    assert!(
-        schema.contains("name: Alice"),
-        "Example should contain name"
+    assert_eq!(
+        lines[12], "age: 30",
+        "Thirteenth line should be example age"
     );
-    assert!(schema.contains("age: 30"), "Example should contain age");
-    assert!(
-        schema.contains("active: true"),
-        "Example should contain active"
+    assert_eq!(
+        lines[13], "active: true",
+        "Fourteenth line should be example active"
     );
 }
 
@@ -78,12 +91,27 @@ fn test_schema_structure() {
     let lines: Vec<&str> = schema.lines().collect();
 
     // First line should be description comment
-    assert_eq!(lines[0], "# A simple person struct");
+    assert_eq!(
+        lines[0], "# A simple person struct",
+        "First line should be description"
+    );
 
     // Second line should be tool name
-    assert_eq!(lines[1], "tool: Person");
+    assert_eq!(lines[1], "tool: Person", "Second line should be tool name");
 
-    // Should have field definitions (look for type patterns)
-    let field_lines: Vec<_> = lines.iter().filter(|l| l.contains("[1:1]:")).collect();
-    assert_eq!(field_lines.len(), 3, "Should have 3 required fields");
+    // Should have exactly 3 required fields (field lines with [1:1] range)
+    let field_lines: Vec<String> = lines
+        .iter()
+        .filter(|l| l.contains("[1:1]:"))
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(
+        field_lines,
+        vec![
+            "name[1:1]: string",
+            "age[1:1]: integer",
+            "active[1:1]: boolean"
+        ],
+        "Should have 3 required fields with exact format"
+    );
 }
