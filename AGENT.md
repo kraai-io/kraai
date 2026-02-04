@@ -236,6 +236,7 @@ This project uses **jj** (Jujutsu) for version control instead of git.
    ```bash
    jj desc -m "commit message"
    ```
+   > **Note:** `jj desc` only changes the description of the current commit. It does NOT move you to a different commit or create a new one. You stay on the same working copy.
 
 3. **For LLM-made commits:**
    - Use a single line description
