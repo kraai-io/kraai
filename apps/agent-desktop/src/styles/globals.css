@@ -121,3 +121,31 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom scrollbar styling to match shadcn theme */
+@layer utilities {
+  .scrollbar-themed {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted-foreground) transparent;
+  }
+  
+  .scrollbar-themed::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .scrollbar-themed::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .scrollbar-themed::-webkit-scrollbar-thumb {
+    background: var(--muted-foreground);
+    border-radius: var(--radius);
+    opacity: 0.5;
+  }
+  
+  .scrollbar-themed::-webkit-scrollbar-thumb:hover {
+    background: var(--foreground);
+    opacity: 0.7;
+  }
+}

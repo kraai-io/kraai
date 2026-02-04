@@ -50,10 +50,28 @@ function App(): React.JSX.Element {
 	const [isLoading, setIsLoading] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const isAtBottomRef = useRef(true);
 
-	// Autofocus textarea on mount and after loading completes
+	// Check if scroll is at bottom (within 50px threshold)
+	const checkIsAtBottom = () => {
+		const container = scrollRef.current;
+		if (!container) return true;
+		const threshold = 50;
+		const position = container.scrollHeight - container.scrollTop - container.clientHeight;
+		return position < threshold;
+	};
+
+	// Handle scroll event to track if user is at bottom
+	const handleScroll = () => {
+		isAtBottomRef.current = checkIsAtBottom();
+	};
+
+	// Autofocus textarea on mount and scroll to bottom initially
 	useEffect(() => {
 		textareaRef.current?.focus();
+		if (scrollRef.current) {
+			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		}
 	}, []);
 
 	// Refocus textarea when loading completes (after response received)
@@ -62,6 +80,13 @@ function App(): React.JSX.Element {
 			textareaRef.current?.focus();
 		}
 	}, [isLoading]);
+
+	// Smart autoscroll - only scroll if user was at bottom
+	useEffect(() => {
+		if (isAtBottomRef.current && scrollRef.current) {
+			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		}
+	}, [messages]);
 
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
@@ -131,7 +156,11 @@ function App(): React.JSX.Element {
 			</header>
 
 			{/* Messages Area */}
-			<div className="flex-1 overflow-y-auto px-4" ref={scrollRef}>
+			<div 
+				className="flex-1 overflow-y-auto px-4 scrollbar-themed" 
+				ref={scrollRef}
+				onScroll={handleScroll}
+			>
 				<div className="mx-auto max-w-3xl py-4">
 					{messages.length === 0 ? (
 						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
