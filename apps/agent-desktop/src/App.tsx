@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Bot, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ChatMessage } from "@/components/chat-message";
 
@@ -52,17 +51,17 @@ function App(): React.JSX.Element {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-	// Auto-scroll to bottom when messages change
-	useEffect(() => {
-		if (scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-		}
-	}, [messages]);
-
-	// Autofocus textarea on mount
+	// Autofocus textarea on mount and after loading completes
 	useEffect(() => {
 		textareaRef.current?.focus();
 	}, []);
+
+	// Refocus textarea when loading completes (after response received)
+	useEffect(() => {
+		if (!isLoading) {
+			textareaRef.current?.focus();
+		}
+	}, [isLoading]);
 
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
@@ -132,7 +131,7 @@ function App(): React.JSX.Element {
 			</header>
 
 			{/* Messages Area */}
-			<ScrollArea className="flex-1 px-4" ref={scrollRef}>
+			<div className="flex-1 overflow-y-auto px-4" ref={scrollRef}>
 				<div className="mx-auto max-w-3xl py-4">
 					{messages.length === 0 ? (
 						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -155,7 +154,7 @@ function App(): React.JSX.Element {
 						</div>
 					)}
 				</div>
-			</ScrollArea>
+			</div>
 
 			<Separator />
 
