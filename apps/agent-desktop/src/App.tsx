@@ -120,9 +120,7 @@ function App(): React.JSX.Element {
 		setError(null);
 		try {
 			// Test with httpbin.org
-			const result = await window.api.testHttpRequest(
-				"https://example.com/",
-			);
+			const result = await window.api.testHttpRequest("https://example.com/");
 			setHttpResult(result);
 			console.log("HTTP Result:", result);
 		} catch (err) {

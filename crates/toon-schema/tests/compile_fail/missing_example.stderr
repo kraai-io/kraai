@@ -1,0 +1,5 @@
+error: Field 'field' must have a #[toon_schema(example = "...")] attribute
+ --> tests/compile_fail/missing_example.rs:8:5
+  |
+8 |     field: String,
+  |     ^^^^^
