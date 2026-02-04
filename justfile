@@ -112,10 +112,10 @@ dist-build-bindings TARGET="native":
             exit 1
         fi
         echo "Building bindings for native target: $TARGET_TRIPLE"
-        cd crates/ts-bindings && napi build --platform --release --target "$TARGET_TRIPLE"
+        cd crates/ts-bindings && pnpm napi build --platform --release --target "$TARGET_TRIPLE"
     else
         echo "Building bindings for target: {{TARGET}}"
-        cd crates/ts-bindings && napi build --platform --release --target "{{TARGET}}"
+        cd crates/ts-bindings && pnpm napi build --platform --release --target "{{TARGET}}"
     fi
 
 # Build electron app (typecheck + vite build)
@@ -125,7 +125,6 @@ dist-build-app:
 # Package the app for current platform (unpackaged, for testing)
 dist-unpack: dist-setup (dist-build-bindings "native") dist-build-app
     cd apps/agent-desktop && pnpm build:unpack
-    @echo "Unpackaged build complete in apps/agent-desktop/out/"
 
 # Linux distribution build
 # Supports: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
@@ -138,8 +137,7 @@ dist-linux TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-a
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for Linux ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && electron-builder --linux --config
-    @echo "Linux packages created in apps/agent-desktop/dist/"
+    cd apps/agent-desktop && pnpm electron-builder --linux --config
     cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
 
 # macOS distribution build
@@ -153,8 +151,7 @@ dist-mac TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for macOS ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && electron-builder --mac --config
-    @echo "macOS packages created in apps/agent-desktop/dist/"
+    cd apps/agent-desktop && pnpm electron-builder --mac --config
     cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
 
 # Windows distribution build
@@ -168,6 +165,5 @@ dist-win TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for Windows ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && electron-builder --win --config
-    @echo "Windows packages created in apps/agent-desktop/dist/"
+    cd apps/agent-desktop && pnpm electron-builder --win --config
     cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
