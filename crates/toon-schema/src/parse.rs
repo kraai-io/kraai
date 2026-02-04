@@ -8,23 +8,35 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
     let struct_name = input.ident.to_string();
 
     // Parse struct-level attributes
+    let mut name = None;
     let mut description = None;
     for attr in &input.attrs {
         if attr.path().is_ident("toon_schema") {
             let metas = attr.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)?;
             for meta in metas {
-                if let Meta::NameValue(nv) = meta
-                    && nv.path.is_ident("description")
-                    && let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                {
-                    description = Some(s.value());
+                if let Meta::NameValue(nv) = meta {
+                    if nv.path.is_ident("name")
+                        && let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = &nv.value
+                    {
+                        name = Some(s.value());
+                    } else if nv.path.is_ident("description")
+                        && let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = &nv.value
+                    {
+                        description = Some(s.value());
+                    }
                 }
             }
         }
     }
+    
+    // Use custom name if provided, otherwise use struct name
+    let name = name.unwrap_or(struct_name);
 
     // Parse fields
     let fields = match &input.data {
@@ -41,7 +53,7 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
     };
 
     Ok(Schema {
-        name: struct_name,
+        name,
         description,
         fields,
     })

@@ -20,30 +20,46 @@ fn test_basic_types() {
 
     // Check that schema contains expected parts
     assert!(
-        schema.contains("Person:"),
-        "Schema should contain struct name"
+        schema.contains("tool: Person"),
+        "Schema should contain tool name"
     );
     assert!(
-        schema.contains("description: \"A simple person struct\""),
-        "Schema should contain description"
+        schema.contains("# A simple person struct"),
+        "Schema should contain description as comment"
     );
     assert!(
-        schema.contains("name[1:1]: string \"Person's name\""),
-        "Schema should contain name field"
+        schema.contains("# Person's name"),
+        "Schema should contain name description"
     );
     assert!(
-        schema.contains("age[1:1]: integer \"Person's age\""),
-        "Schema should contain age field"
+        schema.contains("name[1:1]: string"),
+        "Schema should contain name field with type"
     );
     assert!(
-        schema.contains("active[1:1]: boolean \"Is person active\""),
-        "Schema should contain active field"
+        schema.contains("# Person's age"),
+        "Schema should contain age description"
+    );
+    assert!(
+        schema.contains("age[1:1]: integer"),
+        "Schema should contain age field with type"
+    );
+    assert!(
+        schema.contains("# Is person active"),
+        "Schema should contain active description"
+    );
+    assert!(
+        schema.contains("active[1:1]: boolean"),
+        "Schema should contain active field with type"
     );
 
     // Check example section
     assert!(
         schema.contains("Example:"),
         "Schema should contain example section"
+    );
+    assert!(
+        schema.contains("tool: Person"),
+        "Example should contain tool name"
     );
     assert!(
         schema.contains("name: Alice"),
@@ -61,13 +77,13 @@ fn test_schema_structure() {
     let schema = Person::toon_schema();
     let lines: Vec<&str> = schema.lines().collect();
 
-    // First line should be struct name
-    assert_eq!(lines[0], "Person:");
+    // First line should be description comment
+    assert_eq!(lines[0], "# A simple person struct");
 
-    // Second line should be description
-    assert!(lines[1].contains("description:"));
+    // Second line should be tool name
+    assert_eq!(lines[1], "tool: Person");
 
-    // Should have exactly 3 field lines (name, age, active)
+    // Should have field definitions (look for type patterns)
     let field_lines: Vec<_> = lines.iter().filter(|l| l.contains("[1:1]:")).collect();
     assert_eq!(field_lines.len(), 3, "Should have 3 required fields");
 }

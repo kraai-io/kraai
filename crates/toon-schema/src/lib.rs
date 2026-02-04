@@ -54,6 +54,9 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     // Generate example JSON construction
     let example_construction = generate_example_construction(&schema);
 
+    // Get the tool name from schema
+    let tool_name = &schema.name;
+
     Ok(quote! {
         #validation
 
@@ -71,7 +74,7 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 let example_toon = encode_object(example_json, &EncodeOptions::new())
                     .expect("Failed to encode to Toon format");
 
-                format!("{}\n\nExample:\n{}", #schema_str, example_toon)
+                format!("{}\n\nExample:\ntool: {}\n{}", #schema_str, #tool_name, example_toon)
             }
         }
     })
@@ -80,13 +83,15 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 fn generate_schema_string(schema: &Schema) -> String {
     let mut lines = vec![];
 
-    // Struct name and description
-    lines.push(format!("{}:", schema.name));
+    // Description as a comment if present
     if let Some(desc) = &schema.description {
-        lines.push(format!("  description: \"{}\"", desc));
+        lines.push(format!("# {}", desc));
     }
 
-    // Fields
+    // Tool name
+    lines.push(format!("tool: {}", schema.name));
+
+    // Fields with descriptions as comments above them
     for field in &schema.fields {
         if field.skipped {
             continue;
@@ -105,15 +110,14 @@ fn generate_schema_string(schema: &Schema) -> String {
             ""
         };
 
-        let desc_str = field
-            .description
-            .as_ref()
-            .map(|d| format!(" \"{}\"", d))
-            .unwrap_or_default();
+        // Add description as a comment before the field
+        if let Some(desc) = &field.description {
+            lines.push(format!("# {}", desc));
+        }
 
         lines.push(format!(
-            "  {}{}: {}{}{}",
-            field.name, range_str, type_str, optional_marker, desc_str
+            "{}{}: {}{}",
+            field.name, range_str, type_str, optional_marker
         ));
     }
 
