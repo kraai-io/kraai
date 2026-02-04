@@ -134,8 +134,18 @@ just build-all        # Build bindings + desktop
 just dev-all          # Build bindings then start desktop dev
 
 # Cleanup
-just clean            # Clean everything
+just clean            # Clean everything (includes bindings artifacts and releases/)
 just reset            # Clean + reinstall
+
+# Distribution builds (from scratch - no dependencies needed)
+just dist-setup                          # Install all dependencies fresh
+just dist-unpack                         # Build for current platform (unpackaged, for testing)
+just dist-linux                          # Build Linux packages (auto-detect platform)
+just dist-linux x86_64-unknown-linux-gnu # Cross-compile for specific Linux target
+just dist-mac                            # Build macOS packages (auto-detect platform)  
+just dist-mac aarch64-apple-darwin       # Cross-compile for Apple Silicon
+just dist-win                            # Build Windows packages (auto-detect platform)
+just dist-win x86_64-pc-windows-msvc     # Cross-compile for Windows
 
 # CI simulation
 just localCI          # Run nix flake checks
