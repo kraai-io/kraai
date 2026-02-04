@@ -1,0 +1,5 @@
+error: field name 'tool' is reserved
+ --> tests/compile_fail/reserved_tool.rs:8:5
+  |
+8 |     tool: String,
+  |     ^^^^

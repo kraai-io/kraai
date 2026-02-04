@@ -15,6 +15,7 @@ pub struct Field {
     pub example: String, // JSON string
     pub range: Range,
     pub skipped: bool,
+    pub default_value: Option<String>, // JSON string or None
 }
 
 /// Type representation
@@ -33,7 +34,22 @@ pub enum PrimitiveType {
 
 /// Range notation [min:max]
 pub enum Range {
-    Exactly(u32), // [N:N] - required fields
-    ZeroToOne,    // [0:1] - Option<T>
-    ZeroOrMore,   // [0:] - Vec<T>
+    Exactly(u32),      // [N:N] - required fields
+    ZeroToOne,         // [0:1] - Option<T>
+    ZeroOrMore,        // [0:] - Vec<T> without custom range
+    AtLeast(u32),      // [N:] - Vec<T> with min=N
+    Bounded(u32, u32), // [min:max] - Vec<T> with custom range
+}
+
+impl Range {
+    /// Format the range as a string for display
+    pub fn format(&self) -> String {
+        match self {
+            Range::Exactly(n) => format!("[{}:{}]", n, n),
+            Range::ZeroToOne => "[0:1]".to_string(),
+            Range::ZeroOrMore => "[0:]".to_string(),
+            Range::AtLeast(n) => format!("[{}:]", n),
+            Range::Bounded(min, max) => format!("[{}:{}]", min, max),
+        }
+    }
 }

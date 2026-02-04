@@ -1,0 +1,5 @@
+error: custom ranges can only be applied to Vec<T> fields
+ --> tests/compile_fail/custom_range_on_non_vec.rs:8:5
+  |
+8 |     name: String,
+  |     ^^^^

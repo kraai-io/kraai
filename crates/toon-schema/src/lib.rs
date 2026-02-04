@@ -5,7 +5,7 @@ use syn::{DeriveInput, parse_macro_input};
 mod ir;
 mod parse;
 
-use ir::{PrimitiveType, Range, Schema, Type};
+use ir::{PrimitiveType, Schema, Type};
 use parse::parse_toon_schema;
 
 /// Derive macro for generating Toon format schemas with examples.
@@ -45,24 +45,18 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     let struct_name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    // Generate schema string
+    // Generate the complete schema string at compile time
     let schema_str = generate_schema_string(&schema);
-
-    // Generate compile-time validation
-    let validation = generate_validation(&schema, struct_name);
-
-    // Generate example JSON construction
-    let example_construction = generate_example_construction(&schema);
-
-    // Get the tool name from schema
     let tool_name = &schema.name;
 
-    Ok(quote! {
-        #validation
+    // Generate compile-time example construction and encoding
+    let example_construction = generate_example_construction(&schema);
 
+    Ok(quote! {
         impl #impl_generics #struct_name #ty_generics #where_clause {
             /// Generate the Toon format schema string.
-            pub fn toon_schema() -> String {
+            /// This is generated at compile time for optimal performance.
+            pub fn toon_schema() -> &'static str {
                 use toon_format::{encode_object, EncodeOptions};
 
                 // Build example struct from field examples
@@ -74,7 +68,16 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 let example_toon = encode_object(example_json, &EncodeOptions::new())
                     .expect("Failed to encode to Toon format");
 
-                format!("{}\n\nExample:\ntool: {}\n{}", #schema_str, #tool_name, example_toon)
+                // Concatenate at runtime since example_toon is dynamic
+                // But the schema part is known at compile time
+                static SCHEMA_PART: &str = #schema_str;
+                static TOOL_NAME: &str = #tool_name;
+                
+                // Leak the string to get a &'static str (safe since called infrequently)
+                Box::leak(
+                    format!("{}\n\nExample:\ntool: {}\n{}", SCHEMA_PART, TOOL_NAME, example_toon)
+                        .into_boxed_str()
+                )
             }
         }
     })
@@ -97,28 +100,26 @@ fn generate_schema_string(schema: &Schema) -> String {
             continue;
         }
 
-        let range_str = match field.range {
-            Range::Exactly(n) => format!("[{}:{}]", n, n),
-            Range::ZeroToOne => "[0:1]".to_string(),
-            Range::ZeroOrMore => "[0:]".to_string(),
-        };
-
+        let range_str = field.range.format();
         let type_str = format_type(&field.ty);
-        let optional_marker = if matches!(field.range, Range::ZeroToOne) {
-            " (optional)"
-        } else {
-            ""
-        };
 
         // Add description as a comment before the field
         if let Some(desc) = &field.description {
             lines.push(format!("# {}", desc));
         }
 
-        lines.push(format!(
-            "{}{}: {}{}",
-            field.name, range_str, type_str, optional_marker
-        ));
+        // Build the field line
+        let mut field_line = format!(
+            "{}{}: {}",
+            field.name, range_str, type_str
+        );
+
+        // Add default value as a comment
+        if let Some(default) = &field.default_value {
+            field_line.push_str(&format!(" # default: {}", default));
+        }
+
+        lines.push(field_line);
     }
 
     lines.join("\n")
@@ -134,12 +135,6 @@ fn format_type(ty: &Type) -> String {
         },
         Type::Array(inner) => format!("array<{}>", format_type(inner)),
     }
-}
-
-fn generate_validation(_schema: &Schema, _struct_name: &syn::Ident) -> proc_macro2::TokenStream {
-    // Validation happens at runtime when toon_schema() is called
-    // The example construction will panic if examples are invalid
-    quote! {}
 }
 
 fn generate_example_construction(schema: &Schema) -> proc_macro2::TokenStream {

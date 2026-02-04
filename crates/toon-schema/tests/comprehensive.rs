@@ -178,14 +178,14 @@ fn test_collections_structure() {
         items_line
     );
 
-    // Option should have [0:1] range and (optional) marker
+    // Option should have [0:1] range
     let maybe_line = schema_lines
         .iter()
         .find(|l| l.starts_with("maybe["))
         .unwrap();
     assert_eq!(
-        *maybe_line, "maybe[0:1]: string (optional)",
-        "Option should have [0:1] range and optional: {}",
+        *maybe_line, "maybe[0:1]: string",
+        "Option should have [0:1] range: {}",
         maybe_line
     );
 

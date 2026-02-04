@@ -1,7 +1,7 @@
 use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
 use syn::{
     Data, DataStruct, DeriveInput, Field as SynField, GenericArgument, Meta, PathArguments,
-    Type as SynType, TypePath, punctuated::Punctuated, token::Comma,
+    Type as SynType, TypePath, punctuated::Punctuated, token::Comma, Expr, Lit, ExprLit,
 };
 
 pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
@@ -43,7 +43,10 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
         Data::Struct(DataStruct { fields, .. }) => fields
             .iter()
             .map(parse_field)
-            .collect::<syn::Result<Vec<_>>>()?,
+            .collect::<syn::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()  // Filter out skipped fields
+            .collect(),
         _ => {
             return Err(syn::Error::new(
                 input.ident.span(),
@@ -59,13 +62,16 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
     })
 }
 
-fn parse_field(field: &SynField) -> syn::Result<Field> {
+fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     let mut name = field.ident.as_ref().unwrap().to_string();
     let mut description = None;
     let mut example = None;
     let mut skipped = false;
     let mut is_option = false;
     let mut is_vec = false;
+    let mut min: Option<u32> = None;
+    let mut max: Option<u32> = None;
+    let mut default_value: Option<String> = None;
 
     // Parse attributes
     for attr in &field.attrs {
@@ -86,6 +92,20 @@ fn parse_field(field: &SynField) -> syn::Result<Field> {
                     Meta::Path(path) if path.is_ident("skip") => {
                         skipped = true;
                     }
+                    Meta::Path(path) if path.is_ident("default") => {
+                        // #[serde(default)] - use default value of the type
+                        default_value = Some(String::from("default"));
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("default") => {
+                        // #[serde(default = "path")] - use custom default
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = &nv.value
+                        {
+                            default_value = Some(format!("{}", s.value()));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -95,8 +115,8 @@ fn parse_field(field: &SynField) -> syn::Result<Field> {
         if attr.path().is_ident("toon_schema") {
             let metas = attr.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)?;
             for meta in metas {
-                if let Meta::NameValue(nv) = meta {
-                    if nv.path.is_ident("description") {
+                match meta {
+                    Meta::NameValue(nv) if nv.path.is_ident("description") => {
                         if let syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(s),
                             ..
@@ -104,27 +124,68 @@ fn parse_field(field: &SynField) -> syn::Result<Field> {
                         {
                             description = Some(s.value());
                         }
-                    } else if nv.path.is_ident("example")
-                        && let syn::Expr::Lit(syn::ExprLit {
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("example") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(s),
                             ..
                         }) = &nv.value
-                    {
-                        example = Some(s.value());
+                        {
+                            example = Some(s.value());
+                        }
                     }
+                    Meta::NameValue(nv) if nv.path.is_ident("min") => {
+                        // Parse min = N
+                        if let Some(n) = parse_u32_expr(&nv.value) {
+                            min = Some(n);
+                        }
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("max") => {
+                        // Parse max = N
+                        if let Some(n) = parse_u32_expr(&nv.value) {
+                            max = Some(n);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
 
+    // If skipped, return None (filter out this field)
+    if skipped {
+        return Ok(None);
+    }
+
+    // Check for reserved word "tool"
+    if name == "tool" {
+        return Err(syn::Error::new(
+            field.ident.as_ref().unwrap().span(),
+            "field name 'tool' is reserved",
+        ));
+    }
+
     // Analyze type
     let ty = analyze_type(&field.ty, &mut is_option, &mut is_vec)?;
 
-    // Determine range based on type
+    // Validate: custom ranges only allowed on Vec types
+    if (min.is_some() || max.is_some()) && !is_vec {
+        return Err(syn::Error::new(
+            field.ident.as_ref().unwrap().span(),
+            "custom ranges can only be applied to Vec<T> fields",
+        ));
+    }
+
+    // Determine range based on type and custom range attributes
     let range = if is_option {
         Range::ZeroToOne
     } else if is_vec {
-        Range::ZeroOrMore
+        match (min, max) {
+            (Some(m), None) => Range::AtLeast(m),
+            (Some(m), Some(n)) => Range::Bounded(m, n),
+            (None, Some(n)) => Range::Bounded(0, n),
+            (None, None) => Range::ZeroOrMore,
+        }
     } else {
         Range::Exactly(1)
     };
@@ -141,14 +202,24 @@ fn parse_field(field: &SynField) -> syn::Result<Field> {
         )
     })?;
 
-    Ok(Field {
+    Ok(Some(Field {
         name,
         ty,
         description,
         example,
         range,
-        skipped,
-    })
+        skipped: false,  // We filtered these out above
+        default_value,
+    }))
+}
+
+fn parse_u32_expr(expr: &Expr) -> Option<u32> {
+    match expr {
+        Expr::Lit(ExprLit { lit: Lit::Int(i), .. }) => {
+            i.base10_parse::<u32>().ok()
+        }
+        _ => None,
+    }
 }
 
 fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool) -> syn::Result<Type> {
