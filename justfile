@@ -5,6 +5,9 @@ clean:
     cargo clean
     pnpm clean
     pnpm -r clean
+    rm -rf crates/ts-bindings/dist crates/ts-bindings/index.js crates/ts-bindings/index.d.ts crates/ts-bindings/browser.js
+    rm -rf crates/ts-bindings/*.node
+    rm -rf dist/ releases/
 
 build-bindings:
     cd crates/ts-bindings && pnpm build
@@ -61,3 +64,110 @@ _system := `nix eval --raw --impure --expr 'builtins.currentSystem'`
 localCI:
     nix flake check
     nix build .#devShells.{{ _system }}.default --no-link
+
+# Distribution builds - Fresh environment, cross-compilation ready
+# All packages go to releases/ directory
+
+# Detect current platform for native builds
+[private]
+dist-detect-target:
+    #!/usr/bin/env bash
+    case "$(uname -s)" in
+        Linux)
+            case "$(uname -m)" in
+                x86_64) echo "x86_64-unknown-linux-gnu" ;;
+                aarch64) echo "aarch64-unknown-linux-gnu" ;;
+                *) echo "unsupported" ;;
+            esac
+            ;;
+        Darwin)
+            case "$(uname -m)" in
+                x86_64) echo "x86_64-apple-darwin" ;;
+                arm64) echo "aarch64-apple-darwin" ;;
+                *) echo "unsupported" ;;
+            esac
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            case "$(uname -m)" in
+                x86_64) echo "x86_64-pc-windows-msvc" ;;
+                *) echo "unsupported" ;;
+            esac
+            ;;
+        *) echo "unsupported" ;;
+    esac
+
+# Install all dependencies fresh
+dist-setup:
+    pnpm install
+    mkdir -p releases
+
+# Build bindings for specific target (cross-compilation ready)
+# TARGET examples: x86_64-unknown-linux-gnu, x86_64-apple-darwin, x86_64-pc-windows-msvc
+dist-build-bindings TARGET="native":
+    #!/usr/bin/env bash
+    if [ "{{TARGET}}" = "native" ]; then
+        TARGET_TRIPLE=$(just dist-detect-target)
+        if [ "$TARGET_TRIPLE" = "unsupported" ]; then
+            echo "Unsupported platform"
+            exit 1
+        fi
+        echo "Building bindings for native target: $TARGET_TRIPLE"
+        cd crates/ts-bindings && napi build --platform --release --target "$TARGET_TRIPLE"
+    else
+        echo "Building bindings for target: {{TARGET}}"
+        cd crates/ts-bindings && napi build --platform --release --target "{{TARGET}}"
+    fi
+
+# Build electron app (typecheck + vite build)
+dist-build-app:
+    cd apps/agent-desktop && pnpm build
+
+# Package the app for current platform (unpackaged, for testing)
+dist-unpack: dist-setup (dist-build-bindings "native") dist-build-app
+    cd apps/agent-desktop && pnpm build:unpack
+    @echo "Unpackaged build complete in apps/agent-desktop/out/"
+
+# Linux distribution build
+# Supports: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+# Usage: just dist-linux (auto-detect) or just dist-linux x86_64-unknown-linux-gnu
+dist-linux TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
+    #!/usr/bin/env bash
+    if [ "{{TARGET}}" = "native" ]; then
+        TARGET_TRIPLE=$(just dist-detect-target)
+    else
+        TARGET_TRIPLE="{{TARGET}}"
+    fi
+    echo "Packaging for Linux ($TARGET_TRIPLE)..."
+    cd apps/agent-desktop && electron-builder --linux --config
+    @echo "Linux packages created in apps/agent-desktop/dist/"
+    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
+
+# macOS distribution build
+# Supports: x86_64-apple-darwin, aarch64-apple-darwin
+# Usage: just dist-mac (auto-detect) or just dist-mac aarch64-apple-darwin
+dist-mac TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
+    #!/usr/bin/env bash
+    if [ "{{TARGET}}" = "native" ]; then
+        TARGET_TRIPLE=$(just dist-detect-target)
+    else
+        TARGET_TRIPLE="{{TARGET}}"
+    fi
+    echo "Packaging for macOS ($TARGET_TRIPLE)..."
+    cd apps/agent-desktop && electron-builder --mac --config
+    @echo "macOS packages created in apps/agent-desktop/dist/"
+    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
+
+# Windows distribution build
+# Supports: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc, i686-pc-windows-msvc
+# Usage: just dist-win (auto-detect) or just dist-win x86_64-pc-windows-msvc
+dist-win TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
+    #!/usr/bin/env bash
+    if [ "{{TARGET}}" = "native" ]; then
+        TARGET_TRIPLE=$(just dist-detect-target)
+    else
+        TARGET_TRIPLE="{{TARGET}}"
+    fi
+    echo "Packaging for Windows ($TARGET_TRIPLE)..."
+    cd apps/agent-desktop && electron-builder --win --config
+    @echo "Windows packages created in apps/agent-desktop/dist/"
+    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
