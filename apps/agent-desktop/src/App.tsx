@@ -50,6 +50,7 @@ function App(): React.JSX.Element {
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	// Auto-scroll to bottom when messages change
 	useEffect(() => {
@@ -57,6 +58,11 @@ function App(): React.JSX.Element {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
 		}
 	}, [messages]);
+
+	// Autofocus textarea on mount
+	useEffect(() => {
+		textareaRef.current?.focus();
+	}, []);
 
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
@@ -157,6 +163,7 @@ function App(): React.JSX.Element {
 			<div className="border-t bg-background p-4">
 				<div className="mx-auto flex max-w-3xl items-end gap-2">
 					<Textarea
+						ref={textareaRef}
 						value={inputValue}
 						onChange={(e) => setInputValue(e.target.value)}
 						onKeyDown={handleKeyDown}
