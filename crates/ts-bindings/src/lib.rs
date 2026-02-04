@@ -1,14 +1,12 @@
 #![deny(clippy::all)]
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use color_eyre::eyre::{Context, Result};
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
-// use provider_core::{ProviderManager, ProviderManagerConfig};
-// use provider_google::GoogleFactory;
-// use provider_openai::OpenAIFactory;
 use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
 
 // Re-export the simple function for testing
@@ -20,18 +18,26 @@ pub fn plus_100(input: u32) -> u32 {
 // Simple HTTP request test
 #[napi]
 pub async fn test_http_request(url: String) -> napi::Result<String> {
+  test_http_request_inner(url)
+    .await
+    .map_err(to_napi_error)
+}
+
+async fn test_http_request_inner(url: String) -> Result<String> {
   let client = reqwest::Client::new();
-  match client.get(&url).send().await {
-    Ok(response) => {
-      let status = response.status();
-      let body = response.text().await.unwrap_or_default();
-      Ok(format!("Status: {}\nBody: {}", status, body))
-    }
-    Err(e) => Err(Error::new(
-      Status::GenericFailure,
-      format!("HTTP request failed: {}", e),
-    )),
-  }
+  let response = client
+    .get(&url)
+    .send()
+    .await
+    .wrap_err_with(|| format!("Failed to send HTTP request to {}", url))?;
+  
+  let status = response.status();
+  let body = response
+    .text()
+    .await
+    .wrap_err("Failed to read response body")?;
+  
+  Ok(format!("Status: {}\nBody: {}", status, body))
 }
 
 // File error types for callback-based file operations
@@ -46,10 +52,13 @@ pub enum FileError {
   ParseError { path: String, message: String },
 }
 
-impl FileError {
-  fn to_napi_error(&self) -> napi::Error {
-    Error::new(Status::GenericFailure, format!("{:?}", self))
-  }
+fn to_napi_error(err: color_eyre::Report) -> napi::Error {
+  napi::Error::new(Status::GenericFailure, format!("{:?}", err))
+}
+
+// Helper to convert Mutex poison errors to eyre errors
+fn lock_error<T>(err: PoisonError<T>) -> color_eyre::Report {
+  color_eyre::eyre::eyre!("Lock poisoned: {}", err)
 }
 
 // Enums
@@ -158,7 +167,15 @@ impl AgentAPI {
     write_file_callback: ThreadsafeFunction<(String, Uint8Array), Either<FileError, ()>>,
     list_dir_callback: ThreadsafeFunction<String, Either<FileError, Vec<String>>>,
   ) -> napi::Result<Self> {
-    // Create AgentAPI with file callbacks
+    Self::new_inner(read_file_callback, write_file_callback, list_dir_callback)
+      .map_err(to_napi_error)
+  }
+
+  fn new_inner(
+    read_file_callback: ThreadsafeFunction<String, Either<FileError, Uint8Array>>,
+    write_file_callback: ThreadsafeFunction<(String, Uint8Array), Either<FileError, ()>>,
+    list_dir_callback: ThreadsafeFunction<String, Either<FileError, Vec<String>>>,
+  ) -> Result<Self> {
     Ok(AgentAPI {
       agents: Arc::new(Mutex::new(BTreeMap::new())),
       next_agent_id: Arc::new(Mutex::new(0)),
@@ -176,14 +193,12 @@ impl AgentAPI {
 
   #[napi]
   pub fn create_agent(&self, system_prompt: String) -> napi::Result<AgentHandle> {
-    let mut agents = self
-      .agents
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-    let mut next_id = self
-      .next_agent_id
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+    self.create_agent_inner(system_prompt).map_err(to_napi_error)
+  }
+
+  fn create_agent_inner(&self, system_prompt: String) -> Result<AgentHandle> {
+    let mut agents = self.agents.lock().map_err(lock_error)?;
+    let mut next_id = self.next_agent_id.lock().map_err(lock_error)?;
 
     let id = format!("agent_{}", *next_id);
     *next_id += 1;
@@ -204,10 +219,11 @@ impl AgentAPI {
 
   #[napi]
   pub fn get_agent(&self, id: String) -> napi::Result<Option<AgentHandle>> {
-    let agents = self
-      .agents
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+    self.get_agent_inner(id).map_err(to_napi_error)
+  }
+
+  fn get_agent_inner(&self, id: String) -> Result<Option<AgentHandle>> {
+    let agents = self.agents.lock().map_err(lock_error)?;
 
     if agents.contains_key(&id) {
       Ok(Some(AgentHandle { id }))
@@ -218,10 +234,11 @@ impl AgentAPI {
 
   #[napi]
   pub fn list_agents(&self) -> napi::Result<Vec<AgentInfo>> {
-    let agents = self
-      .agents
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+    self.list_agents_inner().map_err(to_napi_error)
+  }
+
+  fn list_agents_inner(&self) -> Result<Vec<AgentInfo>> {
+    let agents = self.agents.lock().map_err(lock_error)?;
 
     Ok(
       agents
@@ -253,14 +270,15 @@ impl AgentAPI {
 
   #[napi]
   pub fn get_history(&self, agent_id: String) -> napi::Result<Vec<ChatMessage>> {
-    let agents = self
-      .agents
-      .lock()
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
+    self.get_history_inner(agent_id).map_err(to_napi_error)
+  }
+
+  fn get_history_inner(&self, agent_id: String) -> Result<Vec<ChatMessage>> {
+    let agents = self.agents.lock().map_err(lock_error)?;
 
     let agent = agents
       .get(&agent_id)
-      .ok_or_else(|| Error::new(Status::GenericFailure, "Agent not found"))?;
+      .ok_or_else(|| color_eyre::eyre::eyre!("Agent not found: {}", agent_id))?;
 
     Ok(
       agent
@@ -274,11 +292,14 @@ impl AgentAPI {
   // File operation methods
   #[napi]
   pub async fn read_file(&self, path: String) -> napi::Result<Either<FileError, Uint8Array>> {
-    self
-      .read_file_callback
+    self.read_file_inner(path).await.map_err(to_napi_error)
+  }
+
+  async fn read_file_inner(&self, path: String) -> Result<Either<FileError, Uint8Array>> {
+    self.read_file_callback
       .call_async(Ok(path))
       .await
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+      .wrap_err("Failed to invoke read_file callback")
   }
 
   #[napi]
@@ -287,20 +308,30 @@ impl AgentAPI {
     path: String,
     data: Uint8Array,
   ) -> napi::Result<Either<FileError, ()>> {
-    self
-      .write_file_callback
+    self.write_file_inner(path, data).await.map_err(to_napi_error)
+  }
+
+  async fn write_file_inner(
+    &self,
+    path: String,
+    data: Uint8Array,
+  ) -> Result<Either<FileError, ()>> {
+    self.write_file_callback
       .call_async(Ok((path, data)))
       .await
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+      .wrap_err("Failed to invoke write_file callback")
   }
 
   #[napi]
   pub async fn list_dir(&self, path: String) -> napi::Result<Either<FileError, Vec<String>>> {
-    self
-      .list_dir_callback
+    self.list_dir_inner(path).await.map_err(to_napi_error)
+  }
+
+  async fn list_dir_inner(&self, path: String) -> Result<Either<FileError, Vec<String>>> {
+    self.list_dir_callback
       .call_async(Ok(path))
       .await
-      .map_err(|e| Error::new(Status::GenericFailure, format!("Callback error: {}", e)))
+      .wrap_err("Failed to invoke list_dir callback")
   }
 
   // TODO: Re-enable when ProviderManager is set up
