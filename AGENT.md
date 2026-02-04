@@ -252,6 +252,44 @@ This project uses **jj** (Jujutsu) for version control instead of git.
 | `jj log` | View commit history |
 | `jj new` | Create a new empty change |
 | `jj abandon` | Abandon the current change |
+| `jj edit <rev>` | Move to an existing commit to modify it |
+
+### Important jj Insights
+
+**Working Copy vs Commits:**
+- jj always has a "working copy" change (marked with `@` in `jj status`)
+- When you run `jj new`, you create a new empty change and move into it
+- When you run `jj abandon`, you delete the current change and create a NEW empty one
+- This means `abandon` doesn't just delete - it puts you in a fresh empty commit
+
+**Modifying Existing Commits:**
+- Use `jj edit <revision>` to go back to a previous commit and modify it
+- Example: `jj edit pnxukxxk` moves you to that commit to add changes
+- After editing an old commit, you can `jj new` to continue with a fresh change
+
+**Common Workflow:**
+```bash
+# Start new work
+jj new
+
+# Make changes, then commit
+jj diff
+jj desc -m "[ai] my changes"
+
+# Oops, need to add something to that commit
+jj edit <rev>
+# Make changes
+jj diff
+jj desc -m "[ai] updated commit"
+
+# Continue with new work
+jj new
+```
+
+**Avoiding Empty Commits:**
+- Don't chain `jj abandon` calls - it just creates more empty commits
+- Use `jj edit` to go back to a commit with content instead
+- Run `jj log` to see your commit history and find the right revision
 
 ## File Locations Quick Reference
 
