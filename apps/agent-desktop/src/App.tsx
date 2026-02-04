@@ -1,268 +1,189 @@
-import type {
-	AgentApi,
-	AgentHandle,
-	AgentInfo,
-	ChatMessage,
-	// ModelInfo,
-} from "agent-ts-bindings";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { Send, Loader2, Bot, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { ChatMessage } from "@/components/chat-message";
+
+interface Message {
+	id: string;
+	content: string;
+	role: "user" | "assistant";
+	timestamp: Date;
+}
+
+// Mock responses for the toy UI
+const MOCK_RESPONSES = [
+	"I'm a mock AI assistant. The Rust backend isn't connected yet, but this UI is ready for when it is!",
+	"This is a placeholder response. Once the Rust code is fixed, real AI responses will appear here.",
+	"The chat interface is working! You can type messages and see them appear in the chat.",
+	"Hello! I'm running in demo mode. The TypeScript frontend is ready for LLM integration.",
+	"Thanks for your message! This is a test response while the backend is being developed.",
+];
+
+function generateMockResponse(userMessage: string): string {
+	// Simple pattern matching for variety
+	if (userMessage.toLowerCase().includes("hello") || userMessage.toLowerCase().includes("hi")) {
+		return "Hello there! Welcome to the Agent Chat demo. The UI is ready for real LLM integration.";
+	}
+	if (userMessage.toLowerCase().includes("help")) {
+		return "I can help demonstrate the chat interface! Type any message and I'll respond with a placeholder message.";
+	}
+	if (userMessage.toLowerCase().includes("rust")) {
+		return "The Rust backend is still being worked on. Once it's ready, this UI will connect to real LLM providers!";
+	}
+	// Random response
+	const randomIndex = Math.floor(Math.random() * MOCK_RESPONSES.length);
+	return MOCK_RESPONSES[randomIndex];
+}
 
 function App(): React.JSX.Element {
-	const [result, setResult] = useState<number | null>(null);
-	const [agentApiStatus, setAgentApiStatus] =
-		useState<string>("Not initialized");
-	const [agentApi, setAgentApi] = useState<AgentApi | null>(null);
-	// const [models, setModels] = useState<ModelInfo[]>([]);
-	const [agents, setAgents] = useState<AgentInfo[]>([]);
-	const [currentAgent, setCurrentAgent] = useState<AgentHandle | null>(null);
-	const [history, setHistory] = useState<ChatMessage[]>([]);
-	const [error, setError] = useState<string | null>(null);
+	const [messages, setMessages] = useState<Message[]>([
+		{
+			id: "welcome",
+			content: "Hello! I'm your AI assistant. This is a toy UI for testing - real LLM integration coming soon!",
+			role: "assistant",
+			timestamp: new Date(),
+		},
+	]);
+	const [inputValue, setInputValue] = useState("");
+	const [isLoading, setIsLoading] = useState(false);
+	const scrollRef = useRef<HTMLDivElement>(null);
 
-	const handleTestRust = () => {
-		const value = window.api.plus100(42);
-		setResult(value);
+	// Auto-scroll to bottom when messages change
+	useEffect(() => {
+		if (scrollRef.current) {
+			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		}
+	}, [messages]);
+
+	const handleSendMessage = async () => {
+		if (!inputValue.trim() || isLoading) return;
+
+		const userMessage: Message = {
+			id: Date.now().toString(),
+			content: inputValue.trim(),
+			role: "user",
+			timestamp: new Date(),
+		};
+
+		setMessages((prev) => [...prev, userMessage]);
+		setInputValue("");
+		setIsLoading(true);
+
+		// Simulate network delay
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+
+		const assistantMessage: Message = {
+			id: (Date.now() + 1).toString(),
+			content: generateMockResponse(userMessage.content),
+			role: "assistant",
+			timestamp: new Date(),
+		};
+
+		setMessages((prev) => [...prev, assistantMessage]);
+		setIsLoading(false);
 	};
 
-	const handleCreateAgentApi = () => {
-		try {
-			setError(null);
-			const api = window.api.createAgentApi();
-			setAgentApi(api);
-			setAgentApiStatus("AgentAPI created successfully!");
-			console.log("AgentAPI instance:", api);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(errorMsg);
-			setAgentApiStatus(`Error: ${errorMsg}`);
-			console.error("Failed to create AgentAPI:", err);
-		}
-	};
-
-	// TODO: Re-enable when listModels is implemented
-	// const handleListModels = () => {
-	// 	if (!agentApi) {
-	// 		setError("AgentAPI not initialized");
-	// 		return;
-	// 	}
-	// 	try {
-	// 		setError(null);
-	// 		const modelList = agentApi.listModels();
-	// 		setModels(modelList);
-	// 		console.log("Models:", modelList);
-	// 	} catch (err) {
-	// 		const errorMsg = err instanceof Error ? err.message : String(err);
-	// 		setError(errorMsg);
-	// 		console.error("Failed to list models:", err);
-	// 	}
-	// };
-
-	const handleCreateAgent = () => {
-		if (!agentApi) {
-			setError("AgentAPI not initialized");
-			return;
-		}
-		try {
-			setError(null);
-			const agent = agentApi.createAgent("You are a helpful assistant.");
-			setCurrentAgent(agent);
-			console.log("Created agent:", agent);
-			// Refresh agent list
-			const agentList = agentApi.listAgents();
-			setAgents(agentList);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(errorMsg);
-			console.error("Failed to create agent:", err);
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			handleSendMessage();
 		}
 	};
 
-	const handleListAgents = () => {
-		if (!agentApi) {
-			setError("AgentAPI not initialized");
-			return;
-		}
-		try {
-			setError(null);
-			const agentList = agentApi.listAgents();
-			setAgents(agentList);
-			console.log("Agents:", agentList);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(errorMsg);
-			console.error("Failed to list agents:", err);
-		}
-	};
-
-	const handleGetHistory = () => {
-		if (!agentApi || !currentAgent) {
-			setError("AgentAPI or agent not initialized");
-			return;
-		}
-		try {
-			setError(null);
-			const chatHistory = agentApi.getHistory(currentAgent.id);
-			setHistory(chatHistory);
-			console.log("History:", chatHistory);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(errorMsg);
-			console.error("Failed to get history:", err);
-		}
-	};
-
-	// HTTP Request Test
-	const [httpResult, setHttpResult] = useState<string | null>(null);
-	const [httpLoading, setHttpLoading] = useState(false);
-
-	const handleTestHttp = async () => {
-		setHttpLoading(true);
-		setError(null);
-		try {
-			// Test with httpbin.org
-			const result = await window.api.testHttpRequest("https://example.com/");
-			setHttpResult(result);
-			console.log("HTTP Result:", result);
-		} catch (err) {
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			setError(`HTTP Test Error: ${errorMsg}`);
-			console.error("HTTP Test failed:", err);
-		} finally {
-			setHttpLoading(false);
-		}
+	const clearChat = () => {
+		setMessages([
+			{
+				id: "welcome",
+				content: "Chat cleared! How can I help you today?",
+				role: "assistant",
+				timestamp: new Date(),
+			},
+		]);
 	};
 
 	return (
-		<div className="p-4 max-w-4xl">
-			<h1 className="underline text-2xl font-bold mb-4">Agent Demo</h1>
-			<p className="mb-4">Agent desktop application with Rust bindings</p>
-
-			{error && (
-				<div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-					<strong>Error:</strong> {error}
+		<div className="flex h-screen flex-col bg-background">
+			{/* Header */}
+			<header className="flex items-center justify-between border-b px-4 py-3">
+				<div className="flex items-center gap-2">
+					<Bot className="h-6 w-6" />
+					<h1 className="text-lg font-semibold">Agent Chat</h1>
+					<span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						Demo Mode
+					</span>
 				</div>
-			)}
+				<Button
+					variant="ghost"
+					size="icon"
+					onClick={clearChat}
+					title="Clear chat"
+				>
+					<Trash2 className="h-4 w-4" />
+				</Button>
+			</header>
 
-			<div className="space-y-4">
-				<div className="p-4 border rounded">
-					<h2 className="font-bold mb-2">Basic Test</h2>
-					<Button onClick={handleTestRust}>Test Rust Binding (plus100)</Button>
-					{result !== null && (
-						<p className="mt-2 text-green-600">
-							Rust says: 42 + 100 = {result}
-						</p>
+			{/* Messages Area */}
+			<ScrollArea className="flex-1 px-4" ref={scrollRef}>
+				<div className="mx-auto max-w-3xl py-4">
+					{messages.length === 0 ? (
+						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+							<Bot className="mb-4 h-12 w-12 opacity-50" />
+							<p>Start a conversation by typing a message below.</p>
+						</div>
+					) : (
+						messages.map((message) => (
+							<ChatMessage
+								key={message.id}
+								content={message.content}
+								role={message.role}
+							/>
+						))
 					)}
-				</div>
-
-				<div className="p-4 border rounded">
-					<h2 className="font-bold mb-2">HTTP Test</h2>
-					<Button
-						onClick={handleTestHttp}
-						variant="outline"
-						disabled={httpLoading}
-					>
-						{httpLoading ? "Testing..." : "Test HTTP Request (Rust)"}
-					</Button>
-					{httpResult && (
-						<div className="mt-2 p-2 rounded text-xs overflow-auto max-h-40">
-							<pre>{httpResult}</pre>
+					{isLoading && (
+						<div className="flex items-center gap-2 text-muted-foreground">
+							<Loader2 className="h-4 w-4 animate-spin" />
+							<span className="text-sm">Thinking...</span>
 						</div>
 					)}
 				</div>
+			</ScrollArea>
 
-				<div className="p-4 border rounded">
-					<h2 className="font-bold mb-2">AgentAPI</h2>
+			<Separator />
+
+			{/* Input Area */}
+			<div className="border-t bg-background p-4">
+				<div className="mx-auto flex max-w-3xl items-end gap-2">
+					<Textarea
+						value={inputValue}
+						onChange={(e) => setInputValue(e.target.value)}
+						onKeyDown={handleKeyDown}
+						placeholder="Type a message... (Shift+Enter for new line)"
+						className="min-h-[60px] resize-none"
+						rows={1}
+						disabled={isLoading}
+					/>
 					<Button
-						onClick={handleCreateAgentApi}
-						variant="outline"
-						className="mb-2"
+						onClick={handleSendMessage}
+						disabled={!inputValue.trim() || isLoading}
+						size="icon"
+						className="h-[60px] w-[60px] shrink-0"
 					>
-						Create AgentAPI Instance
+						{isLoading ? (
+							<Loader2 className="h-4 w-4 animate-spin" />
+						) : (
+							<Send className="h-4 w-4" />
+						)}
 					</Button>
-					<p className="text-blue-600">{agentApiStatus}</p>
 				</div>
-
-				{agentApi && (
-					<div className="p-4 border rounded">
-						<h2 className="font-bold mb-2">Agent Management</h2>
-						<div className="space-x-2">
-							{/* TODO: Re-enable when listModels is implemented
-							<Button onClick={handleListModels} variant="outline">
-								List Models
-							</Button>
-							*/}
-							<Button onClick={handleCreateAgent} variant="outline">
-								Create Agent
-							</Button>
-							<Button onClick={handleListAgents} variant="outline">
-								List Agents
-							</Button>
-							{currentAgent && (
-								<Button onClick={handleGetHistory} variant="outline">
-									Get History
-								</Button>
-							)}
-						</div>
-
-						{/* TODO: Re-enable when listModels is implemented
-						{models.length > 0 && (
-							<div className="mt-4">
-								<h3 className="font-semibold">Available Models:</h3>
-								<ul className="list-disc pl-5">
-									{models.map((model) => (
-										<li key={model.id}>
-											{model.name} ({model.id})
-										</li>
-									))}
-								</ul>
-							</div>
-						)}
-						*/}
-
-						{agents.length > 0 && (
-							<div className="mt-4">
-								<h3 className="font-semibold">Agents:</h3>
-								<ul className="list-disc pl-5">
-									{agents.map((agent) => (
-										<li key={agent.id}>
-											{agent.id} - {agent.messageCount} messages
-										</li>
-									))}
-								</ul>
-							</div>
-						)}
-
-						{history.length > 0 && (
-							<div className="mt-4">
-								<h3 className="font-semibold">Chat History:</h3>
-								<div className="space-y-2">
-									{history.map((msg, idx) => (
-										<div key={idx} className="p-2 bg-gray-100 rounded">
-											<strong>{ChatRole[msg.role]}:</strong> {msg.content}
-										</div>
-									))}
-								</div>
-							</div>
-						)}
-					</div>
-				)}
+				<p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
+					Press Enter to send, Shift+Enter for new line • Demo mode with mock responses
+				</p>
 			</div>
 		</div>
 	);
-}
-
-// Helper to convert ChatRole enum to string
-function ChatRole(role: number): string {
-	switch (role) {
-		case 0:
-			return "System";
-		case 1:
-			return "User";
-		case 2:
-			return "Assistant";
-		default:
-			return "Unknown";
-	}
 }
 
 export default App;
