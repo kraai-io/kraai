@@ -18,9 +18,7 @@ pub fn plus_100(input: u32) -> u32 {
 // Simple HTTP request test
 #[napi]
 pub async fn test_http_request(url: String) -> napi::Result<String> {
-  test_http_request_inner(url)
-    .await
-    .map_err(to_napi_error)
+  test_http_request_inner(url).await.map_err(to_napi_error)
 }
 
 async fn test_http_request_inner(url: String) -> Result<String> {
@@ -30,13 +28,13 @@ async fn test_http_request_inner(url: String) -> Result<String> {
     .send()
     .await
     .wrap_err_with(|| format!("Failed to send HTTP request to {}", url))?;
-  
+
   let status = response.status();
   let body = response
     .text()
     .await
     .wrap_err("Failed to read response body")?;
-  
+
   Ok(format!("Status: {}\nBody: {}", status, body))
 }
 
@@ -193,7 +191,9 @@ impl AgentAPI {
 
   #[napi]
   pub fn create_agent(&self, system_prompt: String) -> napi::Result<AgentHandle> {
-    self.create_agent_inner(system_prompt).map_err(to_napi_error)
+    self
+      .create_agent_inner(system_prompt)
+      .map_err(to_napi_error)
   }
 
   fn create_agent_inner(&self, system_prompt: String) -> Result<AgentHandle> {
@@ -296,7 +296,8 @@ impl AgentAPI {
   }
 
   async fn read_file_inner(&self, path: String) -> Result<Either<FileError, Uint8Array>> {
-    self.read_file_callback
+    self
+      .read_file_callback
       .call_async(Ok(path))
       .await
       .wrap_err("Failed to invoke read_file callback")
@@ -308,7 +309,10 @@ impl AgentAPI {
     path: String,
     data: Uint8Array,
   ) -> napi::Result<Either<FileError, ()>> {
-    self.write_file_inner(path, data).await.map_err(to_napi_error)
+    self
+      .write_file_inner(path, data)
+      .await
+      .map_err(to_napi_error)
   }
 
   async fn write_file_inner(
@@ -316,7 +320,8 @@ impl AgentAPI {
     path: String,
     data: Uint8Array,
   ) -> Result<Either<FileError, ()>> {
-    self.write_file_callback
+    self
+      .write_file_callback
       .call_async(Ok((path, data)))
       .await
       .wrap_err("Failed to invoke write_file callback")
@@ -328,7 +333,8 @@ impl AgentAPI {
   }
 
   async fn list_dir_inner(&self, path: String) -> Result<Either<FileError, Vec<String>>> {
-    self.list_dir_callback
+    self
+      .list_dir_callback
       .call_async(Ok(path))
       .await
       .wrap_err("Failed to invoke list_dir callback")

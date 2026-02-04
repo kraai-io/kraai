@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, Bot, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Separator } from "@/components/ui/separator";
+import { Bot, Loader2, Send, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 
 interface Message {
 	id: string;
@@ -23,7 +23,10 @@ const MOCK_RESPONSES = [
 
 function generateMockResponse(userMessage: string): string {
 	// Simple pattern matching for variety
-	if (userMessage.toLowerCase().includes("hello") || userMessage.toLowerCase().includes("hi")) {
+	if (
+		userMessage.toLowerCase().includes("hello") ||
+		userMessage.toLowerCase().includes("hi")
+	) {
 		return "Hello there! Welcome to the Agent Chat demo. The UI is ready for real LLM integration.";
 	}
 	if (userMessage.toLowerCase().includes("help")) {
@@ -41,7 +44,8 @@ function App(): React.JSX.Element {
 	const [messages, setMessages] = useState<Message[]>([
 		{
 			id: "welcome",
-			content: "Hello! I'm your AI assistant. This is a toy UI for testing - real LLM integration coming soon!",
+			content:
+				"Hello! I'm your AI assistant. This is a toy UI for testing - real LLM integration coming soon!",
 			role: "assistant",
 			timestamp: new Date(),
 		},
@@ -57,7 +61,8 @@ function App(): React.JSX.Element {
 		const container = scrollRef.current;
 		if (!container) return true;
 		const threshold = 50;
-		const position = container.scrollHeight - container.scrollTop - container.clientHeight;
+		const position =
+			container.scrollHeight - container.scrollTop - container.clientHeight;
 		return position < threshold;
 	};
 
@@ -156,8 +161,8 @@ function App(): React.JSX.Element {
 			</header>
 
 			{/* Messages Area */}
-			<div 
-				className="flex-1 overflow-y-auto px-4 scrollbar-themed" 
+			<div
+				className="flex-1 overflow-y-auto px-4 scrollbar-themed"
 				ref={scrollRef}
 				onScroll={handleScroll}
 			>
@@ -214,7 +219,8 @@ function App(): React.JSX.Element {
 					</Button>
 				</div>
 				<p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
-					Press Enter to send, Shift+Enter for new line • Demo mode with mock responses
+					Press Enter to send, Shift+Enter for new line • Demo mode with mock
+					responses
 				</p>
 			</div>
 		</div>
