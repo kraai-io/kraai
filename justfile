@@ -137,8 +137,10 @@ dist-linux TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-a
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for Linux ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && pnpm electron-builder --linux --config
-    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
+    (cd apps/agent-desktop && pnpm electron-builder --linux --config)
+    echo "Copying artifacts to releases/$TARGET_TRIPLE/"
+    mkdir -p "releases/$TARGET_TRIPLE"
+    cp -r apps/agent-desktop/dist/* "releases/$TARGET_TRIPLE/" 2>/dev/null || true
 
 # macOS distribution build
 # Supports: x86_64-apple-darwin, aarch64-apple-darwin
@@ -151,8 +153,10 @@ dist-mac TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for macOS ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && pnpm electron-builder --mac --config
-    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
+    (cd apps/agent-desktop && pnpm electron-builder --mac --config)
+    echo "Copying artifacts to releases/$TARGET_TRIPLE/"
+    mkdir -p "releases/$TARGET_TRIPLE"
+    cp -r apps/agent-desktop/dist/* "releases/$TARGET_TRIPLE/" 2>/dev/null || true
 
 # Windows distribution build
 # Supports: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc, i686-pc-windows-msvc
@@ -165,5 +169,7 @@ dist-win TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
         TARGET_TRIPLE="{{TARGET}}"
     fi
     echo "Packaging for Windows ($TARGET_TRIPLE)..."
-    cd apps/agent-desktop && pnpm electron-builder --win --config
-    cp -r apps/agent-desktop/dist/* releases/ 2>/dev/null || true
+    (cd apps/agent-desktop && pnpm electron-builder --win --config)
+    echo "Copying artifacts to releases/$TARGET_TRIPLE/"
+    mkdir -p "releases/$TARGET_TRIPLE"
+    cp -r apps/agent-desktop/dist/* "releases/$TARGET_TRIPLE/" 2>/dev/null || true
