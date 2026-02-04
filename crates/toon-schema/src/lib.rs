@@ -72,7 +72,7 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 // But the schema part is known at compile time
                 static SCHEMA_PART: &str = #schema_str;
                 static TOOL_NAME: &str = #tool_name;
-                
+
                 // Leak the string to get a &'static str (safe since called infrequently)
                 Box::leak(
                     format!("{}\n\nExample:\ntool: {}\n{}", SCHEMA_PART, TOOL_NAME, example_toon)
@@ -109,10 +109,7 @@ fn generate_schema_string(schema: &Schema) -> String {
         }
 
         // Build the field line
-        let mut field_line = format!(
-            "{}{}: {}",
-            field.name, range_str, type_str
-        );
+        let mut field_line = format!("{}{}: {}", field.name, range_str, type_str);
 
         // Add default value as a comment
         if let Some(default) = &field.default_value {

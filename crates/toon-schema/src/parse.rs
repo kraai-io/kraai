@@ -1,7 +1,7 @@
 use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
 use syn::{
-    Data, DataStruct, DeriveInput, Field as SynField, GenericArgument, Meta, PathArguments,
-    Type as SynType, TypePath, punctuated::Punctuated, token::Comma, Expr, Lit, ExprLit,
+    Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, GenericArgument, Lit, Meta,
+    PathArguments, Type as SynType, TypePath, punctuated::Punctuated, token::Comma,
 };
 
 pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
@@ -34,7 +34,7 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
             }
         }
     }
-    
+
     // Use custom name if provided, otherwise use struct name
     let name = name.unwrap_or(struct_name);
 
@@ -45,7 +45,7 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
             .map(parse_field)
             .collect::<syn::Result<Vec<_>>>()?
             .into_iter()
-            .flatten()  // Filter out skipped fields
+            .flatten() // Filter out skipped fields
             .collect(),
         _ => {
             return Err(syn::Error::new(
@@ -208,16 +208,16 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
         description,
         example,
         range,
-        skipped: false,  // We filtered these out above
+        skipped: false, // We filtered these out above
         default_value,
     }))
 }
 
 fn parse_u32_expr(expr: &Expr) -> Option<u32> {
     match expr {
-        Expr::Lit(ExprLit { lit: Lit::Int(i), .. }) => {
-            i.base10_parse::<u32>().ok()
-        }
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(i), ..
+        }) => i.base10_parse::<u32>().ok(),
         _ => None,
     }
 }
