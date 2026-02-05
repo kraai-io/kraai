@@ -15,7 +15,7 @@ pub struct ProviderManagerHelper {
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
-type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>>>;
+type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>> + Send>;
 
 #[derive(Deserialize, Serialize)]
 pub struct ProviderManagerConfig {

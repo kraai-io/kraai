@@ -1,7 +1,7 @@
 #![deny(clippy::all)]
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use agent::AgentManager;
 use color_eyre::eyre::{Context, Result};
@@ -11,6 +11,7 @@ use napi_derive::napi;
 use provider_core::{ProviderManager, ProviderManagerHelper};
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
+use tokio::sync::Mutex;
 use tool_core::ToolManager;
 use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
 
@@ -57,11 +58,6 @@ pub enum FileError {
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
-}
-
-// Helper to convert Mutex poison errors to eyre errors
-fn lock_error<T>(err: PoisonError<T>) -> color_eyre::Report {
-  color_eyre::eyre::eyre!("Lock poisoned: {}", err)
 }
 
 // Enums
@@ -134,13 +130,6 @@ pub struct ModelInfo {
   pub max_context: Option<u32>,
 }
 
-// Internal state managed by AgentAPI
-struct AgentState {
-  id: String,
-  system_prompt: String,
-  history: Vec<RustChatMessage>,
-}
-
 // File operation result types
 type FileReadResult = Either<FileError, Uint8Array>;
 type FileWriteResult = Either<FileError, ()>;
@@ -150,9 +139,8 @@ type ListDirResult = Either<FileError, Vec<String>>;
 // File access is done through callbacks to TypeScript
 #[napi]
 pub struct AgentAPI {
-  manager: AgentManager,
-  agents: Arc<Mutex<BTreeMap<String, AgentState>>>,
-  next_agent_id: Arc<Mutex<u32>>,
+  config_dir: Arc<Mutex<PathBuf>>,
+  manager: Arc<Mutex<AgentManager>>,
   // File operation callbacks (wrapped in Arc for Clone)
   read_file_callback: Arc<ThreadsafeFunction<String, FileReadResult>>,
   write_file_callback: Arc<ThreadsafeFunction<(String, Uint8Array), FileWriteResult>>,
@@ -179,25 +167,61 @@ impl AgentAPI {
     let providers = ProviderManager::new();
     let tools = ToolManager::default();
     Ok(AgentAPI {
-      manager: AgentManager::new(providers, tools),
-      agents: Arc::new(Mutex::new(BTreeMap::new())),
-      next_agent_id: Arc::new(Mutex::new(0)),
+      config_dir: Arc::new(Mutex::new("".into())),
+      manager: Arc::new(Mutex::new(AgentManager::new(providers, tools))),
       read_file_callback: Arc::new(read_file_callback),
       write_file_callback: Arc::new(write_file_callback),
       list_dir_callback: Arc::new(list_dir_callback),
     })
   }
 
-  async fn read_config(&mut self) -> Result<()> {
+  #[napi]
+  pub async fn reload_config(
+    &self,
+    config_data: Uint8Array,
+    config_dir: String,
+  ) -> napi::Result<()> {
+    self
+      .reload_config_inner(config_data, config_dir)
+      .await
+      .map_err(to_napi_error)
+  }
+
+  async fn reload_config_inner(&self, config_data: Uint8Array, config_dir: String) -> Result<()> {
+    {
+      let mut config_dir_lock = self.config_dir.lock().await;
+      *config_dir_lock = config_dir.into();
+    }
+
+    // Parse config data
+    let config: provider_core::ProviderManagerConfig =
+      toml::from_slice(&config_data).wrap_err("Failed to parse config.toml")?;
+
+    // Load config into provider manager
+    // Set up provider factories inside the async block to avoid Send issues
+    self
+      .load_providers_with_config(config)
+      .await
+      .wrap_err("Failed to load providers from config")?;
+
+    Ok(())
+  }
+
+  async fn load_providers_with_config(
+    &self,
+    config: provider_core::ProviderManagerConfig,
+  ) -> Result<()> {
+    // Set up provider factories
     let mut helper = ProviderManagerHelper::default();
     helper.register_factory::<GoogleFactory>();
     helper.register_factory::<OpenAIFactory>();
 
-    // self.read_file_inner(path).await;
-    // let config_slice = std::fs::read("~/config.toml")?;
-    let config = toml::from_slice(&config_slice)?;
+    // Load config into provider manager
+    {
+      let mut manager = self.manager.blocking_lock();
+      manager.set_providers(config, helper).await?;
+    }
 
-    self.manager.set_providers(config, helper);
     Ok(())
   }
 
@@ -206,69 +230,6 @@ impl AgentAPI {
   // pub fn list_models(&self) -> napi::Result<Vec<ModelInfo>> {
   //   Ok(vec![])
   // }
-
-  #[napi]
-  pub fn create_agent(&self, system_prompt: String) -> napi::Result<AgentHandle> {
-    self
-      .create_agent_inner(system_prompt)
-      .map_err(to_napi_error)
-  }
-
-  fn create_agent_inner(&self, system_prompt: String) -> Result<AgentHandle> {
-    let mut agents = self.agents.lock().map_err(lock_error)?;
-    let mut next_id = self.next_agent_id.lock().map_err(lock_error)?;
-
-    let id = format!("agent_{}", *next_id);
-    *next_id += 1;
-
-    let agent = AgentState {
-      id: id.clone(),
-      system_prompt: system_prompt.clone(),
-      history: vec![RustChatMessage {
-        role: RustChatRole::System,
-        content: system_prompt,
-      }],
-    };
-
-    agents.insert(id.clone(), agent);
-
-    Ok(AgentHandle { id })
-  }
-
-  #[napi]
-  pub fn get_agent(&self, id: String) -> napi::Result<Option<AgentHandle>> {
-    self.get_agent_inner(id).map_err(to_napi_error)
-  }
-
-  fn get_agent_inner(&self, id: String) -> Result<Option<AgentHandle>> {
-    let agents = self.agents.lock().map_err(lock_error)?;
-
-    if agents.contains_key(&id) {
-      Ok(Some(AgentHandle { id }))
-    } else {
-      Ok(None)
-    }
-  }
-
-  #[napi]
-  pub fn list_agents(&self) -> napi::Result<Vec<AgentInfo>> {
-    self.list_agents_inner().map_err(to_napi_error)
-  }
-
-  fn list_agents_inner(&self) -> Result<Vec<AgentInfo>> {
-    let agents = self.agents.lock().map_err(lock_error)?;
-
-    Ok(
-      agents
-        .values()
-        .map(|a| AgentInfo {
-          id: a.id.clone(),
-          system_prompt: a.system_prompt.clone(),
-          message_count: a.history.len() as u32,
-        })
-        .collect(),
-    )
-  }
 
   // #[napi]
   // pub async fn send_message(
@@ -285,27 +246,6 @@ impl AgentAPI {
   //   // This requires making ProviderManager Send or restructuring the code
   //   unimplemented!("Streaming not yet implemented due to Send requirements")
   // }
-
-  #[napi]
-  pub fn get_history(&self, agent_id: String) -> napi::Result<Vec<ChatMessage>> {
-    self.get_history_inner(agent_id).map_err(to_napi_error)
-  }
-
-  fn get_history_inner(&self, agent_id: String) -> Result<Vec<ChatMessage>> {
-    let agents = self.agents.lock().map_err(lock_error)?;
-
-    let agent = agents
-      .get(&agent_id)
-      .ok_or_else(|| color_eyre::eyre::eyre!("Agent not found: {}", agent_id))?;
-
-    Ok(
-      agent
-        .history
-        .iter()
-        .map(|m| ChatMessage::from(m.clone()))
-        .collect(),
-    )
-  }
 
   // File operation methods
   #[napi]
