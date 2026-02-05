@@ -102,10 +102,11 @@ dist-setup:
     mkdir -p releases
 
 # Build bindings for specific target (cross-compilation ready)
+
 # TARGET examples: x86_64-unknown-linux-gnu, x86_64-apple-darwin, x86_64-pc-windows-msvc
 dist-build-bindings TARGET="native":
     #!/usr/bin/env bash
-    if [ "{{TARGET}}" = "native" ]; then
+    if [ "{{ TARGET }}" = "native" ]; then
         TARGET_TRIPLE=$(just dist-detect-target)
         if [ "$TARGET_TRIPLE" = "unsupported" ]; then
             echo "Unsupported platform"
@@ -114,8 +115,8 @@ dist-build-bindings TARGET="native":
         echo "Building bindings for native target: $TARGET_TRIPLE"
         cd crates/ts-bindings && pnpm napi build --platform --release --target "$TARGET_TRIPLE"
     else
-        echo "Building bindings for target: {{TARGET}}"
-        cd crates/ts-bindings && pnpm napi build --platform --release --target "{{TARGET}}"
+        echo "Building bindings for target: {{ TARGET }}"
+        cd crates/ts-bindings && pnpm napi build --platform --release --target "{{ TARGET }}"
     fi
 
 # Build electron app (typecheck + vite build)
@@ -128,13 +129,14 @@ dist-unpack: dist-setup (dist-build-bindings "native") dist-build-app
 
 # Linux distribution build
 # Supports: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
 # Usage: just dist-linux (auto-detect) or just dist-linux x86_64-unknown-linux-gnu
 dist-linux TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
     #!/usr/bin/env bash
-    if [ "{{TARGET}}" = "native" ]; then
+    if [ "{{ TARGET }}" = "native" ]; then
         TARGET_TRIPLE=$(just dist-detect-target)
     else
-        TARGET_TRIPLE="{{TARGET}}"
+        TARGET_TRIPLE="{{ TARGET }}"
     fi
     echo "Packaging for Linux ($TARGET_TRIPLE)..."
     (cd apps/agent-desktop && pnpm electron-builder --linux --config)
@@ -144,13 +146,14 @@ dist-linux TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-a
 
 # macOS distribution build
 # Supports: x86_64-apple-darwin, aarch64-apple-darwin
+
 # Usage: just dist-mac (auto-detect) or just dist-mac aarch64-apple-darwin
 dist-mac TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
     #!/usr/bin/env bash
-    if [ "{{TARGET}}" = "native" ]; then
+    if [ "{{ TARGET }}" = "native" ]; then
         TARGET_TRIPLE=$(just dist-detect-target)
     else
-        TARGET_TRIPLE="{{TARGET}}"
+        TARGET_TRIPLE="{{ TARGET }}"
     fi
     echo "Packaging for macOS ($TARGET_TRIPLE)..."
     (cd apps/agent-desktop && pnpm electron-builder --mac --config)
@@ -160,13 +163,14 @@ dist-mac TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
 
 # Windows distribution build
 # Supports: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc, i686-pc-windows-msvc
+
 # Usage: just dist-win (auto-detect) or just dist-win x86_64-pc-windows-msvc
 dist-win TARGET="native": dist-setup (dist-build-bindings TARGET) dist-build-app
     #!/usr/bin/env bash
-    if [ "{{TARGET}}" = "native" ]; then
+    if [ "{{ TARGET }}" = "native" ]; then
         TARGET_TRIPLE=$(just dist-detect-target)
     else
-        TARGET_TRIPLE="{{TARGET}}"
+        TARGET_TRIPLE="{{ TARGET }}"
     fi
     echo "Packaging for Windows ($TARGET_TRIPLE)..."
     (cd apps/agent-desktop && pnpm electron-builder --win --config)
