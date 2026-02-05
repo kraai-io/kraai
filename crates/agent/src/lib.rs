@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use provider_core::ProviderManager;
+use color_eyre::eyre::Result;
+use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use tool_core::{ToolId, ToolManager};
 use types::ChatMessage;
 
@@ -17,6 +18,14 @@ impl AgentManager {
             tools,
             agents: BTreeMap::new(),
         }
+    }
+
+    pub async fn set_providers(
+        &mut self,
+        config: ProviderManagerConfig,
+        helper: ProviderManagerHelper,
+    ) -> Result<()> {
+        self.providers.load_config(config, helper).await
     }
 }
 

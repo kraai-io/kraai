@@ -8,6 +8,10 @@ use types::ChatMessage;
 #[derive(Default)]
 pub struct ProviderManager {
     pub providers: BTreeMap<ProviderId, Box<dyn Provider>>,
+}
+
+#[derive(Default)]
+pub struct ProviderManagerHelper {
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
@@ -44,11 +48,7 @@ pub trait ProviderFactory {
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>>;
 }
 
-impl ProviderManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
+impl ProviderManagerHelper {
     pub fn register_factory<F: ProviderFactory + 'static>(&mut self) {
         let key = F::TYPE.to_string();
         let factory_fn = |id, config: toml::Value| {
@@ -57,15 +57,25 @@ impl ProviderManager {
         };
         self.factory_registry.insert(key, Box::new(factory_fn));
     }
+}
 
-    pub async fn load_config(&mut self, config: ProviderManagerConfig) -> Result<()> {
+impl ProviderManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn load_config(
+        &mut self,
+        config: ProviderManagerConfig,
+        helper: ProviderManagerHelper,
+    ) -> Result<()> {
         let providers = config
             .providers
             .into_iter()
             .map(|x| {
                 Ok((
                     x.id.clone(),
-                    (self
+                    (helper
                         .factory_registry
                         .get(&x.r#type)
                         .unwrap_or_else(|| panic!("unknown provider: {:#?}", x.r#type))(
@@ -74,6 +84,7 @@ impl ProviderManager {
                 ))
             })
             .collect::<Result<Vec<(ProviderId, Box<dyn Provider>)>>>()?;
+        self.providers.clear();
         self.providers.extend(providers);
 
         for m in config.models {

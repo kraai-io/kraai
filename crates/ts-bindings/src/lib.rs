@@ -3,10 +3,15 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use agent::AgentManager;
 use color_eyre::eyre::{Context, Result};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
+use provider_core::{ProviderManager, ProviderManagerHelper};
+use provider_google::GoogleFactory;
+use provider_openai::OpenAIFactory;
+use tool_core::ToolManager;
 use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
 
 // Re-export the simple function for testing
@@ -145,6 +150,7 @@ type ListDirResult = Either<FileError, Vec<String>>;
 // File access is done through callbacks to TypeScript
 #[napi]
 pub struct AgentAPI {
+  manager: AgentManager,
   agents: Arc<Mutex<BTreeMap<String, AgentState>>>,
   next_agent_id: Arc<Mutex<u32>>,
   // File operation callbacks (wrapped in Arc for Clone)
@@ -152,10 +158,6 @@ pub struct AgentAPI {
   write_file_callback: Arc<ThreadsafeFunction<(String, Uint8Array), FileWriteResult>>,
   list_dir_callback: Arc<ThreadsafeFunction<String, ListDirResult>>,
 }
-
-// Manual Send implementation
-unsafe impl Send for AgentAPI {}
-unsafe impl Sync for AgentAPI {}
 
 #[napi]
 impl AgentAPI {
@@ -174,13 +176,29 @@ impl AgentAPI {
     write_file_callback: ThreadsafeFunction<(String, Uint8Array), Either<FileError, ()>>,
     list_dir_callback: ThreadsafeFunction<String, Either<FileError, Vec<String>>>,
   ) -> Result<Self> {
+    let providers = ProviderManager::new();
+    let tools = ToolManager::default();
     Ok(AgentAPI {
+      manager: AgentManager::new(providers, tools),
       agents: Arc::new(Mutex::new(BTreeMap::new())),
       next_agent_id: Arc::new(Mutex::new(0)),
       read_file_callback: Arc::new(read_file_callback),
       write_file_callback: Arc::new(write_file_callback),
       list_dir_callback: Arc::new(list_dir_callback),
     })
+  }
+
+  async fn read_config(&mut self) -> Result<()> {
+    let mut helper = ProviderManagerHelper::default();
+    helper.register_factory::<GoogleFactory>();
+    helper.register_factory::<OpenAIFactory>();
+
+    // self.read_file_inner(path).await;
+    // let config_slice = std::fs::read("~/config.toml")?;
+    let config = toml::from_slice(&config_slice)?;
+
+    self.manager.set_providers(config, helper);
+    Ok(())
   }
 
   // TODO: Re-enable when ProviderManager is set up

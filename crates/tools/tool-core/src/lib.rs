@@ -41,5 +41,5 @@ pub trait Tool {
 
 #[derive(Default)]
 pub struct ToolManager {
-    pub tools: BTreeMap<ToolId, Box<dyn Tool>>,
+    pub tools: BTreeMap<ToolId, Box<dyn Tool + Send + Sync>>,
 }
