@@ -8,41 +8,12 @@ use color_eyre::eyre::{Context, Result};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
-use provider_core::{ProviderManager, ProviderManagerHelper};
+use provider_core::{Model, ProviderManager, ProviderManagerHelper};
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::Mutex;
 use tool_core::ToolManager;
 use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
-
-// Re-export the simple function for testing
-#[napi]
-pub fn plus_100(input: u32) -> u32 {
-  input + 100
-}
-
-// Simple HTTP request test
-#[napi]
-pub async fn test_http_request(url: String) -> napi::Result<String> {
-  test_http_request_inner(url).await.map_err(to_napi_error)
-}
-
-async fn test_http_request_inner(url: String) -> Result<String> {
-  let client = reqwest::Client::new();
-  let response = client
-    .get(&url)
-    .send()
-    .await
-    .wrap_err_with(|| format!("Failed to send HTTP request to {}", url))?;
-
-  let status = response.status();
-  let body = response
-    .text()
-    .await
-    .wrap_err("Failed to read response body")?;
-
-  Ok(format!("Status: {}\nBody: {}", status, body))
-}
 
 // File error types for callback-based file operations
 #[napi]
@@ -67,6 +38,7 @@ pub enum ChatRole {
   System,
   User,
   Assistant,
+  Tool,
 }
 
 impl From<RustChatRole> for ChatRole {
@@ -75,7 +47,7 @@ impl From<RustChatRole> for ChatRole {
       RustChatRole::System => ChatRole::System,
       RustChatRole::User => ChatRole::User,
       RustChatRole::Assistant => ChatRole::Assistant,
-      RustChatRole::Tool => ChatRole::Assistant, // Map Tool to Assistant for now
+      RustChatRole::Tool => ChatRole::Tool,
     }
   }
 }
@@ -86,6 +58,7 @@ impl From<ChatRole> for RustChatRole {
       ChatRole::System => RustChatRole::System,
       ChatRole::User => RustChatRole::User,
       ChatRole::Assistant => RustChatRole::Assistant,
+      ChatRole::Tool => RustChatRole::Tool,
     }
   }
 }
@@ -124,10 +97,23 @@ pub struct AgentInfo {
 }
 
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct ModelInfo {
   pub id: String,
   pub name: String,
   pub max_context: Option<u32>,
+}
+
+impl From<Model> for ModelInfo {
+  fn from(value: Model) -> Self {
+    ModelInfo {
+      id: value.id.to_string(),
+      name: value.name,
+      max_context: value
+        .max_context
+        .and_then(|x| Some(u32::try_from(x).expect("model context too large"))),
+    }
+  }
 }
 
 // File operation result types
@@ -135,13 +121,10 @@ type FileReadResult = Either<FileError, Uint8Array>;
 type FileWriteResult = Either<FileError, ()>;
 type ListDirResult = Either<FileError, Vec<String>>;
 
-// AgentAPI class - uses Arc<Mutex<>> for interior mutability
-// File access is done through callbacks to TypeScript
 #[napi]
 pub struct AgentAPI {
   config_dir: Arc<Mutex<PathBuf>>,
   manager: Arc<Mutex<AgentManager>>,
-  // File operation callbacks (wrapped in Arc for Clone)
   read_file_callback: Arc<ThreadsafeFunction<String, FileReadResult>>,
   write_file_callback: Arc<ThreadsafeFunction<(String, Uint8Array), FileWriteResult>>,
   list_dir_callback: Arc<ThreadsafeFunction<String, ListDirResult>>,
@@ -225,11 +208,16 @@ impl AgentAPI {
     Ok(())
   }
 
-  // TODO: Re-enable when ProviderManager is set up
-  // #[napi]
-  // pub fn list_models(&self) -> napi::Result<Vec<ModelInfo>> {
-  //   Ok(vec![])
-  // }
+  #[napi]
+  pub fn list_models(&self) -> Vec<ModelInfo> {
+    self
+      .manager
+      .blocking_lock()
+      .list_models()
+      .into_iter()
+      .map(|x| ModelInfo::from(x))
+      .collect()
+  }
 
   // #[napi]
   // pub async fn send_message(

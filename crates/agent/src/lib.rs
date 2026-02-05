@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use color_eyre::eyre::Result;
-use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use tool_core::{ToolId, ToolManager};
 use types::ChatMessage;
 
@@ -26,6 +26,10 @@ impl AgentManager {
         helper: ProviderManagerHelper,
     ) -> Result<()> {
         self.providers.load_config(config, helper).await
+    }
+
+    pub fn list_models(&self) -> Vec<Model> {
+        self.providers.list_all_models()
     }
 }
 
