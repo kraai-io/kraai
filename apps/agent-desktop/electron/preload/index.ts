@@ -1,8 +1,5 @@
 import { electronAPI } from "@electron-toolkit/preload";
-import {
-	AgentApi,
-	type FileError,
-} from "agent-ts-bindings";
+import { AgentApi, type FileError } from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
 // Store the AgentApi instance globally so we can reload config

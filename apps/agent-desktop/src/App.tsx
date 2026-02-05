@@ -1,17 +1,17 @@
+import type { ModelInfo } from "agent-ts-bindings";
 import { Bot, Loader2, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ModelInfo } from "agent-ts-bindings";
 import { ChatMessage } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 interface Message {
 	id: string;
