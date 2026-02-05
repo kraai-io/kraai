@@ -29,6 +29,23 @@ ipcMain.on("file:listDir", (event, dirPath: string) => {
 	});
 });
 
+// Helper function to send config to renderer
+async function sendConfigToRenderer() {
+	const result = await fileHandler.readConfigFile("config.toml");
+	if (result.ok) {
+		const windows = BrowserWindow.getAllWindows();
+		const configPayload = {
+			data: Array.from(result.data),
+			configDir: fileHandler.getConfigDir(),
+		};
+		windows.forEach((win) => {
+			win.webContents.send("config:reload", configPayload);
+		});
+	} else {
+		console.error("Failed to read config:", result.error);
+	}
+}
+
 // Initialize config watcher
 let configWatcher: ConfigWatcher | null = null;
 
@@ -81,15 +98,16 @@ app.whenReady().then(() => {
 	createWindow();
 
 	// Start config watcher
-	configWatcher = new ConfigWatcher(fileHandler, (data) => {
+	configWatcher = new ConfigWatcher(fileHandler, async () => {
 		console.log("Config file changed, reloading...");
-		// Notify renderer process to reload config
-		const windows = BrowserWindow.getAllWindows();
-		windows.forEach((win) => {
-			win.webContents.send("config:reload", Array.from(data));
-		});
+		await sendConfigToRenderer();
 	});
 	configWatcher.start();
+
+	// Send initial config to renderer after window is ready
+	setTimeout(() => {
+		sendConfigToRenderer();
+	}, 1000);
 
 	app.on("activate", () => {
 		// On macOS it's common to re-create a window in the app when the

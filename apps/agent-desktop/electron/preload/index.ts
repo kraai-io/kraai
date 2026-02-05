@@ -7,6 +7,9 @@ import {
 } from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
+// Store the AgentApi instance globally so we can reload config
+let agentApi: AgentApi | null = null;
+
 // Factory function to create AgentApi with file callbacks
 const createAgentApi = () => {
 	// File read callback
@@ -55,14 +58,37 @@ const createAgentApi = () => {
 		}
 	};
 
-	return new AgentApi(readFileCallback, writeFileCallback, listDirCallback);
+	agentApi = new AgentApi(readFileCallback, writeFileCallback, listDirCallback);
+	return agentApi;
 };
+
+// Handle config reload events from main process
+ipcRenderer.on(
+	"config:reload",
+	async (_event, payload: { data: number[]; configDir: string }) => {
+		if (agentApi) {
+			try {
+				const configData = new Uint8Array(payload.data);
+				await agentApi.reloadConfig(configData, payload.configDir);
+				console.log("Config reloaded successfully");
+			} catch (error) {
+				console.error("Failed to reload config:", error);
+			}
+		} else {
+			console.warn("Received config:reload but AgentApi not initialized yet");
+		}
+	},
+);
 
 // Custom APIs for renderer
 const api = {
 	plus100,
 	createAgentApi,
 	testHttpRequest,
+	// Expose agentApi instance for direct access
+	get agentApi() {
+		return agentApi;
+	},
 };
 
 // Use `contextBridge` APIs to expose Electron APIs to

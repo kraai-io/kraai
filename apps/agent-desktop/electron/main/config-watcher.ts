@@ -5,9 +5,9 @@ import type { FileHandler } from "./file-handler";
 export class ConfigWatcher {
 	private watcher: chokidar.FSWatcher | null = null;
 	private fileHandler: FileHandler;
-	private onChange: (data: Uint8Array) => void;
+	private onChange: () => Promise<void>;
 
-	constructor(fileHandler: FileHandler, onChange: (data: Uint8Array) => void) {
+	constructor(fileHandler: FileHandler, onChange: () => Promise<void>) {
 		this.fileHandler = fileHandler;
 		this.onChange = onChange;
 	}
@@ -24,16 +24,8 @@ export class ConfigWatcher {
 		});
 
 		this.watcher.on("change", async () => {
-			try {
-				const result = await this.fileHandler.readConfigFile("config.toml");
-				if (result.ok) {
-					this.onChange(result.data);
-				} else {
-					console.error("Failed to reload config:", result.error);
-				}
-			} catch (e) {
-				console.error("Error reloading config:", e);
-			}
+			console.log("Config file change detected");
+			await this.onChange();
 		});
 
 		console.log("Config watcher started for:", configPath);
