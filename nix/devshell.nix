@@ -22,6 +22,7 @@
 
           just
 
+          wine
           pkg-config
           openssl
           at-spi2-atk
