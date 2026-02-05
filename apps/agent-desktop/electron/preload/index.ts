@@ -2,8 +2,6 @@ import { electronAPI } from "@electron-toolkit/preload";
 import {
 	AgentApi,
 	type FileError,
-	plus100,
-	testHttpRequest,
 } from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -80,11 +78,12 @@ ipcRenderer.on(
 	},
 );
 
+// Initialize AgentApi immediately with file callbacks
+createAgentApi();
+
 // Custom APIs for renderer
 const api = {
-	plus100,
 	createAgentApi,
-	testHttpRequest,
 	// Expose agentApi instance for direct access
 	get agentApi() {
 		return agentApi;

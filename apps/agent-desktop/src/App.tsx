@@ -1,9 +1,17 @@
 import { Bot, Loader2, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { ModelInfo } from "agent-ts-bindings";
 import { ChatMessage } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Message {
 	id: string;
@@ -52,6 +60,9 @@ function App(): React.JSX.Element {
 	]);
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
+	const [models, setModels] = useState<ModelInfo[]>([]);
+	const [selectedModel, setSelectedModel] = useState<string | null>(null);
+	const [isLoadingModels, setIsLoadingModels] = useState(true);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isAtBottomRef = useRef(true);
@@ -92,6 +103,23 @@ function App(): React.JSX.Element {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
 		}
 	}, [messages]);
+
+	// Fetch available models from Rust (blocking call)
+	useEffect(() => {
+		const agentApi = (window as any).api?.agentApi;
+		if (agentApi) {
+			try {
+				const modelList: ModelInfo[] = agentApi.listModels();
+				setModels(modelList);
+				if (modelList.length > 0) {
+					setSelectedModel(modelList[0].id);
+				}
+			} catch (error) {
+				console.error("Failed to fetch models:", error);
+			}
+		}
+		setIsLoadingModels(false);
+	}, []);
 
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
@@ -195,6 +223,23 @@ function App(): React.JSX.Element {
 			{/* Input Area */}
 			<div className="border-t bg-background p-4">
 				<div className="mx-auto flex max-w-3xl items-end gap-2">
+					{/* Model Selector */}
+					<Select
+						disabled={isLoadingModels || models.length === 0}
+						value={selectedModel || ""}
+						onValueChange={setSelectedModel}
+					>
+						<SelectTrigger className="w-[180px] shrink-0">
+							<SelectValue placeholder="Select a model" />
+						</SelectTrigger>
+						<SelectContent>
+							{models.map((model) => (
+								<SelectItem key={model.id} value={model.id}>
+									{model.name}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
 					<Textarea
 						ref={textareaRef}
 						value={inputValue}
