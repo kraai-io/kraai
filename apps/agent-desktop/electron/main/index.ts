@@ -2,44 +2,51 @@ import { join } from "node:path";
 import { electronApp, is, optimizer } from "@electron-toolkit/utils";
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import icon from "../../resources/icon.png?asset";
-import { AgentApi } from "agent-ts-bindings";
+import { AgentRuntime, type Event } from "agent-ts-bindings";
 
-// Store the AgentApi instance - this is the source of truth
-let agentApi: AgentApi | null = null;
+// Store the runtime and main window
+let runtime: AgentRuntime | null = null;
+let mainWindow: BrowserWindow | null = null;
 
-// Initialize AgentApi
-function initializeAgentApi(): AgentApi {
-  console.log("[MAIN] Initializing AgentApi...");
+function initializeRuntime() {
+  console.log("[MAIN] Initializing AgentRuntime...");
 
-  agentApi = new AgentApi();
-  console.log("[MAIN] AgentApi initialized successfully");
+  // Create event callback that forwards to renderer
+  // NAPI-RS callbacks have signature (err, arg) => void
+  const eventCallback = (err: Error | null, event: Event) => {
+    if (err) {
+      console.error("[MAIN] Event callback error:", err);
+      return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("agent:event", event);
+    }
+  };
 
-  return agentApi;
+  runtime = new AgentRuntime(eventCallback);
+  console.log("[MAIN] AgentRuntime initialized");
 }
 
-// Set up IPC handlers for renderer to call AgentApi methods
 function setupIpcHandlers() {
   console.log("[MAIN] Setting up IPC handlers...");
 
-  // listModels - synchronous (using on + returnValue for sendSync)
-  ipcMain.on("agent:listModels", (event) => {
-    if (!agentApi) {
-      event.returnValue = [];
-      return;
-    }
-    try {
-      event.returnValue = agentApi.listModels();
-    } catch (e) {
-      console.error("[MAIN] listModels error:", e);
-      event.returnValue = [];
-    }
+  // listModels - async
+  ipcMain.handle("agent:listModels", async () => {
+    if (!runtime) throw new Error("Runtime not initialized");
+    return await runtime.listModels();
   });
 
-  console.log("[MAIN] IPC handlers set up successfully");
+  // doSomething - async
+  ipcMain.handle("agent:doSomething", async () => {
+    if (!runtime) throw new Error("Runtime not initialized");
+    await runtime.doSomething();
+  });
+
+  console.log("[MAIN] IPC handlers set up");
 }
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
@@ -52,7 +59,11 @@ function createWindow(): void {
   });
 
   mainWindow.on("ready-to-show", () => {
-    mainWindow.show();
+    mainWindow?.show();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
   });
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -67,7 +78,6 @@ function createWindow(): void {
   }
 }
 
-// App lifecycle
 app.whenReady().then(() => {
   electronApp.setAppUserModelId("com.ominit.agent");
 
@@ -75,10 +85,8 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window);
   });
 
-  // Initialize AgentApi in main process (source of truth)
-  initializeAgentApi();
+  initializeRuntime();
   setupIpcHandlers();
-
   createWindow();
 
   app.on("activate", () => {

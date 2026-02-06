@@ -3,166 +3,107 @@
 use std::sync::Arc;
 
 use agent::AgentManager;
-use color_eyre::eyre::{Context, Result, eyre};
+use color_eyre::eyre::Result;
 use napi::bindgen_prelude::*;
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
-use provider_core::{Model, ProviderManager, ProviderManagerHelper};
-use provider_google::GoogleFactory;
-use provider_openai::OpenAIFactory;
 use tokio::sync::Mutex;
-use tool_core::ToolManager;
-use types::{ChatMessage as RustChatMessage, ChatRole as RustChatRole};
 
-fn to_napi_error(err: color_eyre::Report) -> napi::Error {
-  napi::Error::new(Status::GenericFailure, format!("{:?}", err))
-}
-
-// Enums
-#[napi]
-#[derive(Clone)]
-pub enum ChatRole {
-  System,
-  User,
-  Assistant,
-  Tool,
-}
-
-impl From<RustChatRole> for ChatRole {
-  fn from(role: RustChatRole) -> Self {
-    match role {
-      RustChatRole::System => ChatRole::System,
-      RustChatRole::User => ChatRole::User,
-      RustChatRole::Assistant => ChatRole::Assistant,
-      RustChatRole::Tool => ChatRole::Tool,
-    }
-  }
-}
-
-impl From<ChatRole> for RustChatRole {
-  fn from(role: ChatRole) -> Self {
-    match role {
-      ChatRole::System => RustChatRole::System,
-      ChatRole::User => RustChatRole::User,
-      ChatRole::Assistant => RustChatRole::Assistant,
-      ChatRole::Tool => RustChatRole::Tool,
-    }
-  }
-}
-
-// Objects
+// Example event sent from Rust to TypeScript
 #[napi(object)]
 #[derive(Clone)]
-pub struct ChatMessage {
-  pub role: ChatRole,
-  pub content: String,
+pub struct Event {
+  pub event_type: String,
+  pub data: Option<String>,
 }
 
-impl From<RustChatMessage> for ChatMessage {
-  fn from(msg: RustChatMessage) -> Self {
-    ChatMessage {
-      role: msg.role.into(),
-      content: msg.content,
-    }
-  }
+// The runtime - owns a background tokio task
+#[napi]
+pub struct AgentRuntime {
+  // Channel to send commands to the background task
+  command_tx: tokio::sync::mpsc::Sender<Command>,
+  // Event callback to send data back to TypeScript
+  event_callback: Arc<ThreadsafeFunction<Event>>,
+  agent_manager: AgentManager,
 }
 
-impl From<ChatMessage> for RustChatMessage {
-  fn from(msg: ChatMessage) -> Self {
-    RustChatMessage {
-      role: msg.role.into(),
-      content: msg.content,
-    }
-  }
-}
-
-#[napi(object)]
-#[derive(Debug, Clone)]
-pub struct ModelInfo {
-  pub id: String,
-  pub name: String,
-  pub max_context: Option<u32>,
-}
-
-impl From<Model> for ModelInfo {
-  fn from(value: Model) -> Self {
-    ModelInfo {
-      id: value.id.to_string(),
-      name: value.name,
-      max_context: value
-        .max_context
-        .and_then(|x| Some(u32::try_from(x).expect("model context too large"))),
-    }
-  }
+// Internal commands (not exposed to TypeScript)
+enum Command {
+  ListModels {
+    response: tokio::sync::oneshot::Sender<Vec<String>>,
+  },
 }
 
 #[napi]
-pub struct AgentAPI {
-  manager: Arc<Mutex<AgentManager>>,
-}
-
-#[napi]
-impl AgentAPI {
+impl AgentRuntime {
   #[napi(constructor)]
-  pub fn new() -> napi::Result<Self> {
-    Self::new_inner().map_err(to_napi_error)
+  pub fn new(event_callback: ThreadsafeFunction<Event>) -> napi::Result<Self> {
+    let (command_tx, command_rx) = tokio::sync::mpsc::channel(100);
+    let event_callback = Arc::new(event_callback);
+    let callback_clone = event_callback.clone();
+
+    // Spawn background runtime in a new thread with its own tokio runtime
+    std::thread::spawn(move || {
+      let rt = tokio::runtime::Runtime::new().unwrap();
+      rt.block_on(async {
+        runtime_loop(command_rx, callback_clone).await;
+      });
+    });
+
+    Ok(AgentRuntime {
+      command_tx,
+      event_callback,
+    })
   }
 
-  fn new_inner() -> Result<Self> {
-    let providers = ProviderManager::new();
-    let tools = ToolManager::default();
-    let agent_api = AgentAPI {
-      manager: Arc::new(Mutex::new(AgentManager::new(providers, tools))),
-    };
-    Ok(agent_api)
-  }
-
-  async fn reload_config(&self) -> Result<()> {
-    let config_loc = directories::BaseDirs::new()
-      .expect("Failed to find user directories")
-      .home_dir()
-      .join(".agent-desktop/providers.toml");
-    if !config_loc.exists() {
-      return Err(eyre!("config file doesnt exist")); // TODO create a default config
-    }
-    let config_slice = tokio::fs::read(config_loc).await?;
-    let config: provider_core::ProviderManagerConfig =
-      toml::from_slice(&config_slice).wrap_err("Failed to parse config.toml")?;
-
-    // Load config into provider manager
-    self
-      .load_providers_with_config(config)
-      .await
-      .wrap_err("Failed to load providers from config")?;
-
-    Ok(())
-  }
-
-  async fn load_providers_with_config(
-    &self,
-    config: provider_core::ProviderManagerConfig,
-  ) -> Result<()> {
-    // Set up provider factories
-    let mut helper = ProviderManagerHelper::default();
-    helper.register_factory::<GoogleFactory>();
-    helper.register_factory::<OpenAIFactory>();
-
-    // Load config into provider manager
-    {
-      let mut manager = self.manager.lock().await;
-      manager.set_providers(config, helper).await?;
-    }
-
-    Ok(())
-  }
-
+  // Example: async method that returns data
   #[napi]
-  pub fn list_models(&self) -> Vec<ModelInfo> {
+  pub async fn list_models(&self) -> napi::Result<Vec<String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
     self
-      .manager
-      .blocking_lock()
-      .list_models()
-      .into_iter()
-      .map(|x| ModelInfo::from(x))
-      .collect()
+      .command_tx
+      .send(Command::ListModels { response: tx })
+      .await
+      .map_err(|e| napi::Error::new(Status::GenericFailure, e.to_string()))?;
+
+    rx.await
+      .map_err(|e| napi::Error::new(Status::GenericFailure, e.to_string()))
   }
+
+  // Example: fire-and-forget that sends events back via callback
+  #[napi]
+  pub async fn do_something(&self) -> napi::Result<()> {
+    // Send an event back to TypeScript
+    let event = Event {
+      event_type: "test".to_string(),
+      data: Some("Hello from Rust!".to_string()),
+    };
+
+    self
+      .event_callback
+      .call(Ok(event), ThreadsafeFunctionCallMode::NonBlocking);
+
+    Ok(())
+  }
+}
+
+// Background event loop
+async fn runtime_loop(
+  mut command_rx: tokio::sync::mpsc::Receiver<Command>,
+  event_callback: Arc<ThreadsafeFunction<Event>>,
+) {
+  println!("[RUNTIME] Event loop started");
+
+  while let Some(cmd) = command_rx.recv().await {
+    match cmd {
+      Command::ListModels { response } => {
+        // Example: return some data
+        let models = vec!["model-1".to_string(), "model-2".to_string()];
+        let _ = response.send(models);
+      }
+    }
+  }
+
+  println!("[RUNTIME] Event loop terminated");
 }

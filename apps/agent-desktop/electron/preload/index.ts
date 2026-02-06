@@ -1,35 +1,45 @@
 import { electronAPI } from "@electron-toolkit/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
-// API that proxies calls to the main process AgentApi
-// The actual AgentApi instance lives in the main process
-const agentApiProxy = {
-  // Synchronous method
-  listModels(): any[] {
-    return ipcRenderer.sendSync("agent:listModels");
+// Type definitions for the API
+interface Event {
+  eventType: string;
+  data?: string;
+}
+
+type EventHandler = (event: Event) => void;
+
+// API exposed to renderer
+const api = {
+  // Initialize the runtime with an event handler
+  async initRuntime(onEvent: EventHandler): Promise<void> {
+    // Set up event listener from main process
+    ipcRenderer.on("agent:event", (_event, data: Event) => {
+      onEvent(data);
+    });
+  },
+
+  // Async methods that call into Rust via main process
+  async listModels(): Promise<string[]> {
+    return await ipcRenderer.invoke("agent:listModels");
+  },
+
+  async doSomething(): Promise<void> {
+    await ipcRenderer.invoke("agent:doSomething");
   },
 };
 
-// Custom APIs for renderer
-const api = {
-  agentApi: agentApiProxy,
-};
-
-// Use contextBridge APIs to expose Electron APIs to renderer
+// Expose APIs
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld("electron", electronAPI);
     contextBridge.exposeInMainWorld("api", api);
-    console.log("[PRELOAD] APIs exposed via contextBridge");
   } catch (error) {
     console.error("[PRELOAD] Failed to expose APIs:", error);
   }
 } else {
-  // @ts-expect-error (define in dts)
+  // @ts-expect-error
   window.electron = electronAPI;
-  // @ts-expect-error (define in dts)
+  // @ts-expect-error
   window.api = api;
-  console.log("[PRELOAD] APIs exposed via window object");
 }
-
-console.log("[PRELOAD] Preload script loaded successfully");
