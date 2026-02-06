@@ -3,43 +3,43 @@ import { contextBridge, ipcRenderer } from "electron";
 
 // Type definitions for the API
 interface Event {
-  eventType: string;
-  data?: string;
+	eventType: string;
+	data?: string;
 }
 
 type EventHandler = (event: Event) => void;
 
 // API exposed to renderer
 const api = {
-  // Initialize the runtime with an event handler
-  async initRuntime(onEvent: EventHandler): Promise<void> {
-    // Set up event listener from main process
-    ipcRenderer.on("agent:event", (_event, data: Event) => {
-      onEvent(data);
-    });
-  },
+	// Initialize the runtime with an event handler
+	async initRuntime(onEvent: EventHandler): Promise<void> {
+		// Set up event listener from main process
+		ipcRenderer.on("agent:event", (_event, data: Event) => {
+			onEvent(data);
+		});
+	},
 
-  // Async methods that call into Rust via main process
-  async listModels(): Promise<string[]> {
-    return await ipcRenderer.invoke("agent:listModels");
-  },
+	// Async methods that call into Rust via main process
+	async listModels(): Promise<string[]> {
+		return await ipcRenderer.invoke("agent:listModels");
+	},
 
-  async doSomething(): Promise<void> {
-    await ipcRenderer.invoke("agent:doSomething");
-  },
+	async doSomething(): Promise<void> {
+		await ipcRenderer.invoke("agent:doSomething");
+	},
 };
 
 // Expose APIs
 if (process.contextIsolated) {
-  try {
-    contextBridge.exposeInMainWorld("electron", electronAPI);
-    contextBridge.exposeInMainWorld("api", api);
-  } catch (error) {
-    console.error("[PRELOAD] Failed to expose APIs:", error);
-  }
+	try {
+		contextBridge.exposeInMainWorld("electron", electronAPI);
+		contextBridge.exposeInMainWorld("api", api);
+	} catch (error) {
+		console.error("[PRELOAD] Failed to expose APIs:", error);
+	}
 } else {
-  // @ts-expect-error
-  window.electron = electronAPI;
-  // @ts-expect-error
-  window.api = api;
+	// @ts-expect-error
+	window.electron = electronAPI;
+	// @ts-expect-error
+	window.api = api;
 }

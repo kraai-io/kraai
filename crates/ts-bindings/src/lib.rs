@@ -138,20 +138,25 @@ async fn runtime_loop(
   // Set up file watcher for config
   let (file_change_tx, mut file_change_rx) = mpsc::channel(10);
   let config_path_clone = config_path.clone();
-  
+
   let _watcher_thread = std::thread::spawn(move || {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
       let (tx, mut rx) = mpsc::channel(10);
-      
+
       let mut watcher = RecommendedWatcher::new(
         move |res: Result<NotifyEvent, notify::Error>| {
           let _ = tx.try_send(res);
         },
         Config::default().with_poll_interval(Duration::from_secs(1)),
-      ).expect("Failed to create file watcher");
+      )
+      .expect("Failed to create file watcher");
 
-      watcher.watch(config_path_clone.parent().unwrap(), RecursiveMode::NonRecursive)
+      watcher
+        .watch(
+          config_path_clone.parent().unwrap(),
+          RecursiveMode::NonRecursive,
+        )
         .expect("Failed to watch config directory");
 
       println!("[RUNTIME] Config file watcher started");
@@ -160,7 +165,11 @@ async fn runtime_loop(
         if let Ok(event) = res {
           if event.kind.is_modify() || event.kind.is_create() {
             for path in event.paths {
-              if path.file_name().map(|n| n == "providers.toml").unwrap_or(false) {
+              if path
+                .file_name()
+                .map(|n| n == "providers.toml")
+                .unwrap_or(false)
+              {
                 let _ = file_change_tx.try_send(());
               }
             }

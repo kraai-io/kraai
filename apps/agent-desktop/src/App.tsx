@@ -50,7 +50,7 @@ function App(): React.JSX.Element {
 		// Initialize runtime with event handler
 		api.initRuntime((event: Event) => {
 			console.log("[UI] Received event from Rust:", event);
-			
+
 			switch (event.eventType) {
 				case "config_loaded":
 					console.log("[UI] Config loaded:", event.data);
@@ -87,17 +87,20 @@ function App(): React.JSX.Element {
 		});
 
 		// Load models
-		api.listModels().then((modelList: string[]) => {
-			console.log("[UI] Models loaded:", modelList);
-			setModels(modelList);
-			if (modelList.length > 0) {
-				setSelectedModel(modelList[0]);
-			}
-			setIsLoadingModels(false);
-		}).catch((err: any) => {
-			console.error("[UI] Failed to load models:", err);
-			setIsLoadingModels(false);
-		});
+		api
+			.listModels()
+			.then((modelList: string[]) => {
+				console.log("[UI] Models loaded:", modelList);
+				setModels(modelList);
+				if (modelList.length > 0) {
+					setSelectedModel(modelList[0]);
+				}
+				setIsLoadingModels(false);
+			})
+			.catch((err: any) => {
+				console.error("[UI] Failed to load models:", err);
+				setIsLoadingModels(false);
+			});
 	}, []);
 
 	// Check if scroll is at bottom
@@ -160,7 +163,7 @@ function App(): React.JSX.Element {
 
 		// Mock response for now
 		await new Promise((resolve) => setTimeout(resolve, 1000));
-		
+
 		const assistantMessage: Message = {
 			id: (Date.now() + 1).toString(),
 			content: `Echo: ${userMessage.content}`,
