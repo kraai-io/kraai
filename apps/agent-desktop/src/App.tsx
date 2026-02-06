@@ -51,11 +51,39 @@ function App(): React.JSX.Element {
 		api.initRuntime((event: Event) => {
 			console.log("[UI] Received event from Rust:", event);
 			
-			if (event.eventType === "test") {
-				// Handle test events from Rust
-				console.log("[UI] Test event data:", event.data);
+			switch (event.eventType) {
+				case "config_loaded":
+					console.log("[UI] Config loaded:", event.data);
+					// Refresh models when config is loaded
+					api.listModels().then((modelList: string[]) => {
+						setModels(modelList);
+						if (modelList.length > 0 && !selectedModel) {
+							setSelectedModel(modelList[0]);
+						}
+					});
+					break;
+				case "config_error":
+					console.error("[UI] Config error:", event.data);
+					break;
+				case "config_reloaded":
+					console.log("[UI] Config reloaded:", event.data);
+					// Refresh models when config is reloaded
+					api.listModels().then((modelList: string[]) => {
+						setModels(modelList);
+						if (modelList.length > 0) {
+							setSelectedModel(modelList[0]);
+						}
+					});
+					break;
+				case "config_reload_error":
+					console.error("[UI] Config reload error:", event.data);
+					break;
+				case "test":
+					console.log("[UI] Test event data:", event.data);
+					break;
+				default:
+					console.log("[UI] Unknown event type:", event.eventType);
 			}
-			// Future: handle Token, Complete, Error events here
 		});
 
 		// Load models

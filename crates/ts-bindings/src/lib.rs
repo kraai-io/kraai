@@ -1,12 +1,14 @@
 #![deny(clippy::all)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent::AgentManager;
 use color_eyre::eyre::{Context, Result};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
+use notify::{Config, Event as NotifyEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
@@ -95,7 +97,7 @@ impl AgentRuntime {
 // Background event loop with AgentManager
 async fn runtime_loop(
   mut command_rx: mpsc::Receiver<Command>,
-  _event_callback: Arc<ThreadsafeFunction<Event>>,
+  event_callback: Arc<ThreadsafeFunction<Event>>,
 ) {
   println!("[RUNTIME] Starting event loop");
 
@@ -104,24 +106,112 @@ async fn runtime_loop(
   let tools = ToolManager::default();
   let mut agent_manager = AgentManager::new(providers, tools);
 
+  // Get config path
+  let config_path = directories::BaseDirs::new()
+    .expect("Failed to find user directories")
+    .home_dir()
+    .join(".agent-desktop/providers.toml");
+
   // Load config automatically on startup
   println!("[RUNTIME] Loading config...");
   match load_config_inner(&mut agent_manager).await {
-    Ok(_) => println!("[RUNTIME] Config loaded successfully"),
-    Err(e) => eprintln!("[RUNTIME] Failed to load config: {:?}", e),
+    Ok(_) => {
+      println!("[RUNTIME] Config loaded successfully");
+      // Send config loaded event
+      let event = Event {
+        event_type: "config_loaded".to_string(),
+        data: Some("Config loaded successfully".to_string()),
+      };
+      event_callback.call(Ok(event), ThreadsafeFunctionCallMode::NonBlocking);
+    }
+    Err(e) => {
+      eprintln!("[RUNTIME] Failed to load config: {:?}", e);
+      // Send config error event
+      let event = Event {
+        event_type: "config_error".to_string(),
+        data: Some(format!("Failed to load config: {}", e)),
+      };
+      event_callback.call(Ok(event), ThreadsafeFunctionCallMode::NonBlocking);
+    }
   }
+
+  // Set up file watcher for config
+  let (file_change_tx, mut file_change_rx) = mpsc::channel(10);
+  let config_path_clone = config_path.clone();
+  
+  let _watcher_thread = std::thread::spawn(move || {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+      let (tx, mut rx) = mpsc::channel(10);
+      
+      let mut watcher = RecommendedWatcher::new(
+        move |res: Result<NotifyEvent, notify::Error>| {
+          let _ = tx.try_send(res);
+        },
+        Config::default().with_poll_interval(Duration::from_secs(1)),
+      ).expect("Failed to create file watcher");
+
+      watcher.watch(config_path_clone.parent().unwrap(), RecursiveMode::NonRecursive)
+        .expect("Failed to watch config directory");
+
+      println!("[RUNTIME] Config file watcher started");
+
+      while let Some(res) = rx.recv().await {
+        if let Ok(event) = res {
+          if event.kind.is_modify() || event.kind.is_create() {
+            for path in event.paths {
+              if path.file_name().map(|n| n == "providers.toml").unwrap_or(false) {
+                let _ = file_change_tx.try_send(());
+              }
+            }
+          }
+        }
+      }
+    });
+  });
 
   println!("[RUNTIME] Event loop ready");
 
-  while let Some(cmd) = command_rx.recv().await {
-    match cmd {
-      Command::ListModels { response } => {
-        let models: Vec<String> = agent_manager
-          .list_models()
-          .into_iter()
-          .map(|m| m.id.to_string())
-          .collect();
-        let _ = response.send(models);
+  loop {
+    tokio::select! {
+      // Handle commands from TypeScript
+      cmd = command_rx.recv() => {
+        match cmd {
+          Some(Command::ListModels { response }) => {
+            let models: Vec<String> = agent_manager
+              .list_models()
+              .into_iter()
+              .map(|m| m.id.to_string())
+              .collect();
+            let _ = response.send(models);
+          }
+          None => {
+            println!("[RUNTIME] Command channel closed, shutting down");
+            break;
+          }
+        }
+      }
+      // Handle file change events
+      _ = file_change_rx.recv() => {
+        println!("[RUNTIME] Config file changed, reloading...");
+        match load_config_inner(&mut agent_manager).await {
+          Ok(_) => {
+            println!("[RUNTIME] Config reloaded successfully");
+            let event = Event {
+              event_type: "config_reloaded".to_string(),
+              data: Some("Config reloaded successfully".to_string()),
+            };
+            event_callback.call(Ok(event), ThreadsafeFunctionCallMode::NonBlocking);
+          }
+          Err(e) => {
+            eprintln!("[RUNTIME] Failed to reload config: {:?}", e);
+            let event = Event {
+              event_type: "config_reload_error".to_string(),
+              data: Some(format!("Failed to reload config: {}", e)),
+            };
+            event_callback.call(Ok(event), ThreadsafeFunctionCallMode::NonBlocking);
+          }
+        }
       }
     }
   }
