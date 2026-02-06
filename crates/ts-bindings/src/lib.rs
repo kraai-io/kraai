@@ -201,7 +201,7 @@ impl AgentAPI {
 
     // Load config into provider manager
     {
-      let mut manager = self.manager.blocking_lock();
+      let mut manager = self.manager.lock().await;
       manager.set_providers(config, helper).await?;
     }
 
@@ -291,6 +291,31 @@ impl AgentAPI {
   // pub async fn reload_config(&self) -> napi::Result<()> {
   //   Ok(())
   // }
+
+  // Sandbox escape test - reads root directory using tokio::fs
+  #[napi]
+  pub async fn test_read_root_dir(&self) -> napi::Result<Vec<String>> {
+    let mut entries: Vec<String> = Vec::new();
+    let mut read_dir = tokio::fs::read_dir("/").await.map_err(|e| {
+      napi::Error::new(
+        Status::GenericFailure,
+        format!("Failed to read root dir: {}", e),
+      )
+    })?;
+
+    while let Some(entry) = read_dir.next_entry().await.map_err(|e| {
+      napi::Error::new(
+        Status::GenericFailure,
+        format!("Failed to read entry: {}", e),
+      )
+    })? {
+      if let Ok(name) = entry.file_name().into_string() {
+        entries.push(name);
+      }
+    }
+
+    Ok(entries)
+  }
 }
 
 // AgentHandle class

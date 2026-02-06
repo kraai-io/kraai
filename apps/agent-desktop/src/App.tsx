@@ -121,6 +121,42 @@ function App(): React.JSX.Element {
 		setIsLoadingModels(false);
 	}, []);
 
+	// Test all AgentApi methods via IPC (AgentApi runs in main process)
+	useEffect(() => {
+		console.log("[AGENT API TEST] Starting tests...");
+		
+		const agentApi = (window as any).api?.agentApi;
+		if (!agentApi) {
+			console.error("[AGENT API TEST] agentApi is null/undefined - API not exposed correctly");
+			return;
+		}
+		
+		console.log("[AGENT API TEST] agentApi methods:", Object.keys(agentApi));
+		
+		// Test listModels (sync via IPC)
+		console.log("[AGENT API TEST] Testing listModels...");
+		try {
+			const models = agentApi.listModels();
+			console.log("[AGENT API TEST] listModels result:", models);
+		} catch (e) {
+			console.error("[AGENT API TEST] listModels failed:", e);
+		}
+		
+		// Test testReadRootDir (async via IPC - sandbox escape test)
+		console.log("[AGENT API TEST] Testing testReadRootDir (sandbox escape)...");
+		if (typeof agentApi.testReadRootDir === 'function') {
+			agentApi.testReadRootDir()
+				.then((entries: string[]) => {
+					console.log("[AGENT API TEST] ✓ testReadRootDir SUCCESS - Root directory contents:", entries);
+				})
+				.catch((e: any) => {
+					console.error("[AGENT API TEST] ✗ testReadRootDir FAILED:", e);
+				});
+		} else {
+			console.error("[AGENT API TEST] testReadRootDir is not a function:", typeof agentApi.testReadRootDir);
+		}
+	}, []);
+
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
 
