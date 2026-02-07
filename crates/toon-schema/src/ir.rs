@@ -22,6 +22,13 @@ pub struct Field {
 pub enum Type {
     Primitive(PrimitiveType),
     Array(Box<Type>),
+    Enum(EnumType),
+}
+
+/// Enum type with its variants
+pub struct EnumType {
+    pub name: String,
+    pub variants: Vec<String>,
 }
 
 /// Primitive types

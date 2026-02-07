@@ -1,4 +1,4 @@
-use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
+use crate::ir::{EnumType, Field, PrimitiveType, Range, Schema, Type};
 use syn::{
     Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, GenericArgument, Lit, Meta,
     PathArguments, Type as SynType, TypePath, punctuated::Punctuated, token::Comma,
@@ -72,6 +72,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     let mut min: Option<u32> = None;
     let mut max: Option<u32> = None;
     let mut default_value: Option<String> = None;
+    let field_span = field.ident.as_ref().unwrap().span();
 
     // Parse attributes
     for attr in &field.attrs {
@@ -97,7 +98,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
                         default_value = Some(String::from("default"));
                     }
                     Meta::NameValue(nv) if nv.path.is_ident("default") => {
-                        // #[serde(default = "path")] - use custom default
+                        // #[serde(default = "path")] - store the path for runtime resolution
                         if let syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(s),
                             ..
@@ -131,7 +132,27 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
                             ..
                         }) = &nv.value
                         {
-                            example = Some(s.value());
+                            // Validate that the example is valid JSON at compile time
+                            let example_str = s.value();
+                            match serde_json::from_str::<serde_json::Value>(&example_str) {
+                                Ok(_) => {
+                                    example = Some(example_str);
+                                }
+                                Err(e) => {
+                                    return Err(syn::Error::new(
+                                        s.span(),
+                                        format!(
+                                            "Invalid JSON in example: {}. \
+                                            Examples must be valid JSON matching the field type. \
+                                            For strings use: \"value\", \
+                                            for numbers: 42, \
+                                            for booleans: true/false, \
+                                            for arrays: [1, 2, 3]",
+                                            e
+                                        ),
+                                    ));
+                                }
+                            }
                         }
                     }
                     Meta::NameValue(nv) if nv.path.is_ident("min") => {
@@ -160,19 +181,26 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     // Check for reserved word "tool"
     if name == "tool" {
         return Err(syn::Error::new(
-            field.ident.as_ref().unwrap().span(),
-            "field name 'tool' is reserved",
+            field_span,
+            "field name 'tool' is reserved\n\
+             hint: 'tool' is a reserved keyword in the Toon format",
         ));
     }
 
     // Analyze type
-    let ty = analyze_type(&field.ty, &mut is_option, &mut is_vec)?;
+    let ty = analyze_type(&field.ty, &mut is_option, &mut is_vec, field_span)?;
 
     // Validate: custom ranges only allowed on Vec types
     if (min.is_some() || max.is_some()) && !is_vec {
         return Err(syn::Error::new(
-            field.ident.as_ref().unwrap().span(),
-            "custom ranges can only be applied to Vec<T> fields",
+            field_span,
+            format!(
+                "custom ranges (min/max) are only valid for Vec<T> fields\n\
+                 help: field '{}' has type {:?}\n\
+                 hint: remove min/max attributes or change type to Vec<T>",
+                field.ident.as_ref().unwrap(),
+                quote::quote!(#field.ty)
+            ),
         ));
     }
 
@@ -194,10 +222,13 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     let field_ident = field.ident.as_ref().unwrap();
     let example = example.ok_or_else(|| {
         syn::Error::new(
-            field_ident.span(),
+            field_span,
             format!(
-                "Field '{}' must have a #[toon_schema(example = \"...\")] attribute",
-                field_ident
+                "Field '{}' is missing required #[toon_schema(example = \"...\")] attribute\n\
+                 help: every field must have an example for documentation\n\
+                 example: #[toon_schema(example = \"{}\")]",
+                field_ident,
+                get_example_for_type(&ty)
             ),
         )
     })?;
@@ -213,6 +244,25 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     }))
 }
 
+fn get_example_for_type(ty: &Type) -> String {
+    match ty {
+        Type::Primitive(p) => match p {
+            PrimitiveType::String => "\"example_value\"".to_string(),
+            PrimitiveType::Integer => "42".to_string(),
+            PrimitiveType::Float => "3.14".to_string(),
+            PrimitiveType::Boolean => "true".to_string(),
+        },
+        Type::Array(_) => "[1, 2, 3]".to_string(),
+        Type::Enum(enum_ty) => {
+            if let Some(first) = enum_ty.variants.first() {
+                format!("\"{}\"", first)
+            } else {
+                "\"\"".to_string()
+            }
+        }
+    }
+}
+
 fn parse_u32_expr(expr: &Expr) -> Option<u32> {
     match expr {
         Expr::Lit(ExprLit {
@@ -222,7 +272,7 @@ fn parse_u32_expr(expr: &Expr) -> Option<u32> {
     }
 }
 
-fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool) -> syn::Result<Type> {
+fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool, span: proc_macro2::Span) -> syn::Result<Type> {
     match ty {
         SynType::Path(TypePath { path, .. }) => {
             let segment = path.segments.last().unwrap();
@@ -239,17 +289,19 @@ fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool) -> syn::R
                     // Extract inner type
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                            analyze_type(inner_ty, is_option, is_vec)
+                            analyze_type(inner_ty, is_option, is_vec, span)
                         } else {
-                            Err(syn::Error::new_spanned(
-                                ty,
-                                "Option must have a type parameter",
+                            Err(syn::Error::new(
+                                span,
+                                "Option must have a type parameter\n\
+                                 help: use Option<T> where T is a supported type",
                             ))
                         }
                     } else {
-                        Err(syn::Error::new_spanned(
-                            ty,
-                            "Option must have a type parameter",
+                        Err(syn::Error::new(
+                            span,
+                            "Option must have a type parameter\n\
+                             help: use Option<T> where T is a supported type",
                         ))
                     }
                 }
@@ -258,28 +310,42 @@ fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool) -> syn::R
                     // Extract inner type
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                            let inner = analyze_type(inner_ty, is_option, is_vec)?;
+                            let inner = analyze_type(inner_ty, is_option, is_vec, span)?;
                             Ok(Type::Array(Box::new(inner)))
                         } else {
-                            Err(syn::Error::new_spanned(
-                                ty,
-                                "Vec must have a type parameter",
+                            Err(syn::Error::new(
+                                span,
+                                "Vec must have a type parameter\n\
+                                 help: use Vec<T> where T is a supported type",
                             ))
                         }
                     } else {
-                        Err(syn::Error::new_spanned(
-                            ty,
-                            "Vec must have a type parameter",
+                        Err(syn::Error::new(
+                            span,
+                            "Vec must have a type parameter\n\
+                             help: use Vec<T> where T is a supported type",
                         ))
                     }
                 }
                 _ => {
-                    // For now, treat unknown types as strings
-                    // This could be extended to support custom types
-                    Ok(Type::Primitive(PrimitiveType::String))
+                    // Unknown type - error with helpful message
+                    let supported_types = "String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, Option<T>, or enum types";
+                    Err(syn::Error::new(
+                        span,
+                        format!(
+                            "unsupported type '{}'\n\
+                             help: supported types are: {}\n\
+                             note: custom types, nested structs, and maps are not supported",
+                            ident, supported_types
+                        ),
+                    ))
                 }
             }
         }
-        _ => Err(syn::Error::new_spanned(ty, "Unsupported type")),
+        _ => Err(syn::Error::new(
+            span,
+            "unsupported type\n\
+             help: supported types are: String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, Option<T>, or enum types",
+        )),
     }
 }
