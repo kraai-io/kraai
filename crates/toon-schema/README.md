@@ -11,7 +11,6 @@ A proc-macro derive crate for generating Toon format schema documentation from R
 - **Automatic schema generation** from Rust struct definitions
 - **Compile-time validation** of JSON examples
 - **Serde integration** - respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`
-- **Enum support** with explicit variant specification
 - **Custom ranges** for Vec fields (`min`/`max` attributes)
 - **Type safety** - errors on unsupported types instead of silently converting
 
@@ -63,31 +62,8 @@ max_lines[0:1]: integer
 
 Example:
 tool: ReadFileArgs
-files:
-  - /etc/passwd
-  - /etc/hosts
+files[2]: /etc/passwd,/etc/hosts
 max_lines: 100
-```
-
-### Enum Support
-
-For enum-like fields, specify variants explicitly:
-
-```rust
-#[derive(ToonSchema, Serialize, Deserialize)]
-struct TaskConfig {
-    #[toon_schema(
-        description = "Task priority",
-        example = "\"high\"",
-        variants = "low|medium|high|critical"
-    )]
-    priority: String,
-}
-```
-
-This generates:
-```
-priority[1:1]: enum<low|medium|high|critical>
 ```
 
 ### Custom Ranges
@@ -133,9 +109,8 @@ struct ApiRequest {
 
 - **Primitives**: `String`, `i8`-`i128`, `u8`-`u128`, `isize`, `usize`, `f32`, `f64`, `bool`
 - **Collections**: `Vec<T>` (arrays), `Option<T>` (optional fields)
-- **Enums**: Custom types with explicit `variants` attribute
 
-**Not supported**: Nested structs, maps, tuples, or generic types beyond `Vec` and `Option`.
+**Not supported**: Enums, nested structs, maps, tuples, or generic types beyond `Vec` and `Option`.
 
 ## Attributes
 
@@ -148,7 +123,6 @@ struct ApiRequest {
 
 - `description = "..."` - Field description
 - `example = "..."` - **Required.** JSON example for the field
-- `variants = "A|B|C"` - Enum variants (pipe-separated)
 - `min = N` - Minimum count for Vec fields
 - `max = N` - Maximum count for Vec fields
 
@@ -158,7 +132,7 @@ The crate provides helpful compile-time error messages:
 
 - **Missing example**: Suggests appropriate example for the type
 - **Invalid JSON**: Shows what's wrong and how to fix it
-- **Unknown type**: Lists supported types and suggests using `variants` for enums
+- **Unknown type**: Lists supported types
 - **Custom range on non-Vec**: Explains ranges only work with Vec types
 - **Reserved field name**: 'tool' is reserved in Toon format
 

@@ -131,10 +131,6 @@ fn format_type(ty: &Type) -> String {
             PrimitiveType::Boolean => "boolean".to_string(),
         },
         Type::Array(inner) => format!("array<{}>", format_type(inner)),
-        Type::Enum(enum_ty) => {
-            let variants = enum_ty.variants.join("|");
-            format!("enum<{}>", variants)
-        }
     }
 }
 

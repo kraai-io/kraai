@@ -18,7 +18,7 @@
 //! ## Field-level (`#[toon_schema(...)]`)
 //! - `description = "..."` - Field description
 //! - `example = "..."` - **Required.** JSON example for the field
-//! - `variants = "A|B|C"` - Enum variants (pipe-separated)
+
 //! - `min = N` - Minimum count for Vec fields
 //! - `max = N` - Maximum count for Vec fields
 //!
@@ -29,7 +29,7 @@
 //! - `#[serde(default)]` - Use default value
 //! - `#[serde(default = "path")]` - Use custom default function
 
-use crate::ir::{EnumType, Field, PrimitiveType, Range, Schema, Type};
+use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
 use syn::{
     Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, GenericArgument, Lit, Meta,
     PathArguments, Type as SynType, TypePath, punctuated::Punctuated, token::Comma,
@@ -112,7 +112,6 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     let mut min: Option<u32> = None;
     let mut max: Option<u32> = None;
     let mut default_value: Option<String> = None;
-    let mut enum_variants: Option<Vec<String>> = None;
     let field_span = field.ident.as_ref().unwrap().span();
 
     // Parse attributes
@@ -208,23 +207,6 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
                             max = Some(n);
                         }
                     }
-                    Meta::NameValue(nv) if nv.path.is_ident("variants") => {
-                        // Parse variants = "Variant1|Variant2|Variant3"
-                        if let syn::Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(s),
-                            ..
-                        }) = &nv.value
-                        {
-                            let variants_str = s.value();
-                            enum_variants = Some(
-                                variants_str
-                                    .split('|')
-                                    .map(|v| v.trim().to_string())
-                                    .filter(|v| !v.is_empty())
-                                    .collect(),
-                            );
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -246,13 +228,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     }
 
     // Analyze type
-    let ty = analyze_type(
-        &field.ty,
-        &mut is_option,
-        &mut is_vec,
-        field_span,
-        enum_variants.as_ref(),
-    )?;
+    let ty = analyze_type(&field.ty, &mut is_option, &mut is_vec, field_span)?;
 
     // Validate: custom ranges only allowed on Vec types
     if (min.is_some() || max.is_some()) && !is_vec {
@@ -317,13 +293,6 @@ fn get_example_for_type(ty: &Type) -> String {
             PrimitiveType::Boolean => "true".to_string(),
         },
         Type::Array(_) => "[1, 2, 3]".to_string(),
-        Type::Enum(enum_ty) => {
-            if let Some(first) = enum_ty.variants.first() {
-                format!("\"{}\"", first)
-            } else {
-                "\"\"".to_string()
-            }
-        }
     }
 }
 
@@ -341,7 +310,6 @@ fn analyze_type(
     is_option: &mut bool,
     is_vec: &mut bool,
     span: proc_macro2::Span,
-    enum_variants: Option<&Vec<String>>,
 ) -> syn::Result<Type> {
     match ty {
         SynType::Path(TypePath { path, .. }) => {
@@ -359,7 +327,7 @@ fn analyze_type(
                     // Extract inner type
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                            analyze_type(inner_ty, is_option, is_vec, span, enum_variants)
+                            analyze_type(inner_ty, is_option, is_vec, span)
                         } else {
                             Err(syn::Error::new(
                                 span,
@@ -380,8 +348,7 @@ fn analyze_type(
                     // Extract inner type
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                            let inner =
-                                analyze_type(inner_ty, is_option, is_vec, span, enum_variants)?;
+                            let inner = analyze_type(inner_ty, is_option, is_vec, span)?;
                             Ok(Type::Array(Box::new(inner)))
                         } else {
                             Err(syn::Error::new(
@@ -399,31 +366,24 @@ fn analyze_type(
                     }
                 }
                 _ => {
-                    // Check if this is an enum type (variants were specified)
-                    if let Some(variants) = enum_variants {
-                        Ok(Type::Enum(EnumType {
-                            variants: variants.clone(),
-                        }))
-                    } else {
-                        // Unknown type - error with helpful message
-                        let supported_types = "String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, Option<T>, or enum types";
-                        Err(syn::Error::new(
-                            span,
-                            format!(
-                                "unsupported type '{}'\n\
-                                 help: supported types are: {}\n\
-                                 note: for enum types, use #[toon_schema(variants = \"Variant1|Variant2\")]",
-                                ident, supported_types
-                            ),
-                        ))
-                    }
+                    // Unknown type - error with helpful message
+                    let supported_types =
+                        "String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, or Option<T>";
+                    Err(syn::Error::new(
+                        span,
+                        format!(
+                            "unsupported type '{}'\n\
+                             help: supported types are: {}",
+                            ident, supported_types
+                        ),
+                    ))
                 }
             }
         }
         _ => Err(syn::Error::new(
             span,
             "unsupported type\n\
-             help: supported types are: String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, Option<T>, or enum types",
+             help: supported types are: String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, or Option<T>",
         )),
     }
 }

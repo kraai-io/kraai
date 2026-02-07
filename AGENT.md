@@ -60,8 +60,9 @@ As an AI agent working on this codebase, you are expected to:
 
 **JJ workflow**:
 - `jj st` and `jj diff` to review changes
-- `jj describe -m "[ai] message"` to set commit message
-- `jj new` to create new working commit (important!)
+- `jj describe -m "[ai] message"` to set commit message (this "closes" the current commit)
+- `jj new` to create new working commit (MUST run AFTER `jj describe` to start a new commit!)
+- **Key**: Always run `jj new` AFTER describing, not before. The workflow is: make changes → describe → new → repeat
 
 ## Tooling
 
