@@ -74,6 +74,10 @@ As an AI agent working on this codebase, you are expected to:
 - Add to AGENT.md before moving on to next task
 - Treat documentation as part of the task, not an afterthought
 
+**LEARNING**: Not every change needs its own commit. I can use `jj squash` to combine related commits together. For example, the two documentation commits I just made could have been squashed into one. The workflow should be: make changes → describe → (optionally squash if related) → new.
+
+**LEARNING**: After finishing a commit (describing it), I should ALWAYS run `jj new` immediately to create a fresh empty commit. This ensures I'm always working on a clean slate and follows the expected jj workflow pattern.
+
 ## Tooling
 
 When working on this project, prefer using available tools and commands defined in the project (e.g., `npm run lint`, `npm run typecheck`, etc.) to ensure code quality.
