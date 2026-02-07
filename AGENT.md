@@ -64,6 +64,16 @@ As an AI agent working on this codebase, you are expected to:
 - `jj new` to create new working commit (MUST run AFTER `jj describe` to start a new commit!)
 - **Key**: Always run `jj new` AFTER describing, not before. The workflow is: make changes → describe → new → repeat
 
+**LEARNING**: I made the mistake of not running `jj new` after describing commits, which caused all my changes to accumulate in a single commit. The correct workflow is to always run `jj new` immediately after `jj describe` to create a fresh empty commit for the next batch of changes.
+
+**LEARNING**: Don't add formatting arguments to `jj log` (like `--template`) because it removes crucial details from the output that are needed for debugging and understanding the commit structure. Use plain `jj log` instead.
+
+**LEARNING**: I failed to document learnings proactively multiple times. This is a critical failure. Going forward, I MUST:
+- Document EVERY new learning immediately when discovered
+- Never wait to be reminded or asked
+- Add to AGENT.md before moving on to next task
+- Treat documentation as part of the task, not an afterthought
+
 ## Tooling
 
 When working on this project, prefer using available tools and commands defined in the project (e.g., `npm run lint`, `npm run typecheck`, etc.) to ensure code quality.
