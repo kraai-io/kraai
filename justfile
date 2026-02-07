@@ -21,6 +21,11 @@ test-bindings:
 clean-bindings:
     cd crates/ts-bindings && pnpm clean
 
+dev-nohr: build-bindings-debug dev-desktop
+
+dev:
+    cargo watch -w crates -c -s "just dev-nohr"
+
 dev-desktop:
     cd apps/agent-desktop && pnpm dev
 
@@ -37,8 +42,6 @@ install-deps:
     pnpm install
 
 build-all: build-bindings build-desktop
-
-dev-all: build-bindings dev-desktop
 
 test-all: test-bindings typecheck-desktop
 

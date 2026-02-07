@@ -14,6 +14,7 @@
         buildInputs = with pkgs; [
           cargo-edit
           cargo-msrv
+          cargo-watch
           rust-bin.stable.latest.default
           rust-analyzer
 
