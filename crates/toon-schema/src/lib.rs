@@ -5,7 +5,7 @@ use syn::{DeriveInput, parse_macro_input};
 mod ir;
 mod parse;
 
-use ir::{PrimitiveType, Schema, Type};
+use ir::{EnumType, PrimitiveType, Schema, Type};
 use parse::parse_toon_schema;
 
 /// Derive macro for generating Toon format schemas with examples.
@@ -131,6 +131,10 @@ fn format_type(ty: &Type) -> String {
             PrimitiveType::Boolean => "boolean".to_string(),
         },
         Type::Array(inner) => format!("array<{}>", format_type(inner)),
+        Type::Enum(enum_ty) => {
+            let variants = enum_ty.variants.join("|");
+            format!("enum<{}>", variants)
+        }
     }
 }
 
