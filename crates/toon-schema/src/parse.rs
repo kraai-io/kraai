@@ -246,7 +246,13 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     }
 
     // Analyze type
-    let ty = analyze_type(&field.ty, &mut is_option, &mut is_vec, field_span, enum_variants.as_ref())?;
+    let ty = analyze_type(
+        &field.ty,
+        &mut is_option,
+        &mut is_vec,
+        field_span,
+        enum_variants.as_ref(),
+    )?;
 
     // Validate: custom ranges only allowed on Vec types
     if (min.is_some() || max.is_some()) && !is_vec {
@@ -330,7 +336,13 @@ fn parse_u32_expr(expr: &Expr) -> Option<u32> {
     }
 }
 
-fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool, span: proc_macro2::Span, enum_variants: Option<&Vec<String>>) -> syn::Result<Type> {
+fn analyze_type(
+    ty: &SynType,
+    is_option: &mut bool,
+    is_vec: &mut bool,
+    span: proc_macro2::Span,
+    enum_variants: Option<&Vec<String>>,
+) -> syn::Result<Type> {
     match ty {
         SynType::Path(TypePath { path, .. }) => {
             let segment = path.segments.last().unwrap();
@@ -368,7 +380,8 @@ fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool, span: pro
                     // Extract inner type
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                            let inner = analyze_type(inner_ty, is_option, is_vec, span, enum_variants)?;
+                            let inner =
+                                analyze_type(inner_ty, is_option, is_vec, span, enum_variants)?;
                             Ok(Type::Array(Box::new(inner)))
                         } else {
                             Err(syn::Error::new(
