@@ -1,3 +1,34 @@
+//! Parser module for the toon-schema derive macro.
+//!
+//! This module handles parsing Rust struct definitions and their attributes
+//! into an intermediate representation (IR) used for schema generation.
+//!
+//! # Key Functions
+//!
+//! - [`parse_toon_schema`] - Main entry point that parses a DeriveInput into a Schema
+//! - [`parse_field`] - Parses individual field attributes
+//! - [`analyze_type`] - Determines the Type from a syn::Type
+//!
+//! # Supported Attributes
+//!
+//! ## Struct-level (`#[toon_schema(...)]`)
+//! - `name = "..."` - Custom tool name
+//! - `description = "..."` - Tool description
+//!
+//! ## Field-level (`#[toon_schema(...)]`)
+//! - `description = "..."` - Field description
+//! - `example = "..."` - **Required.** JSON example for the field
+//! - `variants = "A|B|C"` - Enum variants (pipe-separated)
+//! - `min = N` - Minimum count for Vec fields
+//! - `max = N` - Maximum count for Vec fields
+//!
+//! ## Serde Integration
+//! The parser also respects serde attributes:
+//! - `#[serde(rename = "...")]` - Rename field in output
+//! - `#[serde(skip)]` - Skip field in schema
+//! - `#[serde(default)]` - Use default value
+//! - `#[serde(default = "path")]` - Use custom default function
+
 use crate::ir::{EnumType, Field, PrimitiveType, Range, Schema, Type};
 use syn::{
     Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, GenericArgument, Lit, Meta,
