@@ -1,0 +1,8 @@
+error: unsupported type 'SomeCustomType'
+ --> tests/compile_fail/unknown_type.rs:7:5
+  |
+7 |     custom_field: SomeCustomType,
+  |     ^^^^^^^^^^^^
+  |
+  = help: supported types are: String, i8-i128, u8-u128, f32, f64, bool, Vec<T>, Option<T>, or enum types
+  = note: for enum types, use #[toon_schema(variants = "Variant1|Variant2")]

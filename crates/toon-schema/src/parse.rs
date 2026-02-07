@@ -55,6 +55,15 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
         }
     };
 
+    // Check for empty struct (after filtering skipped fields)
+    if fields.is_empty() {
+        return Err(syn::Error::new(
+            input.ident.span(),
+            "ToonSchema cannot be derived for empty structs\n\
+             help: add at least one field or remove the derive",
+        ));
+    }
+
     Ok(Schema {
         name,
         description,

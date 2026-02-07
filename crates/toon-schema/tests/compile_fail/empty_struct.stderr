@@ -1,0 +1,5 @@
+error: ToonSchema cannot be derived for empty structs
+ --> tests/compile_fail/empty_struct.rs:5:1
+  |
+5 | struct EmptyStruct {}
+  | ^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: Invalid JSON in example: expected value at line 1 column 1. Examples must be valid JSON matching the field type. For strings use: "value", for numbers: 42, for booleans: true/false, for arrays: [1, 2, 3]
+ --> tests/compile_fail/malformed_json.rs:6:50
+  |
+6 |     #[toon_schema(description = "A field", example = "not valid json")]
+  |                                                  ^^^^^^^^^^^^^^^^^
