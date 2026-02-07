@@ -70,7 +70,7 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
     let name = name.unwrap_or(struct_name);
 
     // Parse fields
-    let fields = match &input.data {
+    let fields: Vec<Field> = match &input.data {
         Data::Struct(DataStruct { fields, .. }) => fields
             .iter()
             .map(parse_field)
@@ -145,7 +145,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
                             ..
                         }) = &nv.value
                         {
-                            default_value = Some(format!("{}", s.value()));
+                            default_value = Some(s.value().to_string());
                         }
                     }
                     _ => {}
@@ -389,7 +389,6 @@ fn analyze_type(ty: &SynType, is_option: &mut bool, is_vec: &mut bool, span: pro
                     // Check if this is an enum type (variants were specified)
                     if let Some(variants) = enum_variants {
                         Ok(Type::Enum(EnumType {
-                            name: ident,
                             variants: variants.clone(),
                         }))
                     } else {

@@ -1,4 +1,6 @@
-error: custom ranges can only be applied to Vec<T> fields
+error: custom ranges (min/max) are only valid for Vec<T> fields
+       help: field 'name' has type TokenStream [Punct { ch: '#', spacing: Alone, span: #0 bytes(211..212) }, Group { delimiter: Bracket, stream: TokenStream [Ident { ident: "toon_schema", span: #0 bytes(213..224) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { ident: "example", span: #0 bytes(225..232) }, Punct { ch: '=', spacing: Alone, span: #0 bytes(233..234) }, Literal { kind: Str, symbol: "\\\"value\\\"", suffix: None, span: #0 bytes(235..246) }, Punct { ch: ',', spacing: Alone, span: #0 bytes(246..247) }, Ident { ident: "min", span: #0 bytes(248..251) }, Punct { ch: '=', spacing: Alone, span: #0 bytes(252..253) }, Literal { kind: Integer, symbol: "1", suffix: None, span: #0 bytes(254..255) }], span: #0 bytes(224..256) }], span: #0 bytes(212..257) }, Ident { ident: "name", span: #0 bytes(262..266) }, Punct { ch: ':', spacing: Alone, span: #0 bytes(266..267) }, Ident { ident: "String", span: #0 bytes(268..274) }, Punct { ch: '.', spacing: Alone, span: #7 bytes(76..86) }, Ident { ident: "ty", span: #7 bytes(76..86) }]
+       hint: remove min/max attributes or change type to Vec<T>
  --> tests/compile_fail/custom_range_on_non_vec.rs:8:5
   |
 8 |     name: String,

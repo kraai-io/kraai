@@ -1,4 +1,5 @@
 error: field name 'tool' is reserved
+       hint: 'tool' is a reserved keyword in the Toon format
  --> tests/compile_fail/reserved_tool.rs:8:5
   |
 8 |     tool: String,

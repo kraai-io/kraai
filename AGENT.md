@@ -21,7 +21,13 @@ As an AI agent working on this codebase, you are expected to:
 
 7. **Document aha moments**: After/during work, edit this AGENT.md file to capture any durable, reusable learnings or recommendations that would make future work faster or cleaner.
 
-8. **Maintain this file**: You are allowed (and encouraged) to remove or modify anything in this AGENT.md if you find it is incorrect or has changed.
+8. **Proactive documentation**: Do NOT wait to be asked to update AGENT.md. Automatically document learnings as you work:
+   - When you discover an important pattern, gotcha, or workflow
+   - When you solve a non-obvious problem
+   - When you establish a new convention or approach
+   - Add to the "Learnings from Recent Work" section without prompting
+
+9. **Maintain this file**: You are allowed (and encouraged) to remove or modify anything in this AGENT.md if you find it is incorrect or has changed.
 
 ## General Guidelines
 
@@ -30,6 +36,37 @@ As an AI agent working on this codebase, you are expected to:
 - **Be collaborative**: Only commit changes when explicitly requested by the user.
 - **Be proactive**: If you identify potential issues or improvements, suggest them to the user.
 
+## Learnings from Recent Work
+
+### toon-schema crate
+
+**What it does**: Proc-macro derive that generates Toon format schema documentation from Rust structs. Used for LLM tool documentation with compile-time validation.
+
+**Key architectural patterns**:
+- Three-phase architecture: `parse.rs` → IR (`ir.rs`) → `lib.rs` (codegen)
+- Uses `syn` for parsing, `quote` for code generation
+- Compile-time JSON validation via `serde_json::from_str`
+- Static string generation with `Box::leak` (memory tradeoff for convenience)
+
+**Gotchas discovered**:
+- Proc-macros can't easily detect external enum definitions, so enum support uses explicit `#[toon_schema(variants = "A|B|C")]` attribute
+- Type inference can fail in `parse.rs` when collecting to empty Vec - need explicit type annotation
+- Unused imports in proc-macros are hard to catch without `cargo check`
+
+**Testing approach**:
+- Unit tests in `tests/` for successful cases
+- Compile-fail tests with `.stderr` files for error validation
+- Use `type` aliases when testing enum support (type name becomes the enum identifier)
+
+**JJ workflow**:
+- `jj st` and `jj diff` to review changes
+- `jj describe -m "[ai] message"` to set commit message
+- `jj new` to create new working commit (important!)
+
 ## Tooling
 
 When working on this project, prefer using available tools and commands defined in the project (e.g., `npm run lint`, `npm run typecheck`, etc.) to ensure code quality.
+
+**For toon-schema**:
+- `cargo test -p toon-schema --test <test_name>` - Run specific tests
+- `cargo run -p toon-schema --example <example>` - Run examples

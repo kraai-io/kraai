@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use toon_schema::ToonSchema;
 
+// Define a type alias to represent an enum type
 #[derive(ToonSchema, Serialize, Deserialize)]
 #[toon_schema(description = "Test enum support")]
 struct EnumExample {
@@ -9,8 +10,11 @@ struct EnumExample {
         example = "\"pending\"",
         variants = "pending|active|completed|failed"
     )]
-    status: String,
+    status: Status,
 }
+
+// Type alias for clarity
+type Status = String;
 
 #[test]
 fn test_enum_schema_generation() {
@@ -52,8 +56,10 @@ struct OptionalEnumExample {
         example = "\"high\"",
         variants = "low|medium|high|critical"
     )]
-    priority: Option<String>,
+    priority: Option<Priority>,
 }
+
+type Priority = String;
 
 #[test]
 fn test_optional_enum() {

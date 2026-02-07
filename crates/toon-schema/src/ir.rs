@@ -27,7 +27,6 @@ pub enum Type {
 
 /// Enum type with its variants
 pub struct EnumType {
-    pub name: String,
     pub variants: Vec<String>,
 }
 

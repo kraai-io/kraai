@@ -1,4 +1,6 @@
-error: Field 'field' must have a #[toon_schema(example = "...")] attribute
+error: Field 'field' is missing required #[toon_schema(example = "...")] attribute
+       help: every field must have an example for documentation
+       example: #[toon_schema(example = ""example_value"")]
  --> tests/compile_fail/missing_example.rs:8:5
   |
 8 |     field: String,

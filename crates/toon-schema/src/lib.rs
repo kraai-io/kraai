@@ -5,7 +5,7 @@ use syn::{DeriveInput, parse_macro_input};
 mod ir;
 mod parse;
 
-use ir::{EnumType, PrimitiveType, Schema, Type};
+use ir::{PrimitiveType, Schema, Type};
 use parse::parse_toon_schema;
 
 /// Derive macro for generating Toon format schemas with examples.
