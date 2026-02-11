@@ -262,19 +262,19 @@ function App(): React.JSX.Element {
 
 			<div className="border-t bg-background p-4">
 				<div className="mx-auto max-w-3xl">
-					<Textarea
-						ref={textareaRef}
-						value={inputValue}
-						onChange={(e) => setInputValue(e.target.value)}
-						onKeyDown={handleKeyDown}
-						placeholder="Type a message... (Shift+Enter for new line)"
-						className="min-h-[80px] resize-none"
-						rows={3}
-						disabled={isLoading}
-					/>
+					<div className="relative rounded-lg border bg-background overflow-hidden">
+						<Textarea
+							ref={textareaRef}
+							value={inputValue}
+							onChange={(e) => setInputValue(e.target.value)}
+							onKeyDown={handleKeyDown}
+							placeholder="Type a message..."
+							className="min-h-[80px] resize-none border-0 pb-14 pt-3 focus-visible:ring-0 focus-visible:ring-offset-0"
+							rows={3}
+							disabled={isLoading}
+						/>
 
-					<div className="mt-2 flex items-center justify-between">
-						<div className="flex items-center gap-2">
+						<div className="absolute bottom-2 left-2 z-10">
 							{selectedModelData ? (
 								<button
 									onClick={openSelector}
@@ -350,7 +350,7 @@ function App(): React.JSX.Element {
 							</Select>
 						</div>
 
-						<div className="flex items-center gap-2">
+						<div className="absolute bottom-2 right-2 z-10">
 							<Button
 								onClick={handleSendMessage}
 								disabled={!inputValue.trim() || isLoading || !selectedModel}
@@ -361,10 +361,6 @@ function App(): React.JSX.Element {
 							</Button>
 						</div>
 					</div>
-
-					<p className="mt-2 text-center text-xs text-muted-foreground">
-						Press Enter to send, Shift+Enter for new line
-					</p>
 				</div>
 			</div>
 		</div>
