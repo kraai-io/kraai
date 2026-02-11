@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use color_eyre::eyre::Result;
-use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use provider_core::{
+    Model, ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
+};
 use tool_core::{ToolId, ToolManager};
 use types::ChatMessage;
 
@@ -30,6 +32,21 @@ impl AgentManager {
 
     pub fn list_models(&self) -> Vec<Model> {
         self.providers.list_all_models()
+    }
+
+    pub async fn send_message(
+        &mut self,
+        message: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
+    ) -> Result<ChatMessage> {
+        let messages = vec![ChatMessage {
+            role: types::ChatRole::User,
+            content: message,
+        }];
+        self.providers
+            .generate_reply(provider_id, &model_id, messages)
+            .await
     }
 }
 

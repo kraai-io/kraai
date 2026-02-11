@@ -9,11 +9,14 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use provider_core::{
+  ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
+};
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tool_core::ToolManager;
+use types::ChatMessage;
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
@@ -31,6 +34,11 @@ pub enum Event {
 enum Command {
   ListModels {
     response: oneshot::Sender<Vec<String>>,
+  },
+  SendMessage {
+    message: String,
+    model_id: ModelId,
+    provider_id: ProviderId,
   },
   LoadConfig,
 }
@@ -84,6 +92,24 @@ impl AgentRuntime {
       .map_err(to_napi_error)?;
 
     rx.await.map_err(|e| to_napi_error(e.into()))
+  }
+
+  #[napi]
+  pub async fn send_message(
+    &self,
+    message: String,
+    model_id: String,
+    provider_id: String,
+  ) -> napi::Result<()> {
+    self
+      .send_command(Command::SendMessage {
+        message,
+        model_id: model_id.into(),
+        provider_id: provider_id.into(),
+      })
+      .await
+      .map_err(to_napi_error)?;
+    Ok(())
   }
 
   async fn send_command(&self, command: Command) -> Result<()> {
@@ -164,6 +190,19 @@ impl Runtime {
         self.load_providers_config().await?;
         println!("[RUNTIME] loaded config");
         self.send_event(Event::ConfigLoaded);
+      }
+      Command::SendMessage {
+        message,
+        model_id,
+        provider_id,
+      } => {
+        let res = self
+          .agent_manager
+          .lock()
+          .await
+          .send_message(message, model_id, provider_id)
+          .await?;
+        // should send an event
       }
     };
     Ok(())

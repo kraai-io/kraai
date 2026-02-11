@@ -116,21 +116,21 @@ impl ProviderManager {
 
     pub async fn generate_reply(
         &mut self,
-        client_id: ProviderId,
+        provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let client = self.providers.get_mut(&client_id).unwrap();
+        let client = self.providers.get_mut(&provider_id).unwrap();
         client.generate_reply(model_id, messages).await
     }
 
     pub async fn generate_reply_stream<'a>(
         &'a mut self,
-        client_id: ProviderId,
+        provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'a, Result<String>>> {
-        let client = self.providers.get_mut(&client_id).unwrap();
+        let client = self.providers.get_mut(&provider_id).unwrap();
         client.generate_reply_stream(model_id, messages).await
     }
 }
