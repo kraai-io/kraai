@@ -48,10 +48,39 @@ function App(): React.JSX.Element {
 	const isAtBottomRef = useRef(true);
 	const isInitializedRef = useRef(false);
 	const selectTriggerRef = useRef<HTMLButtonElement>(null);
+	const textareaHeightRef = useRef<number>(0);
 
 	useEffect(() => {
 		pendingMessageIdRef.current = pendingMessageId;
 	}, [pendingMessageId]);
+
+	useEffect(() => {
+		const textarea = textareaRef.current;
+		const scrollContainer = scrollRef.current;
+		if (!textarea || !scrollContainer) return;
+
+		const resizeObserver = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const newHeight = entry.contentRect.height;
+				const oldHeight = textareaHeightRef.current;
+				
+				if (oldHeight > 0 && newHeight !== oldHeight) {
+					const heightDiff = newHeight - oldHeight;
+					// Adjust scroll position to maintain the same view
+					scrollContainer.scrollTop += heightDiff;
+				}
+				
+				textareaHeightRef.current = newHeight;
+			}
+		});
+
+		textareaHeightRef.current = textarea.getBoundingClientRect().height;
+		resizeObserver.observe(textarea);
+
+		return () => {
+			resizeObserver.disconnect();
+		};
+	}, []);
 
 	useEffect(() => {
 		const api = (window as any).api;
