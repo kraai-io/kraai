@@ -123,29 +123,40 @@
 }
 
 /* Custom scrollbar styling to match shadcn theme */
-@layer utilities {
-  .scrollbar-themed {
+@layer base {
+  * {
     scrollbar-width: thin;
     scrollbar-color: var(--muted-foreground) transparent;
   }
   
-  .scrollbar-themed::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
   }
   
-  .scrollbar-themed::-webkit-scrollbar-track {
+  *::-webkit-scrollbar-track {
     background: transparent;
   }
   
-  .scrollbar-themed::-webkit-scrollbar-thumb {
+  *::-webkit-scrollbar-thumb {
     background: var(--muted-foreground);
     border-radius: var(--radius);
-    opacity: 0.5;
+    opacity: 0.4;
   }
   
-  .scrollbar-themed::-webkit-scrollbar-thumb:hover {
-    background: var(--foreground);
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
     opacity: 0.7;
+  }
+  
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  .scrollbar-themed {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted-foreground) transparent;
   }
 }

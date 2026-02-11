@@ -1,13 +1,14 @@
-import { Bot, Loader2, Send, Trash2 } from "lucide-react";
+import { Bot, Loader2, Search, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
 import {
 	Select,
 	SelectContent,
+	SelectGroup,
 	SelectItem,
+	SelectLabel,
 	SelectTrigger,
-	SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,12 +21,10 @@ interface Message {
 	timestamp: Date;
 }
 
-// Extended model type with provider info
 interface Model extends BindingModel {
 	providerId: string;
 }
 
-// Serialize/deserialize model key for Select component
 const serializeModelKey = (providerId: string, modelId: string): string =>
 	`${providerId}::${modelId}`;
 
@@ -40,34 +39,31 @@ function App(): React.JSX.Element {
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
 	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(null);
-	const [isLoadingModels, setIsLoadingModels] = useState(true);
 	const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
+	const [searchQuery, setSearchQuery] = useState("");
+	const [isSelectorOpen, setIsSelectorOpen] = useState(false);
 	const pendingMessageIdRef = useRef<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isAtBottomRef = useRef(true);
+	const isInitializedRef = useRef(false);
+	const selectTriggerRef = useRef<HTMLButtonElement>(null);
 
-	// Keep ref in sync with state
 	useEffect(() => {
 		pendingMessageIdRef.current = pendingMessageId;
 	}, [pendingMessageId]);
 
-	const isInitializedRef = useRef(false);
-
-	// Initialize runtime and set up event handler
 	useEffect(() => {
 		const api = (window as any).api;
 		if (!api) return;
 		if (isInitializedRef.current) return;
 		isInitializedRef.current = true;
 
-		// Initialize runtime with event handler
 		api.initRuntime((event: Event) => {
 			console.log("[UI] Received event from Rust:", event);
 
 			if (event.type === "ConfigLoaded") {
 				console.log("[UI] Config loaded");
-				// Refresh models when config is loaded
 				loadModels();
 			} else if (event.type === "Error") {
 				console.error("[UI] Error:", event.field0);
@@ -90,7 +86,6 @@ function App(): React.JSX.Element {
 			}
 		});
 
-		// Load models initially
 		loadModels();
 	}, []);
 
@@ -99,14 +94,10 @@ function App(): React.JSX.Element {
 		if (!api) return;
 
 		try {
-			// Get models as HashMap from Rust
-			const modelMap: Record<string, Array<BindingModel>> =
-				await api.listModels();
+			const modelMap: Record<string, Array<BindingModel>> = await api.listModels();
 			console.log("[UI] Models loaded:", modelMap);
 
-			// Flatten the map into array with providerId included
 			const allModels: Model[] = [];
-
 			for (const [providerId, providerModels] of Object.entries(modelMap)) {
 				for (const model of providerModels) {
 					allModels.push({
@@ -118,24 +109,19 @@ function App(): React.JSX.Element {
 			}
 
 			setModels(allModels);
-
 			if (allModels.length > 0 && !selectedModel) {
 				setSelectedModel([allModels[0].providerId, allModels[0].id]);
 			}
-			setIsLoadingModels(false);
 		} catch (err) {
 			console.error("[UI] Failed to load models:", err);
-			setIsLoadingModels(false);
 		}
 	};
 
-	// Check if scroll is at bottom
 	const checkIsAtBottom = () => {
 		const container = scrollRef.current;
 		if (!container) return true;
 		const threshold = 50;
-		const position =
-			container.scrollHeight - container.scrollTop - container.clientHeight;
+		const position = container.scrollHeight - container.scrollTop - container.clientHeight;
 		return position < threshold;
 	};
 
@@ -166,7 +152,6 @@ function App(): React.JSX.Element {
 		if (!inputValue.trim() || isLoading || !selectedModel) return;
 
 		const [providerId, modelId] = selectedModel;
-
 		const userMessage: Message = {
 			id: Date.now().toString(),
 			content: inputValue.trim(),
@@ -203,20 +188,42 @@ function App(): React.JSX.Element {
 		setMessages([]);
 	};
 
-	const selectedModelName = selectedModel
-		? models.find(
-				(m) =>
-					m.providerId === selectedModel[0] && m.id === selectedModel[1],
-			)?.name || "Unknown model"
-		: "Select a model";
+	const selectedModelData = selectedModel
+		? models.find((m) => m.providerId === selectedModel[0] && m.id === selectedModel[1])
+		: null;
 
-	const selectedModelKey = selectedModel
-		? serializeModelKey(selectedModel[0], selectedModel[1])
-		: "";
+	const selectedModelName = selectedModelData?.name || "Select a model";
+	const selectedProviderName = selectedModelData?.providerId || "";
+	const selectedModelKey = selectedModel ? serializeModelKey(selectedModel[0], selectedModel[1]) : "";
+
+	const modelsByProvider = models.reduce((acc, model) => {
+		if (!acc[model.providerId]) {
+			acc[model.providerId] = [];
+		}
+		acc[model.providerId].push(model);
+		return acc;
+	}, {} as Record<string, Model[]>);
+
+	const filteredProviders = Object.entries(modelsByProvider)
+		.map(([providerId, providerModels]) => ({
+			providerId,
+			models: providerModels.filter(
+				(m) =>
+					m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+					m.providerId.toLowerCase().includes(searchQuery.toLowerCase()),
+			),
+		}))
+		.filter((group) => group.models.length > 0);
+
+	const openSelector = () => {
+		setIsSelectorOpen(true);
+		setTimeout(() => {
+			selectTriggerRef.current?.click();
+		}, 0);
+	};
 
 	return (
 		<div className="flex h-screen flex-col bg-background">
-			{/* Header */}
 			<header className="flex items-center justify-between border-b px-4 py-3">
 				<div className="flex items-center gap-2">
 					<Bot className="h-6 w-6" />
@@ -225,22 +232,12 @@ function App(): React.JSX.Element {
 						Connected
 					</span>
 				</div>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={clearChat}
-					title="Clear chat"
-				>
+				<Button variant="ghost" size="icon" onClick={clearChat} title="Clear chat">
 					<Trash2 className="h-4 w-4" />
 				</Button>
 			</header>
 
-			{/* Messages Area */}
-			<div
-				className="flex-1 overflow-y-auto px-4 scrollbar-themed"
-				ref={scrollRef}
-				onScroll={handleScroll}
-			>
+			<div className="flex-1 overflow-y-auto px-4" ref={scrollRef} onScroll={handleScroll}>
 				<div className="mx-auto max-w-3xl py-4">
 					{messages.length === 0 ? (
 						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -249,11 +246,7 @@ function App(): React.JSX.Element {
 						</div>
 					) : (
 						messages.map((message) => (
-							<ChatMessage
-								key={message.id}
-								content={message.content}
-								role={message.role}
-							/>
+							<ChatMessage key={message.id} content={message.content} role={message.role} />
 						))
 					)}
 					{isLoading && (
@@ -267,60 +260,112 @@ function App(): React.JSX.Element {
 
 			<Separator />
 
-			{/* Input Area */}
 			<div className="border-t bg-background p-4">
-				<div className="mx-auto flex max-w-3xl items-end gap-2">
-					{/* Model Selector */}
-					<Select
-						disabled={isLoadingModels || models.length === 0}
-						value={selectedModelKey}
-						onValueChange={(value) => {
-							const [providerId, modelId] = deserializeModelKey(value);
-							setSelectedModel([providerId, modelId]);
-						}}
-					>
-						<SelectTrigger className="w-[180px] shrink-0">
-							<SelectValue placeholder="Select a model">
-								{selectedModelName}
-							</SelectValue>
-						</SelectTrigger>
-						<SelectContent>
-							{models.map((model) => (
-								<SelectItem
-									key={serializeModelKey(model.providerId, model.id)}
-									value={serializeModelKey(model.providerId, model.id)}
-								>
-									{model.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+				<div className="mx-auto max-w-3xl">
 					<Textarea
 						ref={textareaRef}
 						value={inputValue}
 						onChange={(e) => setInputValue(e.target.value)}
 						onKeyDown={handleKeyDown}
 						placeholder="Type a message... (Shift+Enter for new line)"
-						className="min-h-[60px] resize-none"
-						rows={1}
+						className="min-h-[80px] resize-none"
+						rows={3}
 						disabled={isLoading}
 					/>
-					<Button
-						onClick={handleSendMessage}
-						disabled={!inputValue.trim() || isLoading || !selectedModel}
-						size="icon"
-						className="h-[60px] w-[60px] shrink-0"
-					>
-						{isLoading ? (
-							<Loader2 className="h-4 w-4 animate-spin" />
-						) : (
-							<Send className="h-4 w-4" />
-						)}
-					</Button>
+
+					<div className="mt-2 flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							{selectedModelData ? (
+								<button
+									onClick={openSelector}
+									className="flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-accent"
+								>
+									<span className="font-medium">{selectedModelName}</span>
+									{selectedProviderName && (
+										<>
+											<span className="text-muted-foreground">•</span>
+											<span className="text-muted-foreground text-xs">{selectedProviderName}</span>
+										</>
+									)}
+								</button>
+							) : (
+								<button
+									onClick={openSelector}
+									className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent"
+								>
+									Select a model
+								</button>
+							)}
+
+							<Select
+								value={selectedModelKey}
+								onValueChange={(value) => {
+									const [providerId, modelId] = deserializeModelKey(value);
+									setSelectedModel([providerId, modelId]);
+									setSearchQuery("");
+								}}
+								open={isSelectorOpen}
+								onOpenChange={setIsSelectorOpen}
+							>
+								<SelectTrigger ref={selectTriggerRef} className="sr-only">
+									<span />
+								</SelectTrigger>
+								<SelectContent position="popper" side="top" className="max-h-[400px] w-[320px]">
+									<div className="sticky top-0 z-10 border-b bg-popover px-3 py-2">
+										<div className="relative">
+											<Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+											<input
+												type="text"
+												placeholder="Search models..."
+												value={searchQuery}
+												onChange={(e) => setSearchQuery(e.target.value)}
+												className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+												onClick={(e) => e.stopPropagation()}
+											/>
+										</div>
+									</div>
+									<div className="max-h-[320px] overflow-y-auto">
+										{filteredProviders.length === 0 ? (
+											<div className="px-3 py-4 text-center text-sm text-muted-foreground">No models found</div>
+										) : (
+											filteredProviders.map(({ providerId, models: providerModels }) => (
+												<SelectGroup key={providerId}>
+													<SelectLabel className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+														{providerId}
+													</SelectLabel>
+													{providerModels.map((model) => (
+														<SelectItem
+															key={serializeModelKey(model.providerId, model.id)}
+															value={serializeModelKey(model.providerId, model.id)}
+															className="pl-6"
+														>
+															{model.name}
+														</SelectItem>
+													))}
+												</SelectGroup>
+											))
+										)}
+									</div>
+								</SelectContent>
+							</Select>
+						</div>
+
+						<div className="flex items-center gap-2">
+							<Button
+								onClick={handleSendMessage}
+								disabled={!inputValue.trim() || isLoading || !selectedModel}
+								size="icon"
+								className="h-9 w-9"
+							>
+								{isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+							</Button>
+						</div>
+					</div>
+
+					<p className="mt-2 text-center text-xs text-muted-foreground">
+						Press Enter to send, Shift+Enter for new line
+					</p>
 				</div>
-				<p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
-					Press Enter to send, Shift+Enter for new line
-				</p>
 			</div>
 		</div>
 	);
