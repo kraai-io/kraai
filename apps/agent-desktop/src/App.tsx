@@ -59,10 +59,14 @@ function App(): React.JSX.Element {
 		pendingMessageIdRef.current = pendingMessageId;
 	}, [pendingMessageId]);
 
+	const isInitializedRef = useRef(false);
+
 	// Initialize runtime and set up event handler
 	useEffect(() => {
 		const api = (window as any).api;
 		if (!api) return;
+		if (isInitializedRef.current) return;
+		isInitializedRef.current = true;
 
 		// Initialize runtime with event handler
 		api.initRuntime((event: Event) => {
