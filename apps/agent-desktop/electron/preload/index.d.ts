@@ -1,10 +1,16 @@
 import { ElectronAPI } from "@electron-toolkit/preload";
-import type { AgentApi } from "agent-ts-bindings";
+
+interface Event {
+	eventType: string;
+	field0?: string;
+}
+
+type EventHandler = (event: Event) => void;
 
 interface API {
-	plus100: (input: number) => number;
-	createAgentApi: () => AgentApi;
-	testHttpRequest: (url: string) => Promise<string>;
+	initRuntime: (onEvent: EventHandler) => Promise<void>;
+	listModels: () => Promise<string[]>;
+	sendMessage: (message: string, modelId: string, providerId: string) => Promise<void>;
 }
 
 declare global {

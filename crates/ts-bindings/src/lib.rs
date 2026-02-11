@@ -12,6 +12,15 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use provider_core::{
   ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
+use std::collections::HashMap;
+
+// Model struct exposed to TypeScript
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct Model {
+  pub id: String,
+  pub name: String,
+}
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -28,12 +37,13 @@ fn to_napi_error(err: color_eyre::Report) -> napi::Error {
 pub enum Event {
   ConfigLoaded,
   Error(String),
+  MessageComplete(String),
 }
 
 // Internal commands (not exposed to TypeScript)
 enum Command {
   ListModels {
-    response: oneshot::Sender<Vec<String>>,
+    response: oneshot::Sender<HashMap<String, Vec<Model>>>,
   },
   SendMessage {
     message: String,
@@ -83,7 +93,7 @@ impl AgentRuntime {
 
   // List available models from the AgentManager
   #[napi]
-  pub async fn list_models(&self) -> napi::Result<Vec<String>> {
+  pub async fn list_models(&self) -> napi::Result<HashMap<String, Vec<Model>>> {
     let (tx, rx) = oneshot::channel();
 
     self
@@ -173,18 +183,21 @@ impl Runtime {
   async fn handle_command(&self, command: Command) -> Result<()> {
     match command {
       Command::ListModels { response } => {
-        response
-          .send(
-            self
-              .agent_manager
-              .lock()
-              .await
-              .list_models()
+        let models_map = self.agent_manager.lock().await.list_models();
+        let models: HashMap<String, Vec<Model>> = models_map
+          .iter()
+          .map(|(provider_id, model_list)| {
+            let models: Vec<Model> = model_list
               .iter()
-              .map(|x| x.name.clone())
-              .collect(),
-          )
-          .unwrap();
+              .map(|m| Model {
+                id: m.id.to_string(),
+                name: m.name.clone(),
+              })
+              .collect();
+            (provider_id.to_string(), models)
+          })
+          .collect();
+        response.send(models).unwrap();
       }
       Command::LoadConfig => {
         self.load_providers_config().await?;
@@ -202,7 +215,7 @@ impl Runtime {
           .await
           .send_message(message, model_id, provider_id)
           .await?;
-        // should send an event
+        self.send_event(Event::MessageComplete(res.content));
       }
     };
     Ok(())

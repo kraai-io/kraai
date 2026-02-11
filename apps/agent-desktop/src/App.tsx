@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import type { Event, Model as BindingModel } from "agent-ts-bindings";
 
 interface Message {
 	id: string;
@@ -19,10 +20,19 @@ interface Message {
 	timestamp: Date;
 }
 
-interface Event {
-	eventType: string;
-	data?: string;
+// Extended model type with provider info
+interface Model extends BindingModel {
+	providerId: string;
 }
+
+// Serialize/deserialize model key for Select component
+const serializeModelKey = (providerId: string, modelId: string): string =>
+	`${providerId}::${modelId}`;
+
+const deserializeModelKey = (key: string): [string, string] => {
+	const parts = key.split("::");
+	return [parts[0], parts[1] || ""];
+};
 
 function App(): React.JSX.Element {
 	const [messages, setMessages] = useState<Message[]>([
@@ -35,12 +45,19 @@ function App(): React.JSX.Element {
 	]);
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
-	const [models, setModels] = useState<string[]>([]);
-	const [selectedModel, setSelectedModel] = useState<string | null>(null);
+	const [models, setModels] = useState<Model[]>([]);
+	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(null);
 	const [isLoadingModels, setIsLoadingModels] = useState(true);
+	const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
+	const pendingMessageIdRef = useRef<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isAtBottomRef = useRef(true);
+
+	// Keep ref in sync with state
+	useEffect(() => {
+		pendingMessageIdRef.current = pendingMessageId;
+	}, [pendingMessageId]);
 
 	// Initialize runtime and set up event handler
 	useEffect(() => {
@@ -51,57 +68,69 @@ function App(): React.JSX.Element {
 		api.initRuntime((event: Event) => {
 			console.log("[UI] Received event from Rust:", event);
 
-			switch (event.eventType) {
-				case "config_loaded":
-					console.log("[UI] Config loaded:", event.data);
-					// Refresh models when config is loaded
-					api.listModels().then((modelList: string[]) => {
-						setModels(modelList);
-						if (modelList.length > 0 && !selectedModel) {
-							setSelectedModel(modelList[0]);
-						}
-					});
-					break;
-				case "config_error":
-					console.error("[UI] Config error:", event.data);
-					break;
-				case "config_reloaded":
-					console.log("[UI] Config reloaded:", event.data);
-					// Refresh models when config is reloaded
-					api.listModels().then((modelList: string[]) => {
-						setModels(modelList);
-						if (modelList.length > 0) {
-							setSelectedModel(modelList[0]);
-						}
-					});
-					break;
-				case "config_reload_error":
-					console.error("[UI] Config reload error:", event.data);
-					break;
-				case "test":
-					console.log("[UI] Test event data:", event.data);
-					break;
-				default:
-					console.log("[UI] Unknown event type:", event.eventType);
+			if (event.type === "ConfigLoaded") {
+				console.log("[UI] Config loaded");
+				// Refresh models when config is loaded
+				loadModels();
+			} else if (event.type === "Error") {
+				console.error("[UI] Error:", event.field0);
+				setIsLoading(false);
+			} else if (event.type === "MessageComplete") {
+				console.log("[UI] Message complete:", event.field0);
+				if (event.field0 && pendingMessageIdRef.current) {
+					const assistantMessage: Message = {
+						id: (Date.now() + 1).toString(),
+						content: event.field0,
+						role: "assistant",
+						timestamp: new Date(),
+					};
+					setMessages((prev) => [...prev, assistantMessage]);
+					setIsLoading(false);
+					setPendingMessageId(null);
+				}
+			} else {
+				console.log("[UI] Unknown event type:", (event as any).type);
 			}
 		});
 
-		// Load models
-		api
-			.listModels()
-			.then((modelList: string[]) => {
-				console.log("[UI] Models loaded:", modelList);
-				setModels(modelList);
-				if (modelList.length > 0) {
-					setSelectedModel(modelList[0]);
-				}
-				setIsLoadingModels(false);
-			})
-			.catch((err: any) => {
-				console.error("[UI] Failed to load models:", err);
-				setIsLoadingModels(false);
-			});
+		// Load models initially
+		loadModels();
 	}, []);
+
+	const loadModels = async () => {
+		const api = (window as any).api;
+		if (!api) return;
+
+		try {
+			// Get models as HashMap from Rust
+			const modelMap: Record<string, Array<BindingModel>> =
+				await api.listModels();
+			console.log("[UI] Models loaded:", modelMap);
+
+			// Flatten the map into array with providerId included
+			const allModels: Model[] = [];
+
+			for (const [providerId, providerModels] of Object.entries(modelMap)) {
+				for (const model of providerModels) {
+					allModels.push({
+						id: model.id,
+						name: model.name,
+						providerId: providerId,
+					});
+				}
+			}
+
+			setModels(allModels);
+
+			if (allModels.length > 0 && !selectedModel) {
+				setSelectedModel([allModels[0].providerId, allModels[0].id]);
+			}
+			setIsLoadingModels(false);
+		} catch (err) {
+			console.error("[UI] Failed to load models:", err);
+			setIsLoadingModels(false);
+		}
+	};
 
 	// Check if scroll is at bottom
 	const checkIsAtBottom = () => {
@@ -137,7 +166,9 @@ function App(): React.JSX.Element {
 	}, [messages]);
 
 	const handleSendMessage = async () => {
-		if (!inputValue.trim() || isLoading) return;
+		if (!inputValue.trim() || isLoading || !selectedModel) return;
+
+		const [providerId, modelId] = selectedModel;
 
 		const userMessage: Message = {
 			id: Date.now().toString(),
@@ -149,30 +180,19 @@ function App(): React.JSX.Element {
 		setMessages((prev) => [...prev, userMessage]);
 		setInputValue("");
 		setIsLoading(true);
+		setPendingMessageId(userMessage.id);
 
-		// Test the Rust callback system
 		const api = (window as any).api;
 		if (api) {
 			try {
-				await api.doSomething();
-				console.log("[UI] doSomething called successfully");
+				await api.sendMessage(userMessage.content, modelId, providerId);
+				console.log("[UI] sendMessage called successfully");
 			} catch (err) {
-				console.error("[UI] doSomething failed:", err);
+				console.error("[UI] sendMessage failed:", err);
+				setIsLoading(false);
+				setPendingMessageId(null);
 			}
 		}
-
-		// Mock response for now
-		await new Promise((resolve) => setTimeout(resolve, 1000));
-
-		const assistantMessage: Message = {
-			id: (Date.now() + 1).toString(),
-			content: `Echo: ${userMessage.content}`,
-			role: "assistant",
-			timestamp: new Date(),
-		};
-
-		setMessages((prev) => [...prev, assistantMessage]);
-		setIsLoading(false);
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -192,6 +212,17 @@ function App(): React.JSX.Element {
 			},
 		]);
 	};
+
+	const selectedModelName = selectedModel
+		? models.find(
+				(m) =>
+					m.providerId === selectedModel[0] && m.id === selectedModel[1],
+			)?.name || "Unknown model"
+		: "Select a model";
+
+	const selectedModelKey = selectedModel
+		? serializeModelKey(selectedModel[0], selectedModel[1])
+		: "";
 
 	return (
 		<div className="flex h-screen flex-col bg-background">
@@ -252,16 +283,24 @@ function App(): React.JSX.Element {
 					{/* Model Selector */}
 					<Select
 						disabled={isLoadingModels || models.length === 0}
-						value={selectedModel || ""}
-						onValueChange={setSelectedModel}
+						value={selectedModelKey}
+						onValueChange={(value) => {
+							const [providerId, modelId] = deserializeModelKey(value);
+							setSelectedModel([providerId, modelId]);
+						}}
 					>
 						<SelectTrigger className="w-[180px] shrink-0">
-							<SelectValue placeholder="Select a model" />
+							<SelectValue placeholder="Select a model">
+								{selectedModelName}
+							</SelectValue>
 						</SelectTrigger>
 						<SelectContent>
 							{models.map((model) => (
-								<SelectItem key={model} value={model}>
-									{model}
+								<SelectItem
+									key={serializeModelKey(model.providerId, model.id)}
+									value={serializeModelKey(model.providerId, model.id)}
+								>
+									{model.name}
 								</SelectItem>
 							))}
 						</SelectContent>
@@ -278,7 +317,7 @@ function App(): React.JSX.Element {
 					/>
 					<Button
 						onClick={handleSendMessage}
-						disabled={!inputValue.trim() || isLoading}
+						disabled={!inputValue.trim() || isLoading || !selectedModel}
 						size="icon"
 						className="h-[60px] w-[60px] shrink-0"
 					>

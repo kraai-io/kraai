@@ -36,10 +36,10 @@ function setupIpcHandlers() {
 		return await runtime.listModels();
 	});
 
-	// doSomething - async
-	ipcMain.handle("agent:doSomething", async () => {
+	// sendMessage - async
+	ipcMain.handle("agent:sendMessage", async (_, message: string, modelId: string, providerId: string) => {
 		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.doSomething();
+		await runtime.sendMessage(message, modelId, providerId);
 	});
 
 	console.log("[MAIN] IPC handlers set up");

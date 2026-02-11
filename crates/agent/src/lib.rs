@@ -4,6 +4,7 @@ use color_eyre::eyre::Result;
 use provider_core::{
     Model, ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
+use std::collections::HashMap;
 use tool_core::{ToolId, ToolManager};
 use types::ChatMessage;
 
@@ -30,7 +31,7 @@ impl AgentManager {
         self.providers.load_config(config, helper).await
     }
 
-    pub fn list_models(&self) -> Vec<Model> {
+    pub fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
         self.providers.list_all_models()
     }
 

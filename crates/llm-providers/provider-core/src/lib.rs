@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use color_eyre::Result;
 use futures::stream::BoxStream;
@@ -100,10 +103,10 @@ impl ProviderManager {
         Ok(())
     }
 
-    pub fn list_all_models(&self) -> Vec<Model> {
+    pub fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
         self.providers
-            .values()
-            .flat_map(|x| x.list_models())
+            .iter()
+            .map(|(id, x)| (id.clone(), x.list_models()))
             .collect()
     }
 
