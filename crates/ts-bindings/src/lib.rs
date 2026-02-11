@@ -241,6 +241,14 @@ impl Runtime {
       for res in rx {
         match res {
           Ok(event) => {
+            if event.kind.is_access() {
+              continue;
+            }
+            if event.kind.is_remove() {
+              watcher
+                .watch(&config_loc, RecursiveMode::NonRecursive)
+                .expect("failed to watch config file");
+            }
             println!("[RUNTIME] config changed {:?}", event);
             Self::send_command_tx(command_tx.clone(), Command::LoadConfig).await;
           }
