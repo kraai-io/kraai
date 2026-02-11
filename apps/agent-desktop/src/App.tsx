@@ -35,14 +35,7 @@ const deserializeModelKey = (key: string): [string, string] => {
 };
 
 function App(): React.JSX.Element {
-	const [messages, setMessages] = useState<Message[]>([
-		{
-			id: "welcome",
-			content: "Hello! The Rust runtime is connected.",
-			role: "assistant",
-			timestamp: new Date(),
-		},
-	]);
+	const [messages, setMessages] = useState<Message[]>([]);
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
@@ -207,14 +200,7 @@ function App(): React.JSX.Element {
 	};
 
 	const clearChat = () => {
-		setMessages([
-			{
-				id: "welcome",
-				content: "Chat cleared! How can I help you today?",
-				role: "assistant",
-				timestamp: new Date(),
-			},
-		]);
+		setMessages([]);
 	};
 
 	const selectedModelName = selectedModel
