@@ -1,6 +1,14 @@
 help:
     @just --list
 
+update-rust-deps:
+    cargo upgrade
+    cargo update
+
+update-rust-deps-full:
+    cargo upgrade --incompatible
+    cargo update
+
 clean:
     cargo clean
     pnpm clean
