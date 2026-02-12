@@ -45,6 +45,12 @@ function setupIpcHandlers() {
 		},
 	);
 
+	// newSession - async
+	ipcMain.handle("agent:newSession", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.newSession();
+	});
+
 	console.log("[MAIN] IPC handlers set up");
 }
 

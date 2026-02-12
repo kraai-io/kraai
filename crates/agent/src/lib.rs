@@ -11,7 +11,9 @@ use types::ChatMessage;
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
-    agents: BTreeMap<AgentId, Agent>,
+    current_session: Session,
+    // TODO setup multiple sessions
+    // sessions: BTreeMap<SessionId, Session>,
 }
 
 impl AgentManager {
@@ -19,8 +21,12 @@ impl AgentManager {
         Self {
             providers,
             tools,
-            agents: BTreeMap::new(),
+            current_session: Session::new(),
         }
+    }
+
+    pub fn new_session(&mut self) {
+        self.current_session = Session::new();
     }
 
     pub async fn set_providers(
@@ -41,49 +47,36 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<ChatMessage> {
-        let messages = vec![ChatMessage {
+        self.current_session.add_message(ChatMessage {
             role: types::ChatRole::User,
             content: message,
-        }];
-        self.providers
-            .generate_reply(provider_id, &model_id, messages)
-            .await
+        });
+
+        let res = self
+            .providers
+            .generate_reply(provider_id, &model_id, self.current_session.get_history())
+            .await?;
+        self.current_session.add_message(res.clone());
+        Ok(res)
     }
 }
 
-pub type AgentId = Arc<String>;
+pub type SessionId = Arc<String>;
 
-pub struct Agent {
+pub struct Session {
     history: Vec<ChatMessage>,
-    temporary_messages: Vec<ChatMessage>,
-    current_tools: Vec<ToolId>,
-    dynamic_tools: bool,
 }
 
-impl Agent {
-    pub fn new(system_prompt: String) -> Self {
-        Self {
-            history: vec![ChatMessage {
-                role: types::ChatRole::System,
-                content: system_prompt,
-            }],
-            temporary_messages: vec![],
-            current_tools: vec![],
-            dynamic_tools: true,
-        }
+impl Session {
+    pub fn new() -> Self {
+        Self { history: vec![] }
     }
 
     pub fn add_message(&mut self, message: ChatMessage) {
         self.history.push(message);
     }
 
-    pub fn add_temporary_message(&mut self, message: ChatMessage) {
-        self.temporary_messages.push(message);
-    }
-
     pub fn get_history(&mut self) -> Vec<ChatMessage> {
-        let mut messages = self.history.clone();
-        messages.append(&mut self.temporary_messages);
-        messages
+        self.history.clone()
     }
 }

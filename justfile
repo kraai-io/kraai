@@ -26,6 +26,9 @@ dev-nohr: build-bindings-debug dev-desktop
 dev:
     cargo watch -w crates -c -s "just dev-nohr"
 
+dev-rust:
+    cargo watch -w crates -c
+
 dev-desktop:
     cd apps/agent-desktop && pnpm dev
 

@@ -1,14 +1,13 @@
 #![deny(clippy::all)]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use agent::AgentManager;
 use color_eyre::eyre::{Context, Result, eyre};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecursiveMode, Watcher};
 use provider_core::{
   ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
@@ -25,7 +24,6 @@ use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tool_core::ToolManager;
-use types::ChatMessage;
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
@@ -51,6 +49,7 @@ enum Command {
     provider_id: ProviderId,
   },
   LoadConfig,
+  NewSession,
 }
 
 // The runtime - owns a background tokio task with AgentManager
@@ -118,8 +117,15 @@ impl AgentRuntime {
         provider_id: provider_id.into(),
       })
       .await
-      .map_err(to_napi_error)?;
-    Ok(())
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn new_session(&self) -> napi::Result<()> {
+    self
+      .send_command(Command::NewSession)
+      .await
+      .map_err(to_napi_error)
   }
 
   async fn send_command(&self, command: Command) -> Result<()> {
@@ -217,12 +223,14 @@ impl Runtime {
           .await?;
         self.send_event(Event::MessageComplete(res.content));
       }
+      Command::NewSession => {
+        self.agent_manager.lock().await.new_session();
+      }
     };
     Ok(())
   }
 
   async fn spawn_config_watcher(&self) {
-    // TODO figure out why the config watcher does nothing after the first modification
     let command_tx = self.command_tx.clone();
     tokio::spawn(async move {
       let command_tx = command_tx.clone();
@@ -237,7 +245,6 @@ impl Runtime {
         .watch(&config_loc, RecursiveMode::NonRecursive)
         .expect("failed to watch config file");
 
-      println!("[RUNTIME] started config watcher");
       for res in rx {
         match res {
           Ok(event) => {
@@ -249,13 +256,11 @@ impl Runtime {
                 .watch(&config_loc, RecursiveMode::NonRecursive)
                 .expect("failed to watch config file");
             }
-            println!("[RUNTIME] config changed {:?}", event);
             Self::send_command_tx(command_tx.clone(), Command::LoadConfig).await;
           }
           Err(e) => println!("[ERROR] config watch error: {:?}", e),
         }
       }
-      println!("[RUNTIME] ended config watcher");
     });
   }
 

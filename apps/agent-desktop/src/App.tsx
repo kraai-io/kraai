@@ -33,6 +33,7 @@ interface WindowAPI {
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
+	newSession: () => Promise<void>;
 }
 
 declare global {
@@ -238,8 +239,16 @@ function App(): React.JSX.Element {
 		}
 	};
 
-	const clearChat = () => {
+	const clearChat = async () => {
 		setMessages([]);
+		const api = window.api;
+		if (api) {
+			try {
+				await api.newSession();
+			} catch (err) {
+				console.error("[UI] newSession failed:", err);
+			}
+		}
 	};
 
 	const selectedModelData = selectedModel

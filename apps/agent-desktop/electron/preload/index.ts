@@ -31,6 +31,10 @@ const api = {
 	): Promise<void> {
 		await ipcRenderer.invoke("agent:sendMessage", message, modelId, providerId);
 	},
+
+	async newSession(): Promise<void> {
+		await ipcRenderer.invoke("agent:newSession");
+	},
 };
 
 // Expose APIs
