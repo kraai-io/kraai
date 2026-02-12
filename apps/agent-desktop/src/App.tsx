@@ -289,9 +289,6 @@ function App(): React.JSX.Element {
 				<div className="flex items-center gap-2">
 					<Bot className="h-6 w-6" />
 					<h1 className="text-lg font-semibold">Agent Chat</h1>
-					<span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-						Connected
-					</span>
 				</div>
 				<Button
 					variant="ghost"
