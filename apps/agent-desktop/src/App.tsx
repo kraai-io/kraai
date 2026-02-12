@@ -34,6 +34,7 @@ interface WindowAPI {
 		providerId: string,
 	) => Promise<void>;
 	newSession: () => Promise<void>;
+	getChatHistory: () => Promise<Array<{ role: number; content: string }>>;
 }
 
 declare global {
@@ -113,22 +114,17 @@ function App(): React.JSX.Element {
 			if (event.type === "ConfigLoaded") {
 				console.log("[UI] Config loaded");
 				loadModels();
+				loadChatHistory();
 			} else if (event.type === "Error") {
 				console.error("[UI] Error:", event.field0);
 				setIsLoading(false);
 			} else if (event.type === "MessageComplete") {
 				console.log("[UI] Message complete:", event.field0);
-				if (event.field0 && pendingMessageIdRef.current) {
-					const assistantMessage: Message = {
-						id: (Date.now() + 1).toString(),
-						content: event.field0,
-						role: "assistant",
-						timestamp: new Date(),
-					};
-					setMessages((prev) => [...prev, assistantMessage]);
+				// Reload chat history from Rust (source of truth)
+				loadChatHistory().then(() => {
 					setIsLoading(false);
 					setPendingMessageId(null);
-				}
+				});
 			} else {
 				console.log(
 					"[UI] Unknown event type:",
@@ -171,6 +167,29 @@ function App(): React.JSX.Element {
 		}
 	};
 
+	const loadChatHistory = async () => {
+		const api = window.api;
+		if (!api) return;
+
+		try {
+			const history = await api.getChatHistory();
+			console.log("[UI] Chat history loaded:", history);
+
+			const mappedMessages: Message[] = history
+				.filter((msg) => msg.role === 1 || msg.role === 2) // Only User (1) and Assistant (2)
+				.map((msg, index) => ({
+					id: `history-${index}`,
+					content: msg.content,
+					role: msg.role === 1 ? "user" : "assistant",
+					timestamp: new Date(),
+				}));
+
+			setMessages(mappedMessages);
+		} catch (err) {
+			console.error("[UI] Failed to load chat history:", err);
+		}
+	};
+
 	const checkIsAtBottom = () => {
 		const container = scrollRef.current;
 		if (!container) return true;
@@ -207,23 +226,18 @@ function App(): React.JSX.Element {
 		if (!inputValue.trim() || isLoading || !selectedModel) return;
 
 		const [providerId, modelId] = selectedModel;
-		const userMessage: Message = {
-			id: Date.now().toString(),
-			content: inputValue.trim(),
-			role: "user",
-			timestamp: new Date(),
-		};
-
-		setMessages((prev) => [...prev, userMessage]);
+		const messageContent = inputValue.trim();
 		setInputValue("");
 		setIsLoading(true);
-		setPendingMessageId(userMessage.id);
+		setPendingMessageId(Date.now().toString());
 
 		const api = window.api;
 		if (api) {
 			try {
-				await api.sendMessage(userMessage.content, modelId, providerId);
+				await api.sendMessage(messageContent, modelId, providerId);
 				console.log("[UI] sendMessage called successfully");
+				// Reload chat history from Rust (source of truth) to show user message
+				await loadChatHistory();
 			} catch (err) {
 				console.error("[UI] sendMessage failed:", err);
 				setIsLoading(false);

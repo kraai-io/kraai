@@ -59,6 +59,10 @@ impl AgentManager {
         self.current_session.add_message(res.clone());
         Ok(res)
     }
+
+    pub fn get_chat_history(&self) -> Vec<ChatMessage> {
+        self.current_session.get_history()
+    }
 }
 
 pub type SessionId = Arc<String>;
@@ -76,7 +80,7 @@ impl Session {
         self.history.push(message);
     }
 
-    pub fn get_history(&mut self) -> Vec<ChatMessage> {
+    pub fn get_history(&self) -> Vec<ChatMessage> {
         self.history.clone()
     }
 }

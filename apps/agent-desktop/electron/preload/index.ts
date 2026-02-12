@@ -35,6 +35,10 @@ const api = {
 	async newSession(): Promise<void> {
 		await ipcRenderer.invoke("agent:newSession");
 	},
+
+	async getChatHistory(): Promise<Array<{ role: number; content: string }>> {
+		return await ipcRenderer.invoke("agent:getChatHistory");
+	},
 };
 
 // Expose APIs

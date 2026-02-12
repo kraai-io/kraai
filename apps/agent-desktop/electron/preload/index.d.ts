@@ -15,6 +15,7 @@ interface API {
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
+	getChatHistory: () => Promise<Array<{ role: number; content: string }>>;
 }
 
 declare global {

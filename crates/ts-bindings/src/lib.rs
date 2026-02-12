@@ -12,6 +12,45 @@ use provider_core::{
   ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
 use std::collections::HashMap;
+use types::ChatMessage as TypesChatMessage;
+
+// ChatRole enum exposed to TypeScript
+#[napi]
+#[derive(Clone, Debug)]
+pub enum ChatRole {
+  System,
+  User,
+  Assistant,
+  Tool,
+}
+
+impl From<types::ChatRole> for ChatRole {
+  fn from(role: types::ChatRole) -> Self {
+    match role {
+      types::ChatRole::System => ChatRole::System,
+      types::ChatRole::User => ChatRole::User,
+      types::ChatRole::Assistant => ChatRole::Assistant,
+      types::ChatRole::Tool => ChatRole::Tool,
+    }
+  }
+}
+
+// ChatMessage struct exposed to TypeScript
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct ChatMessage {
+  pub role: ChatRole,
+  pub content: String,
+}
+
+impl From<TypesChatMessage> for ChatMessage {
+  fn from(msg: TypesChatMessage) -> Self {
+    ChatMessage {
+      role: msg.role.into(),
+      content: msg.content,
+    }
+  }
+}
 
 // Model struct exposed to TypeScript
 #[napi(object)]
@@ -50,6 +89,9 @@ enum Command {
   },
   LoadConfig,
   NewSession,
+  GetChatHistory {
+    response: oneshot::Sender<Vec<TypesChatMessage>>,
+  },
 }
 
 // The runtime - owns a background tokio task with AgentManager
@@ -118,6 +160,19 @@ impl AgentRuntime {
       })
       .await
       .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn get_chat_history(&self) -> napi::Result<Vec<ChatMessage>> {
+    let (tx, rx) = oneshot::channel();
+
+    self
+      .send_command(Command::GetChatHistory { response: tx })
+      .await
+      .map_err(to_napi_error)?;
+
+    let history: Vec<TypesChatMessage> = rx.await.map_err(|e| to_napi_error(e.into()))?;
+    Ok(history.into_iter().map(|m| m.into()).collect())
   }
 
   #[napi]
@@ -225,6 +280,11 @@ impl Runtime {
       }
       Command::NewSession => {
         self.agent_manager.lock().await.new_session();
+      }
+      Command::GetChatHistory { response } => {
+        response
+          .send(self.agent_manager.lock().await.get_chat_history())
+          .unwrap();
       }
     };
     Ok(())

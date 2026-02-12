@@ -51,6 +51,12 @@ function setupIpcHandlers() {
 		await runtime.newSession();
 	});
 
+	// getChatHistory - async
+	ipcMain.handle("agent:getChatHistory", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.getChatHistory();
+	});
+
 	console.log("[MAIN] IPC handlers set up");
 }
 
