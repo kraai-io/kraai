@@ -10,7 +10,11 @@ type EventHandler = (event: Event) => void;
 interface API {
 	initRuntime: (onEvent: EventHandler) => Promise<void>;
 	listModels: () => Promise<string[]>;
-	sendMessage: (message: string, modelId: string, providerId: string) => Promise<void>;
+	sendMessage: (
+		message: string,
+		modelId: string,
+		providerId: string,
+	) => Promise<void>;
 }
 
 declare global {

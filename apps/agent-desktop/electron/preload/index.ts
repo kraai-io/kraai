@@ -24,7 +24,11 @@ const api = {
 		return await ipcRenderer.invoke("agent:listModels");
 	},
 
-	async sendMessage(message: string, modelId: string, providerId: string): Promise<void> {
+	async sendMessage(
+		message: string,
+		modelId: string,
+		providerId: string,
+	): Promise<void> {
 		await ipcRenderer.invoke("agent:sendMessage", message, modelId, providerId);
 	},
 };

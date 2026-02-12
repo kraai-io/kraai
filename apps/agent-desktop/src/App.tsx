@@ -1,3 +1,4 @@
+import type { Model as BindingModel, Event } from "agent-ts-bindings";
 import { Bot, Loader2, Search, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
@@ -12,7 +13,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import type { Event, Model as BindingModel } from "agent-ts-bindings";
 
 interface Message {
 	id: string;
@@ -23,6 +23,22 @@ interface Message {
 
 interface Model extends BindingModel {
 	providerId: string;
+}
+
+interface WindowAPI {
+	initRuntime: (callback: (event: Event) => void) => void;
+	listModels: () => Promise<Record<string, BindingModel[]>>;
+	sendMessage: (
+		message: string,
+		modelId: string,
+		providerId: string,
+	) => Promise<void>;
+}
+
+declare global {
+	interface Window {
+		api?: WindowAPI;
+	}
 }
 
 const serializeModelKey = (providerId: string, modelId: string): string =>
@@ -38,7 +54,9 @@ function App(): React.JSX.Element {
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
-	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(null);
+	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
+		null,
+	);
 	const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [isSelectorOpen, setIsSelectorOpen] = useState(false);
@@ -63,13 +81,13 @@ function App(): React.JSX.Element {
 			for (const entry of entries) {
 				const newHeight = entry.contentRect.height;
 				const oldHeight = textareaHeightRef.current;
-				
+
 				if (oldHeight > 0 && newHeight !== oldHeight) {
 					const heightDiff = newHeight - oldHeight;
 					// Adjust scroll position to maintain the same view
 					scrollContainer.scrollTop += heightDiff;
 				}
-				
+
 				textareaHeightRef.current = newHeight;
 			}
 		});
@@ -83,7 +101,7 @@ function App(): React.JSX.Element {
 	}, []);
 
 	useEffect(() => {
-		const api = (window as any).api;
+		const api = window.api;
 		if (!api) return;
 		if (isInitializedRef.current) return;
 		isInitializedRef.current = true;
@@ -111,7 +129,10 @@ function App(): React.JSX.Element {
 					setPendingMessageId(null);
 				}
 			} else {
-				console.log("[UI] Unknown event type:", (event as any).type);
+				console.log(
+					"[UI] Unknown event type:",
+					(event as { type: string }).type,
+				);
 			}
 		});
 
@@ -119,11 +140,14 @@ function App(): React.JSX.Element {
 	}, []);
 
 	const loadModels = async () => {
-		const api = (window as any).api;
+		const api = window.api;
 		if (!api) return;
 
 		try {
-			const modelMap: Record<string, Array<BindingModel>> = await api.listModels();
+			const modelMap: Record<
+				string,
+				Array<BindingModel>
+			> = await api.listModels();
 			console.log("[UI] Models loaded:", modelMap);
 
 			const allModels: Model[] = [];
@@ -150,7 +174,8 @@ function App(): React.JSX.Element {
 		const container = scrollRef.current;
 		if (!container) return true;
 		const threshold = 50;
-		const position = container.scrollHeight - container.scrollTop - container.clientHeight;
+		const position =
+			container.scrollHeight - container.scrollTop - container.clientHeight;
 		return position < threshold;
 	};
 
@@ -193,7 +218,7 @@ function App(): React.JSX.Element {
 		setIsLoading(true);
 		setPendingMessageId(userMessage.id);
 
-		const api = (window as any).api;
+		const api = window.api;
 		if (api) {
 			try {
 				await api.sendMessage(userMessage.content, modelId, providerId);
@@ -218,20 +243,27 @@ function App(): React.JSX.Element {
 	};
 
 	const selectedModelData = selectedModel
-		? models.find((m) => m.providerId === selectedModel[0] && m.id === selectedModel[1])
+		? models.find(
+				(m) => m.providerId === selectedModel[0] && m.id === selectedModel[1],
+			)
 		: null;
 
 	const selectedModelName = selectedModelData?.name || "Select a model";
 	const selectedProviderName = selectedModelData?.providerId || "";
-	const selectedModelKey = selectedModel ? serializeModelKey(selectedModel[0], selectedModel[1]) : "";
+	const selectedModelKey = selectedModel
+		? serializeModelKey(selectedModel[0], selectedModel[1])
+		: "";
 
-	const modelsByProvider = models.reduce((acc, model) => {
-		if (!acc[model.providerId]) {
-			acc[model.providerId] = [];
-		}
-		acc[model.providerId].push(model);
-		return acc;
-	}, {} as Record<string, Model[]>);
+	const modelsByProvider = models.reduce(
+		(acc, model) => {
+			if (!acc[model.providerId]) {
+				acc[model.providerId] = [];
+			}
+			acc[model.providerId].push(model);
+			return acc;
+		},
+		{} as Record<string, Model[]>,
+	);
 
 	const filteredProviders = Object.entries(modelsByProvider)
 		.map(([providerId, providerModels]) => ({
@@ -261,12 +293,21 @@ function App(): React.JSX.Element {
 						Connected
 					</span>
 				</div>
-				<Button variant="ghost" size="icon" onClick={clearChat} title="Clear chat">
+				<Button
+					variant="ghost"
+					size="icon"
+					onClick={clearChat}
+					title="Clear chat"
+				>
 					<Trash2 className="h-4 w-4" />
 				</Button>
 			</header>
 
-			<div className="flex-1 overflow-y-auto px-4" ref={scrollRef} onScroll={handleScroll}>
+			<div
+				className="flex-1 overflow-y-auto px-4"
+				ref={scrollRef}
+				onScroll={handleScroll}
+			>
 				<div className="mx-auto max-w-3xl py-4">
 					{messages.length === 0 ? (
 						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -275,7 +316,11 @@ function App(): React.JSX.Element {
 						</div>
 					) : (
 						messages.map((message) => (
-							<ChatMessage key={message.id} content={message.content} role={message.role} />
+							<ChatMessage
+								key={message.id}
+								content={message.content}
+								role={message.role}
+							/>
 						))
 					)}
 					{isLoading && (
@@ -306,6 +351,7 @@ function App(): React.JSX.Element {
 						<div className="absolute bottom-2 left-2 z-10">
 							{selectedModelData ? (
 								<button
+									type="button"
 									onClick={openSelector}
 									className="flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-accent"
 								>
@@ -313,12 +359,15 @@ function App(): React.JSX.Element {
 									{selectedProviderName && (
 										<>
 											<span className="text-muted-foreground">•</span>
-											<span className="text-muted-foreground text-xs">{selectedProviderName}</span>
+											<span className="text-muted-foreground text-xs">
+												{selectedProviderName}
+											</span>
 										</>
 									)}
 								</button>
 							) : (
 								<button
+									type="button"
 									onClick={openSelector}
 									className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent"
 								>
@@ -339,7 +388,11 @@ function App(): React.JSX.Element {
 								<SelectTrigger ref={selectTriggerRef} className="sr-only">
 									<span />
 								</SelectTrigger>
-								<SelectContent position="popper" side="top" className="max-h-[400px] w-[320px]">
+								<SelectContent
+									position="popper"
+									side="top"
+									className="max-h-[400px] w-[320px]"
+								>
 									<div className="sticky top-0 z-10 border-b bg-popover px-3 py-2">
 										<div className="relative">
 											<Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -355,24 +408,34 @@ function App(): React.JSX.Element {
 									</div>
 									<div className="max-h-[320px] overflow-y-auto">
 										{filteredProviders.length === 0 ? (
-											<div className="px-3 py-4 text-center text-sm text-muted-foreground">No models found</div>
+											<div className="px-3 py-4 text-center text-sm text-muted-foreground">
+												No models found
+											</div>
 										) : (
-											filteredProviders.map(({ providerId, models: providerModels }) => (
-												<SelectGroup key={providerId}>
-													<SelectLabel className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-														{providerId}
-													</SelectLabel>
-													{providerModels.map((model) => (
-														<SelectItem
-															key={serializeModelKey(model.providerId, model.id)}
-															value={serializeModelKey(model.providerId, model.id)}
-															className="pl-6"
-														>
-															{model.name}
-														</SelectItem>
-													))}
-												</SelectGroup>
-											))
+											filteredProviders.map(
+												({ providerId, models: providerModels }) => (
+													<SelectGroup key={providerId}>
+														<SelectLabel className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+															{providerId}
+														</SelectLabel>
+														{providerModels.map((model) => (
+															<SelectItem
+																key={serializeModelKey(
+																	model.providerId,
+																	model.id,
+																)}
+																value={serializeModelKey(
+																	model.providerId,
+																	model.id,
+																)}
+																className="pl-6"
+															>
+																{model.name}
+															</SelectItem>
+														))}
+													</SelectGroup>
+												),
+											)
 										)}
 									</div>
 								</SelectContent>
@@ -386,7 +449,11 @@ function App(): React.JSX.Element {
 								size="icon"
 								className="h-9 w-9"
 							>
-								{isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+								{isLoading ? (
+									<Loader2 className="h-4 w-4 animate-spin" />
+								) : (
+									<Send className="h-4 w-4" />
+								)}
 							</Button>
 						</div>
 					</div>
