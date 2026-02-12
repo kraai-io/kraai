@@ -233,16 +233,26 @@ function App(): React.JSX.Element {
 
 		const api = window.api;
 		if (api) {
-			try {
-				await api.sendMessage(messageContent, modelId, providerId);
-				console.log("[UI] sendMessage called successfully");
-				// Reload chat history from Rust (source of truth) to show user message
-				await loadChatHistory();
-			} catch (err) {
-				console.error("[UI] sendMessage failed:", err);
-				setIsLoading(false);
-				setPendingMessageId(null);
-			}
+			// Optimistically show user message immediately for better UX
+			const optimisticMessage: Message = {
+				id: Date.now().toString(),
+				content: messageContent,
+				role: "user",
+				timestamp: new Date(),
+			};
+			setMessages((prev) => [...prev, optimisticMessage]);
+
+			// Send message without awaiting - let it run in background
+			api
+				.sendMessage(messageContent, modelId, providerId)
+				.then(() => {
+					console.log("[UI] sendMessage called successfully");
+				})
+				.catch((err) => {
+					console.error("[UI] sendMessage failed:", err);
+					setIsLoading(false);
+					setPendingMessageId(null);
+				});
 		}
 	};
 
