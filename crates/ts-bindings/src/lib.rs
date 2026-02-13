@@ -347,8 +347,8 @@ impl Runtime {
       .lock()
       .await
       .set_providers(config, helper)
-      .await
-      .wrap_err("Failed to load providers from config")?;
+      .await?;
+      // .wrap_err("Failed to load providers from config")?;
 
     Ok(())
   }
