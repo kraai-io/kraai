@@ -2119,6 +2119,7 @@ dependencies = [
  "provider-core",
  "serde",
  "serde_json",
+ "tokio",
  "types",
 ]
 
@@ -2133,6 +2134,7 @@ dependencies = [
  "provider-core",
  "serde",
  "serde_json",
+ "tokio",
  "types",
 ]
 

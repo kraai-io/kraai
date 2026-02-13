@@ -9,6 +9,7 @@ async-openai = { workspace = true }
 async-trait = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
+tokio = { workspace = true }
 provider-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,11 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use color_eyre::eyre::Result;
 use provider_core::{
     Model, ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
 use std::collections::HashMap;
-use tool_core::{ToolId, ToolManager};
+use tool_core::ToolManager;
 use types::ChatMessage;
 
 pub struct AgentManager {
@@ -37,8 +37,8 @@ impl AgentManager {
         self.providers.load_config(config, helper).await
     }
 
-    pub fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
-        self.providers.list_all_models()
+    pub async fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
+        self.providers.list_all_models().await
     }
 
     pub async fn send_message(

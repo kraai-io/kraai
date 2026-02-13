@@ -244,7 +244,7 @@ impl Runtime {
   async fn handle_command(&self, command: Command) -> Result<()> {
     match command {
       Command::ListModels { response } => {
-        let models_map = self.agent_manager.lock().await.list_models();
+        let models_map = self.agent_manager.lock().await.list_models().await;
         let models: HashMap<String, Vec<Model>> = models_map
           .iter()
           .map(|(provider_id, model_list)| {
@@ -348,7 +348,6 @@ impl Runtime {
       .await
       .set_providers(config, helper)
       .await?;
-      // .wrap_err("Failed to load providers from config")?;
 
     Ok(())
   }

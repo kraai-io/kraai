@@ -4,7 +4,7 @@ use std::{
 };
 
 use color_eyre::Result;
-use futures::stream::BoxStream;
+use futures::{future::join_all, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use types::ChatMessage;
 
@@ -103,11 +103,16 @@ impl ProviderManager {
         Ok(())
     }
 
-    pub fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
-        self.providers
-            .iter()
-            .map(|(id, x)| (id.clone(), x.list_models()))
-            .collect()
+    pub async fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
+        join_all(
+            self.providers
+                .iter()
+                .map(|(id, x)| async { (id.clone(), x.list_models().await) })
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .into_iter()
+        .collect()
     }
 
     pub async fn update_models_list(&mut self) -> Result<()> {
@@ -118,22 +123,22 @@ impl ProviderManager {
     }
 
     pub async fn generate_reply(
-        &mut self,
+        &self,
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let client = self.providers.get_mut(&provider_id).unwrap();
+        let client = self.providers.get(&provider_id).unwrap();
         client.generate_reply(model_id, messages).await
     }
 
-    pub async fn generate_reply_stream<'a>(
-        &'a mut self,
+    pub async fn generate_reply_stream(
+        &self,
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
-    ) -> Result<BoxStream<'a, Result<String>>> {
-        let client = self.providers.get_mut(&provider_id).unwrap();
+    ) -> Result<BoxStream<'static, Result<String>>> {
+        let client = self.providers.get(&provider_id).unwrap();
         client.generate_reply_stream(model_id, messages).await
     }
 }
@@ -143,20 +148,20 @@ pub trait Provider: Send + Sync {
     ///Unique identifier for this provider (ex: openai, mistral_local).
     fn get_provider_id(&self) -> ProviderId;
 
-    fn list_models(&self) -> Vec<Model>;
+    async fn list_models(&self) -> Vec<Model>;
 
-    async fn cache_models(&mut self) -> Result<()>;
+    async fn cache_models(&self) -> Result<()>;
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
     async fn generate_reply(
-        &mut self,
+        &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage>;
 
     async fn generate_reply_stream(
-        &mut self,
+        &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>>;

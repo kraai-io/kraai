@@ -5,17 +5,16 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
 use provider_core::{Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId};
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use types::ChatMessage;
 
 pub struct GoogleProvider {
     id: ProviderId,
-    cached_models: BTreeMap<ModelId, Model>,
+    cached_models: RwLock<BTreeMap<ModelId, Model>>,
     model_configs: BTreeMap<ModelId, GoogleModelConfig>,
     config: GoogleConfig,
     client: Client<OpenAIConfig>,
 }
-
-impl GoogleProvider {}
 
 #[async_trait::async_trait]
 impl Provider for GoogleProvider {
@@ -23,12 +22,13 @@ impl Provider for GoogleProvider {
         self.id.clone()
     }
 
-    fn list_models(&self) -> Vec<Model> {
-        self.cached_models.values().cloned().collect()
+    async fn list_models(&self) -> Vec<Model> {
+        self.cached_models.read().await.values().cloned().collect()
     }
 
-    async fn cache_models(&mut self) -> Result<()> {
-        self.cached_models.clear();
+    async fn cache_models(&self) -> Result<()> {
+        let mut cache = self.cached_models.write().await;
+        cache.clear();
         let models_raw: ListGeminiModelResponse = self.client.models().list_byot().await?;
 
         for model in models_raw.data {
@@ -46,7 +46,7 @@ impl Provider for GoogleProvider {
                     name = m.name.as_ref().unwrap().clone();
                 }
             }
-            self.cached_models.insert(
+            cache.insert(
                 id.clone(),
                 Model {
                     id,
@@ -65,17 +65,10 @@ impl Provider for GoogleProvider {
     }
 
     async fn generate_reply(
-        &mut self,
+        &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        if !self.cached_models.contains_key(model_id) {
-            self.cache_models().await?;
-            if !self.cached_models.contains_key(model_id) {
-                return Err(eyre!("unable to find model {}", model_id));
-            }
-        }
-
         let request = serde_json::json!({
             "model": model_id,
             "messages": serde_json::to_value(messages)?
@@ -95,17 +88,10 @@ impl Provider for GoogleProvider {
     }
 
     async fn generate_reply_stream(
-        &mut self,
+        &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>> {
-        if !self.cached_models.contains_key(model_id) {
-            self.cache_models().await?;
-            if !self.cached_models.contains_key(model_id) {
-                return Err(eyre!("unable to find model {}", model_id));
-            }
-        }
-
         let request = serde_json::json!({
             "model": model_id,
             "messages": serde_json::to_value(messages)?,
@@ -159,7 +145,7 @@ impl ProviderFactory for GoogleFactory {
         let client = Client::with_config(cconfig);
         let provider = GoogleProvider {
             id,
-            cached_models: BTreeMap::new(),
+            cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
             config,
             client,
