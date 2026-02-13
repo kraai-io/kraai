@@ -1,12 +1,9 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, HashMap};
 
 use color_eyre::Result;
 use futures::{future::join_all, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use types::ChatMessage;
+use types::{ChatMessage, ModelId, ProviderId};
 
 #[derive(Default)]
 pub struct ProviderManager {
@@ -166,10 +163,6 @@ pub trait Provider: Send + Sync {
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>>;
 }
-
-pub type ProviderId = Arc<String>;
-
-pub type ModelId = Arc<String>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {

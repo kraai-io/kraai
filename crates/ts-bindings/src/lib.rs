@@ -8,11 +8,9 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use notify::{RecursiveMode, Watcher};
-use provider_core::{
-  ModelId, ProviderId, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
-};
-use std::collections::HashMap;
-use types::ChatMessage as TypesChatMessage;
+use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use std::collections::{BTreeMap, HashMap};
+use types::{ChatMessage as TypesChatMessage, MessageId, ModelId, ProviderId};
 
 // ChatRole enum exposed to TypeScript
 #[napi]
@@ -90,7 +88,7 @@ enum Command {
   LoadConfig,
   NewSession,
   GetChatHistory {
-    response: oneshot::Sender<Vec<TypesChatMessage>>,
+    response: oneshot::Sender<BTreeMap<MessageId, TypesChatMessage>>,
   },
 }
 
@@ -155,15 +153,15 @@ impl AgentRuntime {
     self
       .send_command(Command::SendMessage {
         message,
-        model_id: model_id.into(),
-        provider_id: provider_id.into(),
+        model_id: ModelId::new(model_id),
+        provider_id: ProviderId::new(provider_id),
       })
       .await
       .map_err(to_napi_error)
   }
 
   #[napi]
-  pub async fn get_chat_history(&self) -> napi::Result<Vec<ChatMessage>> {
+  pub async fn get_chat_history_tree(&self) -> napi::Result<BTreeMap<String, ChatMessage>> {
     let (tx, rx) = oneshot::channel();
 
     self
@@ -171,8 +169,14 @@ impl AgentRuntime {
       .await
       .map_err(to_napi_error)?;
 
-    let history: Vec<TypesChatMessage> = rx.await.map_err(|e| to_napi_error(e.into()))?;
-    Ok(history.into_iter().map(|m| m.into()).collect())
+    let history: BTreeMap<MessageId, TypesChatMessage> =
+      rx.await.map_err(|e| to_napi_error(e.into()))?;
+    Ok(
+      history
+        .into_iter()
+        .map(|(id, m)| (id.to_string(), m.into()))
+        .collect(),
+    )
   }
 
   #[napi]
@@ -283,7 +287,7 @@ impl Runtime {
       }
       Command::GetChatHistory { response } => {
         response
-          .send(self.agent_manager.lock().await.get_chat_history())
+          .send(self.agent_manager.lock().await.get_chat_history().await)
           .unwrap();
       }
     };

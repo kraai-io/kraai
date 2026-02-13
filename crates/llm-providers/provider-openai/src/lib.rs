@@ -1,12 +1,12 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use async_openai::Client;
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
-use provider_core::{Model, ModelConfig, ModelId, Provider, ProviderFactory, ProviderId};
+use provider_core::{Model, ModelConfig, Provider, ProviderFactory};
 use serde::Deserialize;
 use tokio::sync::RwLock;
-use types::ChatMessage;
+use types::{ChatMessage, ModelId, ProviderId};
 
 pub struct OpenAIProvider {
     id: ProviderId,
@@ -32,7 +32,7 @@ impl Provider for OpenAIProvider {
         let models_raw: ListOpenAIModelResponse = self.client.models().list_byot().await?;
 
         for model in models_raw.data {
-            let id = Arc::new(model.id);
+            let id = ModelId::new(model.id);
             let contains = self.model_configs.contains_key(&id);
             if self.config.only_listed_models && !contains {
                 continue;
