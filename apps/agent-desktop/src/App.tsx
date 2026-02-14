@@ -1,24 +1,14 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
-import { Bot, Loader2, Search, Send, Trash2 } from "lucide-react";
+import { Bot, Plus, Send, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
+import { ModelSelector } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
-import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectLabel,
-	SelectTrigger,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
 
-// Matching NAPI-RS generated types (ChatRole is numeric enum)
 interface Message {
 	id: string;
 	parentId?: string;
-	role: number; // 0=System, 1=User, 2=Assistant, 3=Tool
+	role: number;
 	content: string;
 	status:
 		| { type: "Complete" }
@@ -40,159 +30,93 @@ interface Model extends BindingModel {
 interface WindowAPI {
 	initRuntime: (callback: (event: Event) => void) => void;
 	listModels: () => Promise<Record<string, BindingModel[]>>;
-	sendMessage: (
-		message: string,
-		modelId: string,
-		providerId: string,
-	) => Promise<void>;
+	sendMessage: (message: string, modelId: string, providerId: string) => Promise<void>;
 	newSession: () => Promise<void>;
 	getChatHistoryTree: () => Promise<Record<string, Message>>;
 }
 
 declare global {
 	interface Window {
-		api?: WindowAPI;
+		api: WindowAPI;
 	}
 }
-
-const serializeModelKey = (providerId: string, modelId: string): string =>
-	`${providerId}::${modelId}`;
-
-const deserializeModelKey = (key: string): [string, string] => {
-	const parts = key.split("::");
-	return [parts[0], parts[1] || ""];
-};
 
 function App(): React.JSX.Element {
 	const [messages, setMessages] = useState<UIMessage[]>([]);
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
-	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
-		null,
-	);
-	const [isSelectorOpen, setIsSelectorOpen] = useState(false);
-	const [searchQuery, setSearchQuery] = useState("");
+	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const isAtBottomRef = useRef(true);
 	const isInitializedRef = useRef(false);
-	const selectTriggerRef = useRef<HTMLButtonElement>(null);
-	const textareaHeightRef = useRef<number>(0);
-
-	useEffect(() => {
-		const textarea = textareaRef.current;
-		const scrollContainer = scrollRef.current;
-		if (!textarea || !scrollContainer) return;
-
-		const resizeObserver = new ResizeObserver((entries) => {
-			for (const entry of entries) {
-				const newHeight = entry.contentRect.height;
-				const oldHeight = textareaHeightRef.current;
-
-				if (oldHeight > 0 && newHeight !== oldHeight) {
-					const heightDiff = newHeight - oldHeight;
-					// Adjust scroll position to maintain the same view
-					scrollContainer.scrollTop += heightDiff;
-				}
-
-				textareaHeightRef.current = newHeight;
-			}
-		});
-
-		textareaHeightRef.current = textarea.getBoundingClientRect().height;
-		resizeObserver.observe(textarea);
-
-		return () => {
-			resizeObserver.disconnect();
-		};
-	}, []);
 
 	useEffect(() => {
 		const api = window.api;
-		if (!api) return;
-		if (isInitializedRef.current) return;
+		if (!api || isInitializedRef.current) return;
 		isInitializedRef.current = true;
 
 		api.initRuntime((event: Event) => {
-			console.log("[UI] Received event from Rust:", event);
+			console.log("[UI] Event:", event.type);
 
-			if (event.type === "ConfigLoaded") {
-				console.log("[UI] Config loaded");
-				loadModels();
-				loadChatHistory();
-			} else if (event.type === "Error") {
-				console.error("[UI] Error:", event.field0);
-				setIsLoading(false);
-			} else if (event.type === "MessageComplete") {
-				// Legacy - can be removed
-				console.log("[UI] Message complete:", event.field0);
-				loadChatHistory().then(() => {
+			switch (event.type) {
+				case "ConfigLoaded":
+					loadModels();
+					loadChatHistory();
+					break;
+				case "Error":
+					console.error("[UI] Error:", event.field0);
 					setIsLoading(false);
-				});
-			} else if (event.type === "StreamStart") {
-				console.log("[UI] Stream started:", event.messageId);
-				// Add empty streaming message
-				setMessages((prev) => [
-					...prev,
-					{
-						id: event.messageId,
-						content: "",
-						role: "assistant",
-						isStreaming: true,
-					},
-				]);
-			} else if (event.type === "StreamChunk") {
-				// Append chunk to streaming message
-				setMessages((prev) =>
-					prev.map((msg) =>
-						msg.id === event.messageId
-							? { ...msg, content: msg.content + event.chunk }
-							: msg,
-					),
-				);
-			} else if (event.type === "StreamComplete") {
-				console.log("[UI] Stream complete:", event.messageId);
-				setIsLoading(false);
-				// Reload chat history from Rust to get authoritative message
-				loadChatHistory();
-			} else if (event.type === "StreamError") {
-				console.error("[UI] Stream error:", event.error);
-				setIsLoading(false);
-				// Remove the failed message
-				setMessages((prev) =>
-					prev.filter((msg) => msg.id !== event.messageId),
-				);
-			} else {
-				console.log(
-					"[UI] Unknown event type:",
-					(event as { type: string }).type,
-				);
+					break;
+				case "StreamStart":
+					setMessages((prev) => [
+						...prev,
+						{ id: event.messageId, content: "", role: "assistant", isStreaming: true },
+					]);
+					scrollToBottom();
+					break;
+				case "StreamChunk":
+					setMessages((prev) =>
+						prev.map((msg) =>
+							msg.id === event.messageId
+								? { ...msg, content: msg.content + event.chunk }
+								: msg,
+						),
+					);
+					scrollToBottom();
+					break;
+				case "StreamComplete":
+					setIsLoading(false);
+					loadChatHistory();
+					break;
+				case "StreamError":
+					console.error("[UI] Stream error:", event.error);
+					setIsLoading(false);
+					setMessages((prev) => prev.filter((msg) => msg.id !== event.messageId));
+					break;
 			}
 		});
 
 		loadModels();
 	}, []);
 
+	const scrollToBottom = () => {
+		if (scrollRef.current) {
+			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		}
+	};
+
 	const loadModels = async () => {
 		const api = window.api;
 		if (!api) return;
 
 		try {
-			const modelMap: Record<
-				string,
-				Array<BindingModel>
-			> = await api.listModels();
-			console.log("[UI] Models loaded:", modelMap);
-
+			const modelMap = await api.listModels();
 			const allModels: Model[] = [];
+
 			for (const [providerId, providerModels] of Object.entries(modelMap)) {
 				for (const model of providerModels) {
-					allModels.push({
-						id: model.id,
-						name: model.name,
-						providerId: providerId,
-					});
+					allModels.push({ ...model, providerId });
 				}
 			}
 
@@ -211,15 +135,10 @@ function App(): React.JSX.Element {
 
 		try {
 			const historyMap = await api.getChatHistoryTree();
-			console.log("[UI] Chat history loaded:", historyMap);
-
 			const entries = Object.entries(historyMap);
-			console.log("[UI] Total entries:", entries.length);
 
-			// ChatRole enum: System=0, User=1, Assistant=2, Tool=3
-			// Build ordered list by walking the tree from tip to root
-			const messageMap = new Map<string, { parentId?: string; role: number; content: string; status: { type: string } }>();
-			const childMap = new Map<string, string>(); // parentId -> childId
+			const messageMap = new Map<string, Message>();
+			const childMap = new Map<string, string>();
 
 			for (const [id, msg] of entries) {
 				messageMap.set(id, msg);
@@ -228,7 +147,6 @@ function App(): React.JSX.Element {
 				}
 			}
 
-			// Find the tip (message that has no children)
 			let tipId: string | null = null;
 			for (const [id] of entries) {
 				if (!childMap.has(id)) {
@@ -237,20 +155,16 @@ function App(): React.JSX.Element {
 				}
 			}
 
-			// Walk from tip to root
-			const ordered: { id: string; msg: { parentId?: string; role: number; content: string; status: { type: string } } }[] = [];
+			const ordered: { id: string; msg: Message }[] = [];
 			let currentId = tipId;
 			while (currentId) {
 				const msg = messageMap.get(currentId);
 				if (msg) {
-					ordered.unshift({ id: currentId, msg }); // Add to front
+					ordered.unshift({ id: currentId, msg });
 					currentId = msg.parentId || null;
-				} else {
-					break;
-				}
+				} else break;
 			}
 
-			// Map to UIMessage
 			const mappedMessages: UIMessage[] = ordered
 				.filter(({ msg }) => msg.role === 1 || msg.role === 2)
 				.map(({ id, msg }) => ({
@@ -260,304 +174,129 @@ function App(): React.JSX.Element {
 					isStreaming: msg.status.type === "Streaming",
 				}));
 
-			console.log("[UI] Mapped messages count:", mappedMessages.length);
 			setMessages(mappedMessages);
+			scrollToBottom();
 		} catch (err) {
 			console.error("[UI] Failed to load chat history:", err);
 		}
 	};
 
-	const checkIsAtBottom = () => {
-		const container = scrollRef.current;
-		if (!container) return true;
-		const threshold = 50;
-		const position =
-			container.scrollHeight - container.scrollTop - container.clientHeight;
-		return position < threshold;
-	};
-
-	const handleScroll = () => {
-		isAtBottomRef.current = checkIsAtBottom();
-	};
-
-	useEffect(() => {
-		textareaRef.current?.focus();
-		if (scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-		}
-	}, []);
-
-	useEffect(() => {
-		if (!isLoading) {
-			textareaRef.current?.focus();
-		}
-	}, [isLoading]);
-
-	useEffect(() => {
-		if (isAtBottomRef.current && scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-		}
-	}, [messages]);
-
-	const handleSendMessage = async () => {
+	const handleSend = async () => {
 		if (!inputValue.trim() || isLoading || !selectedModel) return;
 
 		const [providerId, modelId] = selectedModel;
-		const messageContent = inputValue.trim();
+		const content = inputValue.trim();
 		setInputValue("");
 		setIsLoading(true);
 
-		const api = window.api;
-		if (api) {
-			// Optimistically show user message immediately for better UX
-			const optimisticMessage: UIMessage = {
-				id: Date.now().toString(),
-				content: messageContent,
-				role: "user",
-				isStreaming: false,
-			};
-			setMessages((prev) => [...prev, optimisticMessage]);
+		const optimisticMessage: UIMessage = {
+			id: Date.now().toString(),
+			content,
+			role: "user",
+			isStreaming: false,
+		};
+		setMessages((prev) => [...prev, optimisticMessage]);
+		scrollToBottom();
 
-			// Send message without awaiting - let it run in background
-			api
-				.sendMessage(messageContent, modelId, providerId)
-				.then(() => {
-					console.log("[UI] sendMessage called successfully");
-				})
-				.catch((err) => {
-					console.error("[UI] sendMessage failed:", err);
-					setIsLoading(false);
-				});
-		}
+		window.api?.sendMessage(content, modelId, providerId).catch((err) => {
+			console.error("[UI] Send failed:", err);
+			setIsLoading(false);
+		});
 	};
 
-	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
-			handleSendMessage();
+			handleSend();
 		}
 	};
 
-	const clearChat = async () => {
+	const handleNewChat = async () => {
 		setMessages([]);
-		const api = window.api;
-		if (api) {
-			try {
-				await api.newSession();
-			} catch (err) {
-				console.error("[UI] newSession failed:", err);
-			}
-		}
-	};
-
-	const selectedModelData = selectedModel
-		? models.find(
-				(m) => m.providerId === selectedModel[0] && m.id === selectedModel[1],
-			)
-		: null;
-
-	const selectedModelName = selectedModelData?.name || "Select a model";
-	const selectedProviderName = selectedModelData?.providerId || "";
-	const selectedModelKey = selectedModel
-		? serializeModelKey(selectedModel[0], selectedModel[1])
-		: "";
-
-	const modelsByProvider = models.reduce(
-		(acc, model) => {
-			if (!acc[model.providerId]) {
-				acc[model.providerId] = [];
-			}
-			acc[model.providerId].push(model);
-			return acc;
-		},
-		{} as Record<string, Model[]>,
-	);
-
-	const filteredProviders = Object.entries(modelsByProvider)
-		.map(([providerId, providerModels]) => ({
-			providerId,
-			models: providerModels.filter(
-				(m) =>
-					m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-					m.providerId.toLowerCase().includes(searchQuery.toLowerCase()),
-			),
-		}))
-		.filter((group) => group.models.length > 0);
-
-	const openSelector = () => {
-		setIsSelectorOpen(true);
-		setTimeout(() => {
-			selectTriggerRef.current?.click();
-		}, 0);
+		await window.api?.newSession();
 	};
 
 	return (
 		<div className="flex h-screen flex-col bg-background">
 			<header className="flex items-center justify-between border-b px-4 py-3">
 				<div className="flex items-center gap-2">
-					<Bot className="h-6 w-6" />
-					<h1 className="text-lg font-semibold">Agent Chat</h1>
+					<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+						<Bot className="h-4 w-4 text-primary-foreground" />
+					</div>
+					<h1 className="text-lg font-semibold tracking-tight">Agent</h1>
 				</div>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={clearChat}
-					title="Clear chat"
-				>
-					<Trash2 className="h-4 w-4" />
+				<Button variant="ghost" size="icon" onClick={handleNewChat} title="New chat">
+					<Plus className="h-4 w-4" />
 				</Button>
 			</header>
 
-			<div
-				className="flex-1 overflow-y-auto px-4"
-				ref={scrollRef}
-				onScroll={handleScroll}
-			>
-				<div className="mx-auto max-w-3xl py-4">
+			<div ref={scrollRef} className="flex-1 overflow-y-auto">
+				<div className="mx-auto max-w-2xl px-4">
 					{messages.length === 0 ? (
-						<div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-							<Bot className="mb-4 h-12 w-12 opacity-50" />
-							<p>Start a conversation by typing a message below.</p>
+						<div className="flex h-[60vh] flex-col items-center justify-center text-muted-foreground">
+							<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
+								<Bot className="h-7 w-7" />
+							</div>
+							<p className="text-sm">Send a message to start</p>
 						</div>
 					) : (
-						messages.map((message) => (
-							<ChatMessage
-								key={message.id}
-								content={message.content}
-								role={message.role}
-							/>
-						))
-					)}
-					{isLoading && (
-						<div className="flex items-center gap-2 text-muted-foreground">
-							<Loader2 className="h-4 w-4 animate-spin" />
-							<span className="text-sm">Thinking...</span>
+						<div className="divide-y">
+							{messages.map((message) => (
+								<ChatMessage
+									key={message.id}
+									content={message.content}
+									role={message.role}
+									isStreaming={message.isStreaming}
+								/>
+							))}
 						</div>
 					)}
 				</div>
 			</div>
 
-			<Separator />
-
-			<div className="border-t bg-background p-4">
-				<div className="mx-auto max-w-3xl">
-					<div className="relative rounded-lg border bg-background overflow-hidden">
-						<Textarea
-							ref={textareaRef}
+			<div className="border-t p-4">
+				<div className="mx-auto max-w-2xl">
+					<div className="rounded-2xl border p-3">
+						<textarea
+							ref={textareaRef as React.RefObject<HTMLTextAreaElement>}
 							value={inputValue}
-							onChange={(e) => setInputValue(e.target.value)}
-							onKeyDown={handleKeyDown}
-							placeholder="Type a message..."
-							className="min-h-[80px] resize-none border-0 pb-14 pt-3 focus-visible:ring-0 focus-visible:ring-offset-0"
-							rows={3}
+							onChange={(e) => {
+								setInputValue(e.target.value);
+								// Auto-resize
+								e.target.style.height = "auto";
+								e.target.style.height = e.target.scrollHeight + "px";
+							}}
+							onKeyDown={(e) => {
+								handleKeyDown(e);
+								// Reset height on backspace if needed
+								if (e.key === "Backspace") {
+									const target = e.target as HTMLTextAreaElement;
+									target.style.height = "auto";
+									target.style.height = target.scrollHeight + "px";
+								}
+							}}
+							placeholder="Message..."
+							className="w-full resize-none bg-transparent px-2 py-1 text-sm outline-none placeholder:text-muted-foreground"
+							rows={1}
+							style={{ height: "auto", overflow: "hidden" }}
 							disabled={isLoading}
 						/>
-
-						<div className="absolute bottom-2 left-2 z-10">
-							{selectedModelData ? (
-								<button
-									type="button"
-									onClick={openSelector}
-									className="flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-accent"
-								>
-									<span className="font-medium">{selectedModelName}</span>
-									{selectedProviderName && (
-										<>
-											<span className="text-muted-foreground">•</span>
-											<span className="text-muted-foreground text-xs">
-												{selectedProviderName}
-											</span>
-										</>
-									)}
-								</button>
-							) : (
-								<button
-									type="button"
-									onClick={openSelector}
-									className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent"
-								>
-									Select a model
-								</button>
-							)}
-
-							<Select
-								value={selectedModelKey}
-								onValueChange={(value) => {
-									const [providerId, modelId] = deserializeModelKey(value);
-									setSelectedModel([providerId, modelId]);
-									setSearchQuery("");
-								}}
-								open={isSelectorOpen}
-								onOpenChange={setIsSelectorOpen}
-							>
-								<SelectTrigger ref={selectTriggerRef} className="sr-only">
-									<span />
-								</SelectTrigger>
-								<SelectContent
-									position="popper"
-									side="top"
-									className="max-h-[400px] w-[320px]"
-								>
-									<div className="sticky top-0 z-10 border-b bg-popover px-3 py-2">
-										<div className="relative">
-											<Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-											<input
-												type="text"
-												placeholder="Search models..."
-												value={searchQuery}
-												onChange={(e) => setSearchQuery(e.target.value)}
-												className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
-												onClick={(e) => e.stopPropagation()}
-											/>
-										</div>
-									</div>
-									<div className="max-h-[320px] overflow-y-auto">
-										{filteredProviders.length === 0 ? (
-											<div className="px-3 py-4 text-center text-sm text-muted-foreground">
-												No models found
-											</div>
-										) : (
-											filteredProviders.map(
-												({ providerId, models: providerModels }) => (
-													<SelectGroup key={providerId}>
-														<SelectLabel className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-															{providerId}
-														</SelectLabel>
-														{providerModels.map((model) => (
-															<SelectItem
-																key={serializeModelKey(
-																	model.providerId,
-																	model.id,
-																)}
-																value={serializeModelKey(
-																	model.providerId,
-																	model.id,
-																)}
-																className="pl-6"
-															>
-																{model.name}
-															</SelectItem>
-														))}
-													</SelectGroup>
-												),
-											)
-										)}
-									</div>
-								</SelectContent>
-							</Select>
-						</div>
-
-						<div className="absolute bottom-2 right-2 z-10">
+						<div className="flex items-center justify-between pt-2">
+							<ModelSelector
+								models={models}
+								value={selectedModel}
+								onChange={setSelectedModel}
+							/>
 							<Button
-								onClick={handleSendMessage}
-								disabled={!inputValue.trim() || isLoading || !selectedModel}
 								size="icon"
-								className="h-9 w-9"
+								className="h-8 w-8 rounded-xl"
+								onClick={handleSend}
+								disabled={!inputValue.trim() || isLoading || !selectedModel}
 							>
 								{isLoading ? (
-									<Loader2 className="h-4 w-4 animate-spin" />
+									<Square className="h-3.5 w-3.5" />
 								) : (
-									<Send className="h-4 w-4" />
+									<Send className="h-3.5 w-3.5" />
 								)}
 							</Button>
 						</div>
