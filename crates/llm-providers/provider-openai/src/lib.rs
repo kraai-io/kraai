@@ -102,13 +102,14 @@ impl Provider for OpenAIProvider {
             .chat()
             .create_stream_byot(request)
             .await?
-            .map(|x| {
-                x.map_err(|e| eyre!(e)).map(|x: serde_json::Value| {
-                    x["choices"][0]["delta"]["content"]
-                        .as_str()
-                        .unwrap()
-                        .to_string()
-                })
+            .filter_map(|x: Result<serde_json::Value, _>| async {
+                match x {
+                    Ok(val) => {
+                        let content = val["choices"][0]["delta"]["content"].as_str();
+                        content.map(|s: &str| Ok(s.to_string()))
+                    }
+                    Err(e) => Some(Err(eyre!(e))),
+                }
             })
             .boxed();
 

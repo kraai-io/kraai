@@ -3,9 +3,9 @@ use types::CallId;
 use types::MessageId;
 use types::ModelId;
 use types::ProviderId;
-use types::SessionId;
 
 use color_eyre::eyre::Result;
+use futures::{Stream, StreamExt, stream::BoxStream};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -16,7 +16,6 @@ use ulid::Ulid;
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
-    // sessions: RwLock<BTreeMap<SessionId, Arc<Session>>>,
     current_session: Session,
 }
 
@@ -25,7 +24,6 @@ impl AgentManager {
         Self {
             providers,
             tools,
-            // sessions: RwLock::new(BTreeMap::new()),
             current_session: Session::new(),
         }
     }
@@ -46,12 +44,12 @@ impl AgentManager {
         self.providers.list_all_models().await
     }
 
-    pub async fn send_message(
+    pub async fn start_stream(
         &mut self,
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
-    ) -> Result<Message> {
+    ) -> Result<(MessageId, BoxStream<'static, Result<String>>)> {
         let user_msg_id = self
             .current_session
             .add_message(ChatRole::User, message)
@@ -67,18 +65,28 @@ impl AgentManager {
             })
             .collect();
 
-        let response = self
-            .providers
-            .generate_reply(provider_id, &model_id, provider_messages)
-            .await?;
-
+        let call_id = CallId::new(Ulid::new());
         let assistant_msg_id = self
             .current_session
-            .add_message(response.role, response.content)
+            .start_streaming_message(ChatRole::Assistant, call_id)
             .await;
 
-        let messages = self.current_session.messages.read().await;
-        Ok(messages.get(&assistant_msg_id).cloned().unwrap())
+        let stream = self
+            .providers
+            .generate_reply_stream(provider_id, &model_id, provider_messages)
+            .await?;
+
+        Ok((assistant_msg_id, stream))
+    }
+
+    pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) {
+        self.current_session
+            .append_to_streaming(message_id, chunk)
+            .await;
+    }
+
+    pub async fn complete_message(&self, message_id: &MessageId) {
+        self.current_session.complete_streaming(message_id).await;
     }
 
     pub async fn get_chat_history(&self) -> BTreeMap<MessageId, Message> {

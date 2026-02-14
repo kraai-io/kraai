@@ -105,18 +105,24 @@ use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tool_core::ToolManager;
+use futures::StreamExt;
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
 }
 
-// Example event sent from Rust to TypeScript
+// Streaming events sent from Rust to TypeScript
 #[napi]
 #[derive(Clone)]
 pub enum Event {
   ConfigLoaded,
   Error(String),
   MessageComplete(String),
+  // Streaming events
+  StreamStart { message_id: String },
+  StreamChunk { message_id: String, chunk: String },
+  StreamComplete { message_id: String },
+  StreamError { message_id: String, error: String },
 }
 
 // Internal commands (not exposed to TypeScript)
@@ -318,13 +324,75 @@ impl Runtime {
         model_id,
         provider_id,
       } => {
-        let res = self
-          .agent_manager
-          .lock()
-          .await
-          .send_message(message, model_id, provider_id)
-          .await?;
-        self.send_event(Event::MessageComplete(res.content));
+        let event_callback = self.event_callback.clone();
+        let agent_manager = self.agent_manager.clone();
+        
+        tokio::spawn(async move {
+          let (msg_id, mut stream) = {
+            let mut agent = agent_manager.lock().await;
+            match agent.start_stream(message, model_id, provider_id).await {
+              Ok(result) => result,
+              Err(e) => {
+                event_callback.call(
+                  Ok(Event::Error(e.to_string())),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+                return;
+              }
+            }
+          };
+          
+          // Send stream start event
+          event_callback.call(
+            Ok(Event::StreamStart { message_id: msg_id.to_string() }),
+            ThreadsafeFunctionCallMode::NonBlocking,
+          );
+          
+          // Process stream chunks
+          while let Some(chunk_result) = stream.next().await {
+            let chunk_result: Result<String, color_eyre::Report> = chunk_result;
+            match chunk_result {
+              Ok(chunk) => {
+                // Append to message in session
+                {
+                  let agent = agent_manager.lock().await;
+                  agent.append_chunk(&msg_id, &chunk).await;
+                }
+                
+                // Send chunk event
+                event_callback.call(
+                  Ok(Event::StreamChunk { 
+                    message_id: msg_id.to_string(),
+                    chunk,
+                  }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+              }
+              Err(e) => {
+                event_callback.call(
+                  Ok(Event::StreamError { 
+                    message_id: msg_id.to_string(),
+                    error: e.to_string(),
+                  }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+                return;
+              }
+            }
+          }
+          
+          // Complete the message
+          {
+            let agent = agent_manager.lock().await;
+            agent.complete_message(&msg_id).await;
+          }
+          
+          // Send completion event
+          event_callback.call(
+            Ok(Event::StreamComplete { message_id: msg_id.to_string() }),
+            ThreadsafeFunctionCallMode::NonBlocking,
+          );
+        });
       }
       Command::NewSession => {
         self.agent_manager.lock().await.new_session();

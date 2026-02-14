@@ -125,11 +125,44 @@ function App(): React.JSX.Element {
 				console.error("[UI] Error:", event.field0);
 				setIsLoading(false);
 			} else if (event.type === "MessageComplete") {
+				// Legacy - can be removed
 				console.log("[UI] Message complete:", event.field0);
-				// Reload chat history from Rust (source of truth)
 				loadChatHistory().then(() => {
 					setIsLoading(false);
 				});
+			} else if (event.type === "StreamStart") {
+				console.log("[UI] Stream started:", event.messageId);
+				// Add empty streaming message
+				setMessages((prev) => [
+					...prev,
+					{
+						id: event.messageId,
+						content: "",
+						role: "assistant",
+						isStreaming: true,
+					},
+				]);
+			} else if (event.type === "StreamChunk") {
+				// Append chunk to streaming message
+				setMessages((prev) =>
+					prev.map((msg) =>
+						msg.id === event.messageId
+							? { ...msg, content: msg.content + event.chunk }
+							: msg,
+					),
+				);
+			} else if (event.type === "StreamComplete") {
+				console.log("[UI] Stream complete:", event.messageId);
+				setIsLoading(false);
+				// Reload chat history from Rust to get authoritative message
+				loadChatHistory();
+			} else if (event.type === "StreamError") {
+				console.error("[UI] Stream error:", event.error);
+				setIsLoading(false);
+				// Remove the failed message
+				setMessages((prev) =>
+					prev.filter((msg) => msg.id !== event.messageId),
+				);
 			} else {
 				console.log(
 					"[UI] Unknown event type:",
@@ -182,19 +215,45 @@ function App(): React.JSX.Element {
 
 			const entries = Object.entries(historyMap);
 			console.log("[UI] Total entries:", entries.length);
-			
-			entries.forEach(([id, msg]) => {
-				console.log("[UI] Message:", id, "role:", msg.role, "content:", msg.content?.substring(0, 50));
-			});
 
 			// ChatRole enum: System=0, User=1, Assistant=2, Tool=3
-			const mappedMessages: UIMessage[] = entries
-				.filter(([id, msg]) => {
-					const passes = msg.role === 1 || msg.role === 2; // User or Assistant
-					console.log("[UI] Filter check:", id, "role:", msg.role, "passes:", passes);
-					return passes;
-				})
-				.map(([id, msg]) => ({
+			// Build ordered list by walking the tree from tip to root
+			const messageMap = new Map<string, { parentId?: string; role: number; content: string; status: { type: string } }>();
+			const childMap = new Map<string, string>(); // parentId -> childId
+
+			for (const [id, msg] of entries) {
+				messageMap.set(id, msg);
+				if (msg.parentId) {
+					childMap.set(msg.parentId, id);
+				}
+			}
+
+			// Find the tip (message that has no children)
+			let tipId: string | null = null;
+			for (const [id] of entries) {
+				if (!childMap.has(id)) {
+					tipId = id;
+					break;
+				}
+			}
+
+			// Walk from tip to root
+			const ordered: { id: string; msg: { parentId?: string; role: number; content: string; status: { type: string } } }[] = [];
+			let currentId = tipId;
+			while (currentId) {
+				const msg = messageMap.get(currentId);
+				if (msg) {
+					ordered.unshift({ id: currentId, msg }); // Add to front
+					currentId = msg.parentId || null;
+				} else {
+					break;
+				}
+			}
+
+			// Map to UIMessage
+			const mappedMessages: UIMessage[] = ordered
+				.filter(({ msg }) => msg.role === 1 || msg.role === 2)
+				.map(({ id, msg }) => ({
 					id,
 					content: msg.content,
 					role: msg.role === 1 ? "user" : "assistant",

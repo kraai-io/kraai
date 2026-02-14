@@ -1,11 +1,15 @@
 import { electronAPI } from "@electron-toolkit/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
-// Type definitions for the API
-interface Event {
-	eventType: string;
-	data?: string;
-}
+// Type definitions matching NAPI-RS Event enum
+type Event =
+	| { type: "ConfigLoaded" }
+	| { type: "Error"; field0: string }
+	| { type: "MessageComplete"; field0: string }
+	| { type: "StreamStart"; messageId: string }
+	| { type: "StreamChunk"; messageId: string; chunk: string }
+	| { type: "StreamComplete"; messageId: string }
+	| { type: "StreamError"; messageId: string; error: string };
 
 type EventHandler = (event: Event) => void;
 
