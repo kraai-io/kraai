@@ -34,7 +34,9 @@ interface WindowAPI {
 		providerId: string,
 	) => Promise<void>;
 	newSession: () => Promise<void>;
-	getChatHistoryTree: () => Promise<Record<string, { role: number; content: string }>>;
+	getChatHistoryTree: () => Promise<
+		Record<string, { role: number; content: string }>
+	>;
 }
 
 declare global {

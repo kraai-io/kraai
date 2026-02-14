@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "crates/agent",
-    "crates/llm-providers/provider-core",
-    "crates/llm-providers/provider-google",
-    "crates/llm-providers/provider-openai",
-    "crates/tools/tool-core",
-    "crates/tools/tool-read-file",
-    "crates/toon-schema",
-    "crates/ts-bindings",
-    # "crates/tui",
-    "crates/types",
+  "crates/agent",
+  "crates/llm-providers/provider-core",
+  "crates/llm-providers/provider-google",
+  "crates/llm-providers/provider-openai",
+  "crates/tools/tool-core",
+  "crates/tools/tool-read-file",
+  "crates/toon-schema",
+  "crates/ts-bindings",
+  # "crates/tui",
+  "crates/types",
 ]
 resolver = "3"
 
@@ -33,9 +33,9 @@ tool-read-file = { path = "crates/tools/tool-read-file" }
 types = { path = "crates/types" }
 
 async-openai = { version = "0.32.4", features = [
-    "byot",
-    "chat-completion",
-    "model",
+  "byot",
+  "chat-completion",
+  "model",
 ] }
 async-trait = "0.1.89"
 chrono = { version = "0.4.43", features = ["serde"] }
@@ -46,17 +46,16 @@ llm-toolkit = "0.61.1"
 proc-macro2 = "1.0.106"
 quote = "1.0.44"
 ratatui = { version = "0.30.0", features = [
-    "all-widgets",
-    "macros",
-    "scrolling-regions",
-    "serde",
+  "all-widgets",
+  "macros",
+  "scrolling-regions",
+  "serde",
 ] }
 regex = "1.12.3"
 reqwest = { features = ["json", "stream"], version = "0.13.2" }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.149"
 specta = "2.0.0-rc.22"
-ulid = "1.2.1"
 specta-typescript = "0.0.9"
 syn = { version = "2.0.115", features = ["derive", "full"] }
 tachyonfx = "0.23.0"
@@ -67,4 +66,5 @@ tokio = { features = ["full"], version = "1.49.0" }
 toml = "1.0.1"
 toon-format = "0.4.1"
 trybuild = "1.0.116"
+ulid = "1.2.1"
 url = "2.5.8"
