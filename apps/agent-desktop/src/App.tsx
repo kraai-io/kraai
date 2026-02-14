@@ -1,5 +1,5 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
-import { Bot, Plus, Send, Square } from "lucide-react";
+import { Bot, ChevronDown, Plus, Send, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
@@ -50,6 +50,8 @@ function App(): React.JSX.Element {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
+	const [isAtBottom, setIsAtBottom] = useState(true);
+	const isAtBottomRef = useRef(true);
 
 	useEffect(() => {
 		const api = window.api;
@@ -73,7 +75,7 @@ function App(): React.JSX.Element {
 						...prev,
 						{ id: event.messageId, content: "", role: "assistant", isStreaming: true },
 					]);
-					scrollToBottom();
+					forceScrollToBottom();
 					break;
 				case "StreamChunk":
 					setMessages((prev) =>
@@ -100,9 +102,38 @@ function App(): React.JSX.Element {
 		loadModels();
 	}, []);
 
+	useEffect(() => {
+		const container = scrollRef.current;
+		if (!container) return;
+
+		const handleScroll = () => {
+			const { scrollTop, scrollHeight, clientHeight } = container;
+			const atBottom = scrollTop + clientHeight >= scrollHeight - 100;
+			setIsAtBottom(atBottom);
+			isAtBottomRef.current = atBottom;
+		};
+
+		container.addEventListener('scroll', handleScroll);
+		return () => container.removeEventListener('scroll', handleScroll);
+	}, []);
+
 	const scrollToBottom = () => {
+		if (scrollRef.current && isAtBottomRef.current) {
+			requestAnimationFrame(() => {
+				if (scrollRef.current) {
+					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+				}
+			});
+		}
+	};
+
+	const forceScrollToBottom = () => {
 		if (scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+			requestAnimationFrame(() => {
+				if (scrollRef.current) {
+					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+				}
+			});
 		}
 	};
 
@@ -175,7 +206,7 @@ function App(): React.JSX.Element {
 				}));
 
 			setMessages(mappedMessages);
-			scrollToBottom();
+			forceScrollToBottom();
 		} catch (err) {
 			console.error("[UI] Failed to load chat history:", err);
 		}
@@ -196,7 +227,7 @@ function App(): React.JSX.Element {
 			isStreaming: false,
 		};
 		setMessages((prev) => [...prev, optimisticMessage]);
-		scrollToBottom();
+		forceScrollToBottom();
 
 		window.api?.sendMessage(content, modelId, providerId).catch((err) => {
 			console.error("[UI] Send failed:", err);
@@ -230,28 +261,47 @@ function App(): React.JSX.Element {
 				</Button>
 			</header>
 
-			<div ref={scrollRef} className="flex-1 overflow-y-auto">
-				<div className="mx-auto max-w-2xl px-4">
-					{messages.length === 0 ? (
-						<div className="flex h-[60vh] flex-col items-center justify-center text-muted-foreground">
-							<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
-								<Bot className="h-7 w-7" />
+			<div className="relative flex-1">
+				<div ref={scrollRef} className="absolute inset-0 overflow-y-auto">
+					<div className="mx-auto max-w-2xl px-4">
+						{messages.length === 0 ? (
+							<div className="flex h-[60vh] flex-col items-center justify-center text-muted-foreground">
+								<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
+									<Bot className="h-7 w-7" />
+								</div>
+								<p className="text-sm">Send a message to start</p>
 							</div>
-							<p className="text-sm">Send a message to start</p>
-						</div>
-					) : (
-						<div className="divide-y">
-							{messages.map((message) => (
-								<ChatMessage
-									key={message.id}
-									content={message.content}
-									role={message.role}
-									isStreaming={message.isStreaming}
-								/>
-							))}
-						</div>
-					)}
+						) : (
+							<div className="divide-y">
+								{messages.map((message) => (
+									<ChatMessage
+										key={message.id}
+										content={message.content}
+										role={message.role}
+										isStreaming={message.isStreaming}
+									/>
+								))}
+							</div>
+						)}
+					</div>
 				</div>
+
+				{!isAtBottom && (
+					<div className="absolute bottom-0 left-1/2 -translate-x-1/2 z-10 pb-2">
+						<Button
+							variant="secondary"
+							size="icon"
+							className="h-8 w-8 rounded-full shadow-md"
+							onClick={() => {
+								forceScrollToBottom();
+								setIsAtBottom(true);
+								isAtBottomRef.current = true;
+							}}
+						>
+							<ChevronDown className="h-4 w-4" />
+						</Button>
+					</div>
+				)}
 			</div>
 
 			<div className="border-t p-4">
