@@ -34,7 +34,7 @@ interface WindowAPI {
 		providerId: string,
 	) => Promise<void>;
 	newSession: () => Promise<void>;
-	getChatHistory: () => Promise<Array<{ role: number; content: string }>>;
+	getChatHistoryTree: () => Promise<Record<string, { role: number; content: string }>>;
 }
 
 declare global {
@@ -172,13 +172,13 @@ function App(): React.JSX.Element {
 		if (!api) return;
 
 		try {
-			const history = await api.getChatHistory();
-			console.log("[UI] Chat history loaded:", history);
+			const historyMap = await api.getChatHistoryTree();
+			console.log("[UI] Chat history loaded:", historyMap);
 
-			const mappedMessages: Message[] = history
-				.filter((msg) => msg.role === 1 || msg.role === 2) // Only User (1) and Assistant (2)
-				.map((msg, index) => ({
-					id: `history-${index}`,
+			const mappedMessages: Message[] = Object.entries(historyMap)
+				.filter(([, msg]) => msg.role === 1 || msg.role === 2) // Only User (1) and Assistant (2)
+				.map(([id, msg]) => ({
+					id,
 					content: msg.content,
 					role: msg.role === 1 ? "user" : "assistant",
 					timestamp: new Date(),

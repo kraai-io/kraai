@@ -36,8 +36,8 @@ const api = {
 		await ipcRenderer.invoke("agent:newSession");
 	},
 
-	async getChatHistory(): Promise<Array<{ role: number; content: string }>> {
-		return await ipcRenderer.invoke("agent:getChatHistory");
+	async getChatHistoryTree(): Promise<Record<string, { role: number; content: string }>> {
+		return await ipcRenderer.invoke("agent:getChatHistoryTree");
 	},
 };
 
