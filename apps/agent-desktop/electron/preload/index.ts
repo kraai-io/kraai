@@ -9,6 +9,18 @@ interface Event {
 
 type EventHandler = (event: Event) => void;
 
+// Matching NAPI-RS generated types (from index.d.ts)
+interface Message {
+	id: string;
+	parentId?: string;
+	role: number; // ChatRole const enum: System=0, User=1, Assistant=2, Tool=3
+	content: string;
+	status:
+		| { type: "Complete" }
+		| { type: "Streaming"; callId: string }
+		| { type: "Cancelled" };
+}
+
 // API exposed to renderer
 const api = {
 	// Initialize the runtime with an event handler
@@ -36,9 +48,7 @@ const api = {
 		await ipcRenderer.invoke("agent:newSession");
 	},
 
-	async getChatHistoryTree(): Promise<
-		Record<string, { role: number; content: string }>
-	> {
+	async getChatHistoryTree(): Promise<Record<string, Message>> {
 		return await ipcRenderer.invoke("agent:getChatHistoryTree");
 	},
 };

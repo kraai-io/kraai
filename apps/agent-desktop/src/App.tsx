@@ -14,11 +14,23 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 
+// Matching NAPI-RS generated types (ChatRole is numeric enum)
 interface Message {
+	id: string;
+	parentId?: string;
+	role: number; // 0=System, 1=User, 2=Assistant, 3=Tool
+	content: string;
+	status:
+		| { type: "Complete" }
+		| { type: "Streaming"; callId: string }
+		| { type: "Cancelled" };
+}
+
+interface UIMessage {
 	id: string;
 	content: string;
 	role: "user" | "assistant";
-	timestamp: Date;
+	isStreaming: boolean;
 }
 
 interface Model extends BindingModel {
@@ -34,9 +46,7 @@ interface WindowAPI {
 		providerId: string,
 	) => Promise<void>;
 	newSession: () => Promise<void>;
-	getChatHistoryTree: () => Promise<
-		Record<string, { role: number; content: string }>
-	>;
+	getChatHistoryTree: () => Promise<Record<string, Message>>;
 }
 
 declare global {
@@ -54,27 +64,21 @@ const deserializeModelKey = (key: string): [string, string] => {
 };
 
 function App(): React.JSX.Element {
-	const [messages, setMessages] = useState<Message[]>([]);
+	const [messages, setMessages] = useState<UIMessage[]>([]);
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
 	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
 		null,
 	);
-	const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
-	const [searchQuery, setSearchQuery] = useState("");
 	const [isSelectorOpen, setIsSelectorOpen] = useState(false);
-	const pendingMessageIdRef = useRef<string | null>(null);
+	const [searchQuery, setSearchQuery] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isAtBottomRef = useRef(true);
 	const isInitializedRef = useRef(false);
 	const selectTriggerRef = useRef<HTMLButtonElement>(null);
 	const textareaHeightRef = useRef<number>(0);
-
-	useEffect(() => {
-		pendingMessageIdRef.current = pendingMessageId;
-	}, [pendingMessageId]);
 
 	useEffect(() => {
 		const textarea = textareaRef.current;
@@ -125,7 +129,6 @@ function App(): React.JSX.Element {
 				// Reload chat history from Rust (source of truth)
 				loadChatHistory().then(() => {
 					setIsLoading(false);
-					setPendingMessageId(null);
 				});
 			} else {
 				console.log(
@@ -177,15 +180,28 @@ function App(): React.JSX.Element {
 			const historyMap = await api.getChatHistoryTree();
 			console.log("[UI] Chat history loaded:", historyMap);
 
-			const mappedMessages: Message[] = Object.entries(historyMap)
-				.filter(([, msg]) => msg.role === 1 || msg.role === 2) // Only User (1) and Assistant (2)
+			const entries = Object.entries(historyMap);
+			console.log("[UI] Total entries:", entries.length);
+			
+			entries.forEach(([id, msg]) => {
+				console.log("[UI] Message:", id, "role:", msg.role, "content:", msg.content?.substring(0, 50));
+			});
+
+			// ChatRole enum: System=0, User=1, Assistant=2, Tool=3
+			const mappedMessages: UIMessage[] = entries
+				.filter(([id, msg]) => {
+					const passes = msg.role === 1 || msg.role === 2; // User or Assistant
+					console.log("[UI] Filter check:", id, "role:", msg.role, "passes:", passes);
+					return passes;
+				})
 				.map(([id, msg]) => ({
 					id,
 					content: msg.content,
 					role: msg.role === 1 ? "user" : "assistant",
-					timestamp: new Date(),
+					isStreaming: msg.status.type === "Streaming",
 				}));
 
+			console.log("[UI] Mapped messages count:", mappedMessages.length);
 			setMessages(mappedMessages);
 		} catch (err) {
 			console.error("[UI] Failed to load chat history:", err);
@@ -231,16 +247,15 @@ function App(): React.JSX.Element {
 		const messageContent = inputValue.trim();
 		setInputValue("");
 		setIsLoading(true);
-		setPendingMessageId(Date.now().toString());
 
 		const api = window.api;
 		if (api) {
 			// Optimistically show user message immediately for better UX
-			const optimisticMessage: Message = {
+			const optimisticMessage: UIMessage = {
 				id: Date.now().toString(),
 				content: messageContent,
 				role: "user",
-				timestamp: new Date(),
+				isStreaming: false,
 			};
 			setMessages((prev) => [...prev, optimisticMessage]);
 
@@ -253,7 +268,6 @@ function App(): React.JSX.Element {
 				.catch((err) => {
 					console.error("[UI] sendMessage failed:", err);
 					setIsLoading(false);
-					setPendingMessageId(null);
 				});
 		}
 	};

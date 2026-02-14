@@ -10,7 +10,7 @@ use napi_derive::napi;
 use notify::{RecursiveMode, Watcher};
 use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::{BTreeMap, HashMap};
-use types::{ChatMessage as TypesChatMessage, MessageId, ModelId, ProviderId};
+use types::{MessageId, ModelId, ProviderId};
 
 // ChatRole enum exposed to TypeScript
 #[napi]
@@ -33,7 +33,51 @@ impl From<types::ChatRole> for ChatRole {
   }
 }
 
-// ChatMessage struct exposed to TypeScript
+// MessageStatus enum exposed to TypeScript
+#[napi]
+#[derive(Clone, Debug)]
+pub enum MessageStatus {
+  Complete,
+  Streaming { call_id: String },
+  Cancelled,
+}
+
+impl From<types::MessageStatus> for MessageStatus {
+  fn from(status: types::MessageStatus) -> Self {
+    match status {
+      types::MessageStatus::Complete => MessageStatus::Complete,
+      types::MessageStatus::Streaming { call_id } => MessageStatus::Streaming {
+        call_id: call_id.to_string(),
+      },
+      types::MessageStatus::Cancelled => MessageStatus::Cancelled,
+    }
+  }
+}
+
+// Message struct exposed to TypeScript
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct Message {
+  pub id: String,
+  pub parent_id: Option<String>,
+  pub role: ChatRole,
+  pub content: String,
+  pub status: MessageStatus,
+}
+
+impl From<types::Message> for Message {
+  fn from(msg: types::Message) -> Self {
+    Message {
+      id: msg.id.to_string(),
+      parent_id: msg.parent_id.map(|id| id.to_string()),
+      role: msg.role.into(),
+      content: msg.content,
+      status: msg.status.into(),
+    }
+  }
+}
+
+// ChatMessage struct exposed to TypeScript (legacy compatibility)
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -41,8 +85,8 @@ pub struct ChatMessage {
   pub content: String,
 }
 
-impl From<TypesChatMessage> for ChatMessage {
-  fn from(msg: TypesChatMessage) -> Self {
+impl From<types::ChatMessage> for ChatMessage {
+  fn from(msg: types::ChatMessage) -> Self {
     ChatMessage {
       role: msg.role.into(),
       content: msg.content,
@@ -88,7 +132,7 @@ enum Command {
   LoadConfig,
   NewSession,
   GetChatHistory {
-    response: oneshot::Sender<BTreeMap<MessageId, TypesChatMessage>>,
+    response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
   },
 }
 
@@ -161,7 +205,7 @@ impl AgentRuntime {
   }
 
   #[napi]
-  pub async fn get_chat_history_tree(&self) -> napi::Result<BTreeMap<String, ChatMessage>> {
+  pub async fn get_chat_history_tree(&self) -> napi::Result<BTreeMap<String, Message>> {
     let (tx, rx) = oneshot::channel();
 
     self
@@ -169,7 +213,7 @@ impl AgentRuntime {
       .await
       .map_err(to_napi_error)?;
 
-    let history: BTreeMap<MessageId, TypesChatMessage> =
+    let history: BTreeMap<MessageId, types::Message> =
       rx.await.map_err(|e| to_napi_error(e.into()))?;
     Ok(
       history
