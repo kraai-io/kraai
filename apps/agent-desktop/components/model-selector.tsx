@@ -50,7 +50,7 @@ export function ModelSelector({ models, value, onChange }: ModelSelectorProps) {
 			<PopoverTrigger asChild>
 				<button
 					type="button"
-					className="flex items-center gap-1.5 px-2 py-1 text-sm rounded-md hover:bg-accent/50 transition-colors"
+					className="flex items-center gap-1.5 px-2 py-1 text-base rounded-md hover:bg-accent/50 transition-colors"
 				>
 					{selectedModel ? (
 						<>

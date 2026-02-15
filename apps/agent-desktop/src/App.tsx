@@ -269,7 +269,7 @@ function App(): React.JSX.Element {
 								<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
 									<Bot className="h-7 w-7" />
 								</div>
-								<p className="text-sm">Send a message to start</p>
+								<p className="text-base">Send a message to start</p>
 							</div>
 						) : (
 							<div className="divide-y">
@@ -326,7 +326,7 @@ function App(): React.JSX.Element {
 								}
 							}}
 							placeholder="Message..."
-							className="w-full resize-none bg-transparent px-2 py-1 text-sm outline-none placeholder:text-muted-foreground"
+							className="w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-muted-foreground"
 							rows={1}
 							style={{ height: "auto", overflow: "hidden" }}
 							disabled={isLoading}
