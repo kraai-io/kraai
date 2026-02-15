@@ -101,11 +101,11 @@ pub struct Model {
   pub id: String,
   pub name: String,
 }
+use futures::StreamExt;
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tool_core::ToolManager;
-use futures::StreamExt;
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
@@ -326,7 +326,7 @@ impl Runtime {
       } => {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
-        
+
         tokio::spawn(async move {
           let (msg_id, mut stream) = {
             let mut agent = agent_manager.lock().await;
@@ -341,13 +341,15 @@ impl Runtime {
               }
             }
           };
-          
+
           // Send stream start event
           event_callback.call(
-            Ok(Event::StreamStart { message_id: msg_id.to_string() }),
+            Ok(Event::StreamStart {
+              message_id: msg_id.to_string(),
+            }),
             ThreadsafeFunctionCallMode::NonBlocking,
           );
-          
+
           // Process stream chunks
           while let Some(chunk_result) = stream.next().await {
             let chunk_result: Result<String, color_eyre::Report> = chunk_result;
@@ -358,10 +360,10 @@ impl Runtime {
                   let agent = agent_manager.lock().await;
                   agent.append_chunk(&msg_id, &chunk).await;
                 }
-                
+
                 // Send chunk event
                 event_callback.call(
-                  Ok(Event::StreamChunk { 
+                  Ok(Event::StreamChunk {
                     message_id: msg_id.to_string(),
                     chunk,
                   }),
@@ -370,7 +372,7 @@ impl Runtime {
               }
               Err(e) => {
                 event_callback.call(
-                  Ok(Event::StreamError { 
+                  Ok(Event::StreamError {
                     message_id: msg_id.to_string(),
                     error: e.to_string(),
                   }),
@@ -380,16 +382,18 @@ impl Runtime {
               }
             }
           }
-          
+
           // Complete the message
           {
             let agent = agent_manager.lock().await;
             agent.complete_message(&msg_id).await;
           }
-          
+
           // Send completion event
           event_callback.call(
-            Ok(Event::StreamComplete { message_id: msg_id.to_string() }),
+            Ok(Event::StreamComplete {
+              message_id: msg_id.to_string(),
+            }),
             ThreadsafeFunctionCallMode::NonBlocking,
           );
         });

@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
+import { useState } from "react";
 import {
 	Command,
 	CommandEmpty,
@@ -71,34 +71,36 @@ export function ModelSelector({ models, value, onChange }: ModelSelectorProps) {
 					<CommandInput placeholder="Search models..." />
 					<CommandList>
 						<CommandEmpty>No models found.</CommandEmpty>
-						{Object.entries(modelsByProvider).map(([providerId, providerModels]) => (
-							<CommandGroup key={providerId} heading={providerId}>
-								{providerModels.map((model) => {
-									const isSelected =
-										selectedModel?.id === model.id &&
-										selectedModel?.providerId === model.providerId;
-									return (
-										<CommandItem
-											key={`${model.providerId}::${model.id}`}
-											value={`${model.name} ${model.providerId}`}
-											onSelect={() => {
-												onChange([model.providerId, model.id]);
-												setOpen(false);
-											}}
-											className="flex items-center justify-between"
-										>
-											<span>{model.name}</span>
-											<Check
-												className={cn(
-													"h-4 w-4",
-													isSelected ? "opacity-100" : "opacity-0",
-												)}
-											/>
-										</CommandItem>
-									);
-								})}
-							</CommandGroup>
-						))}
+						{Object.entries(modelsByProvider).map(
+							([providerId, providerModels]) => (
+								<CommandGroup key={providerId} heading={providerId}>
+									{providerModels.map((model) => {
+										const isSelected =
+											selectedModel?.id === model.id &&
+											selectedModel?.providerId === model.providerId;
+										return (
+											<CommandItem
+												key={`${model.providerId}::${model.id}`}
+												value={`${model.name} ${model.providerId}`}
+												onSelect={() => {
+													onChange([model.providerId, model.id]);
+													setOpen(false);
+												}}
+												className="flex items-center justify-between"
+											>
+												<span>{model.name}</span>
+												<Check
+													className={cn(
+														"h-4 w-4",
+														isSelected ? "opacity-100" : "opacity-0",
+													)}
+												/>
+											</CommandItem>
+										);
+									})}
+								</CommandGroup>
+							),
+						)}
 					</CommandList>
 				</Command>
 			</PopoverContent>

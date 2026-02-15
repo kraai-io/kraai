@@ -30,7 +30,11 @@ interface Model extends BindingModel {
 interface WindowAPI {
 	initRuntime: (callback: (event: Event) => void) => void;
 	listModels: () => Promise<Record<string, BindingModel[]>>;
-	sendMessage: (message: string, modelId: string, providerId: string) => Promise<void>;
+	sendMessage: (
+		message: string,
+		modelId: string,
+		providerId: string,
+	) => Promise<void>;
 	newSession: () => Promise<void>;
 	getChatHistoryTree: () => Promise<Record<string, Message>>;
 }
@@ -46,7 +50,9 @@ function App(): React.JSX.Element {
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [models, setModels] = useState<Model[]>([]);
-	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(null);
+	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
+		null,
+	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -73,7 +79,12 @@ function App(): React.JSX.Element {
 				case "StreamStart":
 					setMessages((prev) => [
 						...prev,
-						{ id: event.messageId, content: "", role: "assistant", isStreaming: true },
+						{
+							id: event.messageId,
+							content: "",
+							role: "assistant",
+							isStreaming: true,
+						},
 					]);
 					forceScrollToBottom();
 					break;
@@ -94,7 +105,9 @@ function App(): React.JSX.Element {
 				case "StreamError":
 					console.error("[UI] Stream error:", event.error);
 					setIsLoading(false);
-					setMessages((prev) => prev.filter((msg) => msg.id !== event.messageId));
+					setMessages((prev) =>
+						prev.filter((msg) => msg.id !== event.messageId),
+					);
 					break;
 			}
 		});
@@ -113,8 +126,8 @@ function App(): React.JSX.Element {
 			isAtBottomRef.current = atBottom;
 		};
 
-		container.addEventListener('scroll', handleScroll);
-		return () => container.removeEventListener('scroll', handleScroll);
+		container.addEventListener("scroll", handleScroll);
+		return () => container.removeEventListener("scroll", handleScroll);
 	}, []);
 
 	const scrollToBottom = () => {
@@ -256,7 +269,12 @@ function App(): React.JSX.Element {
 					</div>
 					<h1 className="text-lg font-semibold tracking-tight">Agent</h1>
 				</div>
-				<Button variant="ghost" size="icon" onClick={handleNewChat} title="New chat">
+				<Button
+					variant="ghost"
+					size="icon"
+					onClick={handleNewChat}
+					title="New chat"
+				>
 					<Plus className="h-4 w-4" />
 				</Button>
 			</header>

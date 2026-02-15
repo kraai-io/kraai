@@ -119,7 +119,10 @@ impl Session {
             status: MessageStatus::Complete,
         };
 
-        self.messages.write().await.insert(message_id.clone(), message);
+        self.messages
+            .write()
+            .await
+            .insert(message_id.clone(), message);
         *self.active_tip.write().await = Some(message_id.clone());
 
         message_id
@@ -137,7 +140,10 @@ impl Session {
             status: MessageStatus::Streaming { call_id },
         };
 
-        self.messages.write().await.insert(message_id.clone(), message);
+        self.messages
+            .write()
+            .await
+            .insert(message_id.clone(), message);
         *self.active_tip.write().await = Some(message_id.clone());
 
         message_id
