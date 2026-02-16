@@ -3,12 +3,15 @@ use std::{io::Read, sync::Arc};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tool_core::{Tool, ToolOutput};
-use toon_format::EncodeOptions;
+use toon_schema::ToonSchema;
+use types::ToolId;
 
 pub struct ReadFileTool {}
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToonSchema, Serialize)]
+#[toon_schema(name = "read_files")]
 struct ReadFileToolArgs {
+    #[toon_schema(example = "[\"/path/to/file.txt\", \"/path/to/other/file.ext\"]")]
     files: Vec<String>,
 }
 
@@ -19,21 +22,12 @@ struct ReadFileToolOutput {
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> Arc<String> {
-        "read_files".to_string().into()
+    fn name(&self) -> ToolId {
+        todo!()
     }
 
-    fn description(&self) -> Arc<String> {
-        "read the contents of files".to_string().into()
-    }
-
-    fn parameters_schema(&self) -> Arc<String> {
-        let json = serde_json::json!({
-            "tool": self.name(),
-            "files": "Vec<RelativePath>"
-        });
-        let toon = toon_format::encode_object(json, &EncodeOptions::new()).unwrap();
-        toon.into()
+    fn schema(&self) -> &'static str {
+        ReadFileToolArgs::toon_schema()
     }
 
     async fn call(&self, args: serde_json::Value) -> ToolOutput {

@@ -1,11 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 use types::CallId;
 use types::MessageId;
 use types::ModelId;
 use types::ProviderId;
 
 use color_eyre::eyre::Result;
-use futures::{Stream, StreamExt, stream::BoxStream};
+use futures::{StreamExt, stream::BoxStream};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::HashMap;
 use tokio::sync::RwLock;

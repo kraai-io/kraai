@@ -30,6 +30,7 @@ provider-google = { path = "crates/llm-providers/provider-google" }
 provider-openai = { path = "crates/llm-providers/provider-openai" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
+toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
 
 async-openai = { version = "0.32.4", features = [

@@ -3189,6 +3189,8 @@ dependencies = [
  "serde",
  "serde_json",
  "toon-format",
+ "toon-schema",
+ "types",
 ]
 
 [[package]]
@@ -3200,6 +3202,8 @@ dependencies = [
  "serde_json",
  "tool-core",
  "toon-format",
+ "toon-schema",
+ "types",
 ]
 
 [[package]]

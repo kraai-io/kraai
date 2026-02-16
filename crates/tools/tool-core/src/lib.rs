@@ -2,8 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-
-pub type ToolId = Arc<String>;
+use types::ToolId;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -29,12 +28,10 @@ impl ToolOutput {
 }
 
 #[async_trait]
-pub trait Tool {
-    fn name(&self) -> Arc<String>;
+pub trait Tool: Send + Sync {
+    fn name(&self) -> ToolId;
 
-    fn description(&self) -> Arc<String>;
-
-    fn parameters_schema(&self) -> Arc<String>;
+    fn schema(&self) -> &'static str;
 
     async fn call(&self, args: serde_json::Value) -> ToolOutput;
 }
