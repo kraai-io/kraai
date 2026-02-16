@@ -47,6 +47,7 @@ apps/
 - Workspace dependencies defined in root Cargo.toml
 
 **TypeScript:**
+- All TypeScript code was written by an LLM
 - Single quotes, no semicolons, trailing commas (ES5)
 - Use `import type` for type-only imports
 - Line width: 100
