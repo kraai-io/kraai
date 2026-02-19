@@ -42,9 +42,9 @@ impl Provider for OpenAIProvider {
             if contains {
                 let m = self.model_configs.get(&id).unwrap();
                 max_context = m.max_context;
-                if m.name.is_some() {
-                    name = m.name.as_ref().unwrap().clone();
-                }
+            if let Some(n) = &m.name {
+                name = n.clone();
+            }
             }
             cache.insert(
                 id.clone(),

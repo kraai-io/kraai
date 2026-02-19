@@ -63,6 +63,7 @@ tachyonfx = "0.23.0"
 tauri = "2.10.2"
 tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
 textwrap = "0.16"
+thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.49.0" }
 toml = "1.0.1"
 toon-format = "0.4.1"
