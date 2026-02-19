@@ -1,3 +1,7 @@
+//! Google Gemini provider implementation.
+//!
+//! This provider uses Google's OpenAI-compatible API endpoint.
+
 use std::collections::BTreeMap;
 
 use async_openai::{Client, config::OpenAIConfig};
@@ -8,6 +12,10 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use types::{ChatMessage, ModelId, ProviderId};
 
+const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+const DEFAULT_ENV_VAR: &str = "GEMINI_API_KEY";
+
+/// Google Gemini provider.
 pub struct GoogleProvider {
     id: ProviderId,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
@@ -39,12 +47,11 @@ impl Provider for GoogleProvider {
             }
             let mut name = model.display_name;
             let mut max_context = None;
-            if contains {
-                let m = self.model_configs.get(&id).unwrap();
+            if let Some(m) = self.model_configs.get(&id) {
                 max_context = m.max_context;
-            if let Some(n) = &m.name {
-                name = n.clone();
-            }
+                if let Some(n) = &m.name {
+                    name = n.clone();
+                }
             }
             cache.insert(
                 id.clone(),
@@ -74,17 +81,19 @@ impl Provider for GoogleProvider {
             "messages": serde_json::to_value(messages)?
         });
         let response: serde_json::Value = self.client.chat().create_byot(request).await?;
-        let message = response["choices"][0]["message"].as_object().unwrap();
+        let message = response["choices"][0]["message"]
+            .as_object()
+            .ok_or_else(|| eyre!("Invalid response: missing message"))?;
         let content = message
             .get("content")
-            .unwrap()
-            .as_str()
-            .unwrap()
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| eyre!("Invalid response: missing content"))?
             .to_string();
-        let role = serde_json::from_value(message.get("role").unwrap().clone())?;
-        let message = ChatMessage { content, role };
-
-        Ok(message)
+        let role = message
+            .get("role")
+            .ok_or_else(|| eyre!("Invalid response: missing role"))?;
+        let role = serde_json::from_value(role.clone())?;
+        Ok(ChatMessage { content, role })
     }
 
     async fn generate_reply_stream(
@@ -117,6 +126,7 @@ impl Provider for GoogleProvider {
     }
 }
 
+/// Model configuration for Google provider.
 #[derive(Deserialize)]
 pub struct GoogleModelConfig {
     pub id: ModelId,
@@ -124,13 +134,26 @@ pub struct GoogleModelConfig {
     pub max_context: Option<usize>,
 }
 
+/// Provider configuration for Google Gemini.
 #[derive(Deserialize)]
 pub struct GoogleConfig {
+    /// API key. If not provided, falls back to `env_var_api_key`.
+    pub api_key: Option<String>,
+    /// Environment variable name for the API key.
+    /// Defaults to "GEMINI_API_KEY" if not specified.
+    #[serde(default = "default_env_var")]
+    pub env_var_api_key: String,
+    /// Only list models that are explicitly configured.
     #[serde(default)]
     pub only_listed_models: bool,
 }
 
-pub struct GoogleFactory {}
+fn default_env_var() -> String {
+    DEFAULT_ENV_VAR.to_string()
+}
+
+/// Factory for creating Google providers.
+pub struct GoogleFactory;
 
 impl ProviderFactory for GoogleFactory {
     const TYPE: &'static str = "google";
@@ -138,10 +161,19 @@ impl ProviderFactory for GoogleFactory {
     type Config = GoogleConfig;
 
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
-        let base_url = "https://generativelanguage.googleapis.com/v1beta/openai";
-        let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
+        let api_key = config
+            .api_key
+            .clone()
+            .or_else(|| std::env::var(&config.env_var_api_key).ok())
+            .ok_or_else(|| {
+                eyre!(
+                    "API key not found. Either set 'api_key' in config or set the '{}' environment variable",
+                    config.env_var_api_key
+                )
+            })?;
+
         let cconfig = OpenAIConfig::new()
-            .with_api_base(base_url)
+            .with_api_base(GEMINI_BASE_URL)
             .with_api_key(api_key);
         let client = Client::with_config(cconfig);
         let provider = GoogleProvider {

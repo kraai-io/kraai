@@ -1,3 +1,7 @@
+//! OpenAI-compatible provider implementation.
+//!
+//! This provider supports any OpenAI-compatible API by allowing a custom base URL.
+
 use std::collections::BTreeMap;
 
 use async_openai::Client;
@@ -8,6 +12,7 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use types::{ChatMessage, ModelId, ProviderId};
 
+/// OpenAI-compatible provider.
 pub struct OpenAIProvider {
     id: ProviderId,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
@@ -39,12 +44,11 @@ impl Provider for OpenAIProvider {
             }
             let mut name = id.clone().to_string();
             let mut max_context = None;
-            if contains {
-                let m = self.model_configs.get(&id).unwrap();
+            if let Some(m) = self.model_configs.get(&id) {
                 max_context = m.max_context;
-            if let Some(n) = &m.name {
-                name = n.clone();
-            }
+                if let Some(n) = &m.name {
+                    name = n.clone();
+                }
             }
             cache.insert(
                 id.clone(),
@@ -74,17 +78,19 @@ impl Provider for OpenAIProvider {
             "messages": serde_json::to_value(messages)?
         });
         let response: serde_json::Value = self.client.chat().create_byot(request).await?;
-        let message = response["choices"][0]["message"].as_object().unwrap();
+        let message = response["choices"][0]["message"]
+            .as_object()
+            .ok_or_else(|| eyre!("Invalid response: missing message"))?;
         let content = message
             .get("content")
-            .unwrap()
-            .as_str()
-            .unwrap()
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| eyre!("Invalid response: missing content"))?
             .to_string();
-        let role = serde_json::from_value(message.get("role").unwrap().clone())?;
-        let message = ChatMessage { content, role };
-
-        Ok(message)
+        let role = message
+            .get("role")
+            .ok_or_else(|| eyre!("Invalid response: missing role"))?;
+        let role = serde_json::from_value(role.clone())?;
+        Ok(ChatMessage { content, role })
     }
 
     async fn generate_reply_stream(
@@ -117,6 +123,7 @@ impl Provider for OpenAIProvider {
     }
 }
 
+/// Model configuration for OpenAI provider.
 #[derive(Deserialize)]
 pub struct OpenAIModelConfig {
     pub id: ModelId,
@@ -124,16 +131,28 @@ pub struct OpenAIModelConfig {
     pub max_context: Option<usize>,
 }
 
+/// Provider configuration for OpenAI-compatible APIs.
 #[derive(Deserialize)]
 pub struct OpenAIConfig {
+    /// Base URL for the API (e.g., "https://api.openai.com/v1").
     pub base_url: String,
+    /// API key. If not provided, falls back to `env_var_api_key`.
+    pub api_key: Option<String>,
+    /// Environment variable name for the API key.
+    /// Defaults to "OPENAI_API_KEY" if not specified.
+    #[serde(default = "default_env_var")]
     pub env_var_api_key: String,
-
+    /// Only list models that are explicitly configured.
     #[serde(default)]
     pub only_listed_models: bool,
 }
 
-pub struct OpenAIFactory {}
+fn default_env_var() -> String {
+    "OPENAI_API_KEY".to_string()
+}
+
+/// Factory for creating OpenAI providers.
+pub struct OpenAIFactory;
 
 impl ProviderFactory for OpenAIFactory {
     const TYPE: &'static str = "openai";
@@ -141,9 +160,18 @@ impl ProviderFactory for OpenAIFactory {
     type Config = OpenAIConfig;
 
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
+        let api_key = config
+            .api_key
+            .clone()
+            .or_else(|| std::env::var(&config.env_var_api_key).ok())
+            .ok_or_else(|| {
+                eyre!(
+                    "API key not found. Either set 'api_key' in config or set the '{}' environment variable",
+                    config.env_var_api_key
+                )
+            })?;
+
         let base_url = config.base_url.clone();
-        let api_key = std::env::var(config.env_var_api_key.clone())
-            .unwrap_or_else(|_| panic!("{} must be set", &config.env_var_api_key));
         let cconfig = async_openai::config::OpenAIConfig::new()
             .with_api_base(base_url)
             .with_api_key(api_key);
