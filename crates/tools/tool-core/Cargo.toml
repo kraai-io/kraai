@@ -8,6 +8,7 @@ version = "0.1.0"
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 toon-format = { workspace = true }
 toon-schema = { workspace = true }
 types = { workspace = true }
