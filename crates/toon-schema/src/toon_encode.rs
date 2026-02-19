@@ -81,13 +81,8 @@ fn value_to_toon(
 }
 
 /// Format array range notation for Toon format.
-fn format_array_range(range: &crate::ir::Range, count: usize) -> String {
-    match range {
-        crate::ir::Range::ZeroOrMore => format!("[{}]", count),
-        crate::ir::Range::AtLeast(min) => format!("[{}+]", count.min(*min as usize)),
-        crate::ir::Range::Bounded(_, _) => format!("[{}]", count),
-        _ => format!("[{}]", count),
-    }
+fn format_array_range(_range: &crate::ir::Range, count: usize) -> String {
+    format!("[{}]", count)
 }
 
 /// Convert an array item to Toon format.

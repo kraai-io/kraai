@@ -15,7 +15,7 @@ pub struct ReadFileTool {}
 struct ReadFileToolArgs {
     #[toon_schema(
         description = "List of file paths to read",
-        example = "[\"/path/to/file.txt\"]",
+        example = "[\"/path/to/file.txt\", \"/path/to/another/file.md\"]",
         min = 1
     )]
     files: Vec<String>,
