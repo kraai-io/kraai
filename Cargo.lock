@@ -3238,7 +3238,6 @@ dependencies = [
  "serde",
  "serde_json",
  "syn",
- "toon-format",
  "trybuild",
 ]
 

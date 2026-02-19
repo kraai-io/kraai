@@ -4,30 +4,86 @@ use syn::{DeriveInput, parse_macro_input};
 
 mod ir;
 mod parse;
+mod toon_encode;
 
 use ir::{PrimitiveType, Schema, Type};
 use parse::parse_toon_schema;
+use toon_encode::encode_example_toon;
 
-/// Derive macro for generating Toon format schemas with examples.
+/// Derive macro for generating Toon format schema documentation from Rust structs.
+///
+/// This macro generates all schema content at compile time, returning `&'static str`
+/// with zero runtime overhead.
 ///
 /// # Requirements
-/// - Every field MUST have an `example` attribute
-/// - Examples MUST be valid JSON
-/// - Examples MUST match the field type (validated at compile time)
+///
+/// - Every field MUST have an `example` attribute with valid JSON
+/// - Examples MUST match their field types (validated at compile time)
+/// - Supported types: primitives, `Vec<T>`, `Option<T>`
+///
+/// # Generated Methods
+///
+/// - `tool_name() -> &'static str` - Returns the tool name
+/// - `toon_schema() -> &'static str` - Returns the complete schema
 ///
 /// # Example
+///
 /// ```rust
 /// use serde::{Deserialize, Serialize};
 /// use toon_schema::ToonSchema;
 ///
 /// #[derive(ToonSchema, Serialize, Deserialize)]
-/// #[toon_schema(description = "Read files")]
+/// #[toon_schema(description = "Read files from the filesystem", name = "read_file")]
 /// struct ReadFileArgs {
 ///     #[toon_schema(
-///         description = "File paths",
-///         example = "[\"/etc/passwd\"]"
+///         description = "File paths to read",
+///         example = "[\"/etc/passwd\", \"/etc/hosts\"]"
 ///     )]
 ///     files: Vec<String>,
+///
+///     #[toon_schema(description = "Maximum file size", example = "1048576")]
+///     max_size: i64,
+/// }
+///
+/// // Both methods return &'static str - fully computed at compile time
+/// let name: &'static str = ReadFileArgs::tool_name();  // "read_file"
+/// let schema: &'static str = ReadFileArgs::toon_schema();
+/// ```
+///
+/// # Attributes
+///
+/// ## Struct-level (`#[toon_schema(...)]`)
+///
+/// - `name = "..."` - Custom tool name (defaults to struct name)
+/// - `description = "..."` - Tool description
+///
+/// ## Field-level (`#[toon_schema(...)]`)
+///
+/// - `description = "..."` - Field description
+/// - `example = "..."` - **Required.** JSON example for the field
+/// - `min = N` - Minimum count for Vec fields
+/// - `max = N` - Maximum count for Vec fields
+///
+/// # Serde Integration
+///
+/// The derive respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`:
+///
+/// ```rust
+/// use serde::{Deserialize, Serialize};
+/// use toon_schema::ToonSchema;
+///
+/// #[derive(ToonSchema, Serialize, Deserialize)]
+/// struct ApiRequest {
+///     #[serde(rename = "api_key")]
+///     #[toon_schema(description = "API key", example = "\"secret\"")]
+///     key: String,  // Shows as "api_key" in schema
+///
+///     #[serde(skip)]
+///     internal: String,  // Not included in schema
+///
+///     #[serde(default)]
+///     #[toon_schema(description = "Timeout", example = "30")]
+///     timeout: i32,  // Shows "# default: default" in schema
 /// }
 /// ```
 #[proc_macro_derive(ToonSchema, attributes(toon_schema, serde))]
@@ -45,12 +101,9 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     let struct_name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    // Generate the complete schema string at compile time
-    let schema_str = generate_schema_string(&schema);
     let tool_name = &schema.name;
 
-    // Generate compile-time example construction and encoding
-    let example_construction = generate_example_construction(&schema);
+    let complete_schema = generate_complete_schema(&schema)?;
 
     Ok(quote! {
         impl #impl_generics #struct_name #ty_generics #where_clause {
@@ -60,46 +113,23 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             }
 
             /// Generate the Toon format schema string.
-            /// This is generated at compile time for optimal performance.
+            /// Fully generated at compile time.
             pub fn toon_schema() -> &'static str {
-                use toon_format::{encode_object, EncodeOptions};
-
-                // Build example struct from field examples
-                let example_struct: Self = #example_construction;
-
-                // Convert to JSON then to Toon format
-                let example_json = serde_json::to_value(&example_struct)
-                    .expect("Failed to serialize example");
-                let example_toon = encode_object(example_json, &EncodeOptions::new())
-                    .expect("Failed to encode to Toon format");
-
-                // Concatenate at runtime since example_toon is dynamic
-                // But the schema part is known at compile time
-                static SCHEMA_PART: &str = #schema_str;
-                static TOOL_NAME: &str = #tool_name;
-
-                // Leak the string to get a &'static str (safe since called infrequently)
-                Box::leak(
-                    format!("{}\n\nExample:\ntool: {}\n{}", SCHEMA_PART, TOOL_NAME, example_toon)
-                        .into_boxed_str()
-                )
+                #complete_schema
             }
         }
     })
 }
 
-fn generate_schema_string(schema: &Schema) -> String {
+fn generate_complete_schema(schema: &Schema) -> syn::Result<String> {
     let mut lines = vec![];
 
-    // Description as a comment if present
     if let Some(desc) = &schema.description {
         lines.push(format!("# {}", desc));
     }
 
-    // Tool name
     lines.push(format!("tool: {}", schema.name));
 
-    // Fields with descriptions as comments above them
     for field in &schema.fields {
         if field.skipped {
             continue;
@@ -108,15 +138,12 @@ fn generate_schema_string(schema: &Schema) -> String {
         let range_str = field.range.format();
         let type_str = format_type(&field.ty);
 
-        // Add description as a comment before the field
         if let Some(desc) = &field.description {
             lines.push(format!("# {}", desc));
         }
 
-        // Build the field line
         let mut field_line = format!("{}{}: {}", field.name, range_str, type_str);
 
-        // Add default value as a comment
         if let Some(default) = &field.default_value {
             field_line.push_str(&format!(" # default: {}", default));
         }
@@ -124,7 +151,14 @@ fn generate_schema_string(schema: &Schema) -> String {
         lines.push(field_line);
     }
 
-    lines.join("\n")
+    lines.push(String::new());
+    lines.push("Example:".to_string());
+    lines.push(format!("tool: {}", schema.name));
+
+    let example_lines = encode_example_toon(&schema.fields)?;
+    lines.extend(example_lines);
+
+    Ok(lines.join("\n"))
 }
 
 fn format_type(ty: &Type) -> String {
@@ -136,31 +170,5 @@ fn format_type(ty: &Type) -> String {
             PrimitiveType::Boolean => "boolean".to_string(),
         },
         Type::Array(inner) => format!("array<{}>", format_type(inner)),
-    }
-}
-
-fn generate_example_construction(schema: &Schema) -> proc_macro2::TokenStream {
-    // Build a JSON object with all field examples
-    let field_entries: Vec<_> = schema
-        .fields
-        .iter()
-        .filter(|f| !f.skipped)
-        .map(|f| {
-            let name = &f.name;
-            let example = &f.example;
-            // Parse the example as JSON value
-            quote! {
-                #name: serde_json::from_str::<serde_json::Value>(#example).unwrap()
-            }
-        })
-        .collect();
-
-    quote! {
-        {
-            let json_obj = serde_json::json!({
-                #(#field_entries),*
-            });
-            serde_json::from_value::<Self>(json_obj).expect("Failed to deserialize example - invalid examples provided")
-        }
     }
 }

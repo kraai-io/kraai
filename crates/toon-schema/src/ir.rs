@@ -1,6 +1,7 @@
 //! Intermediate representation for Toon schema generation
 
 /// Schema for a struct
+#[derive(Debug)]
 pub struct Schema {
     pub name: String,
     pub description: Option<String>,
@@ -8,6 +9,7 @@ pub struct Schema {
 }
 
 /// Field in a struct
+#[derive(Debug)]
 pub struct Field {
     pub name: String,
     pub ty: Type,
@@ -19,12 +21,14 @@ pub struct Field {
 }
 
 /// Type representation
+#[derive(Debug)]
 pub enum Type {
     Primitive(PrimitiveType),
     Array(Box<Type>),
 }
 
 /// Primitive types
+#[derive(Debug)]
 pub enum PrimitiveType {
     String,
     Integer,
@@ -33,6 +37,7 @@ pub enum PrimitiveType {
 }
 
 /// Range notation [min:max]
+#[derive(Debug)]
 pub enum Range {
     Exactly(u32),      // [N:N] - required fields
     ZeroToOne,         // [0:1] - Option<T>

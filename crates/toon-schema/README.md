@@ -4,15 +4,16 @@ A proc-macro derive crate for generating Toon format schema documentation from R
 
 ## Overview
 
-`toon-schema` automatically generates structured schema documentation for your Rust types, making it easy to document APIs and data structures in the Toon format. It provides compile-time validation of examples and ensures your documentation stays in sync with your code.
+`toon-schema` automatically generates structured schema documentation for your Rust types at **compile time**. It provides compile-time validation of examples and type checking, ensuring your documentation stays in sync with your code.
 
 ## Features
 
-- **Automatic schema generation** from Rust struct definitions
-- **Compile-time validation** of JSON examples
-- **Serde integration** - respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`
+- **Fully compile-time** - Schema generation, Toon encoding, and type validation all happen during macro expansion
+- **Zero runtime dependencies** - No external crates needed at runtime; returns `&'static str` directly
+- **Compile-time validation** - JSON examples validated and type-checked during compilation
+- **Serde integration** - Respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`
 - **Custom ranges** for Vec fields (`min`/`max` attributes)
-- **Type safety** - errors on unsupported types instead of silently converting
+- **Helpful error messages** - Clear compile-time errors with suggestions
 
 ## Usage
 
@@ -47,7 +48,12 @@ struct ReadFileArgs {
 }
 
 fn main() {
-    println!("{}", ReadFileArgs::toon_schema());
+    // Returns &'static str - fully computed at compile time
+    let schema: &'static str = ReadFileArgs::toon_schema();
+    println!("{}", schema);
+    
+    // Also available: tool name
+    println!("Tool: {}", ReadFileArgs::tool_name());
 }
 ```
 
@@ -66,9 +72,24 @@ files[2]: /etc/passwd,/etc/hosts
 max_lines: 100
 ```
 
+### Custom Tool Name
+
+Use the `name` attribute to customize the tool name:
+
+```rust
+#[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(description = "Greeting tool", name = "say_hello")]
+struct GreetingArgs {
+    #[toon_schema(description = "Name to greet", example = "\"World\"")]
+    name: String,
+}
+
+// GreetingArgs::tool_name() returns "say_hello"
+```
+
 ### Custom Ranges
 
-For Vec fields, you can specify minimum and maximum counts:
+For Vec fields, specify minimum and maximum counts:
 
 ```rust
 #[derive(ToonSchema, Serialize, Deserialize)]
@@ -116,25 +137,61 @@ struct ApiRequest {
 
 ### Struct-level (`#[toon_schema(...)]`)
 
-- `name = "..."` - Custom tool name (defaults to struct name)
-- `description = "..."` - Tool description
+| Attribute | Description |
+|-----------|-------------|
+| `name = "..."` | Custom tool name (defaults to struct name) |
+| `description = "..."` | Tool description |
 
 ### Field-level (`#[toon_schema(...)]`)
 
-- `description = "..."` - Field description
-- `example = "..."` - **Required.** JSON example for the field
-- `min = N` - Minimum count for Vec fields
-- `max = N` - Maximum count for Vec fields
+| Attribute | Description |
+|-----------|-------------|
+| `description = "..."` | Field description |
+| `example = "..."` | **Required.** JSON example for the field |
+| `min = N` | Minimum count for Vec fields |
+| `max = N` | Maximum count for Vec fields |
 
-## Error Messages
+## Compile-Time Validation
 
-The crate provides helpful compile-time error messages:
+All validation happens at compile time:
 
 - **Missing example**: Suggests appropriate example for the type
 - **Invalid JSON**: Shows what's wrong and how to fix it
+- **Type mismatch**: Example value doesn't match field type
 - **Unknown type**: Lists supported types
 - **Custom range on non-Vec**: Explains ranges only work with Vec types
 - **Reserved field name**: 'tool' is reserved in Toon format
+
+### Example: Type Mismatch Error
+
+```rust
+#[derive(ToonSchema, Serialize, Deserialize)]
+struct BadExample {
+    #[toon_schema(example = "\"not a number\"")] // Wrong! Should be a number
+    count: i32,
+}
+```
+
+Produces a compile-time error:
+```
+error: Type mismatch for field 'count': expected Integer, got JSON value '"not a number"'
+```
+
+## Generated Methods
+
+The derive generates two methods:
+
+```rust
+impl MyStruct {
+    /// Returns the tool name (from `name` attribute or struct name)
+    pub fn tool_name() -> &'static str;
+    
+    /// Returns the complete Toon format schema with example
+    pub fn toon_schema() -> &'static str;
+}
+```
+
+Both methods return `&'static str` with all computation done at compile time.
 
 ## License
 
