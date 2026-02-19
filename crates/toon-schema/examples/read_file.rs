@@ -18,7 +18,10 @@ struct ReadFileArgs {
 }
 
 fn main() {
-    println!("=== Schema ===");
+    println!("=== Tool Name ===");
+    println!("{}", ReadFileArgs::tool_name());
+
+    println!("\n=== Schema ===");
     println!("{}", ReadFileArgs::toon_schema());
 
     println!("\n=== Validation Test ===");

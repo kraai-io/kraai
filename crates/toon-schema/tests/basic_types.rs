@@ -15,6 +15,23 @@ struct Person {
 }
 
 #[test]
+fn test_tool_name() {
+    assert_eq!(Person::tool_name(), "Person");
+}
+
+#[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(description = "A greeting tool", name = "say_hello")]
+struct GreetingArgs {
+    #[toon_schema(description = "Name to greet", example = "\"World\"")]
+    name: String,
+}
+
+#[test]
+fn test_custom_tool_name() {
+    assert_eq!(GreetingArgs::tool_name(), "say_hello");
+}
+
+#[test]
 fn test_basic_types() {
     let schema = Person::toon_schema();
     let lines: Vec<&str> = schema.lines().collect();

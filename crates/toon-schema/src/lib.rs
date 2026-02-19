@@ -54,6 +54,11 @@ fn impl_toon_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 
     Ok(quote! {
         impl #impl_generics #struct_name #ty_generics #where_clause {
+            /// Get the tool name for this schema.
+            pub fn tool_name() -> &'static str {
+                #tool_name
+            }
+
             /// Generate the Toon format schema string.
             /// This is generated at compile time for optimal performance.
             pub fn toon_schema() -> &'static str {
