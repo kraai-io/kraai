@@ -56,6 +56,7 @@ dependencies = [
  "tokio",
  "toml",
  "tool-core",
+ "tool-read-file",
  "types",
 ]
 

@@ -5,7 +5,7 @@ use types::ModelId;
 use types::ProviderId;
 
 use color_eyre::eyre::Result;
-use futures::{StreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -57,13 +57,21 @@ impl AgentManager {
 
         let context = self.current_session.get_history_context(&user_msg_id).await;
 
-        let provider_messages: Vec<ChatMessage> = context
+        let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
             .map(|m| ChatMessage {
                 role: m.role,
                 content: m.content,
             })
             .collect();
+
+        let system_prompt = self.tools.generate_system_prompt();
+        if !system_prompt.is_empty() {
+            provider_messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: system_prompt,
+            });
+        }
 
         let call_id = CallId::new(Ulid::new());
         let assistant_msg_id = self

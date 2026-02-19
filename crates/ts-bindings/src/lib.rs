@@ -10,6 +10,8 @@ use napi_derive::napi;
 use notify::{RecursiveMode, Watcher};
 use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::{BTreeMap, HashMap};
+use tool_core::ToolManager;
+use tool_read_file::ReadFileTool;
 use types::{MessageId, ModelId, ProviderId};
 
 // ChatRole enum exposed to TypeScript
@@ -105,7 +107,6 @@ use futures::StreamExt;
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tool_core::ToolManager;
 
 fn to_napi_error(err: color_eyre::Report) -> napi::Error {
   napi::Error::new(Status::GenericFailure, format!("{:?}", err))
@@ -163,7 +164,8 @@ impl AgentRuntime {
       let rt = tokio::runtime::Runtime::new().unwrap();
       rt.block_on(async {
         let providers = ProviderManager::new();
-        let tools = ToolManager::default();
+        let mut tools = ToolManager::new();
+        tools.register_tool(ReadFileTool {});
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(providers, tools)));
         let runtime = Runtime {
           event_callback: callback_clone,

@@ -70,6 +70,14 @@ impl ToolManager {
         self.tools.keys().cloned().collect()
     }
 
+    pub fn generate_system_prompt(&self) -> String {
+        self.tools
+            .values()
+            .map(|t| t.schema())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
     pub async fn call_tool(
         &self,
         id: &ToolId,
