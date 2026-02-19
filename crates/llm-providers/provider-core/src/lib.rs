@@ -80,7 +80,8 @@ pub struct ProviderManagerHelper {
     factory_registry: BTreeMap<String, ProviderFactoryFn>,
 }
 
-type ProviderFactoryFn = Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>, ProviderError> + Send>;
+type ProviderFactoryFn =
+    Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>, ProviderError> + Send>;
 
 /// Configuration for the provider manager.
 ///
@@ -487,7 +488,10 @@ mod tests {
         helper.register_factory::<MockFactory>().unwrap();
         let result = helper.register_factory::<MockFactory>();
 
-        assert!(matches!(result, Err(ProviderError::FactoryAlreadyRegistered(_))));
+        assert!(matches!(
+            result,
+            Err(ProviderError::FactoryAlreadyRegistered(_))
+        ));
     }
 
     #[tokio::test]
