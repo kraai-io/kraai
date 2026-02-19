@@ -12,7 +12,7 @@
 //! - Values matching `true`, `false`, or `null`
 //! - Strings that look like numbers
 //! - Strings containing `:`, `"`, `\`, `[`, `]`, `{`, `}`, `,`, or control characters
-//! - Strings equal to `-` or starting with `- `
+//! - Strings equal to `-` or starting with `-` followed by any character
 //!
 //! All other strings can be unquoted for token efficiency.
 
@@ -142,8 +142,8 @@ fn needs_quoting(s: &str) -> bool {
         return true;
     }
 
-    let lower = s.to_lowercase();
-    if lower == "true" || lower == "false" || lower == "null" {
+    // Per Toon spec, quoting is case-sensitive: only exact lowercase matches
+    if s == "true" || s == "false" || s == "null" {
         return true;
     }
 
@@ -151,7 +151,8 @@ fn needs_quoting(s: &str) -> bool {
         return true;
     }
 
-    if s == "-" || s.starts_with("- ") {
+    // Per Toon spec: "It equals '-' or starts with '-' followed by any character"
+    if s == "-" || (s.starts_with('-') && s.len() > 1) {
         return true;
     }
 
