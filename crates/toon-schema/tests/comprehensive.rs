@@ -96,19 +96,29 @@ fn test_basic_types_exact_structure() {
     assert_eq!(lines[example_idx], "Example:", "Should have Example header");
     assert_eq!(
         lines[example_idx + 1],
-        "tool: Person",
-        "Example should start with tool"
+        "```tool_call",
+        "Example should start with markdown code block"
     );
     assert_eq!(
         lines[example_idx + 2],
+        "tool: Person",
+        "Example should have tool name"
+    );
+    assert_eq!(
+        lines[example_idx + 3],
         "name: Alice",
         "Example should have name"
     );
-    assert_eq!(lines[example_idx + 3], "age: 30", "Example should have age");
+    assert_eq!(lines[example_idx + 4], "age: 30", "Example should have age");
     assert_eq!(
-        lines[example_idx + 4],
+        lines[example_idx + 5],
         "active: true",
         "Example should have active"
+    );
+    assert_eq!(
+        lines[example_idx + 6],
+        "```",
+        "Example should end with markdown code block"
     );
 }
 

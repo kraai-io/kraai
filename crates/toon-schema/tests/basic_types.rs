@@ -85,20 +85,28 @@ fn test_basic_types() {
     assert_eq!(lines[8], "", "Ninth line should be empty separator");
     assert_eq!(lines[9], "Example:", "Tenth line should be example header");
     assert_eq!(
-        lines[10], "tool: Person",
-        "Eleventh line should be example tool name"
+        lines[10], "```tool_call",
+        "Eleventh line should be markdown code block start"
     );
     assert_eq!(
-        lines[11], "name: Alice",
-        "Twelfth line should be example name"
+        lines[11], "tool: Person",
+        "Twelfth line should be example tool name"
     );
     assert_eq!(
-        lines[12], "age: 30",
-        "Thirteenth line should be example age"
+        lines[12], "name: Alice",
+        "Thirteenth line should be example name"
     );
     assert_eq!(
-        lines[13], "active: true",
-        "Fourteenth line should be example active"
+        lines[13], "age: 30",
+        "Fourteenth line should be example age"
+    );
+    assert_eq!(
+        lines[14], "active: true",
+        "Fifteenth line should be example active"
+    );
+    assert_eq!(
+        lines[15], "```",
+        "Sixteenth line should be markdown code block end"
     );
 }
 
