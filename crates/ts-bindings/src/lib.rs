@@ -461,8 +461,8 @@ impl Runtime {
       toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
 
     let mut helper = ProviderManagerHelper::default();
-    helper.register_factory::<GoogleFactory>();
-    helper.register_factory::<OpenAIFactory>();
+    helper.register_factory::<GoogleFactory>().map_err(|e| eyre!("{}", e))?;
+    helper.register_factory::<OpenAIFactory>().map_err(|e| eyre!("{}", e))?;
 
     self
       .agent_manager
