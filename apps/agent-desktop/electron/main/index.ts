@@ -18,6 +18,7 @@ function initializeRuntime() {
 			console.error("[MAIN] Event callback error:", err);
 			return;
 		}
+		console.log("[MAIN] Forwarding event to renderer:", event.type);
 		if (mainWindow && !mainWindow.isDestroyed()) {
 			mainWindow.webContents.send("agent:event", event);
 		}

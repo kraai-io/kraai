@@ -11,7 +11,8 @@ type Event =
 	| { type: "StreamComplete"; messageId: string }
 	| { type: "StreamError"; messageId: string; error: string }
 	| { type: "ToolCallDetected"; callId: string; toolId: string; args: string; description: string }
-	| { type: "ToolResultReady"; callId: string; toolId: string; success: boolean; output: string; denied: boolean };
+	| { type: "ToolResultReady"; callId: string; toolId: string; success: boolean; output: string; denied: boolean }
+	| { type: "HistoryUpdated" };
 
 type EventHandler = (event: Event) => void;
 
@@ -34,6 +35,7 @@ const api = {
 	async initRuntime(onEvent: EventHandler): Promise<void> {
 		// Set up event listener from main process
 		ipcRenderer.on("agent:event", (_event, data: Event) => {
+			console.log("[PRELOAD] Received event from main:", data.type);
 			onEvent(data);
 		});
 	},

@@ -129,6 +129,8 @@ pub enum Event {
   // Tool events
   ToolCallDetected { call_id: String, tool_id: String, args: String, description: String },
   ToolResultReady { call_id: String, tool_id: String, success: bool, output: String, denied: bool },
+  // History events
+  HistoryUpdated,
 }
 
 // Internal commands (not exposed to TypeScript)
@@ -445,12 +447,122 @@ impl Runtime {
           );
 
           // Check for tool calls in the completed message
-          let tool_calls = {
+          let (tool_calls, failed) = {
             let mut agent = agent_manager.lock().await;
             agent.parse_tool_calls_from_content(&full_content).await
           };
 
-          println!("[RUNTIME] Found {} tool calls", tool_calls.len());
+          println!("[RUNTIME] Found {} tool calls, {} failed", tool_calls.len(), failed.len());
+
+          // Add failed tool calls to history and reprompt
+          if !failed.is_empty() {
+            println!("[RUNTIME] Failed tool calls found, adding to history and reprompting");
+            let mut agent = agent_manager.lock().await;
+            agent.add_failed_tool_calls_to_history(failed).await;
+            event_callback.call(Ok(Event::HistoryUpdated), ThreadsafeFunctionCallMode::NonBlocking);
+
+            // Start continuation stream to let model retry
+            println!("[RUNTIME] Starting continuation stream for retry");
+            let continuation = {
+              let mut agent = agent_manager.lock().await;
+              agent.start_continuation_stream().await
+            };
+
+            match continuation {
+              Ok(Some((msg_id, mut stream))) => {
+                println!("[RUNTIME] Continuation stream started: {}", msg_id);
+                event_callback.call(
+                  Ok(Event::StreamStart {
+                    message_id: msg_id.to_string(),
+                  }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+
+                let mut cont_content = String::new();
+                while let Some(chunk_result) = stream.next().await {
+                  let chunk_result: Result<String, color_eyre::Report> = chunk_result;
+                  match chunk_result {
+                    Ok(chunk) => {
+                      cont_content.push_str(&chunk);
+                      {
+                        let agent = agent_manager.lock().await;
+                        agent.append_chunk(&msg_id, &chunk).await;
+                      }
+                      event_callback.call(
+                        Ok(Event::StreamChunk {
+                          message_id: msg_id.to_string(),
+                          chunk,
+                        }),
+                        ThreadsafeFunctionCallMode::NonBlocking,
+                      );
+                    }
+                    Err(e) => {
+                      println!("[RUNTIME] Continuation stream error: {}", e);
+                      event_callback.call(
+                        Ok(Event::StreamError {
+                          message_id: msg_id.to_string(),
+                          error: e.to_string(),
+                        }),
+                        ThreadsafeFunctionCallMode::NonBlocking,
+                      );
+                      return;
+                    }
+                  }
+                }
+
+                {
+                  let agent = agent_manager.lock().await;
+                  agent.complete_message(&msg_id).await;
+                }
+
+                println!("[RUNTIME] Continuation stream completed");
+                event_callback.call(
+                  Ok(Event::StreamComplete {
+                    message_id: msg_id.to_string(),
+                  }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+
+                // Recursively check for more tool calls
+                let (more_calls, more_failed) = {
+                  let mut agent = agent_manager.lock().await;
+                  agent.parse_tool_calls_from_content(&cont_content).await
+                };
+
+                println!("[RUNTIME] After retry: {} tool calls, {} failed", more_calls.len(), more_failed.len());
+
+                for (call_id, tool_id, description) in more_calls {
+                  let args_json = {
+                    let agent = agent_manager.lock().await;
+                    let pending = agent.get_pending_tool_args(&call_id);
+                    pending.map(|a| serde_json::to_string(&a).unwrap_or_default()).unwrap_or_default()
+                  };
+                  event_callback.call(
+                    Ok(Event::ToolCallDetected {
+                      call_id: call_id.to_string(),
+                      tool_id,
+                      args: args_json,
+                      description,
+                    }),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                  );
+                }
+
+                if !more_failed.is_empty() {
+                  let mut agent = agent_manager.lock().await;
+                  agent.add_failed_tool_calls_to_history(more_failed).await;
+                  event_callback.call(Ok(Event::HistoryUpdated), ThreadsafeFunctionCallMode::NonBlocking);
+                }
+              }
+              Ok(None) => {
+                println!("[RUNTIME] No continuation stream available (no model/provider set)");
+              }
+              Err(e) => {
+                println!("[RUNTIME] Failed to start continuation stream: {}", e);
+              }
+            }
+            return;
+          }
 
           // Emit tool call detected events
           for (call_id, tool_id, description) in tool_calls {
@@ -522,6 +634,8 @@ impl Runtime {
             let mut agent = agent_manager.lock().await;
             agent.add_tool_results_to_history(results).await;
           }
+          println!("[RUNTIME] Emitting HistoryUpdated event after tool results");
+          event_callback.call(Ok(Event::HistoryUpdated), ThreadsafeFunctionCallMode::NonBlocking);
 
           // Start continuation stream
           let continuation = {
@@ -554,6 +668,7 @@ impl Runtime {
                   );
                 }
                 Err(e) => {
+                  println!("[RUNTIME] Continuation stream error: {}", e);
                   event_callback.call(
                     Ok(Event::StreamError {
                       message_id: msg_id.to_string(),
@@ -579,15 +694,55 @@ impl Runtime {
             );
 
             // Check for more tool calls
-            let tool_calls = {
+            let (tool_calls, failed) = {
               let mut agent = agent_manager.lock().await;
               let history = agent.get_chat_history().await;
               if let Some(msg) = history.get(&msg_id) {
                 agent.parse_tool_calls_from_content(&msg.content).await
               } else {
-                vec![]
+                (vec![], vec![])
               }
             };
+
+            // Add failed tool calls to history and reprompt
+            if !failed.is_empty() {
+              let mut agent = agent_manager.lock().await;
+              agent.add_failed_tool_calls_to_history(failed).await;
+              event_callback.call(Ok(Event::HistoryUpdated), ThreadsafeFunctionCallMode::NonBlocking);
+              
+              // Trigger another continuation for the model to retry
+              if let Ok(Some((retry_id, mut retry_stream))) = {
+                let mut agent = agent_manager.lock().await;
+                agent.start_continuation_stream().await
+              } {
+                event_callback.call(
+                  Ok(Event::StreamStart { message_id: retry_id.to_string() }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+                
+                while let Some(chunk_result) = retry_stream.next().await {
+                  if let Ok(chunk) = chunk_result {
+                    {
+                      let agent = agent_manager.lock().await;
+                      agent.append_chunk(&retry_id, &chunk).await;
+                    }
+                    event_callback.call(
+                      Ok(Event::StreamChunk { message_id: retry_id.to_string(), chunk }),
+                      ThreadsafeFunctionCallMode::NonBlocking,
+                    );
+                  }
+                }
+                
+                {
+                  let agent = agent_manager.lock().await;
+                  agent.complete_message(&retry_id).await;
+                }
+                event_callback.call(
+                  Ok(Event::StreamComplete { message_id: retry_id.to_string() }),
+                  ThreadsafeFunctionCallMode::NonBlocking,
+                );
+              }
+            }
 
             for (call_id, tool_id, description) in tool_calls {
               let args_json = {

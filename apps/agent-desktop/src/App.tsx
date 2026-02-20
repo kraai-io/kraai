@@ -147,6 +147,10 @@ function App(): React.JSX.Element {
 					console.log("[UI] Tool result ready:", event.toolId, event.success, event.denied);
 					setPendingTools((prev) => prev.filter((t) => t.callId !== event.callId));
 					break;
+				case "HistoryUpdated":
+					console.log("[UI] HistoryUpdated event received");
+					loadChatHistory();
+					break;
 			}
 		});
 
@@ -218,11 +222,13 @@ function App(): React.JSX.Element {
 		try {
 			const historyMap = await api.getChatHistoryTree();
 			const entries = Object.entries(historyMap);
+			console.log("[UI] Chat history loaded:", entries.length, "messages");
 
 			const messageMap = new Map<string, Message>();
 			const childMap = new Map<string, string>();
 
 			for (const [id, msg] of entries) {
+				console.log("[UI] Message:", id, "role:", msg.role, "parent:", msg.parentId);
 				messageMap.set(id, msg);
 				if (msg.parentId) {
 					childMap.set(msg.parentId, id);

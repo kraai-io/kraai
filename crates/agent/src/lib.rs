@@ -179,14 +179,11 @@ impl AgentManager {
     pub async fn parse_tool_calls_from_content(
         &mut self,
         content: &str,
-    ) -> Vec<(CallId, String, String)> {
-        let parsed_calls = match toon_parser::parse_tool_calls(content) {
-            Ok(calls) => calls,
-            Err(_) => return vec![],
-        };
+    ) -> (Vec<(CallId, String, String)>, Vec<(String, String)>) {
+        let result = toon_parser::parse_tool_calls(content);
 
         let mut detected_calls = Vec::new();
-        for parsed in parsed_calls {
+        for parsed in result.successful {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
             let description = self
@@ -213,7 +210,25 @@ impl AgentManager {
             detected_calls.push((call_id, parsed.tool_id, description));
         }
 
-        detected_calls
+        let failed_calls: Vec<(String, String)> = result
+            .failed
+            .into_iter()
+            .map(|f| (f.raw_content, f.error))
+            .collect();
+
+        (detected_calls, failed_calls)
+    }
+
+    pub async fn add_failed_tool_calls_to_history(&mut self, failed: Vec<(String, String)>) {
+        for (raw_content, error) in failed {
+            let content = format!(
+                "Failed to parse tool call:\n```\n{}\n```\nError: {}",
+                raw_content, error
+            );
+            self.current_session
+                .add_message(ChatRole::Tool, content)
+                .await;
+        }
     }
 
     pub async fn process_message_for_tools(
@@ -226,7 +241,13 @@ impl AgentManager {
             None => return vec![],
         };
 
-        self.parse_tool_calls_from_content(&message.content).await
+        let (detected, failed) = self.parse_tool_calls_from_content(&message.content).await;
+        
+        if !failed.is_empty() {
+            self.add_failed_tool_calls_to_history(failed).await;
+        }
+
+        detected
     }
 
     pub fn approve_tool(&mut self, call_id: CallId) -> bool {
@@ -292,12 +313,18 @@ impl AgentManager {
         for result in results {
             let content = if result.permission_denied {
                 format!(
-                    "Tool {} was denied by user",
+                    "Tool '{}' was denied by user",
                     result.tool_id
                 )
             } else {
-                serde_json::to_string(&result.output).unwrap_or_else(|_| "{}".to_string())
+                let output_str = serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| "{}".to_string());
+                format!(
+                    "Tool '{}' result:\n{}",
+                    result.tool_id, output_str
+                )
             };
+
+            println!("[AGENT] Adding tool result to history: tool_id={}, denied={}", result.tool_id, result.permission_denied);
 
             self.current_session
                 .add_message(ChatRole::Tool, content)
@@ -332,6 +359,8 @@ impl Session {
     pub async fn add_message(&self, role: ChatRole, content: String) -> MessageId {
         let message_id = MessageId::new(Ulid::new());
         let parent_id = self.active_tip.read().await.clone();
+
+        println!("[SESSION] Adding message: id={}, role={:?}, parent={:?}", message_id, role, parent_id);
 
         let message = Message {
             id: message_id.clone(),

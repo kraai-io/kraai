@@ -8,6 +8,18 @@ pub struct ParsedToolCall {
     pub args: Value,
 }
 
+#[derive(Debug, Clone)]
+pub struct FailedToolCall {
+    pub raw_content: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParseResult {
+    pub successful: Vec<ParsedToolCall>,
+    pub failed: Vec<FailedToolCall>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     #[error("Failed to decode Toon: {0}")]
@@ -18,19 +30,25 @@ pub enum ParseError {
     InvalidToolField,
 }
 
-pub fn parse_tool_calls(text: &str) -> Result<Vec<ParsedToolCall>, ParseError> {
+pub fn parse_tool_calls(text: &str) -> ParseResult {
     let re = Regex::new(r"```tool_call\s*\n([\s\S]*?)```").unwrap();
-    let mut calls = Vec::new();
+    let mut successful = Vec::new();
+    let mut failed = Vec::new();
 
     for caps in re.captures_iter(text) {
-        if let Some(toon_content) = caps.get(1)
-            && let Ok(parsed) = parse_single_tool_call(toon_content.as_str())
-        {
-            calls.push(parsed);
+        if let Some(toon_content) = caps.get(1) {
+            let raw = toon_content.as_str().to_string();
+            match parse_single_tool_call(&raw) {
+                Ok(parsed) => successful.push(parsed),
+                Err(e) => failed.push(FailedToolCall {
+                    raw_content: raw,
+                    error: e.to_string(),
+                }),
+            }
         }
     }
 
-    Ok(calls)
+    ParseResult { successful, failed }
 }
 
 fn parse_single_tool_call(toon_content: &str) -> Result<ParsedToolCall, ParseError> {
@@ -71,9 +89,10 @@ tool: read_files
 files[2]: /etc/passwd,/etc/hosts
 ```"#;
 
-        let calls = parse_tool_calls(text).unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].tool_id, "read_files");
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "read_files");
     }
 
     #[test]
@@ -90,17 +109,19 @@ tool: another_tool
 arg: value
 ```"#;
 
-        let calls = parse_tool_calls(text).unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].tool_id, "read_files");
-        assert_eq!(calls[1].tool_id, "another_tool");
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 2);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "read_files");
+        assert_eq!(result.successful[1].tool_id, "another_tool");
     }
 
     #[test]
     fn test_no_tool_calls() {
         let text = "Just regular text without any tool calls.";
-        let calls = parse_tool_calls(text).unwrap();
-        assert!(calls.is_empty());
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert!(result.failed.is_empty());
     }
 
     #[test]
@@ -109,8 +130,10 @@ arg: value
 files[1]: /etc/passwd
 ```"#;
 
-        let calls = parse_tool_calls(text).unwrap();
-        assert!(calls.is_empty());
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(result.failed[0].error.contains("tool"));
     }
 
     #[test]
@@ -122,13 +145,14 @@ encoding: utf-8
 max_size: 1048576
 ```"#;
 
-        let calls = parse_tool_calls(text).unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].tool_id, "read_files");
-        assert!(calls[0].args.get("files").is_some());
-        assert!(calls[0].args.get("encoding").is_some());
-        assert!(calls[0].args.get("max_size").is_some());
-        assert!(calls[0].args.get("tool").is_none());
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "read_files");
+        assert!(result.successful[0].args.get("files").is_some());
+        assert!(result.successful[0].args.get("encoding").is_some());
+        assert!(result.successful[0].args.get("max_size").is_some());
+        assert!(result.successful[0].args.get("tool").is_none());
     }
 
     #[test]
@@ -144,8 +168,30 @@ max_size: 1048576
 
 More text after."#;
 
-        let calls = parse_tool_calls(text).unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].tool_id, "read_files");
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "read_files");
+    }
+
+    #[test]
+    fn test_mixed_valid_and_invalid() {
+        let text = r#"```tool_call
+tool: valid_tool
+arg: value
+```
+
+```tool_call
+invalid_field: value
+```
+
+```tool_call
+tool: another_valid
+x: 1
+```"#;
+
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 2);
+        assert_eq!(result.failed.len(), 1);
     }
 }

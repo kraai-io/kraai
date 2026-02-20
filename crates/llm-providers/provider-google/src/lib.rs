@@ -78,7 +78,7 @@ impl Provider for GoogleProvider {
     ) -> Result<ChatMessage> {
         let request = serde_json::json!({
             "model": model_id,
-            "messages": serde_json::to_value(messages)?
+            "messages": self.serialize_messages(messages)?
         });
         let response: serde_json::Value = self.client.chat().create_byot(request).await?;
         let message = response["choices"][0]["message"]
@@ -103,7 +103,7 @@ impl Provider for GoogleProvider {
     ) -> Result<BoxStream<'static, Result<String>>> {
         let request = serde_json::json!({
             "model": model_id,
-            "messages": serde_json::to_value(messages)?,
+            "messages": self.serialize_messages(messages)?,
             "stream": true
         });
         let stream: BoxStream<Result<String>> = self
@@ -123,6 +123,30 @@ impl Provider for GoogleProvider {
             .boxed();
 
         Ok(stream)
+    }
+}
+
+impl GoogleProvider {
+    fn serialize_messages(&self, messages: Vec<ChatMessage>) -> Result<serde_json::Value> {
+        let converted: Vec<serde_json::Value> = messages
+            .into_iter()
+            .map(|msg| {
+                if msg.role == types::ChatRole::Tool {
+                    serde_json::json!({
+                        "role": "user",
+                        "content": format!("[Tool Result]\n{}", msg.content)
+                    })
+                } else {
+                    serde_json::to_value(&msg).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "role": serde_json::to_value(&msg.role).unwrap_or(serde_json::json!("user")),
+                            "content": msg.content
+                        })
+                    })
+                }
+            })
+            .collect();
+        Ok(serde_json::to_value(converted)?)
     }
 }
 
