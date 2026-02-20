@@ -1,3 +1,5 @@
+pub mod toon_parser;
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -41,6 +43,14 @@ pub trait Tool: Send + Sync {
     fn schema(&self) -> &'static str;
 
     async fn call(&self, args: serde_json::Value) -> ToolOutput;
+
+    async fn describe(&self, args: serde_json::Value) -> String {
+        format!(
+            "{}: {}",
+            self.name(),
+            serde_json::to_string(&args).unwrap_or_default()
+        )
+    }
 }
 
 #[derive(Default, Clone)]
@@ -88,5 +98,17 @@ impl ToolManager {
             .get(id)
             .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
         Ok(tool.call(args).await)
+    }
+
+    pub async fn describe_tool(
+        &self,
+        id: &ToolId,
+        args: serde_json::Value,
+    ) -> Result<String, ToolError> {
+        let tool = self
+            .tools
+            .get(id)
+            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
+        Ok(tool.describe(args).await)
     }
 }

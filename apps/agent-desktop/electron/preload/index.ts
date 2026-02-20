@@ -9,7 +9,9 @@ type Event =
 	| { type: "StreamStart"; messageId: string }
 	| { type: "StreamChunk"; messageId: string; chunk: string }
 	| { type: "StreamComplete"; messageId: string }
-	| { type: "StreamError"; messageId: string; error: string };
+	| { type: "StreamError"; messageId: string; error: string }
+	| { type: "ToolCallDetected"; callId: string; toolId: string; args: string; description: string }
+	| { type: "ToolResultReady"; callId: string; toolId: string; success: boolean; output: string; denied: boolean };
 
 type EventHandler = (event: Event) => void;
 
@@ -22,6 +24,7 @@ interface Message {
 	status:
 		| { type: "Complete" }
 		| { type: "Streaming"; callId: string }
+		| { type: "ProcessingTools" }
 		| { type: "Cancelled" };
 }
 
@@ -54,6 +57,18 @@ const api = {
 
 	async getChatHistoryTree(): Promise<Record<string, Message>> {
 		return await ipcRenderer.invoke("agent:getChatHistoryTree");
+	},
+
+	async approveTool(callId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:approveTool", callId);
+	},
+
+	async denyTool(callId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:denyTool", callId);
+	},
+
+	async executeApprovedTools(): Promise<void> {
+		await ipcRenderer.invoke("agent:executeApprovedTools");
 	},
 };
 

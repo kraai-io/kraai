@@ -65,4 +65,12 @@ impl Tool for ReadFileTool {
         let out = ReadFileToolOutput { files: files_out };
         ToolOutput::success(out)
     }
+
+    async fn describe(&self, args: serde_json::Value) -> String {
+        let args: ReadFileToolArgs =
+            serde_json::from_value(args).unwrap_or(ReadFileToolArgs { files: vec![] });
+        let count = args.files.len();
+        let files_str = args.files.join(", ");
+        format!("Read {} file(s): {}", count, files_str)
+    }
 }

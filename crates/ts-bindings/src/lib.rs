@@ -41,6 +41,7 @@ impl From<types::ChatRole> for ChatRole {
 pub enum MessageStatus {
   Complete,
   Streaming { call_id: String },
+  ProcessingTools,
   Cancelled,
 }
 
@@ -51,6 +52,7 @@ impl From<types::MessageStatus> for MessageStatus {
       types::MessageStatus::Streaming { call_id } => MessageStatus::Streaming {
         call_id: call_id.to_string(),
       },
+      types::MessageStatus::ProcessingTools => MessageStatus::ProcessingTools,
       types::MessageStatus::Cancelled => MessageStatus::Cancelled,
     }
   }
@@ -124,6 +126,9 @@ pub enum Event {
   StreamChunk { message_id: String, chunk: String },
   StreamComplete { message_id: String },
   StreamError { message_id: String, error: String },
+  // Tool events
+  ToolCallDetected { call_id: String, tool_id: String, args: String, description: String },
+  ToolResultReady { call_id: String, tool_id: String, success: bool, output: String, denied: bool },
 }
 
 // Internal commands (not exposed to TypeScript)
@@ -141,6 +146,13 @@ enum Command {
   GetChatHistory {
     response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
   },
+  ApproveTool {
+    call_id: String,
+  },
+  DenyTool {
+    call_id: String,
+  },
+  ExecuteApprovedTools,
 }
 
 // The runtime - owns a background tokio task with AgentManager
@@ -235,6 +247,30 @@ impl AgentRuntime {
   pub async fn new_session(&self) -> napi::Result<()> {
     self
       .send_command(Command::NewSession)
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn approve_tool(&self, call_id: String) -> napi::Result<()> {
+    self
+      .send_command(Command::ApproveTool { call_id })
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn deny_tool(&self, call_id: String) -> napi::Result<()> {
+    self
+      .send_command(Command::DenyTool { call_id })
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn execute_approved_tools(&self) -> napi::Result<()> {
+    self
+      .send_command(Command::ExecuteApprovedTools)
       .await
       .map_err(to_napi_error)
   }
@@ -352,11 +388,15 @@ impl Runtime {
             ThreadsafeFunctionCallMode::NonBlocking,
           );
 
+          let mut full_content = String::new();
+
           // Process stream chunks
           while let Some(chunk_result) = stream.next().await {
             let chunk_result: Result<String, color_eyre::Report> = chunk_result;
             match chunk_result {
               Ok(chunk) => {
+                full_content.push_str(&chunk);
+
                 // Append to message in session
                 {
                   let agent = agent_manager.lock().await;
@@ -385,6 +425,11 @@ impl Runtime {
             }
           }
 
+          println!("[RUNTIME] Full content length: {}", full_content.len());
+          if full_content.contains("tool_call") {
+            println!("[RUNTIME] Content contains tool_call marker");
+          }
+
           // Complete the message
           {
             let agent = agent_manager.lock().await;
@@ -398,6 +443,35 @@ impl Runtime {
             }),
             ThreadsafeFunctionCallMode::NonBlocking,
           );
+
+          // Check for tool calls in the completed message
+          let tool_calls = {
+            let mut agent = agent_manager.lock().await;
+            agent.parse_tool_calls_from_content(&full_content).await
+          };
+
+          println!("[RUNTIME] Found {} tool calls", tool_calls.len());
+
+          // Emit tool call detected events
+          for (call_id, tool_id, description) in tool_calls {
+            let args_json = {
+              let agent = agent_manager.lock().await;
+              let pending = agent.get_pending_tool_args(&call_id);
+              pending.map(|a| serde_json::to_string(&a).unwrap_or_default()).unwrap_or_default()
+            };
+
+            println!("[RUNTIME] Emitting ToolCallDetected: {} - {}", tool_id, description);
+
+            event_callback.call(
+              Ok(Event::ToolCallDetected {
+                call_id: call_id.to_string(),
+                tool_id,
+                args: args_json,
+                description,
+              }),
+              ThreadsafeFunctionCallMode::NonBlocking,
+            );
+          }
         });
       }
       Command::NewSession => {
@@ -407,6 +481,135 @@ impl Runtime {
         response
           .send(self.agent_manager.lock().await.get_chat_history().await)
           .unwrap();
+      }
+      Command::ApproveTool { call_id } => {
+        let call_id = types::CallId::new(call_id);
+        self.agent_manager.lock().await.approve_tool(call_id);
+      }
+      Command::DenyTool { call_id } => {
+        let call_id = types::CallId::new(call_id);
+        self.agent_manager.lock().await.deny_tool(call_id);
+      }
+      Command::ExecuteApprovedTools => {
+        let event_callback = self.event_callback.clone();
+        let agent_manager = self.agent_manager.clone();
+        let command_tx = self.command_tx.clone();
+
+        tokio::spawn(async move {
+          let results = {
+            let mut agent = agent_manager.lock().await;
+            agent.execute_approved_tools().await
+          };
+
+          for result in &results {
+            let success = !result.output.get("error").is_some_and(|e| e.is_string());
+            let output = serde_json::to_string(&result.output).unwrap_or_default();
+
+            event_callback.call(
+              Ok(Event::ToolResultReady {
+                call_id: result.call_id.to_string(),
+                tool_id: result.tool_id.to_string(),
+                success,
+                output,
+                denied: result.permission_denied,
+              }),
+              ThreadsafeFunctionCallMode::NonBlocking,
+            );
+          }
+
+          // Add results to history
+          {
+            let mut agent = agent_manager.lock().await;
+            agent.add_tool_results_to_history(results).await;
+          }
+
+          // Start continuation stream
+          let continuation = {
+            let mut agent = agent_manager.lock().await;
+            agent.start_continuation_stream().await
+          };
+
+          if let Ok(Some((msg_id, mut stream))) = continuation {
+            event_callback.call(
+              Ok(Event::StreamStart {
+                message_id: msg_id.to_string(),
+              }),
+              ThreadsafeFunctionCallMode::NonBlocking,
+            );
+
+            while let Some(chunk_result) = stream.next().await {
+              let chunk_result: Result<String, color_eyre::Report> = chunk_result;
+              match chunk_result {
+                Ok(chunk) => {
+                  {
+                    let agent = agent_manager.lock().await;
+                    agent.append_chunk(&msg_id, &chunk).await;
+                  }
+                  event_callback.call(
+                    Ok(Event::StreamChunk {
+                      message_id: msg_id.to_string(),
+                      chunk,
+                    }),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                  );
+                }
+                Err(e) => {
+                  event_callback.call(
+                    Ok(Event::StreamError {
+                      message_id: msg_id.to_string(),
+                      error: e.to_string(),
+                    }),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                  );
+                  return;
+                }
+              }
+            }
+
+            {
+              let agent = agent_manager.lock().await;
+              agent.complete_message(&msg_id).await;
+            }
+
+            event_callback.call(
+              Ok(Event::StreamComplete {
+                message_id: msg_id.to_string(),
+              }),
+              ThreadsafeFunctionCallMode::NonBlocking,
+            );
+
+            // Check for more tool calls
+            let tool_calls = {
+              let mut agent = agent_manager.lock().await;
+              let history = agent.get_chat_history().await;
+              if let Some(msg) = history.get(&msg_id) {
+                agent.parse_tool_calls_from_content(&msg.content).await
+              } else {
+                vec![]
+              }
+            };
+
+            for (call_id, tool_id, description) in tool_calls {
+              let args_json = {
+                let agent = agent_manager.lock().await;
+                let pending = agent.get_pending_tool_args(&call_id);
+                pending.map(|a| serde_json::to_string(&a).unwrap_or_default()).unwrap_or_default()
+              };
+
+              event_callback.call(
+                Ok(Event::ToolCallDetected {
+                  call_id: call_id.to_string(),
+                  tool_id,
+                  args: args_json,
+                  description,
+                }),
+                ThreadsafeFunctionCallMode::NonBlocking,
+              );
+            }
+          }
+
+          let _ = command_tx;
+        });
       }
     };
     Ok(())

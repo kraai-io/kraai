@@ -57,6 +57,24 @@ function setupIpcHandlers() {
 		return await runtime.getChatHistoryTree();
 	});
 
+	// approveTool - async
+	ipcMain.handle("agent:approveTool", async (_, callId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.approveTool(callId);
+	});
+
+	// denyTool - async
+	ipcMain.handle("agent:denyTool", async (_, callId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.denyTool(callId);
+	});
+
+	// executeApprovedTools - async
+	ipcMain.handle("agent:executeApprovedTools", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.executeApprovedTools();
+	});
+
 	console.log("[MAIN] IPC handlers set up");
 }
 

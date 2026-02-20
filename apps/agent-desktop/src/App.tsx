@@ -1,9 +1,17 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
-import { Bot, ChevronDown, Plus, Send, Square } from "lucide-react";
+import { Bot, ChevronDown, Plus, Send, Square, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 
 interface Message {
 	id: string;
@@ -13,14 +21,23 @@ interface Message {
 	status:
 		| { type: "Complete" }
 		| { type: "Streaming"; callId: string }
+		| { type: "ProcessingTools" }
 		| { type: "Cancelled" };
 }
 
 interface UIMessage {
 	id: string;
 	content: string;
-	role: "user" | "assistant";
+	role: "user" | "assistant" | "tool";
 	isStreaming: boolean;
+}
+
+interface PendingTool {
+	callId: string;
+	toolId: string;
+	args: string;
+	description: string;
+	approved: boolean | null;
 }
 
 interface Model extends BindingModel {
@@ -37,6 +54,9 @@ interface WindowAPI {
 	) => Promise<void>;
 	newSession: () => Promise<void>;
 	getChatHistoryTree: () => Promise<Record<string, Message>>;
+	approveTool: (callId: string) => Promise<void>;
+	denyTool: (callId: string) => Promise<void>;
+	executeApprovedTools: () => Promise<void>;
 }
 
 declare global {
@@ -53,6 +73,7 @@ function App(): React.JSX.Element {
 	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
 		null,
 	);
+	const [pendingTools, setPendingTools] = useState<PendingTool[]>([]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -108,6 +129,23 @@ function App(): React.JSX.Element {
 					setMessages((prev) =>
 						prev.filter((msg) => msg.id !== event.messageId),
 					);
+					break;
+				case "ToolCallDetected":
+					console.log("[UI] Tool call detected:", event.toolId, event.description);
+					setPendingTools((prev) => [
+						...prev,
+						{
+							callId: event.callId,
+							toolId: event.toolId,
+							args: event.args,
+							description: event.description,
+							approved: null,
+						},
+					]);
+					break;
+				case "ToolResultReady":
+					console.log("[UI] Tool result ready:", event.toolId, event.success, event.denied);
+					setPendingTools((prev) => prev.filter((t) => t.callId !== event.callId));
 					break;
 			}
 		});
@@ -209,14 +247,14 @@ function App(): React.JSX.Element {
 				} else break;
 			}
 
-			const mappedMessages: UIMessage[] = ordered
-				.filter(({ msg }) => msg.role === 1 || msg.role === 2)
-				.map(({ id, msg }) => ({
-					id,
-					content: msg.content,
-					role: msg.role === 1 ? "user" : "assistant",
-					isStreaming: msg.status.type === "Streaming",
-				}));
+		const mappedMessages: UIMessage[] = ordered
+			.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
+			.map(({ id, msg }) => ({
+				id,
+				content: msg.content,
+				role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
+				isStreaming: msg.status.type === "Streaming",
+			}));
 
 			setMessages(mappedMessages);
 			forceScrollToBottom();
@@ -257,11 +295,84 @@ function App(): React.JSX.Element {
 
 	const handleNewChat = async () => {
 		setMessages([]);
+		setPendingTools([]);
 		await window.api?.newSession();
 	};
 
+	const handleApproveTool = async (callId: string) => {
+		await window.api?.approveTool(callId);
+		setPendingTools((prev) =>
+			prev.map((t) => (t.callId === callId ? { ...t, approved: true } : t)),
+		);
+	};
+
+	const handleDenyTool = async (callId: string) => {
+		await window.api?.denyTool(callId);
+		setPendingTools((prev) =>
+			prev.map((t) => (t.callId === callId ? { ...t, approved: false } : t)),
+		);
+	};
+
+	const handleExecuteTools = async () => {
+		await window.api?.executeApprovedTools();
+	};
+
+	const unhandledTools = pendingTools.filter((t) => t.approved === null);
+	const hasApprovedTools = pendingTools.some((t) => t.approved === true);
+
 	return (
 		<div className="flex h-screen flex-col bg-background">
+			{/* Tool Permission Dialog */}
+			<Dialog open={unhandledTools.length > 0}>
+				<DialogContent showCloseButton={false}>
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<Wrench className="h-5 w-5" />
+							Tool Permission Request
+						</DialogTitle>
+						<DialogDescription>
+							The assistant wants to execute the following tool:
+						</DialogDescription>
+					</DialogHeader>
+					{unhandledTools[0] && (
+						<div className="space-y-4">
+							<div className="rounded-lg border bg-muted/50 p-4">
+								<div className="font-mono text-sm font-medium">
+									{unhandledTools[0].toolId}
+								</div>
+								<div className="text-muted-foreground mt-1">
+									{unhandledTools[0].description}
+								</div>
+								{unhandledTools[0].args && unhandledTools[0].args !== "{}" && (
+									<pre className="mt-2 text-xs bg-background rounded p-2 overflow-x-auto">
+										{JSON.stringify(JSON.parse(unhandledTools[0].args), null, 2)}
+									</pre>
+								)}
+							</div>
+							<DialogFooter>
+								<Button
+									variant="outline"
+									onClick={() => handleDenyTool(unhandledTools[0].callId)}
+								>
+									Deny
+								</Button>
+								<Button onClick={() => handleApproveTool(unhandledTools[0].callId)}>
+									Approve
+								</Button>
+							</DialogFooter>
+						</div>
+					)}
+				</DialogContent>
+			</Dialog>
+
+			{/* Execute Tools Button */}
+			{hasApprovedTools && unhandledTools.length === 0 && (
+				<div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-20">
+					<Button onClick={handleExecuteTools} className="shadow-lg">
+						Execute Approved Tools
+					</Button>
+				</div>
+			)}
 			<header className="flex items-center justify-between border-b px-4 py-3">
 				<div className="flex items-center gap-2">
 					<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">

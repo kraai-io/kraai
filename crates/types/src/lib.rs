@@ -32,7 +32,23 @@ pub struct Message {
 pub enum MessageStatus {
     Complete,
     Streaming { call_id: CallId },
+    ProcessingTools,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub call_id: CallId,
+    pub tool_id: ToolId,
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub call_id: CallId,
+    pub tool_id: ToolId,
+    pub output: serde_json::Value,
+    pub permission_denied: bool,
 }
 
 /// Wrapper that gives type safety while keeping Arc<String> benefits
