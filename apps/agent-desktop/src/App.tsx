@@ -1,6 +1,6 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
 import { Bot, ChevronDown, Plus, Send, Square, Wrench } from "lucide-react";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";

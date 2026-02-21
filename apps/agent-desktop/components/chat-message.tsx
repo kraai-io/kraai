@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight, FileText, Wrench } from "lucide-react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
-import { useState } from "react";
 import "katex/dist/katex.min.css";
 import { parseThinkBlocks } from "@/lib/parse-think-blocks";
 import { ThinkingBlock } from "./thinking-block";
@@ -17,11 +17,18 @@ function ToolResultDisplay({ toolName, rawContent }: ToolResultDisplayProps) {
 		const parsed = JSON.parse(rawContent);
 
 		// Handle read_files tool output
-		if (toolName === "read_files" && parsed.files && Array.isArray(parsed.files)) {
+		if (
+			toolName === "read_files" &&
+			parsed.files &&
+			Array.isArray(parsed.files)
+		) {
 			return (
 				<div className="mt-2 space-y-3">
 					{parsed.files.map((fileContent: string, idx: number) => (
-						<div key={`file-${idx}-${fileContent.slice(0, 50)}`} className="border rounded-lg overflow-hidden">
+						<div
+							key={`file-${idx}-${fileContent.slice(0, 50)}`}
+							className="border rounded-lg overflow-hidden"
+						>
 							<div className="bg-muted/70 px-3 py-1.5 text-xs font-medium text-muted-foreground flex items-center gap-1.5">
 								<FileText className="h-3 w-3" />
 								File {idx + 1}
@@ -95,9 +102,7 @@ export function ChatMessage({ content, role, isStreaming }: ChatMessageProps) {
 					)}
 					<Wrench className="h-3 w-3" />
 					<span className="font-medium">{toolName}</span>
-					{wasDenied && (
-						<span className="text-destructive">(denied)</span>
-					)}
+					{wasDenied && <span className="text-destructive">(denied)</span>}
 				</button>
 				{toolExpanded && resultContent && (
 					<ToolResultDisplay toolName={toolName} rawContent={resultContent} />
