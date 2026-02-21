@@ -180,6 +180,7 @@ enum Command {
 
 // The runtime - owns a background tokio task with AgentManager
 #[napi]
+#[allow(dead_code)]
 pub struct AgentRuntime {
   command_tx: mpsc::Sender<Command>,
   event_callback: Arc<ThreadsafeFunction<Event>>,

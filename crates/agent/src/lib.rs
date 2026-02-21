@@ -347,6 +347,7 @@ struct Session {
 }
 
 impl Session {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             messages: RwLock::new(BTreeMap::new()),
@@ -415,6 +416,7 @@ impl Session {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn set_status(&self, message_id: &MessageId, status: MessageStatus) {
         let mut messages = self.messages.write().await;
         if let Some(msg) = messages.get_mut(message_id) {
@@ -444,6 +446,7 @@ impl Session {
         self.active_tip.read().await.clone()
     }
 
+    #[allow(dead_code)]
     pub async fn set_active_tip(&self, message_id: MessageId) {
         *self.active_tip.write().await = Some(message_id);
     }
