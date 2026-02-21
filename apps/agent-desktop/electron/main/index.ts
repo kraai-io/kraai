@@ -46,10 +46,10 @@ function setupIpcHandlers() {
 		},
 	);
 
-	// newSession - async
-	ipcMain.handle("agent:newSession", async () => {
-		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.newSession();
+	// clearCurrentSession - sync (no need to wait)
+	ipcMain.on("agent:clearCurrentSession", () => {
+		if (!runtime) return;
+		runtime.clearCurrentSession();
 	});
 
 	// getChatHistoryTree - async

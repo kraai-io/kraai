@@ -15,6 +15,7 @@ futures = { workspace = true }
 napi = { version = "3.8.2", features = ["async", "tokio_rt"] }
 napi-derive = "3.5.1"
 notify = "8.2.0"
+persistence = { workspace = true }
 provider-core = { workspace = true }
 provider-google = { workspace = true }
 provider-openai = { workspace = true }

@@ -66,8 +66,8 @@ const api = {
 		await ipcRenderer.invoke("agent:sendMessage", message, modelId, providerId);
 	},
 
-	async newSession(): Promise<void> {
-		await ipcRenderer.invoke("agent:newSession");
+	clearCurrentSession(): void {
+		ipcRenderer.send("agent:clearCurrentSession");
 	},
 
 	async getChatHistoryTree(): Promise<Record<string, Message>> {

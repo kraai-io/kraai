@@ -52,7 +52,7 @@ interface WindowAPI {
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
-	newSession: () => Promise<void>;
+	clearCurrentSession: () => void;
 	getChatHistoryTree: () => Promise<Record<string, Message>>;
 	approveTool: (callId: string) => Promise<void>;
 	denyTool: (callId: string) => Promise<void>;
@@ -317,10 +317,10 @@ function App(): React.JSX.Element {
 		}
 	};
 
-	const handleNewChat = async () => {
+	const handleNewChat = () => {
 		setMessages([]);
 		setPendingTools([]);
-		await window.api?.newSession();
+		window.api?.clearCurrentSession();
 	};
 
 	const handleApproveTool = async (callId: string) => {

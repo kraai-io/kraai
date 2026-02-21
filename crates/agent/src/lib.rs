@@ -1,19 +1,14 @@
 use std::collections::BTreeMap;
-use types::CallId;
-use types::MessageId;
-use types::ModelId;
-use types::ProviderId;
-use types::ToolCall;
-use types::ToolId;
-use types::ToolResult;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
+use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tool_core::{ToolManager, ToolOutput, toon_parser};
-use types::{ChatMessage, ChatRole, Message, MessageStatus};
+use types::{CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId, ToolCall, ToolId, ToolResult};
 use ulid::Ulid;
 
 #[derive(Clone, Debug)]
@@ -33,26 +28,73 @@ pub enum PermissionStatus {
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
-    current_session: Session,
+    message_store: Arc<dyn MessageStore>,
+    session_store: Arc<dyn SessionStore>,
+    current_session_id: Option<String>,
+    /// Messages currently being streamed (not yet persisted)
+    streaming_messages: RwLock<HashMap<MessageId, Message>>,
     pending_tool_calls: HashMap<CallId, PendingToolCall>,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
 }
 
 impl AgentManager {
-    pub fn new(providers: ProviderManager, tools: ToolManager) -> Self {
+    pub fn new(
+        providers: ProviderManager,
+        tools: ToolManager,
+        message_store: Arc<dyn MessageStore>,
+        session_store: Arc<dyn SessionStore>,
+    ) -> Self {
         Self {
             providers,
             tools,
-            current_session: Session::new(),
+            message_store,
+            session_store,
+            current_session_id: None,
+            streaming_messages: RwLock::new(HashMap::new()),
             pending_tool_calls: HashMap::new(),
             last_model: None,
             last_provider: None,
         }
     }
 
-    pub fn new_session(&mut self) {
-        self.current_session = Session::new();
+    /// Create a new session and set it as current
+    pub async fn new_session(&mut self) -> Result<String> {
+        self.ensure_session().await
+    }
+
+    /// Clear the current session (for starting fresh - session created on first message)
+    pub fn clear_current_session(&mut self) {
+        self.current_session_id = None;
+        self.pending_tool_calls.clear();
+        self.last_model = None;
+        self.last_provider = None;
+    }
+
+    /// Load an existing session as current
+    pub async fn load_session(&mut self, session_id: &str) -> Result<bool> {
+        match self.session_store.get(session_id).await? {
+            Some(_) => {
+                self.current_session_id = Some(session_id.to_string());
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// List all sessions
+    pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
+        self.session_store.list().await
+    }
+
+    /// Delete a session
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        self.session_store.delete(session_id).await
+    }
+
+    /// Get current session ID
+    pub fn get_current_session_id(&self) -> Option<&str> {
+        self.current_session_id.as_deref()
     }
 
     pub async fn set_providers(
@@ -67,6 +109,36 @@ impl AgentManager {
         self.providers.list_all_models().await
     }
 
+    async fn get_current_tip(&self) -> Result<Option<MessageId>> {
+        let session_id = match &self.current_session_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        match self.session_store.get(session_id).await? {
+            Some(session) => Ok(session.tip_id),
+            None => Ok(None),
+        }
+    }
+
+    async fn update_tip(&self, new_tip: MessageId) -> Result<()> {
+        let session_id = match &self.current_session_id {
+            Some(id) => id.clone(),
+            None => return Ok(()),
+        };
+
+        if let Some(mut session) = self.session_store.get(&session_id).await? {
+            session.tip_id = Some(new_tip);
+            session.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            self.session_store.save(&session).await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn start_stream(
         &mut self,
         message: String,
@@ -76,12 +148,9 @@ impl AgentManager {
         self.last_model = Some(model_id.clone());
         self.last_provider = Some(provider_id.clone());
 
-        let user_msg_id = self
-            .current_session
-            .add_message(ChatRole::User, message)
-            .await;
+        let user_msg_id = self.add_message(ChatRole::User, message).await?;
 
-        let context = self.current_session.get_history_context(&user_msg_id).await;
+        let context = self.get_history_context(&user_msg_id).await?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -100,10 +169,7 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
-        let assistant_msg_id = self
-            .current_session
-            .start_streaming_message(ChatRole::Assistant, call_id)
-            .await;
+        let assistant_msg_id = self.start_streaming_message(ChatRole::Assistant, call_id).await?;
 
         let stream = self
             .providers
@@ -125,12 +191,12 @@ impl AgentManager {
             None => return Ok(None),
         };
 
-        let tip_id = match self.current_session.get_active_tip().await {
+        let tip_id = match self.get_current_tip().await? {
             Some(id) => id,
             None => return Ok(None),
         };
 
-        let context = self.current_session.get_history_context(&tip_id).await;
+        let context = self.get_history_context(&tip_id).await?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -149,10 +215,7 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
-        let assistant_msg_id = self
-            .current_session
-            .start_streaming_message(ChatRole::Assistant, call_id)
-            .await;
+        let assistant_msg_id = self.start_streaming_message(ChatRole::Assistant, call_id).await?;
 
         let stream = self
             .providers
@@ -162,18 +225,149 @@ impl AgentManager {
         Ok(Some((assistant_msg_id, stream)))
     }
 
+    async fn ensure_session(&mut self) -> Result<String> {
+        if let Some(id) = &self.current_session_id {
+            return Ok(id.clone());
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let session_id = Ulid::new().to_string();
+        let session = SessionMeta {
+            id: session_id.clone(),
+            tip_id: None,
+            created_at: now,
+            updated_at: now,
+            title: None,
+        };
+
+        self.session_store.save(&session).await?;
+        self.current_session_id = Some(session_id.clone());
+
+        Ok(session_id)
+    }
+
+    async fn add_message(&mut self, role: ChatRole, content: String) -> Result<MessageId> {
+        // Ensure we have a session before adding messages
+        self.ensure_session().await?;
+
+        let message_id = MessageId::new(Ulid::new());
+        let parent_id = self.get_current_tip().await?;
+
+        println!(
+            "[AGENT] Adding message: id={}, role={:?}, parent={:?}",
+            message_id, role, parent_id
+        );
+
+        let message = Message {
+            id: message_id.clone(),
+            parent_id,
+            role,
+            content,
+            status: MessageStatus::Complete,
+        };
+
+        self.message_store.save(&message).await?;
+        self.update_tip(message_id.clone()).await?;
+
+        Ok(message_id)
+    }
+
+    async fn start_streaming_message(&mut self, role: ChatRole, call_id: CallId) -> Result<MessageId> {
+        // Ensure we have a session before adding messages
+        self.ensure_session().await?;
+
+        let message_id = MessageId::new(Ulid::new());
+        let parent_id = self.get_current_tip().await?;
+
+        let message = Message {
+            id: message_id.clone(),
+            parent_id,
+            role,
+            content: String::new(),
+            status: MessageStatus::Streaming { call_id },
+        };
+
+        // Store in streaming buffer, not persisted yet
+        let mut streaming = self.streaming_messages.write().await;
+        streaming.insert(message_id.clone(), message);
+
+        // Update tip to point to this streaming message
+        self.update_tip(message_id.clone()).await?;
+
+        Ok(message_id)
+    }
+
     pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) {
-        self.current_session
-            .append_to_streaming(message_id, chunk)
-            .await;
+        let mut streaming = self.streaming_messages.write().await;
+        if let Some(msg) = streaming.get_mut(message_id) {
+            msg.content.push_str(chunk);
+        }
     }
 
-    pub async fn complete_message(&self, message_id: &MessageId) {
-        self.current_session.complete_streaming(message_id).await;
+    pub async fn complete_message(&self, message_id: &MessageId) -> Result<()> {
+        let mut streaming = self.streaming_messages.write().await;
+        if let Some(mut msg) = streaming.remove(message_id) {
+            msg.status = MessageStatus::Complete;
+            self.message_store.save(&msg).await?;
+        }
+        Ok(())
     }
 
-    pub async fn get_chat_history(&self) -> BTreeMap<MessageId, Message> {
-        self.current_session.get_all_messages().await
+    async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
+        let mut context = Vec::new();
+        let mut current = Some(from.clone());
+
+        while let Some(id) = current {
+            // Check streaming buffer first
+            {
+                let streaming = self.streaming_messages.read().await;
+                if let Some(msg) = streaming.get(&id) {
+                    context.push(msg.clone());
+                    current = msg.parent_id.clone();
+                    continue;
+                }
+            }
+
+            // Then check persistent store
+            if let Some(msg) = self.message_store.get(&id).await? {
+                context.push(msg.clone());
+                current = msg.parent_id.clone();
+            } else {
+                break;
+            }
+        }
+
+        context.reverse();
+        Ok(context)
+    }
+
+    pub async fn get_chat_history(&self) -> Result<BTreeMap<MessageId, Message>> {
+        let mut result = BTreeMap::new();
+
+        // Get all messages from the current session's tree
+        let tip_id = match self.get_current_tip().await? {
+            Some(id) => id,
+            None => return Ok(result),
+        };
+
+        let context = self.get_history_context(&tip_id).await?;
+        for msg in context {
+            result.insert(msg.id.clone(), msg);
+        }
+
+        // Also include streaming messages
+        {
+            let streaming = self.streaming_messages.read().await;
+            for (id, msg) in streaming.iter() {
+                result.insert(id.clone(), msg.clone());
+            }
+        }
+
+        Ok(result)
     }
 
     pub async fn parse_tool_calls_from_content(
@@ -219,35 +413,34 @@ impl AgentManager {
         (detected_calls, failed_calls)
     }
 
-    pub async fn add_failed_tool_calls_to_history(&mut self, failed: Vec<(String, String)>) {
+    pub async fn add_failed_tool_calls_to_history(&mut self, failed: Vec<(String, String)>) -> Result<()> {
         for (raw_content, error) in failed {
             let content = format!(
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",
                 raw_content, error
             );
-            self.current_session
-                .add_message(ChatRole::Tool, content)
-                .await;
+            self.add_message(ChatRole::Tool, content).await?;
         }
+        Ok(())
     }
 
     pub async fn process_message_for_tools(
         &mut self,
         message_id: &MessageId,
-    ) -> Vec<(CallId, String, String)> {
-        let messages = self.current_session.get_all_messages().await;
-        let message = match messages.get(message_id) {
+    ) -> Result<Vec<(CallId, String, String)>> {
+        let history = self.get_chat_history().await?;
+        let message = match history.get(message_id) {
             Some(m) => m,
-            None => return vec![],
+            None => return Ok(vec![]),
         };
 
         let (detected, failed) = self.parse_tool_calls_from_content(&message.content).await;
 
         if !failed.is_empty() {
-            self.add_failed_tool_calls_to_history(failed).await;
+            self.add_failed_tool_calls_to_history(failed).await?;
         }
 
-        detected
+        Ok(detected)
     }
 
     pub fn approve_tool(&mut self, call_id: CallId) -> bool {
@@ -309,7 +502,7 @@ impl AgentManager {
         results
     }
 
-    pub async fn add_tool_results_to_history(&mut self, results: Vec<ToolResult>) {
+    pub async fn add_tool_results_to_history(&mut self, results: Vec<ToolResult>) -> Result<()> {
         for result in results {
             let content = if result.permission_denied {
                 format!("Tool '{}' was denied by user", result.tool_id)
@@ -324,10 +517,9 @@ impl AgentManager {
                 result.tool_id, result.permission_denied
             );
 
-            self.current_session
-                .add_message(ChatRole::Tool, content)
-                .await;
+            self.add_message(ChatRole::Tool, content).await?;
         }
+        Ok(())
     }
 
     pub fn has_pending_tools(&self) -> bool {
@@ -338,120 +530,5 @@ impl AgentManager {
         self.pending_tool_calls
             .get(call_id)
             .map(|p| p.call.args.clone())
-    }
-}
-
-struct Session {
-    messages: RwLock<BTreeMap<MessageId, Message>>,
-    active_tip: RwLock<Option<MessageId>>,
-}
-
-impl Session {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {
-            messages: RwLock::new(BTreeMap::new()),
-            active_tip: RwLock::new(None),
-        }
-    }
-
-    pub async fn add_message(&self, role: ChatRole, content: String) -> MessageId {
-        let message_id = MessageId::new(Ulid::new());
-        let parent_id = self.active_tip.read().await.clone();
-
-        println!(
-            "[SESSION] Adding message: id={}, role={:?}, parent={:?}",
-            message_id, role, parent_id
-        );
-
-        let message = Message {
-            id: message_id.clone(),
-            parent_id,
-            role,
-            content,
-            status: MessageStatus::Complete,
-        };
-
-        self.messages
-            .write()
-            .await
-            .insert(message_id.clone(), message);
-        *self.active_tip.write().await = Some(message_id.clone());
-
-        message_id
-    }
-
-    pub async fn start_streaming_message(&self, role: ChatRole, call_id: CallId) -> MessageId {
-        let message_id = MessageId::new(Ulid::new());
-        let parent_id = self.active_tip.read().await.clone();
-
-        let message = Message {
-            id: message_id.clone(),
-            parent_id,
-            role,
-            content: String::new(),
-            status: MessageStatus::Streaming { call_id },
-        };
-
-        self.messages
-            .write()
-            .await
-            .insert(message_id.clone(), message);
-        *self.active_tip.write().await = Some(message_id.clone());
-
-        message_id
-    }
-
-    pub async fn append_to_streaming(&self, message_id: &MessageId, chunk: &str) {
-        let mut messages = self.messages.write().await;
-        if let Some(msg) = messages.get_mut(message_id) {
-            msg.content.push_str(chunk);
-        }
-    }
-
-    pub async fn complete_streaming(&self, message_id: &MessageId) {
-        let mut messages = self.messages.write().await;
-        if let Some(msg) = messages.get_mut(message_id) {
-            msg.status = MessageStatus::Complete;
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn set_status(&self, message_id: &MessageId, status: MessageStatus) {
-        let mut messages = self.messages.write().await;
-        if let Some(msg) = messages.get_mut(message_id) {
-            msg.status = status;
-        }
-    }
-
-    pub async fn get_history_context(&self, from: &MessageId) -> Vec<Message> {
-        let messages = self.messages.read().await;
-        let mut context = Vec::new();
-        let mut current = Some(from.clone());
-
-        while let Some(id) = current {
-            if let Some(msg) = messages.get(&id) {
-                context.push(msg.clone());
-                current = msg.parent_id.clone();
-            } else {
-                break;
-            }
-        }
-
-        context.reverse();
-        context
-    }
-
-    pub async fn get_active_tip(&self) -> Option<MessageId> {
-        self.active_tip.read().await.clone()
-    }
-
-    #[allow(dead_code)]
-    pub async fn set_active_tip(&self, message_id: MessageId) {
-        *self.active_tip.write().await = Some(message_id);
-    }
-
-    pub async fn get_all_messages(&self) -> BTreeMap<MessageId, Message> {
-        self.messages.read().await.clone()
     }
 }

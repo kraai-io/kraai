@@ -8,6 +8,7 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use notify::{RecursiveMode, Watcher};
+use persistence::SessionMeta;
 use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use std::collections::{BTreeMap, HashMap};
 use tool_core::ToolManager;
@@ -105,6 +106,29 @@ pub struct Model {
   pub id: String,
   pub name: String,
 }
+
+// SessionMeta struct exposed to TypeScript
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct Session {
+  pub id: String,
+  pub tip_id: Option<String>,
+  pub created_at: f64,
+  pub updated_at: f64,
+  pub title: Option<String>,
+}
+
+impl From<SessionMeta> for Session {
+  fn from(meta: SessionMeta) -> Self {
+    Session {
+      id: meta.id,
+      tip_id: meta.tip_id.map(|id| id.to_string()),
+      created_at: meta.created_at as f64,
+      updated_at: meta.updated_at as f64,
+      title: meta.title,
+    }
+  }
+}
 use futures::StreamExt;
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
@@ -165,7 +189,20 @@ enum Command {
     provider_id: ProviderId,
   },
   LoadConfig,
-  NewSession,
+  ClearCurrentSession,
+  LoadSession {
+    session_id: String,
+    response: oneshot::Sender<bool>,
+  },
+  ListSessions {
+    response: oneshot::Sender<Vec<Session>>,
+  },
+  DeleteSession {
+    session_id: String,
+  },
+  GetCurrentSessionId {
+    response: oneshot::Sender<Option<String>>,
+  },
   GetChatHistory {
     response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
   },
@@ -199,10 +236,20 @@ impl AgentRuntime {
     std::thread::spawn(move || {
       let rt = tokio::runtime::Runtime::new().unwrap();
       rt.block_on(async {
+        // Initialize persistence layer
+        let (message_store, session_store) = persistence::init()
+          .await
+          .expect("Failed to initialize persistence layer");
+
         let providers = ProviderManager::new();
         let mut tools = ToolManager::new();
         tools.register_tool(ReadFileTool {});
-        let agent_manager = Arc::new(Mutex::new(AgentManager::new(providers, tools)));
+        let agent_manager = Arc::new(Mutex::new(AgentManager::new(
+          providers,
+          tools,
+          message_store,
+          session_store,
+        )));
         let runtime = Runtime {
           event_callback: callback_clone,
           command_tx: command_tx_clone,
@@ -268,11 +315,58 @@ impl AgentRuntime {
   }
 
   #[napi]
-  pub async fn new_session(&self) -> napi::Result<()> {
+  pub async fn clear_current_session(&self) -> napi::Result<()> {
     self
-      .send_command(Command::NewSession)
+      .send_command(Command::ClearCurrentSession)
       .await
       .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn load_session(&self, session_id: String) -> napi::Result<bool> {
+    let (tx, rx) = oneshot::channel();
+
+    self
+      .send_command(Command::LoadSession {
+        session_id,
+        response: tx,
+      })
+      .await
+      .map_err(to_napi_error)?;
+
+    rx.await.map_err(|e| to_napi_error(e.into()))
+  }
+
+  #[napi]
+  pub async fn list_sessions(&self) -> napi::Result<Vec<Session>> {
+    let (tx, rx) = oneshot::channel();
+
+    self
+      .send_command(Command::ListSessions { response: tx })
+      .await
+      .map_err(to_napi_error)?;
+
+    rx.await.map_err(|e| to_napi_error(e.into()))
+  }
+
+  #[napi]
+  pub async fn delete_session(&self, session_id: String) -> napi::Result<()> {
+    self
+      .send_command(Command::DeleteSession { session_id })
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn get_current_session_id(&self) -> napi::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+
+    self
+      .send_command(Command::GetCurrentSessionId { response: tx })
+      .await
+      .map_err(to_napi_error)?;
+
+    rx.await.map_err(|e| to_napi_error(e.into()))
   }
 
   #[napi]
@@ -457,7 +551,7 @@ impl Runtime {
           // Complete the message
           {
             let agent = agent_manager.lock().await;
-            agent.complete_message(&msg_id).await;
+            let _ = agent.complete_message(&msg_id).await;
           }
 
           // Send completion event
@@ -484,7 +578,9 @@ impl Runtime {
           if !failed.is_empty() {
             println!("[RUNTIME] Failed tool calls found, adding to history and reprompting");
             let mut agent = agent_manager.lock().await;
-            agent.add_failed_tool_calls_to_history(failed).await;
+            if let Err(e) = agent.add_failed_tool_calls_to_history(failed).await {
+              println!("[RUNTIME] Error adding failed tool calls to history: {}", e);
+            }
             event_callback.call(
               Ok(Event::HistoryUpdated),
               ThreadsafeFunctionCallMode::NonBlocking,
@@ -541,7 +637,7 @@ impl Runtime {
 
                 {
                   let agent = agent_manager.lock().await;
-                  agent.complete_message(&msg_id).await;
+                  let _ = agent.complete_message(&msg_id).await;
                 }
 
                 println!("[RUNTIME] Continuation stream completed");
@@ -585,7 +681,7 @@ impl Runtime {
 
                 if !more_failed.is_empty() {
                   let mut agent = agent_manager.lock().await;
-                  agent.add_failed_tool_calls_to_history(more_failed).await;
+                  let _ = agent.add_failed_tool_calls_to_history(more_failed).await;
                   event_callback.call(
                     Ok(Event::HistoryUpdated),
                     ThreadsafeFunctionCallMode::NonBlocking,
@@ -629,12 +725,31 @@ impl Runtime {
           }
         });
       }
-      Command::NewSession => {
-        self.agent_manager.lock().await.new_session();
+      Command::ClearCurrentSession => {
+        self.agent_manager.lock().await.clear_current_session();
+      }
+      Command::LoadSession {
+        session_id,
+        response,
+      } => {
+        let loaded = self.agent_manager.lock().await.load_session(&session_id).await?;
+        response.send(loaded).unwrap();
+      }
+      Command::ListSessions { response } => {
+        let sessions = self.agent_manager.lock().await.list_sessions().await?;
+        let sessions: Vec<Session> = sessions.into_iter().map(|s| s.into()).collect();
+        response.send(sessions).unwrap();
+      }
+      Command::DeleteSession { session_id } => {
+        self.agent_manager.lock().await.delete_session(&session_id).await?;
+      }
+      Command::GetCurrentSessionId { response } => {
+        let session_id = self.agent_manager.lock().await.get_current_session_id().map(|s| s.to_string());
+        response.send(session_id).unwrap();
       }
       Command::GetChatHistory { response } => {
         response
-          .send(self.agent_manager.lock().await.get_chat_history().await)
+          .send(self.agent_manager.lock().await.get_chat_history().await?)
           .unwrap();
       }
       Command::ApproveTool { call_id } => {
@@ -675,7 +790,7 @@ impl Runtime {
           // Add results to history
           {
             let mut agent = agent_manager.lock().await;
-            agent.add_tool_results_to_history(results).await;
+            let _ = agent.add_tool_results_to_history(results).await;
           }
           println!("[RUNTIME] Emitting HistoryUpdated event after tool results");
           event_callback.call(
@@ -729,7 +844,7 @@ impl Runtime {
 
             {
               let agent = agent_manager.lock().await;
-              agent.complete_message(&msg_id).await;
+              let _ = agent.complete_message(&msg_id).await;
             }
 
             event_callback.call(
@@ -742,18 +857,27 @@ impl Runtime {
             // Check for more tool calls
             let (tool_calls, failed) = {
               let mut agent = agent_manager.lock().await;
-              let history = agent.get_chat_history().await;
-              if let Some(msg) = history.get(&msg_id) {
-                agent.parse_tool_calls_from_content(&msg.content).await
-              } else {
-                (vec![], vec![])
+              match agent.get_chat_history().await {
+                Ok(history) => {
+                  if let Some(msg) = history.get(&msg_id) {
+                    agent.parse_tool_calls_from_content(&msg.content).await
+                  } else {
+                    (vec![], vec![])
+                  }
+                }
+                Err(e) => {
+                  println!("[RUNTIME] Error getting chat history: {}", e);
+                  (vec![], vec![])
+                }
               }
             };
 
             // Add failed tool calls to history and reprompt
             if !failed.is_empty() {
               let mut agent = agent_manager.lock().await;
-              agent.add_failed_tool_calls_to_history(failed).await;
+              if let Err(e) = agent.add_failed_tool_calls_to_history(failed).await {
+                println!("[RUNTIME] Error adding failed tool calls to history: {}", e);
+              }
               event_callback.call(
                 Ok(Event::HistoryUpdated),
                 ThreadsafeFunctionCallMode::NonBlocking,
@@ -789,7 +913,7 @@ impl Runtime {
 
                 {
                   let agent = agent_manager.lock().await;
-                  agent.complete_message(&retry_id).await;
+                  let _ = agent.complete_message(&retry_id).await;
                 }
                 event_callback.call(
                   Ok(Event::StreamComplete {
