@@ -127,8 +127,7 @@ impl OpenAIProvider {
     fn serialize_messages(&self, messages: Vec<ChatMessage>) -> Result<serde_json::Value> {
         let converted: Vec<serde_json::Value> = messages
             .into_iter()
-            .enumerate()
-            .map(|(_i, msg)| {
+            .map(|msg| {
                 if msg.role == types::ChatRole::Tool {
                     serde_json::json!({
                         "role": "user",
