@@ -64,22 +64,56 @@ impl AgentManager {
     }
 
     /// Clear the current session (for starting fresh - session created on first message)
-    pub fn clear_current_session(&mut self) {
+    pub async fn clear_current_session(&mut self) {
         self.current_session_id = None;
         self.pending_tool_calls.clear();
         self.last_model = None;
         self.last_provider = None;
+        // Clear any orphaned streaming messages
+        self.streaming_messages.write().await.clear();
     }
 
     /// Load an existing session as current
     pub async fn load_session(&mut self, session_id: &str) -> Result<bool> {
         match self.session_store.get(session_id).await? {
-            Some(_) => {
+            Some(session) => {
+                // Clean up streaming messages from previous session
+                self.streaming_messages.write().await.clear();
+                
+                // Clean up hot cache for other sessions
+                self.cleanup_hot_cache_for_session(&session).await?;
+                
                 self.current_session_id = Some(session_id.to_string());
                 Ok(true)
             }
             None => Ok(false),
         }
+    }
+
+    /// Clean up hot cache, keeping only messages from the given session's tree
+    async fn cleanup_hot_cache_for_session(&self, session: &SessionMeta) -> Result<()> {
+        // Collect message IDs that should stay in hot cache
+        let mut keep_ids = std::collections::HashSet::new();
+        
+        if let Some(tip_id) = &session.tip_id {
+            let mut current = Some(tip_id.clone());
+            while let Some(id) = current {
+                keep_ids.insert(id.clone());
+                if let Some(msg) = self.message_store.get(&id).await? {
+                    current = msg.parent_id;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Unload messages not in the keep set
+        let hot_ids = self.message_store.list_hot().await?;
+        for id in hot_ids.difference(&keep_ids) {
+            self.message_store.unload(id).await;
+        }
+
+        Ok(())
     }
 
     /// List all sessions
@@ -131,7 +165,7 @@ impl AgentManager {
             session.tip_id = Some(new_tip);
             session.updated_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or(std::time::Duration::ZERO)
                 .as_secs();
             self.session_store.save(&session).await?;
         }
@@ -232,7 +266,7 @@ impl AgentManager {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::ZERO)
             .as_secs();
 
         let session_id = Ulid::new().to_string();

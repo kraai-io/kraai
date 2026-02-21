@@ -732,7 +732,7 @@ impl Runtime {
         });
       }
       Command::ClearCurrentSession => {
-        self.agent_manager.lock().await.clear_current_session();
+        self.agent_manager.lock().await.clear_current_session().await;
       }
       Command::LoadSession {
         session_id,

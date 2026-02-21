@@ -38,6 +38,9 @@ pub trait MessageStore: Send + Sync {
 
     /// List all message IDs that exist on disk
     async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>>;
+
+    /// List all message IDs currently in hot cache
+    async fn list_hot(&self) -> Result<HashSet<MessageId>>;
 }
 
 /// Trait for storing and retrieving sessions
@@ -167,6 +170,11 @@ impl MessageStore for FileMessageStore {
         Ok(path.exists())
     }
 
+    async fn list_hot(&self) -> Result<HashSet<MessageId>> {
+        let hot = self.hot.read().await;
+        Ok(hot.keys().cloned().collect())
+    }
+
     async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
         let mut ids = HashSet::new();
 
@@ -236,27 +244,27 @@ impl FileSessionStore {
         Ok(())
     }
 
-    /// Persist sessions to disk
-    async fn persist(&self) -> Result<()> {
-        let sessions = self.sessions.read().await;
-        let content = serde_json::to_string_pretty(&*sessions)
+    /// Persist sessions to disk (internal version that takes sessions map)
+    async fn persist_sessions(sessions: &HashMap<String, SessionMeta>, path: &Path) -> Result<()> {
+        let content = serde_json::to_string_pretty(sessions)
             .with_context(|| "Failed to serialize sessions")?;
 
         // Ensure parent directory exists
-        if let Some(parent) = self.sessions_path.parent() {
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .await
                 .with_context(|| format!("Failed to create directory: {:?}", parent))?;
         }
 
-        fs::write(&self.sessions_path, &content)
+        // Write to temp file, then rename for atomicity
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, &content)
             .await
-            .with_context(|| {
-                format!(
-                    "Failed to write sessions file: {:?}",
-                    self.sessions_path
-                )
-            })?;
+            .with_context(|| format!("Failed to write temp file: {:?}", temp_path))?;
+
+        fs::rename(&temp_path, path)
+            .await
+            .with_context(|| format!("Failed to rename temp file to: {:?}", path))?;
 
         Ok(())
     }
@@ -297,9 +305,18 @@ impl FileSessionStore {
     pub async fn gc_orphaned_messages(&self, deleted_tree: HashSet<MessageId>) -> Result<()> {
         let still_referenced = self.collect_all_referenced_messages().await?;
 
+        let mut errors = Vec::new();
         for msg_id in deleted_tree {
-            if !still_referenced.contains(&msg_id) {
-                self.message_store.delete(&msg_id).await?;
+            if !still_referenced.contains(&msg_id)
+                && let Err(e) = self.message_store.delete(&msg_id).await
+            {
+                errors.push((msg_id, e));
+            }
+        }
+
+        if !errors.is_empty() {
+            for (id, e) in &errors {
+                eprintln!("[PERSISTENCE] Failed to delete orphaned message {}: {}", id, e);
             }
         }
 
@@ -322,36 +339,41 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn save(&self, session: &SessionMeta) -> Result<()> {
-        {
-            let mut sessions = self.sessions.write().await;
-            sessions.insert(session.id.clone(), session.clone());
-        }
-        self.persist().await
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session.id.clone(), session.clone());
+        Self::persist_sessions(&sessions, &self.sessions_path).await
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        // Collect the tree before removing the session
-        let tree_to_delete = {
+        // Get tip_id and clone sessions map under lock
+        let (tip_id_to_delete, sessions_without_deleted) = {
             let sessions = self.sessions.read().await;
-            if let Some(session) = sessions.get(id) {
-                if let Some(tip_id) = &session.tip_id {
-                    Some(self.collect_tree_messages(tip_id).await?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            let tip_id = sessions.get(id).and_then(|s| s.tip_id.clone());
+            
+            // Clone the map without the deleted session
+            let mut new_sessions = sessions.clone();
+            new_sessions.remove(id);
+            
+            (tip_id, new_sessions)
         };
 
+        // Collect tree messages outside of lock (does I/O)
+        let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
+            Some(self.collect_tree_messages(&tip_id).await?)
+        } else {
+            None
+        };
+
+        // Persist without holding any lock
+        Self::persist_sessions(&sessions_without_deleted, &self.sessions_path).await?;
+
+        // Update in-memory map
         {
             let mut sessions = self.sessions.write().await;
-            sessions.remove(id);
+            *sessions = sessions_without_deleted;
         }
 
-        self.persist().await?;
-
-        // GC orphaned messages
+        // GC orphaned messages (no lock held)
         if let Some(tree) = tree_to_delete {
             self.gc_orphaned_messages(tree).await?;
         }
@@ -374,8 +396,12 @@ impl FileSessionStore {
 
         let mut deleted_count = 0;
         for msg_id in on_disk.difference(&referenced) {
-            self.message_store.delete(msg_id).await?;
-            deleted_count += 1;
+            match self.message_store.delete(msg_id).await {
+                Ok(()) => deleted_count += 1,
+                Err(e) => {
+                    eprintln!("[PERSISTENCE] Failed to delete orphaned message {}: {}", msg_id, e);
+                }
+            }
         }
 
         if deleted_count > 0 {
