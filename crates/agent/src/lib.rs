@@ -242,7 +242,7 @@ impl AgentManager {
         };
 
         let (detected, failed) = self.parse_tool_calls_from_content(&message.content).await;
-        
+
         if !failed.is_empty() {
             self.add_failed_tool_calls_to_history(failed).await;
         }
@@ -312,19 +312,17 @@ impl AgentManager {
     pub async fn add_tool_results_to_history(&mut self, results: Vec<ToolResult>) {
         for result in results {
             let content = if result.permission_denied {
-                format!(
-                    "Tool '{}' was denied by user",
-                    result.tool_id
-                )
+                format!("Tool '{}' was denied by user", result.tool_id)
             } else {
-                let output_str = serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| "{}".to_string());
-                format!(
-                    "Tool '{}' result:\n{}",
-                    result.tool_id, output_str
-                )
+                let output_str = serde_json::to_string_pretty(&result.output)
+                    .unwrap_or_else(|_| "{}".to_string());
+                format!("Tool '{}' result:\n{}", result.tool_id, output_str)
             };
 
-            println!("[AGENT] Adding tool result to history: tool_id={}, denied={}", result.tool_id, result.permission_denied);
+            println!(
+                "[AGENT] Adding tool result to history: tool_id={}, denied={}",
+                result.tool_id, result.permission_denied
+            );
 
             self.current_session
                 .add_message(ChatRole::Tool, content)
@@ -360,7 +358,10 @@ impl Session {
         let message_id = MessageId::new(Ulid::new());
         let parent_id = self.active_tip.read().await.clone();
 
-        println!("[SESSION] Adding message: id={}, role={:?}, parent={:?}", message_id, role, parent_id);
+        println!(
+            "[SESSION] Adding message: id={}, role={:?}, parent={:?}",
+            message_id, role, parent_id
+        );
 
         let message = Message {
             id: message_id.clone(),

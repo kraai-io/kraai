@@ -1,6 +1,6 @@
 use regex::Regex;
 use serde_json::Value;
-use toon_format::{decode_default, ToonError};
+use toon_format::{ToonError, decode_default};
 
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {

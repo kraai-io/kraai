@@ -10,8 +10,21 @@ type Event =
 	| { type: "StreamChunk"; messageId: string; chunk: string }
 	| { type: "StreamComplete"; messageId: string }
 	| { type: "StreamError"; messageId: string; error: string }
-	| { type: "ToolCallDetected"; callId: string; toolId: string; args: string; description: string }
-	| { type: "ToolResultReady"; callId: string; toolId: string; success: boolean; output: string; denied: boolean }
+	| {
+			type: "ToolCallDetected";
+			callId: string;
+			toolId: string;
+			args: string;
+			description: string;
+	  }
+	| {
+			type: "ToolResultReady";
+			callId: string;
+			toolId: string;
+			success: boolean;
+			output: string;
+			denied: boolean;
+	  }
 	| { type: "HistoryUpdated" };
 
 type EventHandler = (event: Event) => void;

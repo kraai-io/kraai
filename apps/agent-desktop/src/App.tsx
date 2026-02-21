@@ -131,7 +131,11 @@ function App(): React.JSX.Element {
 					);
 					break;
 				case "ToolCallDetected":
-					console.log("[UI] Tool call detected:", event.toolId, event.description);
+					console.log(
+						"[UI] Tool call detected:",
+						event.toolId,
+						event.description,
+					);
 					setPendingTools((prev) => [
 						...prev,
 						{
@@ -144,8 +148,15 @@ function App(): React.JSX.Element {
 					]);
 					break;
 				case "ToolResultReady":
-					console.log("[UI] Tool result ready:", event.toolId, event.success, event.denied);
-					setPendingTools((prev) => prev.filter((t) => t.callId !== event.callId));
+					console.log(
+						"[UI] Tool result ready:",
+						event.toolId,
+						event.success,
+						event.denied,
+					);
+					setPendingTools((prev) =>
+						prev.filter((t) => t.callId !== event.callId),
+					);
 					break;
 				case "HistoryUpdated":
 					console.log("[UI] HistoryUpdated event received");
@@ -228,7 +239,14 @@ function App(): React.JSX.Element {
 			const childMap = new Map<string, string>();
 
 			for (const [id, msg] of entries) {
-				console.log("[UI] Message:", id, "role:", msg.role, "parent:", msg.parentId);
+				console.log(
+					"[UI] Message:",
+					id,
+					"role:",
+					msg.role,
+					"parent:",
+					msg.parentId,
+				);
 				messageMap.set(id, msg);
 				if (msg.parentId) {
 					childMap.set(msg.parentId, id);
@@ -253,14 +271,14 @@ function App(): React.JSX.Element {
 				} else break;
 			}
 
-		const mappedMessages: UIMessage[] = ordered
-			.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
-			.map(({ id, msg }) => ({
-				id,
-				content: msg.content,
-				role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
-				isStreaming: msg.status.type === "Streaming",
-			}));
+			const mappedMessages: UIMessage[] = ordered
+				.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
+				.map(({ id, msg }) => ({
+					id,
+					content: msg.content,
+					role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
+					isStreaming: msg.status.type === "Streaming",
+				}));
 
 			setMessages(mappedMessages);
 			forceScrollToBottom();
@@ -351,7 +369,11 @@ function App(): React.JSX.Element {
 								</div>
 								{unhandledTools[0].args && unhandledTools[0].args !== "{}" && (
 									<pre className="mt-2 text-xs bg-background rounded p-2 overflow-x-auto">
-										{JSON.stringify(JSON.parse(unhandledTools[0].args), null, 2)}
+										{JSON.stringify(
+											JSON.parse(unhandledTools[0].args),
+											null,
+											2,
+										)}
 									</pre>
 								)}
 							</div>
@@ -362,7 +384,9 @@ function App(): React.JSX.Element {
 								>
 									Deny
 								</Button>
-								<Button onClick={() => handleApproveTool(unhandledTools[0].callId)}>
+								<Button
+									onClick={() => handleApproveTool(unhandledTools[0].callId)}
+								>
 									Approve
 								</Button>
 							</DialogFooter>
