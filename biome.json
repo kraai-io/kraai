@@ -1,84 +1,9 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
-  },
-  "files": {
-    "ignoreUnknown": true,
-    "includes": [
-      "**",
-      "!node_modules",
-      "!target",
-      "!dist",
-      "!build",
-      "!out",
-      "!*.min.js",
-      "!*.min.css",
-      "!coverage",
-      "!.nyc_output",
-      "!*.lock",
-      "!pnpm-lock.yaml",
-      "!Cargo.lock",
-      "!crates/ts-bindings/index.js",
-      "!crates/ts-bindings/index.d.ts",
-      "!crates/ts-bindings/browser.js",
-      "!crates/ts-bindings/browser.d.ts",
-      "!crates/ts-bindings/*.wasm",
-      "!crates/ts-bindings/wasi-worker.mjs",
-      "!crates/ts-bindings/wasi-worker-browser.mjs",
-      "!apps/agent-desktop/src/styles/globals.css"
-    ]
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "recommended": true,
-      "a11y": {
-        "recommended": true
-      },
-      "complexity": {
-        "recommended": true
-      },
-      "correctness": {
-        "recommended": true
-      },
-      "performance": {
-        "recommended": true
-      },
-      "security": {
-        "recommended": true
-      },
-      "style": {
-        "recommended": true,
-        "useImportType": "error"
-      },
-      "suspicious": {
-        "recommended": true,
-        "noArrayIndexKey": "warn"
-      }
-    }
-  },
-  "formatter": {
-    "enabled": true,
-    "lineWidth": 100,
-    "indentWidth": 2,
-    "indentStyle": "space"
-  },
-  "javascript": {
-    "formatter": {
-      "quoteStyle": "single",
-      "semicolons": "asNeeded",
-      "trailingCommas": "es5",
-      "arrowParentheses": "always",
-      "jsxQuoteStyle": "double"
-    }
-  },
-  "json": {
-    "formatter": {
-      "enabled": true
-    }
   },
   "css": {
     "parser": {

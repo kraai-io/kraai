@@ -1,6 +1,6 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
 import { Bot, ChevronDown, Plus, Send, Square, Wrench } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
@@ -79,6 +79,110 @@ function App(): React.JSX.Element {
 	const isInitializedRef = useRef(false);
 	const [isAtBottom, setIsAtBottom] = useState(true);
 	const isAtBottomRef = useRef(true);
+
+	const scrollToBottom = useCallback(() => {
+		if (scrollRef.current && isAtBottomRef.current) {
+			requestAnimationFrame(() => {
+				if (scrollRef.current) {
+					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+				}
+			});
+		}
+	}, []);
+
+	const forceScrollToBottom = useCallback(() => {
+		if (scrollRef.current) {
+			requestAnimationFrame(() => {
+				if (scrollRef.current) {
+					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+				}
+			});
+		}
+	}, []);
+
+	const loadModels = useCallback(async () => {
+		const api = window.api;
+		if (!api) return;
+
+		try {
+			const modelMap = await api.listModels();
+			const allModels: Model[] = [];
+
+			for (const [providerId, providerModels] of Object.entries(modelMap)) {
+				for (const model of providerModels) {
+					allModels.push({ ...model, providerId });
+				}
+			}
+
+			setModels(allModels);
+			if (allModels.length > 0 && !selectedModel) {
+				setSelectedModel([allModels[0].providerId, allModels[0].id]);
+			}
+		} catch (err) {
+			console.error("[UI] Failed to load models:", err);
+		}
+	}, [selectedModel]);
+
+	const loadChatHistory = useCallback(async () => {
+		const api = window.api;
+		if (!api) return;
+
+		try {
+			const historyMap = await api.getChatHistoryTree();
+			const entries = Object.entries(historyMap);
+			console.log("[UI] Chat history loaded:", entries.length, "messages");
+
+			const messageMap = new Map<string, Message>();
+			const childMap = new Map<string, string>();
+
+			for (const [id, msg] of entries) {
+				console.log(
+					"[UI] Message:",
+					id,
+					"role:",
+					msg.role,
+					"parent:",
+					msg.parentId,
+				);
+				messageMap.set(id, msg);
+				if (msg.parentId) {
+					childMap.set(msg.parentId, id);
+				}
+			}
+
+			let tipId: string | null = null;
+			for (const [id] of entries) {
+				if (!childMap.has(id)) {
+					tipId = id;
+					break;
+				}
+			}
+
+			const ordered: { id: string; msg: Message }[] = [];
+			let currentId = tipId;
+			while (currentId) {
+				const msg = messageMap.get(currentId);
+				if (msg) {
+					ordered.unshift({ id: currentId, msg });
+					currentId = msg.parentId || null;
+				} else break;
+			}
+
+			const mappedMessages: UIMessage[] = ordered
+				.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
+				.map(({ id, msg }) => ({
+					id,
+					content: msg.content,
+					role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
+					isStreaming: msg.status.type === "Streaming",
+				}));
+
+			setMessages(mappedMessages);
+			forceScrollToBottom();
+		} catch (err) {
+			console.error("[UI] Failed to load chat history:", err);
+		}
+	}, [forceScrollToBottom]);
 
 	useEffect(() => {
 		const api = window.api;
@@ -166,7 +270,7 @@ function App(): React.JSX.Element {
 		});
 
 		loadModels();
-	}, []);
+	}, [loadModels, loadChatHistory, forceScrollToBottom, scrollToBottom]);
 
 	useEffect(() => {
 		const container = scrollRef.current;
@@ -182,110 +286,6 @@ function App(): React.JSX.Element {
 		container.addEventListener("scroll", handleScroll);
 		return () => container.removeEventListener("scroll", handleScroll);
 	}, []);
-
-	const scrollToBottom = () => {
-		if (scrollRef.current && isAtBottomRef.current) {
-			requestAnimationFrame(() => {
-				if (scrollRef.current) {
-					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-				}
-			});
-		}
-	};
-
-	const forceScrollToBottom = () => {
-		if (scrollRef.current) {
-			requestAnimationFrame(() => {
-				if (scrollRef.current) {
-					scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-				}
-			});
-		}
-	};
-
-	const loadModels = async () => {
-		const api = window.api;
-		if (!api) return;
-
-		try {
-			const modelMap = await api.listModels();
-			const allModels: Model[] = [];
-
-			for (const [providerId, providerModels] of Object.entries(modelMap)) {
-				for (const model of providerModels) {
-					allModels.push({ ...model, providerId });
-				}
-			}
-
-			setModels(allModels);
-			if (allModels.length > 0 && !selectedModel) {
-				setSelectedModel([allModels[0].providerId, allModels[0].id]);
-			}
-		} catch (err) {
-			console.error("[UI] Failed to load models:", err);
-		}
-	};
-
-	const loadChatHistory = async () => {
-		const api = window.api;
-		if (!api) return;
-
-		try {
-			const historyMap = await api.getChatHistoryTree();
-			const entries = Object.entries(historyMap);
-			console.log("[UI] Chat history loaded:", entries.length, "messages");
-
-			const messageMap = new Map<string, Message>();
-			const childMap = new Map<string, string>();
-
-			for (const [id, msg] of entries) {
-				console.log(
-					"[UI] Message:",
-					id,
-					"role:",
-					msg.role,
-					"parent:",
-					msg.parentId,
-				);
-				messageMap.set(id, msg);
-				if (msg.parentId) {
-					childMap.set(msg.parentId, id);
-				}
-			}
-
-			let tipId: string | null = null;
-			for (const [id] of entries) {
-				if (!childMap.has(id)) {
-					tipId = id;
-					break;
-				}
-			}
-
-			const ordered: { id: string; msg: Message }[] = [];
-			let currentId = tipId;
-			while (currentId) {
-				const msg = messageMap.get(currentId);
-				if (msg) {
-					ordered.unshift({ id: currentId, msg });
-					currentId = msg.parentId || null;
-				} else break;
-			}
-
-			const mappedMessages: UIMessage[] = ordered
-				.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
-				.map(({ id, msg }) => ({
-					id,
-					content: msg.content,
-					role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
-					isStreaming: msg.status.type === "Streaming",
-				}));
-
-			setMessages(mappedMessages);
-			forceScrollToBottom();
-		} catch (err) {
-			console.error("[UI] Failed to load chat history:", err);
-		}
-	};
 
 	const handleSend = async () => {
 		if (!inputValue.trim() || isLoading || !selectedModel) return;
@@ -473,7 +473,7 @@ function App(): React.JSX.Element {
 								setInputValue(e.target.value);
 								// Auto-resize
 								e.target.style.height = "auto";
-								e.target.style.height = e.target.scrollHeight + "px";
+								e.target.style.height = `${e.target.scrollHeight}px`;
 							}}
 							onKeyDown={(e) => {
 								handleKeyDown(e);
@@ -481,7 +481,7 @@ function App(): React.JSX.Element {
 								if (e.key === "Backspace") {
 									const target = e.target as HTMLTextAreaElement;
 									target.style.height = "auto";
-									target.style.height = target.scrollHeight + "px";
+									target.style.height = `${target.scrollHeight}px`;
 								}
 							}}
 							placeholder="Message..."
