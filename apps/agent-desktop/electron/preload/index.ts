@@ -29,6 +29,15 @@ type Event =
 
 type EventHandler = (event: Event) => void;
 
+// Session type matching NAPI-RS
+interface Session {
+	id: string;
+	tipId?: string;
+	createdAt: number;
+	updatedAt: number;
+	title?: string;
+}
+
 // Matching NAPI-RS generated types (from index.d.ts)
 interface Message {
 	id: string;
@@ -67,7 +76,7 @@ const api = {
 	},
 
 	clearCurrentSession(): void {
-		ipcRenderer.send("agent:clearCurrentSession");
+		ipcRenderer.invoke("agent:clearCurrentSession");
 	},
 
 	async getChatHistoryTree(): Promise<Record<string, Message>> {
@@ -84,6 +93,22 @@ const api = {
 
 	async executeApprovedTools(): Promise<void> {
 		await ipcRenderer.invoke("agent:executeApprovedTools");
+	},
+
+	async listSessions(): Promise<Session[]> {
+		return await ipcRenderer.invoke("agent:listSessions");
+	},
+
+	async loadSession(sessionId: string): Promise<boolean> {
+		return await ipcRenderer.invoke("agent:loadSession", sessionId);
+	},
+
+	async deleteSession(sessionId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:deleteSession", sessionId);
+	},
+
+	async getCurrentSessionId(): Promise<string | null> {
+		return await ipcRenderer.invoke("agent:getCurrentSessionId");
 	},
 };
 

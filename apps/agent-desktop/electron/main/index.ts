@@ -46,8 +46,8 @@ function setupIpcHandlers() {
 		},
 	);
 
-	// clearCurrentSession - sync (no need to wait)
-	ipcMain.on("agent:clearCurrentSession", () => {
+	// clearCurrentSession - async
+	ipcMain.handle("agent:clearCurrentSession", async () => {
 		if (!runtime) return;
 		runtime.clearCurrentSession();
 	});
@@ -74,6 +74,30 @@ function setupIpcHandlers() {
 	ipcMain.handle("agent:executeApprovedTools", async () => {
 		if (!runtime) throw new Error("Runtime not initialized");
 		await runtime.executeApprovedTools();
+	});
+
+	// listSessions - async
+	ipcMain.handle("agent:listSessions", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.listSessions();
+	});
+
+	// loadSession - async
+	ipcMain.handle("agent:loadSession", async (_, sessionId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.loadSession(sessionId);
+	});
+
+	// deleteSession - async
+	ipcMain.handle("agent:deleteSession", async (_, sessionId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.deleteSession(sessionId);
+	});
+
+	// getCurrentSessionId - async
+	ipcMain.handle("agent:getCurrentSessionId", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.getCurrentSessionId();
 	});
 
 	console.log("[MAIN] IPC handlers set up");

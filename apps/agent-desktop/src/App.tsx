@@ -1,5 +1,15 @@
 import type { Model as BindingModel, Event } from "agent-ts-bindings";
-import { Bot, ChevronDown, Plus, Send, Square, Wrench } from "lucide-react";
+import {
+	Bot,
+	ChevronDown,
+	ChevronLeft,
+	ChevronRight,
+	Plus,
+	Send,
+	Square,
+	Trash2,
+	Wrench,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
@@ -44,6 +54,14 @@ interface Model extends BindingModel {
 	providerId: string;
 }
 
+interface Session {
+	id: string;
+	tipId?: string;
+	createdAt: number;
+	updatedAt: number;
+	title?: string;
+}
+
 interface WindowAPI {
 	initRuntime: (callback: (event: Event) => void) => void;
 	listModels: () => Promise<Record<string, BindingModel[]>>;
@@ -57,6 +75,10 @@ interface WindowAPI {
 	approveTool: (callId: string) => Promise<void>;
 	denyTool: (callId: string) => Promise<void>;
 	executeApprovedTools: () => Promise<void>;
+	listSessions: () => Promise<Session[]>;
+	loadSession: (sessionId: string) => Promise<boolean>;
+	deleteSession: (sessionId: string) => Promise<void>;
+	getCurrentSessionId: () => Promise<string | null>;
 }
 
 declare global {
@@ -74,6 +96,10 @@ function App(): React.JSX.Element {
 		null,
 	);
 	const [pendingTools, setPendingTools] = useState<PendingTool[]>([]);
+	const [sessions, setSessions] = useState<Session[]>([]);
+	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+	const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -122,6 +148,22 @@ function App(): React.JSX.Element {
 			console.error("[UI] Failed to load models:", err);
 		}
 	}, [selectedModel]);
+
+	const loadSessions = useCallback(async () => {
+		const api = window.api;
+		if (!api) return;
+
+		try {
+			const [sessionsList, currentId] = await Promise.all([
+				api.listSessions(),
+				api.getCurrentSessionId(),
+			]);
+			setSessions(sessionsList);
+			setCurrentSessionId(currentId);
+		} catch (err) {
+			console.error("[UI] Failed to load sessions:", err);
+		}
+	}, []);
 
 	const loadChatHistory = useCallback(async () => {
 		const api = window.api;
@@ -195,6 +237,7 @@ function App(): React.JSX.Element {
 			switch (event.type) {
 				case "ConfigLoaded":
 					loadModels();
+					loadSessions();
 					loadChatHistory();
 					break;
 				case "Error":
@@ -265,12 +308,13 @@ function App(): React.JSX.Element {
 				case "HistoryUpdated":
 					console.log("[UI] HistoryUpdated event received");
 					loadChatHistory();
+					loadSessions();
 					break;
 			}
 		});
 
 		loadModels();
-	}, [loadModels, loadChatHistory, forceScrollToBottom, scrollToBottom]);
+	}, [loadModels, loadChatHistory, forceScrollToBottom, scrollToBottom, loadSessions]);
 
 	useEffect(() => {
 		const container = scrollRef.current;
@@ -320,7 +364,27 @@ function App(): React.JSX.Element {
 	const handleNewChat = () => {
 		setMessages([]);
 		setPendingTools([]);
+		setCurrentSessionId(null);
 		window.api?.clearCurrentSession();
+	};
+
+	const handleLoadSession = async (sessionId: string) => {
+		const success = await window.api?.loadSession(sessionId);
+		if (success) {
+			setCurrentSessionId(sessionId);
+			setIsSidebarOpen(false);
+			await loadChatHistory();
+		}
+	};
+
+	const handleDeleteSession = async (sessionId: string) => {
+		await window.api?.deleteSession(sessionId);
+		setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+		if (sessionId === currentSessionId) {
+			setMessages([]);
+			setCurrentSessionId(null);
+		}
+		setSessionToDelete(null);
 	};
 
 	const handleApproveTool = async (callId: string) => {
@@ -345,16 +409,112 @@ function App(): React.JSX.Element {
 	const hasApprovedTools = pendingTools.some((t) => t.approved === true);
 
 	return (
-		<div className="flex h-screen flex-col bg-background">
-			{/* Tool Permission Dialog */}
-			<Dialog open={unhandledTools.length > 0}>
-				<DialogContent showCloseButton={false}>
+		<div className="flex h-screen bg-background">
+			{/* Delete Session Dialog */}
+			<Dialog open={sessionToDelete !== null}>
+				<DialogContent>
 					<DialogHeader>
-						<DialogTitle className="flex items-center gap-2">
-							<Wrench className="h-5 w-5" />
-							Tool Permission Request
-						</DialogTitle>
+						<DialogTitle>Delete Session</DialogTitle>
 						<DialogDescription>
+							Are you sure you want to delete this session? This action cannot be
+							undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setSessionToDelete(null)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							onClick={() => sessionToDelete && handleDeleteSession(sessionToDelete)}
+						>
+							Delete
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Sidebar */}
+			<div
+				className={`border-r transition-all duration-300 ${
+					isSidebarOpen ? "w-64" : "w-0"
+				} overflow-hidden`}
+			>
+				<div className="flex h-full flex-col">
+					<div className="flex items-center justify-between border-b p-4">
+						<h2 className="font-semibold">Sessions</h2>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-8 w-8"
+							onClick={() => setIsSidebarOpen(false)}
+						>
+							<ChevronLeft className="h-4 w-4" />
+						</Button>
+					</div>
+					<div className="flex-1 overflow-y-auto">
+						<div className="p-2">
+							<Button
+								variant="ghost"
+								className="w-full justify-start gap-2"
+								onClick={handleNewChat}
+							>
+								<Plus className="h-4 w-4" />
+								New Chat
+							</Button>
+						</div>
+						<div className="p-2 pt-0">
+							{sessions.map((session) => (
+								<button
+									type="button"
+									key={session.id}
+									className={`group flex w-full items-center gap-2 rounded-md p-2 text-left ${
+										session.id === currentSessionId
+											? "bg-accent"
+											: "hover:bg-muted"
+									}`}
+									onClick={() => handleLoadSession(session.id)}
+								>
+									<div className="flex-1 truncate text-sm">
+										{session.title || `Session ${session.id.slice(0, 8)}`}
+									</div>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="h-6 w-6 opacity-0 group-hover:opacity-100"
+										onClick={(e) => {
+											e.stopPropagation();
+											setSessionToDelete(session.id);
+										}}
+									>
+										<Trash2 className="h-3 w-3" />
+									</Button>
+								</button>
+							))}
+							{sessions.length === 0 && (
+								<p className="p-2 text-sm text-muted-foreground">
+									No sessions yet
+								</p>
+							)}
+						</div>
+					</div>
+				</div>
+			</div>
+
+			{/* Main Content */}
+			<div className="flex flex-1 flex-col">
+				{/* Tool Permission Dialog */}
+				<Dialog open={unhandledTools.length > 0}>
+					<DialogContent showCloseButton={false}>
+						<DialogHeader>
+							<DialogTitle className="flex items-center gap-2">
+								<Wrench className="h-5 w-5" />
+								Tool Permission Request
+							</DialogTitle>
+							<DialogDescription>
 							The assistant wants to execute the following tool:
 						</DialogDescription>
 					</DialogHeader>
@@ -405,6 +565,18 @@ function App(): React.JSX.Element {
 			)}
 			<header className="flex items-center justify-between border-b px-4 py-3">
 				<div className="flex items-center gap-2">
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+						title="Toggle sessions"
+					>
+						<ChevronRight
+							className={`h-4 w-4 transition-transform ${
+								isSidebarOpen ? "rotate-180" : ""
+							}`}
+						/>
+					</Button>
 					<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
 						<Bot className="h-4 w-4 text-primary-foreground" />
 					</div>
@@ -511,6 +683,7 @@ function App(): React.JSX.Element {
 						</div>
 					</div>
 				</div>
+			</div>
 			</div>
 		</div>
 	);

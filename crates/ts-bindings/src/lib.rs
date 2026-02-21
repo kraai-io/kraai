@@ -562,6 +562,12 @@ impl Runtime {
             ThreadsafeFunctionCallMode::NonBlocking,
           );
 
+          // Notify UI that history was updated (new session may have been created)
+          event_callback.call(
+            Ok(Event::HistoryUpdated),
+            ThreadsafeFunctionCallMode::NonBlocking,
+          );
+
           // Check for tool calls in the completed message
           let (tool_calls, failed) = {
             let mut agent = agent_manager.lock().await;
