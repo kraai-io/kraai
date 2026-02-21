@@ -8,24 +8,11 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-agent = { workspace = true }
+agent-runtime = { workspace = true }
 color-eyre = { workspace = true }
-directories = { workspace = true }
-futures = { workspace = true }
 napi = { version = "3.8.2", features = ["async", "tokio_rt"] }
 napi-derive = "3.5.1"
-notify = "8.2.0"
 persistence = { workspace = true }
-provider-core = { workspace = true }
-provider-google = { workspace = true }
-provider-openai = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
-toml = { workspace = true }
-tool-core = { workspace = true }
-tool-read-file = { workspace = true }
 types = { workspace = true }
 
 [build-dependencies]

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/agent",
+  "crates/agent", "crates/agent-runtime",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
   "crates/llm-providers/provider-openai", "crates/persistence",
@@ -25,6 +25,7 @@ strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
 agent = { path = "crates/agent" }
+agent-runtime = { path = "crates/agent-runtime" }
 persistence = { path = "crates/persistence" }
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-google = { path = "crates/llm-providers/provider-google" }
