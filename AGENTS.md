@@ -8,9 +8,10 @@ A desktop agent application built with Rust backend and Electron/React frontend.
 
 **Stack:**
 - Backend: Rust (edition 2024, MSRV 1.88.0)
-- Frontend: Electron + React + TypeScript + Tailwind CSS v4
+- Frontend: Electron 39 + React 19 + TypeScript + Tailwind CSS v4
 - Build: pnpm (workspace), cargo, just (task runner)
 - Linting: Biome (JS/TS/JSON/CSS), Clippy (Rust)
+- UI: Radix UI primitives, Lucide icons, cmdk
 
 ## Commands
 
@@ -29,15 +30,24 @@ A desktop agent application built with Rust backend and Electron/React frontend.
 
 ```
 crates/
-  agent/           - Core agent logic
-  types/           - Shared type definitions
-  ts-bindings/     - napi-rs bindings for TypeScript
-  llm-providers/   - LLM provider implementations (google, openai)
-  tools/           - Tool implementations
-  toon-schema/     - Schema definitions
+  agent/             - Core agent logic
+  agent-runtime/     - Agent runtime
+  persistence/       - Data persistence layer
+  types/             - Shared type definitions
+  ts-bindings/       - napi-rs bindings for TypeScript
+  llm-providers/
+    provider-core/   - LLM provider trait definitions
+    provider-google/ - Google LLM implementation
+    provider-openai/ - OpenAI LLM implementation
+  tools/
+    tool-core/       - Tool trait definitions
+    tool-read-file/  - File reading tool
+  toon-schema/       - Schema definitions
+  toon-schema-core/  - Core schema types
+  tui/               - Terminal UI (disabled in workspace)
 
 apps/
-  agent-desktop/   - Electron + React frontend
+  agent-desktop/     - Electron + React frontend
 ```
 
 ## Code Conventions
@@ -61,7 +71,7 @@ apps/
 <!-- Update this section as you discover patterns, gotchas, and solutions -->
 
 ### Discovered Patterns
-- (Add patterns you notice in the codebase)
+- LLM providers follow a trait-based pattern via provider-core
 
 ### Gotchas
 - (Add non-obvious issues encountered)
@@ -69,22 +79,16 @@ apps/
 ### Solutions Applied
 - (Document solutions to problems faced)
 
-## Recent Changes
-
-<!-- Track significant changes made during sessions -->
-
-| Date | Change | Files |
-|------|--------|-------|
-| | | |
-
 ## Dependencies
 
 **Rust:** See `Cargo.toml` workspace.dependencies
 
-**Node:** 
+Key dependencies: async-openai, tokio, serde, specta, llm-toolkit, ratatui
+
+**Node:**
 - Root: biome only
 - ts-bindings: napi-rs, ava (testing)
-- agent-desktop: electron, react, tailwind v4, radix-ui
+- agent-desktop: electron, react, react-dom, tailwind v4, radix-ui, lucide-react, cmdk, react-markdown, katex
 
 ## Build Targets
 
