@@ -12,10 +12,10 @@ use tool_read_file::ReadFileTool;
 use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
+use notify::{RecursiveMode, Watcher};
 use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use notify::{RecursiveMode, Watcher};
 
 // ============================================================================
 // Public Types - exposed to all clients
@@ -59,27 +59,17 @@ pub enum Event {
     Error(String),
     /// Message completed (legacy)
     MessageComplete(String),
-    
+
     // Streaming events
     /// Stream started for a message
-    StreamStart {
-        message_id: String,
-    },
+    StreamStart { message_id: String },
     /// Chunk received for a streaming message
-    StreamChunk {
-        message_id: String,
-        chunk: String,
-    },
+    StreamChunk { message_id: String, chunk: String },
     /// Stream completed for a message
-    StreamComplete {
-        message_id: String,
-    },
+    StreamComplete { message_id: String },
     /// Stream error for a message
-    StreamError {
-        message_id: String,
-        error: String,
-    },
-    
+    StreamError { message_id: String, error: String },
+
     // Tool events
     /// Tool call detected, awaiting permission
     ToolCallDetected {
@@ -96,7 +86,7 @@ pub enum Event {
         output: String,
         denied: bool,
     },
-    
+
     // History events
     /// Chat history was updated
     HistoryUpdated,
@@ -107,7 +97,7 @@ pub enum Event {
 // ============================================================================
 
 /// Trait for receiving events from the runtime
-/// 
+///
 /// Clients (TUI, CLI, Electron, etc.) implement this trait to receive
 /// events from the runtime.
 pub trait EventCallback: Send + Sync {
@@ -115,8 +105,8 @@ pub trait EventCallback: Send + Sync {
     fn on_event(&self, event: Event);
 }
 
-impl<F> EventCallback for F 
-where 
+impl<F> EventCallback for F
+where
     F: Fn(Event) + Send + Sync,
 {
     fn on_event(&self, event: Event) {
@@ -170,7 +160,7 @@ enum Command {
 // ============================================================================
 
 /// Handle to the runtime for sending commands
-/// 
+///
 /// This is cheaply cloneable and can be passed around to different parts
 /// of the application.
 #[derive(Clone)]
@@ -182,24 +172,35 @@ impl RuntimeHandle {
     /// List available models from all providers
     pub async fn list_models(&self) -> Result<HashMap<String, Vec<Model>>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::ListModels { response: tx }).await?;
+        self.command_tx
+            .send(Command::ListModels { response: tx })
+            .await?;
         Ok(rx.await?)
     }
 
     /// Send a message to the agent
-    pub async fn send_message(&self, message: String, model_id: String, provider_id: String) -> Result<()> {
-        self.command_tx.send(Command::SendMessage {
-            message,
-            model_id: ModelId::new(model_id),
-            provider_id: ProviderId::new(provider_id),
-        }).await?;
+    pub async fn send_message(
+        &self,
+        message: String,
+        model_id: String,
+        provider_id: String,
+    ) -> Result<()> {
+        self.command_tx
+            .send(Command::SendMessage {
+                message,
+                model_id: ModelId::new(model_id),
+                provider_id: ProviderId::new(provider_id),
+            })
+            .await?;
         Ok(())
     }
 
     /// Get the chat history as a tree
     pub async fn get_chat_history(&self) -> Result<BTreeMap<MessageId, types::Message>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::GetChatHistory { response: tx }).await?;
+        self.command_tx
+            .send(Command::GetChatHistory { response: tx })
+            .await?;
         Ok(rx.await?)
     }
 
@@ -212,33 +213,46 @@ impl RuntimeHandle {
     /// Load a session by ID
     pub async fn load_session(&self, session_id: String) -> Result<bool> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::LoadSession { session_id, response: tx }).await?;
+        self.command_tx
+            .send(Command::LoadSession {
+                session_id,
+                response: tx,
+            })
+            .await?;
         Ok(rx.await?)
     }
 
     /// List all sessions
     pub async fn list_sessions(&self) -> Result<Vec<Session>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::ListSessions { response: tx }).await?;
+        self.command_tx
+            .send(Command::ListSessions { response: tx })
+            .await?;
         Ok(rx.await?)
     }
 
     /// Delete a session by ID
     pub async fn delete_session(&self, session_id: String) -> Result<()> {
-        self.command_tx.send(Command::DeleteSession { session_id }).await?;
+        self.command_tx
+            .send(Command::DeleteSession { session_id })
+            .await?;
         Ok(())
     }
 
     /// Get the current session ID
     pub async fn get_current_session_id(&self) -> Result<Option<String>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::GetCurrentSessionId { response: tx }).await?;
+        self.command_tx
+            .send(Command::GetCurrentSessionId { response: tx })
+            .await?;
         Ok(rx.await?)
     }
 
     /// Approve a tool call
     pub async fn approve_tool(&self, call_id: String) -> Result<()> {
-        self.command_tx.send(Command::ApproveTool { call_id }).await?;
+        self.command_tx
+            .send(Command::ApproveTool { call_id })
+            .await?;
         Ok(())
     }
 
@@ -273,7 +287,7 @@ impl RuntimeBuilder {
     }
 
     /// Build and start the runtime
-    /// 
+    ///
     /// This spawns the runtime in a background thread and returns a handle
     /// to send commands.
     pub fn build(self) -> RuntimeHandle {
@@ -293,7 +307,7 @@ impl RuntimeBuilder {
                 let providers = ProviderManager::new();
                 let mut tools = ToolManager::new();
                 tools.register_tool(ReadFileTool {});
-                
+
                 let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                     providers,
                     tools,
@@ -306,7 +320,7 @@ impl RuntimeBuilder {
                     command_tx: command_tx_for_runtime,
                     agent_manager,
                 };
-                
+
                 runtime.run(command_rx).await;
             });
         });
@@ -372,7 +386,9 @@ impl RuntimeInner {
                         (provider_id.to_string(), models)
                     })
                     .collect();
-                response.send(models).map_err(|_| eyre!("Failed to send response"))?;
+                response
+                    .send(models)
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::LoadConfig => {
@@ -381,37 +397,71 @@ impl RuntimeInner {
                 self.send_event(Event::ConfigLoaded);
             }
 
-            Command::SendMessage { message, model_id, provider_id } => {
-                self.handle_send_message(message, model_id, provider_id).await;
+            Command::SendMessage {
+                message,
+                model_id,
+                provider_id,
+            } => {
+                self.handle_send_message(message, model_id, provider_id)
+                    .await;
             }
 
             Command::ClearCurrentSession => {
-                self.agent_manager.lock().await.clear_current_session().await;
+                self.agent_manager
+                    .lock()
+                    .await
+                    .clear_current_session()
+                    .await;
             }
 
-            Command::LoadSession { session_id, response } => {
-                let loaded = self.agent_manager.lock().await.load_session(&session_id).await?;
-                response.send(loaded).map_err(|_| eyre!("Failed to send response"))?;
+            Command::LoadSession {
+                session_id,
+                response,
+            } => {
+                let loaded = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .load_session(&session_id)
+                    .await?;
+                response
+                    .send(loaded)
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::ListSessions { response } => {
                 let sessions = self.agent_manager.lock().await.list_sessions().await?;
                 let sessions: Vec<Session> = sessions.into_iter().map(Into::into).collect();
-                response.send(sessions).map_err(|_| eyre!("Failed to send response"))?;
+                response
+                    .send(sessions)
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::DeleteSession { session_id } => {
-                self.agent_manager.lock().await.delete_session(&session_id).await?;
+                self.agent_manager
+                    .lock()
+                    .await
+                    .delete_session(&session_id)
+                    .await?;
             }
 
             Command::GetCurrentSessionId { response } => {
-                let session_id = self.agent_manager.lock().await.get_current_session_id().map(|s| s.to_string());
-                response.send(session_id).map_err(|_| eyre!("Failed to send response"))?;
+                let session_id = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .get_current_session_id()
+                    .map(|s| s.to_string());
+                response
+                    .send(session_id)
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::GetChatHistory { response } => {
                 let history = self.agent_manager.lock().await.get_chat_history().await?;
-                response.send(history).map_err(|_| eyre!("Failed to send response"))?;
+                response
+                    .send(history)
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::ApproveTool { call_id } => {
@@ -432,7 +482,12 @@ impl RuntimeInner {
         Ok(())
     }
 
-    async fn handle_send_message(&self, message: String, model_id: ModelId, provider_id: ProviderId) {
+    async fn handle_send_message(
+        &self,
+        message: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
+    ) {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
@@ -506,7 +561,11 @@ impl RuntimeInner {
                 agent.parse_tool_calls_from_content(&full_content).await
             };
 
-            println!("[RUNTIME] Found {} tool calls, {} failed", tool_calls.len(), failed.len());
+            println!(
+                "[RUNTIME] Found {} tool calls, {} failed",
+                tool_calls.len(),
+                failed.len()
+            );
 
             // Handle failed tool calls
             if !failed.is_empty() {
@@ -516,11 +575,8 @@ impl RuntimeInner {
                 event_callback.on_event(Event::HistoryUpdated);
 
                 // Start continuation stream
-                Self::start_continuation(
-                    agent_manager.clone(),
-                    event_callback.clone(),
-                    command_tx,
-                ).await;
+                Self::start_continuation(agent_manager.clone(), event_callback.clone(), command_tx)
+                    .await;
                 return;
             }
 
@@ -528,12 +584,16 @@ impl RuntimeInner {
             for (call_id, tool_id, description) in tool_calls {
                 let args_json = {
                     let agent = agent_manager.lock().await;
-                    agent.get_pending_tool_args(&call_id)
+                    agent
+                        .get_pending_tool_args(&call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
 
-                println!("[RUNTIME] Emitting ToolCallDetected: {} - {}", tool_id, description);
+                println!(
+                    "[RUNTIME] Emitting ToolCallDetected: {} - {}",
+                    tool_id, description
+                );
                 event_callback.on_event(Event::ToolCallDetected {
                     call_id: call_id.to_string(),
                     tool_id,
@@ -657,7 +717,8 @@ impl RuntimeInner {
             for (call_id, tool_id, description) in tool_calls {
                 let args_json = {
                     let agent = agent_manager.lock().await;
-                    agent.get_pending_tool_args(&call_id)
+                    agent
+                        .get_pending_tool_args(&call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
@@ -683,9 +744,10 @@ impl RuntimeInner {
                 .expect("Failed to find user directories")
                 .home_dir()
                 .join(".agent-desktop/providers.toml");
-            
+
             let (tx, rx) = std::sync::mpsc::channel();
-            let mut watcher = notify::recommended_watcher(tx).expect("Failed to create config watcher");
+            let mut watcher =
+                notify::recommended_watcher(tx).expect("Failed to create config watcher");
 
             watcher
                 .watch(&config_loc, RecursiveMode::NonRecursive)
@@ -725,12 +787,19 @@ impl RuntimeInner {
             toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
 
         let mut helper = ProviderManagerHelper::default();
-        helper.register_factory::<GoogleFactory>().map_err(|e| eyre!("{}", e))?;
-        helper.register_factory::<OpenAIFactory>().map_err(|e| eyre!("{}", e))?;
+        helper
+            .register_factory::<GoogleFactory>()
+            .map_err(|e| eyre!("{}", e))?;
+        helper
+            .register_factory::<OpenAIFactory>()
+            .map_err(|e| eyre!("{}", e))?;
 
-        self.agent_manager.lock().await.set_providers(config, helper).await?;
+        self.agent_manager
+            .lock()
+            .await
+            .set_providers(config, helper)
+            .await?;
 
         Ok(())
     }
 }
-

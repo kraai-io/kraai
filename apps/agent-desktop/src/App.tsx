@@ -314,7 +314,13 @@ function App(): React.JSX.Element {
 		});
 
 		loadModels();
-	}, [loadModels, loadChatHistory, forceScrollToBottom, scrollToBottom, loadSessions]);
+	}, [
+		loadModels,
+		loadChatHistory,
+		forceScrollToBottom,
+		scrollToBottom,
+		loadSessions,
+	]);
 
 	useEffect(() => {
 		const container = scrollRef.current;
@@ -416,20 +422,19 @@ function App(): React.JSX.Element {
 					<DialogHeader>
 						<DialogTitle>Delete Session</DialogTitle>
 						<DialogDescription>
-							Are you sure you want to delete this session? This action cannot be
-							undone.
+							Are you sure you want to delete this session? This action cannot
+							be undone.
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => setSessionToDelete(null)}
-						>
+						<Button variant="outline" onClick={() => setSessionToDelete(null)}>
 							Cancel
 						</Button>
 						<Button
 							variant="destructive"
-							onClick={() => sessionToDelete && handleDeleteSession(sessionToDelete)}
+							onClick={() =>
+								sessionToDelete && handleDeleteSession(sessionToDelete)
+							}
 						>
 							Delete
 						</Button>
@@ -515,175 +520,176 @@ function App(): React.JSX.Element {
 								Tool Permission Request
 							</DialogTitle>
 							<DialogDescription>
-							The assistant wants to execute the following tool:
-						</DialogDescription>
-					</DialogHeader>
-					{unhandledTools[0] && (
-						<div className="space-y-4">
-							<div className="rounded-lg border bg-muted/50 p-4">
-								<div className="font-mono text-sm font-medium">
-									{unhandledTools[0].toolId}
-								</div>
-								<div className="text-muted-foreground mt-1">
-									{unhandledTools[0].description}
-								</div>
-								{unhandledTools[0].args && unhandledTools[0].args !== "{}" && (
-									<pre className="mt-2 text-xs bg-background rounded p-2 overflow-x-auto">
-										{JSON.stringify(
-											JSON.parse(unhandledTools[0].args),
-											null,
-											2,
+								The assistant wants to execute the following tool:
+							</DialogDescription>
+						</DialogHeader>
+						{unhandledTools[0] && (
+							<div className="space-y-4">
+								<div className="rounded-lg border bg-muted/50 p-4">
+									<div className="font-mono text-sm font-medium">
+										{unhandledTools[0].toolId}
+									</div>
+									<div className="text-muted-foreground mt-1">
+										{unhandledTools[0].description}
+									</div>
+									{unhandledTools[0].args &&
+										unhandledTools[0].args !== "{}" && (
+											<pre className="mt-2 text-xs bg-background rounded p-2 overflow-x-auto">
+												{JSON.stringify(
+													JSON.parse(unhandledTools[0].args),
+													null,
+													2,
+												)}
+											</pre>
 										)}
-									</pre>
-								)}
-							</div>
-							<DialogFooter>
-								<Button
-									variant="outline"
-									onClick={() => handleDenyTool(unhandledTools[0].callId)}
-								>
-									Deny
-								</Button>
-								<Button
-									onClick={() => handleApproveTool(unhandledTools[0].callId)}
-								>
-									Approve
-								</Button>
-							</DialogFooter>
-						</div>
-					)}
-				</DialogContent>
-			</Dialog>
-
-			{/* Execute Tools Button */}
-			{hasApprovedTools && unhandledTools.length === 0 && (
-				<div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-20">
-					<Button onClick={handleExecuteTools} className="shadow-lg">
-						Execute Approved Tools
-					</Button>
-				</div>
-			)}
-			<header className="flex items-center justify-between border-b px-4 py-3">
-				<div className="flex items-center gap-2">
-					<Button
-						variant="ghost"
-						size="icon"
-						onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-						title="Toggle sessions"
-					>
-						<ChevronRight
-							className={`h-4 w-4 transition-transform ${
-								isSidebarOpen ? "rotate-180" : ""
-							}`}
-						/>
-					</Button>
-					<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-						<Bot className="h-4 w-4 text-primary-foreground" />
-					</div>
-					<h1 className="text-lg font-semibold tracking-tight">Agent</h1>
-				</div>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={handleNewChat}
-					title="New chat"
-				>
-					<Plus className="h-4 w-4" />
-				</Button>
-			</header>
-
-			<div className="relative flex-1">
-				<div ref={scrollRef} className="absolute inset-0 overflow-y-auto">
-					<div className="mx-auto max-w-2xl px-4">
-						{messages.length === 0 ? (
-							<div className="flex h-[60vh] flex-col items-center justify-center text-muted-foreground">
-								<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
-									<Bot className="h-7 w-7" />
 								</div>
-								<p className="text-base">Send a message to start</p>
-							</div>
-						) : (
-							<div className="divide-y">
-								{messages.map((message) => (
-									<ChatMessage
-										key={message.id}
-										content={message.content}
-										role={message.role}
-										isStreaming={message.isStreaming}
-									/>
-								))}
+								<DialogFooter>
+									<Button
+										variant="outline"
+										onClick={() => handleDenyTool(unhandledTools[0].callId)}
+									>
+										Deny
+									</Button>
+									<Button
+										onClick={() => handleApproveTool(unhandledTools[0].callId)}
+									>
+										Approve
+									</Button>
+								</DialogFooter>
 							</div>
 						)}
-					</div>
-				</div>
+					</DialogContent>
+				</Dialog>
 
-				{!isAtBottom && (
-					<div className="absolute bottom-0 left-1/2 -translate-x-1/2 z-10 pb-2">
-						<Button
-							variant="secondary"
-							size="icon"
-							className="h-8 w-8 rounded-full shadow-md"
-							onClick={() => {
-								forceScrollToBottom();
-								setIsAtBottom(true);
-								isAtBottomRef.current = true;
-							}}
-						>
-							<ChevronDown className="h-4 w-4" />
+				{/* Execute Tools Button */}
+				{hasApprovedTools && unhandledTools.length === 0 && (
+					<div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-20">
+						<Button onClick={handleExecuteTools} className="shadow-lg">
+							Execute Approved Tools
 						</Button>
 					</div>
 				)}
-			</div>
-
-			<div className="border-t p-4">
-				<div className="mx-auto max-w-2xl">
-					<div className="rounded-2xl border p-3">
-						<textarea
-							ref={textareaRef as React.RefObject<HTMLTextAreaElement>}
-							value={inputValue}
-							onChange={(e) => {
-								setInputValue(e.target.value);
-								// Auto-resize
-								e.target.style.height = "auto";
-								e.target.style.height = `${e.target.scrollHeight}px`;
-							}}
-							onKeyDown={(e) => {
-								handleKeyDown(e);
-								// Reset height on backspace if needed
-								if (e.key === "Backspace") {
-									const target = e.target as HTMLTextAreaElement;
-									target.style.height = "auto";
-									target.style.height = `${target.scrollHeight}px`;
-								}
-							}}
-							placeholder="Message..."
-							className="w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-muted-foreground"
-							rows={1}
-							style={{ height: "auto", overflow: "hidden" }}
-							disabled={isLoading}
-						/>
-						<div className="flex items-center justify-between pt-2">
-							<ModelSelector
-								models={models}
-								value={selectedModel}
-								onChange={setSelectedModel}
+				<header className="flex items-center justify-between border-b px-4 py-3">
+					<div className="flex items-center gap-2">
+						<Button
+							variant="ghost"
+							size="icon"
+							onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+							title="Toggle sessions"
+						>
+							<ChevronRight
+								className={`h-4 w-4 transition-transform ${
+									isSidebarOpen ? "rotate-180" : ""
+								}`}
 							/>
+						</Button>
+						<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+							<Bot className="h-4 w-4 text-primary-foreground" />
+						</div>
+						<h1 className="text-lg font-semibold tracking-tight">Agent</h1>
+					</div>
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={handleNewChat}
+						title="New chat"
+					>
+						<Plus className="h-4 w-4" />
+					</Button>
+				</header>
+
+				<div className="relative flex-1">
+					<div ref={scrollRef} className="absolute inset-0 overflow-y-auto">
+						<div className="mx-auto max-w-2xl px-4">
+							{messages.length === 0 ? (
+								<div className="flex h-[60vh] flex-col items-center justify-center text-muted-foreground">
+									<div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted mb-4">
+										<Bot className="h-7 w-7" />
+									</div>
+									<p className="text-base">Send a message to start</p>
+								</div>
+							) : (
+								<div className="divide-y">
+									{messages.map((message) => (
+										<ChatMessage
+											key={message.id}
+											content={message.content}
+											role={message.role}
+											isStreaming={message.isStreaming}
+										/>
+									))}
+								</div>
+							)}
+						</div>
+					</div>
+
+					{!isAtBottom && (
+						<div className="absolute bottom-0 left-1/2 -translate-x-1/2 z-10 pb-2">
 							<Button
+								variant="secondary"
 								size="icon"
-								className="h-8 w-8 rounded-xl"
-								onClick={handleSend}
-								disabled={!inputValue.trim() || isLoading || !selectedModel}
+								className="h-8 w-8 rounded-full shadow-md"
+								onClick={() => {
+									forceScrollToBottom();
+									setIsAtBottom(true);
+									isAtBottomRef.current = true;
+								}}
 							>
-								{isLoading ? (
-									<Square className="h-3.5 w-3.5" />
-								) : (
-									<Send className="h-3.5 w-3.5" />
-								)}
+								<ChevronDown className="h-4 w-4" />
 							</Button>
+						</div>
+					)}
+				</div>
+
+				<div className="border-t p-4">
+					<div className="mx-auto max-w-2xl">
+						<div className="rounded-2xl border p-3">
+							<textarea
+								ref={textareaRef as React.RefObject<HTMLTextAreaElement>}
+								value={inputValue}
+								onChange={(e) => {
+									setInputValue(e.target.value);
+									// Auto-resize
+									e.target.style.height = "auto";
+									e.target.style.height = `${e.target.scrollHeight}px`;
+								}}
+								onKeyDown={(e) => {
+									handleKeyDown(e);
+									// Reset height on backspace if needed
+									if (e.key === "Backspace") {
+										const target = e.target as HTMLTextAreaElement;
+										target.style.height = "auto";
+										target.style.height = `${target.scrollHeight}px`;
+									}
+								}}
+								placeholder="Message..."
+								className="w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-muted-foreground"
+								rows={1}
+								style={{ height: "auto", overflow: "hidden" }}
+								disabled={isLoading}
+							/>
+							<div className="flex items-center justify-between pt-2">
+								<ModelSelector
+									models={models}
+									value={selectedModel}
+									onChange={setSelectedModel}
+								/>
+								<Button
+									size="icon"
+									className="h-8 w-8 rounded-xl"
+									onClick={handleSend}
+									disabled={!inputValue.trim() || isLoading || !selectedModel}
+								>
+									{isLoading ? (
+										<Square className="h-3.5 w-3.5" />
+									) : (
+										<Send className="h-3.5 w-3.5" />
+									)}
+								</Button>
+							</div>
 						</div>
 					</div>
 				</div>
-			</div>
 			</div>
 		</div>
 	);

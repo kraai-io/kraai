@@ -8,7 +8,10 @@ use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use tokio::sync::RwLock;
 use tool_core::{ToolManager, ToolOutput, toon_parser};
-use types::{CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId, ToolCall, ToolId, ToolResult};
+use types::{
+    CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId,
+    ToolCall, ToolId, ToolResult,
+};
 use ulid::Ulid;
 
 #[derive(Clone, Debug)]
@@ -79,10 +82,10 @@ impl AgentManager {
             Some(session) => {
                 // Clean up streaming messages from previous session
                 self.streaming_messages.write().await.clear();
-                
+
                 // Clean up hot cache for other sessions
                 self.cleanup_hot_cache_for_session(&session).await?;
-                
+
                 self.current_session_id = Some(session_id.to_string());
                 Ok(true)
             }
@@ -94,7 +97,7 @@ impl AgentManager {
     async fn cleanup_hot_cache_for_session(&self, session: &SessionMeta) -> Result<()> {
         // Collect message IDs that should stay in hot cache
         let mut keep_ids = std::collections::HashSet::new();
-        
+
         if let Some(tip_id) = &session.tip_id {
             let mut current = Some(tip_id.clone());
             while let Some(id) = current {
@@ -203,7 +206,9 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
-        let assistant_msg_id = self.start_streaming_message(ChatRole::Assistant, call_id).await?;
+        let assistant_msg_id = self
+            .start_streaming_message(ChatRole::Assistant, call_id)
+            .await?;
 
         let stream = self
             .providers
@@ -249,7 +254,9 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
-        let assistant_msg_id = self.start_streaming_message(ChatRole::Assistant, call_id).await?;
+        let assistant_msg_id = self
+            .start_streaming_message(ChatRole::Assistant, call_id)
+            .await?;
 
         let stream = self
             .providers
@@ -310,7 +317,11 @@ impl AgentManager {
         Ok(message_id)
     }
 
-    async fn start_streaming_message(&mut self, role: ChatRole, call_id: CallId) -> Result<MessageId> {
+    async fn start_streaming_message(
+        &mut self,
+        role: ChatRole,
+        call_id: CallId,
+    ) -> Result<MessageId> {
         // Ensure we have a session before adding messages
         self.ensure_session().await?;
 
@@ -447,7 +458,10 @@ impl AgentManager {
         (detected_calls, failed_calls)
     }
 
-    pub async fn add_failed_tool_calls_to_history(&mut self, failed: Vec<(String, String)>) -> Result<()> {
+    pub async fn add_failed_tool_calls_to_history(
+        &mut self,
+        failed: Vec<(String, String)>,
+    ) -> Result<()> {
         for (raw_content, error) in failed {
             let content = format!(
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",

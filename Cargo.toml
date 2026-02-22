@@ -1,9 +1,11 @@
 [workspace]
 members = [
-  "crates/agent", "crates/agent-runtime",
+  "crates/agent",
+  "crates/agent-runtime",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
-  "crates/llm-providers/provider-openai", "crates/persistence",
+  "crates/llm-providers/provider-openai",
+  "crates/persistence",
   "crates/tools/tool-core",
   "crates/tools/tool-read-file",
   "crates/toon-schema",

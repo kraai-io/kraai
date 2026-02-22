@@ -228,15 +228,10 @@ impl FileSessionStore {
 
         let content = fs::read_to_string(&self.sessions_path)
             .await
-            .with_context(|| {
-                format!(
-                    "Failed to read sessions file: {:?}",
-                    self.sessions_path
-                )
-            })?;
+            .with_context(|| format!("Failed to read sessions file: {:?}", self.sessions_path))?;
 
-        let sessions: HashMap<String, SessionMeta> = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse sessions file")?;
+        let sessions: HashMap<String, SessionMeta> =
+            serde_json::from_str(&content).with_context(|| "Failed to parse sessions file")?;
 
         let mut loaded = self.sessions.write().await;
         *loaded = sessions;
@@ -316,7 +311,10 @@ impl FileSessionStore {
 
         if !errors.is_empty() {
             for (id, e) in &errors {
-                eprintln!("[PERSISTENCE] Failed to delete orphaned message {}: {}", id, e);
+                eprintln!(
+                    "[PERSISTENCE] Failed to delete orphaned message {}: {}",
+                    id, e
+                );
             }
         }
 
@@ -349,11 +347,11 @@ impl SessionStore for FileSessionStore {
         let (tip_id_to_delete, sessions_without_deleted) = {
             let sessions = self.sessions.read().await;
             let tip_id = sessions.get(id).and_then(|s| s.tip_id.clone());
-            
+
             // Clone the map without the deleted session
             let mut new_sessions = sessions.clone();
             new_sessions.remove(id);
-            
+
             (tip_id, new_sessions)
         };
 
@@ -399,13 +397,19 @@ impl FileSessionStore {
             match self.message_store.delete(msg_id).await {
                 Ok(()) => deleted_count += 1,
                 Err(e) => {
-                    eprintln!("[PERSISTENCE] Failed to delete orphaned message {}: {}", msg_id, e);
+                    eprintln!(
+                        "[PERSISTENCE] Failed to delete orphaned message {}: {}",
+                        msg_id, e
+                    );
                 }
             }
         }
 
         if deleted_count > 0 {
-            println!("[PERSISTENCE] Cleaned up {} orphaned messages", deleted_count);
+            println!(
+                "[PERSISTENCE] Cleaned up {} orphaned messages",
+                deleted_count
+            );
         }
 
         Ok(deleted_count)

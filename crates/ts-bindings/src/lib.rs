@@ -136,10 +136,20 @@ pub enum Event {
   ConfigLoaded,
   Error(String),
   MessageComplete(String),
-  StreamStart { message_id: String },
-  StreamChunk { message_id: String, chunk: String },
-  StreamComplete { message_id: String },
-  StreamError { message_id: String, error: String },
+  StreamStart {
+    message_id: String,
+  },
+  StreamChunk {
+    message_id: String,
+    chunk: String,
+  },
+  StreamComplete {
+    message_id: String,
+  },
+  StreamError {
+    message_id: String,
+    error: String,
+  },
   ToolCallDetected {
     call_id: String,
     tool_id: String,
@@ -163,15 +173,37 @@ impl From<agent_runtime::Event> for Event {
       agent_runtime::Event::Error(e) => Event::Error(e),
       agent_runtime::Event::MessageComplete(id) => Event::MessageComplete(id),
       agent_runtime::Event::StreamStart { message_id } => Event::StreamStart { message_id },
-      agent_runtime::Event::StreamChunk { message_id, chunk } => Event::StreamChunk { message_id, chunk },
+      agent_runtime::Event::StreamChunk { message_id, chunk } => {
+        Event::StreamChunk { message_id, chunk }
+      }
       agent_runtime::Event::StreamComplete { message_id } => Event::StreamComplete { message_id },
-      agent_runtime::Event::StreamError { message_id, error } => Event::StreamError { message_id, error },
-      agent_runtime::Event::ToolCallDetected { call_id, tool_id, args, description } => {
-        Event::ToolCallDetected { call_id, tool_id, args, description }
+      agent_runtime::Event::StreamError { message_id, error } => {
+        Event::StreamError { message_id, error }
       }
-      agent_runtime::Event::ToolResultReady { call_id, tool_id, success, output, denied } => {
-        Event::ToolResultReady { call_id, tool_id, success, output, denied }
-      }
+      agent_runtime::Event::ToolCallDetected {
+        call_id,
+        tool_id,
+        args,
+        description,
+      } => Event::ToolCallDetected {
+        call_id,
+        tool_id,
+        args,
+        description,
+      },
+      agent_runtime::Event::ToolResultReady {
+        call_id,
+        tool_id,
+        success,
+        output,
+        denied,
+      } => Event::ToolResultReady {
+        call_id,
+        tool_id,
+        success,
+        output,
+        denied,
+      },
       agent_runtime::Event::HistoryUpdated => Event::HistoryUpdated,
     }
   }
@@ -188,10 +220,9 @@ struct NapiEventCallback {
 
 impl agent_runtime::EventCallback for NapiEventCallback {
   fn on_event(&self, event: agent_runtime::Event) {
-    self.tsfn.call(
-      Ok(event.into()),
-      ThreadsafeFunctionCallMode::NonBlocking,
-    );
+    self
+      .tsfn
+      .call(Ok(event.into()), ThreadsafeFunctionCallMode::NonBlocking);
   }
 }
 
@@ -213,7 +244,9 @@ fn to_napi_error(err: color_eyre::Report) -> napi::Error {
 impl AgentRuntime {
   #[napi(constructor)]
   pub fn new(event_callback: ThreadsafeFunction<Event>) -> napi::Result<Self> {
-    let callback = NapiEventCallback { tsfn: event_callback };
+    let callback = NapiEventCallback {
+      tsfn: event_callback,
+    };
     let handle = agent_runtime::RuntimeBuilder::new(callback).build();
     Ok(AgentRuntime { handle })
   }
@@ -227,9 +260,7 @@ impl AgentRuntime {
       .map(|map| {
         map
           .into_iter()
-          .map(|(provider_id, models)| {
-            (provider_id, models.into_iter().map(Into::into).collect())
-          })
+          .map(|(provider_id, models)| (provider_id, models.into_iter().map(Into::into).collect()))
           .collect()
       })
       .map_err(to_napi_error)
@@ -250,7 +281,9 @@ impl AgentRuntime {
   }
 
   #[napi]
-  pub async fn get_chat_history_tree(&self) -> napi::Result<std::collections::BTreeMap<String, Message>> {
+  pub async fn get_chat_history_tree(
+    &self,
+  ) -> napi::Result<std::collections::BTreeMap<String, Message>> {
     self
       .handle
       .get_chat_history()
@@ -321,11 +354,7 @@ impl AgentRuntime {
 
   #[napi]
   pub async fn deny_tool(&self, call_id: String) -> napi::Result<()> {
-    self
-      .handle
-      .deny_tool(call_id)
-      .await
-      .map_err(to_napi_error)
+    self.handle.deny_tool(call_id).await.map_err(to_napi_error)
   }
 
   #[napi]
