@@ -62,11 +62,15 @@ fn value_to_toon(
         (Type::Array(inner), Value::Array(arr)) => {
             let count = arr.len();
             let range_str = format_array_range(range, count);
-            let items: Vec<String> = arr
-                .iter()
-                .map(|v| array_item_to_toon(inner, v))
-                .collect::<syn::Result<Vec<_>>>()?;
-            Ok(format!("{}{}: {}", name, range_str, items.join(",")))
+            if arr.is_empty() {
+                Ok(format!("{}{}:", name, range_str))
+            } else {
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|v| array_item_to_toon(inner, v))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                Ok(format!("{}{}: {}", name, range_str, items.join(",")))
+            }
         }
         (Type::Primitive(_), Value::Null) => Ok(format!("{}: null", name)),
         (Type::Array(_), Value::Null) => Ok(format!("{}[0]:", name)),
@@ -146,14 +150,13 @@ fn needs_quoting(s: &str) -> bool {
         return true;
     }
 
-    // Per Toon spec: "It equals '-' or starts with '-' followed by any character"
-    if s == "-" || (s.starts_with('-') && s.len() > 1) {
-        return true;
-    }
-
+    // Check for structural characters: : " \ [ ] { } , -
+    // Per toon-format spec, '-' is a structural character, so any string containing '-' needs quoting
     for c in s.chars() {
         match c {
-            ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',' | '\n' | '\r' | '\t' => return true,
+            ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',' | '-' | '\n' | '\r' | '\t' => {
+                return true
+            }
             _ => {}
         }
     }

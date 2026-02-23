@@ -87,7 +87,7 @@ struct DashQuoting {
     #[toon_schema(example = "\"-x\"")]
     dash_x: String,
 
-    // Dash in middle should NOT be quoted
+    // Dash in middle must also be quoted (per toon-format, '-' is a structural char)
     #[toon_schema(example = "\"hello-world\"")]
     dash_in_middle: String,
 
@@ -123,10 +123,10 @@ fn test_dash_quoting() {
         "- test should be quoted"
     );
 
-    // Dash in middle should NOT be quoted
+    // Dash in middle must also be quoted (per toon-format, '-' is a structural char)
     assert!(
-        example_section.contains("dash_in_middle: hello-world"),
-        "hello-world should NOT be quoted"
+        example_section.contains("dash_in_middle: \"hello-world\""),
+        "hello-world must be quoted (dash is structural char)"
     );
 }
 
