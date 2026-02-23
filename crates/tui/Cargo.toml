@@ -5,15 +5,9 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
+agent-runtime = { workspace = true }
 color-eyre = { workspace = true }
-futures = { workspace = true }
-provider-core = { workspace = true }
-provider-google = { workspace = true }
-provider-openai = { workspace = true }
+crossbeam-channel = "0.5"
 ratatui = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-textwrap = { workspace = true }
 tokio = { workspace = true }
-toml = { workspace = true }
 types = { workspace = true }
