@@ -155,7 +155,7 @@ fn needs_quoting(s: &str) -> bool {
     for c in s.chars() {
         match c {
             ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',' | '-' | '\n' | '\r' | '\t' => {
-                return true
+                return true;
             }
             _ => {}
         }
