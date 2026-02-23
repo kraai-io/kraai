@@ -295,11 +295,13 @@ impl RuntimeBuilder {
         let handle = RuntimeHandle { command_tx };
         let command_tx_for_runtime = handle.command_tx.clone();
 
-        // Spawn background runtime in a new thread with its own tokio runtime
+        let callback = self.callback.clone();
+
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                // Initialize persistence layer
+                Self::init_tracing();
+
                 let (message_store, session_store) = persistence::init()
                     .await
                     .expect("Failed to initialize persistence layer");
@@ -316,7 +318,7 @@ impl RuntimeBuilder {
                 )));
 
                 let runtime = RuntimeInner {
-                    event_callback: self.callback,
+                    event_callback: callback,
                     command_tx: command_tx_for_runtime,
                     agent_manager,
                 };
@@ -326,6 +328,34 @@ impl RuntimeBuilder {
         });
 
         handle
+    }
+
+    fn init_tracing() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+
+        INIT.call_once(|| {
+            let log_dir = directories::BaseDirs::new()
+                .expect("Failed to find user directories")
+                .home_dir()
+                .join(".agent-desktop/logs");
+
+            std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "agent.log");
+
+            let subscriber = tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                )
+                .with_writer(file_appender)
+                .with_ansi(false)
+                .finish();
+
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("Failed to set tracing subscriber");
+        });
     }
 }
 
@@ -349,14 +379,13 @@ impl RuntimeInner {
     }
 
     async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
-        println!("[RUNTIME] Starting event loop");
+        tracing::info!("Starting event loop");
 
-        // Start config watcher and load initial config
         self.spawn_config_watcher();
         if let Err(e) = self.load_providers_config().await {
             self.send_error(format!("Failed to load config: {}", e));
         } else {
-            println!("[RUNTIME] Loaded config");
+            tracing::info!("Loaded config");
             self.send_event(Event::ConfigLoaded);
         }
 
@@ -366,7 +395,7 @@ impl RuntimeInner {
             }
         }
 
-        println!("[RUNTIME] Event loop terminated");
+        tracing::info!("Event loop terminated");
     }
 
     async fn handle_command(&self, command: Command) -> Result<()> {
@@ -393,7 +422,7 @@ impl RuntimeInner {
 
             Command::LoadConfig => {
                 self.load_providers_config().await?;
-                println!("[RUNTIME] Loaded config");
+                tracing::info!("Loaded config");
                 self.send_event(Event::ConfigLoaded);
             }
 
@@ -539,7 +568,7 @@ impl RuntimeInner {
                 }
             }
 
-            println!("[RUNTIME] Full content length: {}", full_content.len());
+            tracing::debug!("Full content length: {}", full_content.len());
 
             // Complete the message
             {
@@ -561,15 +590,14 @@ impl RuntimeInner {
                 agent.parse_tool_calls_from_content(&full_content).await
             };
 
-            println!(
-                "[RUNTIME] Found {} tool calls, {} failed",
+            tracing::debug!(
+                "Found {} tool calls, {} failed",
                 tool_calls.len(),
                 failed.len()
             );
 
-            // Handle failed tool calls
             if !failed.is_empty() {
-                println!("[RUNTIME] Failed tool calls found, adding to history");
+                tracing::warn!("Failed tool calls found, adding to history");
                 let mut agent = agent_manager.lock().await;
                 let _ = agent.add_failed_tool_calls_to_history(failed).await;
                 event_callback.on_event(Event::HistoryUpdated);
@@ -590,9 +618,10 @@ impl RuntimeInner {
                         .unwrap_or_default()
                 };
 
-                println!(
-                    "[RUNTIME] Emitting ToolCallDetected: {} - {}",
-                    tool_id, description
+                tracing::debug!(
+                    "Emitting ToolCallDetected: {} - {}",
+                    tool_id,
+                    description
                 );
                 event_callback.on_event(Event::ToolCallDetected {
                     call_id: call_id.to_string(),
@@ -634,7 +663,7 @@ impl RuntimeInner {
                 let _ = agent.add_tool_results_to_history(results).await;
             }
 
-            println!("[RUNTIME] Emitting HistoryUpdated event after tool results");
+            tracing::debug!("Emitting HistoryUpdated event after tool results");
             event_callback.on_event(Event::HistoryUpdated);
 
             // Start continuation stream
@@ -677,7 +706,7 @@ impl RuntimeInner {
                         });
                     }
                     Err(e) => {
-                        println!("[RUNTIME] Continuation stream error: {}", e);
+                        tracing::error!("Continuation stream error: {}", e);
                         event_callback.on_event(Event::StreamError {
                             message_id: msg_id.to_string(),
                             error: e.to_string(),

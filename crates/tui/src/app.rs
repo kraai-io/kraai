@@ -88,7 +88,9 @@ impl App {
                     eprintln!("Error: {}", msg);
                 }
                 Event::StreamStart { message_id } => {
-                    self.state.streaming_content.insert(message_id.clone(), String::new());
+                    self.state
+                        .streaming_content
+                        .insert(message_id.clone(), String::new());
                     self.state.current_streaming_id = Some(message_id);
                     self.state.chat_history.push(ChatMessage {
                         role: ChatRole::Assistant,
@@ -155,7 +157,13 @@ impl App {
                     std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async {
-                            let _ = runtime.send_message(content, MODEL_ID.to_string(), PROVIDER_ID.to_string()).await;
+                            let _ = runtime
+                                .send_message(
+                                    content,
+                                    MODEL_ID.to_string(),
+                                    PROVIDER_ID.to_string(),
+                                )
+                                .await;
                         });
                     });
                 }

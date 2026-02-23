@@ -298,9 +298,11 @@ impl AgentManager {
         let message_id = MessageId::new(Ulid::new());
         let parent_id = self.get_current_tip().await?;
 
-        println!(
-            "[AGENT] Adding message: id={}, role={:?}, parent={:?}",
-            message_id, role, parent_id
+        tracing::debug!(
+            "Adding message: id={}, role={:?}, parent={:?}",
+            message_id,
+            role,
+            parent_id
         );
 
         let message = Message {
@@ -560,9 +562,10 @@ impl AgentManager {
                 format!("Tool '{}' result:\n{}", result.tool_id, output_str)
             };
 
-            println!(
-                "[AGENT] Adding tool result to history: tool_id={}, denied={}",
-                result.tool_id, result.permission_denied
+            tracing::debug!(
+                "Adding tool result to history: tool_id={}, denied={}",
+                result.tool_id,
+                result.permission_denied
             );
 
             self.add_message(ChatRole::Tool, content).await?;

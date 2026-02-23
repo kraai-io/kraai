@@ -67,6 +67,9 @@ thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.49.0" }
 toml = "1.0.1"
 toon-format = "0.4.1"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 trybuild = "1.0.116"
 ulid = "1.2.1"
 url = "2.5.8"
