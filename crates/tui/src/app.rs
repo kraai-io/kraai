@@ -28,6 +28,7 @@ pub struct AppState {
     input: String,
     chat_history: Vec<ChatMessage>,
     scroll: u16,
+    auto_scroll: bool,
     streaming_content: HashMap<String, String>,
     current_streaming_id: Option<String>,
     config_loaded: bool,
@@ -40,6 +41,7 @@ impl App {
             input: String::new(),
             chat_history: Vec::new(),
             scroll: 0,
+            auto_scroll: true,
             streaming_content: HashMap::new(),
             current_streaming_id: None,
             config_loaded: false,
@@ -172,12 +174,16 @@ impl App {
             KeyCode::Backspace => {
                 self.state.input.pop();
             }
-            KeyCode::Down => {
-                if self.state.scroll > 0 {
-                    self.state.scroll -= 1
-                }
+            KeyCode::Up => {
+                self.state.auto_scroll = false;
+                self.state.scroll = self.state.scroll.saturating_sub(1);
             }
-            KeyCode::Up => self.state.scroll += 1,
+            KeyCode::Down => {
+                if self.state.auto_scroll {
+                    self.state.auto_scroll = false;
+                }
+                self.state.scroll = self.state.scroll.saturating_add(1);
+            }
             _ => {}
         }
     }
@@ -200,7 +206,7 @@ impl Widget for AppState {
         .flex(Flex::End);
         let [chat_history_area, input_area] = layout.areas(area);
 
-        ChatHistory::new(&self.chat_history, self.scroll).render(chat_history_area, buf);
+        ChatHistory::new(&self.chat_history, self.scroll, self.auto_scroll).render(chat_history_area, buf);
         TextInput::new(&self.input).render(input_area, buf);
     }
 }
