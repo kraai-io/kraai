@@ -1,15 +1,15 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use agent_runtime::{Event, RuntimeHandle};
 use color_eyre::eyre::Result;
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
     layout::{Constraint, Flex, Layout, Rect},
     widgets::Widget,
 };
-use types::{ChatMessage, ChatRole};
+use types::{ChatRole, Message, MessageId, MessageStatus};
 
 use crate::components::{ChatHistory, TextInput};
 
@@ -19,6 +19,8 @@ const MODEL_ID: &str = "big-pickle";
 pub struct App {
     runtime: RuntimeHandle,
     event_rx: Receiver<Event>,
+    history_rx: Receiver<BTreeMap<MessageId, Message>>,
+    history_tx: Sender<BTreeMap<MessageId, Message>>,
     state: AppState,
 }
 
@@ -26,30 +28,33 @@ pub struct App {
 pub struct AppState {
     exit: bool,
     input: String,
-    chat_history: Vec<ChatMessage>,
+    chat_history: BTreeMap<MessageId, Message>,
     scroll: u16,
     auto_scroll: bool,
-    streaming_content: HashMap<String, String>,
-    current_streaming_id: Option<String>,
     config_loaded: bool,
 }
 
 impl App {
-    pub fn new(runtime: RuntimeHandle, event_rx: Receiver<Event>) -> Self {
+    pub fn new(
+        runtime: RuntimeHandle,
+        event_rx: Receiver<Event>,
+        history_rx: Receiver<BTreeMap<MessageId, Message>>,
+        history_tx: Sender<BTreeMap<MessageId, Message>>,
+    ) -> Self {
         let state = AppState {
             exit: false,
             input: String::new(),
-            chat_history: Vec::new(),
+            chat_history: BTreeMap::new(),
             scroll: 0,
             auto_scroll: true,
-            streaming_content: HashMap::new(),
-            current_streaming_id: None,
             config_loaded: false,
         };
 
         Self {
             runtime,
             event_rx,
+            history_rx,
+            history_tx,
             state,
         }
     }
@@ -85,51 +90,58 @@ impl App {
             match event {
                 Event::ConfigLoaded => {
                     self.state.config_loaded = true;
+                    self.refresh_history();
                 }
                 Event::Error(msg) => {
                     tracing::error!("Error: {}", msg);
                 }
-                Event::StreamStart { message_id } => {
-                    self.state
-                        .streaming_content
-                        .insert(message_id.clone(), String::new());
-                    self.state.current_streaming_id = Some(message_id);
-                    self.state.chat_history.push(ChatMessage {
-                        role: ChatRole::Assistant,
-                        content: String::new(),
-                    });
+                Event::StreamStart { message_id: _ } => {
+                    // Streaming message will appear in history when we refresh
+                    // The runtime's get_chat_history includes streaming messages
                 }
-                Event::StreamChunk { message_id, chunk } => {
-                    if let Some(content) = self.state.streaming_content.get_mut(&message_id) {
-                        content.push_str(&chunk);
-                        if let Some(last) = self.state.chat_history.last_mut()
-                            && last.role == ChatRole::Assistant
-                        {
-                            last.content = content.clone();
-                        }
-                    }
+                Event::StreamChunk { message_id: _, chunk: _ } => {
+                    // Streaming content will appear in history when we refresh
                 }
                 Event::StreamComplete { message_id } => {
-                    if let Some(content) = self.state.streaming_content.remove(&message_id)
-                        && let Some(last) = self.state.chat_history.last_mut()
-                        && last.role == ChatRole::Assistant
-                        && last.content.is_empty()
-                    {
-                        last.content = content;
-                    }
-                    self.state.current_streaming_id = None;
+                    tracing::debug!("Stream complete: {}", message_id);
+                    // Refresh history to get the real message from runtime
+                    self.refresh_history();
                 }
                 Event::StreamError { message_id, error } => {
                     tracing::error!("Stream error for {}: {}", message_id, error);
-                    self.state.streaming_content.remove(&message_id);
-                    self.state.current_streaming_id = None;
                 }
-                Event::HistoryUpdated => {}
+                Event::HistoryUpdated => {
+                    self.refresh_history();
+                }
                 Event::MessageComplete(_msg) => {}
                 Event::ToolCallDetected { .. } => {}
                 Event::ToolResultReady { .. } => {}
             }
         }
+
+        while let Ok(history) = self.history_rx.try_recv() {
+            self.state.chat_history = history;
+            self.state.auto_scroll = true;
+        }
+    }
+
+    fn refresh_history(&mut self) {
+        let runtime = self.runtime.clone();
+        let history_tx = self.history_tx.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                match runtime.get_chat_history().await {
+                    Ok(history) => {
+                        tracing::debug!("Fetched {} messages from history", history.len());
+                        let _ = history_tx.send(history);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to fetch history: {}", e);
+                    }
+                }
+            });
+        });
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -150,10 +162,35 @@ impl App {
             KeyCode::Enter => {
                 if !self.state.input.is_empty() && self.state.config_loaded {
                     let content: String = self.state.input.drain(..).collect();
-                    self.state.chat_history.push(ChatMessage {
+
+                    let runtime = self.runtime.clone();
+                    
+                    // Get the current tip from runtime in a separate thread
+                    let tip_id: Option<MessageId> = std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            runtime.get_current_tip().await.ok().flatten()
+                                .map(MessageId::new)
+                        })
+                    }).join().unwrap();
+
+                    // Add optimistic user message immediately with parent set to current tip
+                    let message_id = MessageId::new(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis()
+                            .to_string(),
+                    );
+                    
+                    let optimistic_message = Message {
+                        id: message_id,
+                        parent_id: tip_id,
                         role: ChatRole::User,
                         content: content.clone(),
-                    });
+                        status: MessageStatus::Complete,
+                    };
+                    self.state.chat_history.insert(optimistic_message.id.clone(), optimistic_message);
 
                     let runtime = self.runtime.clone();
                     std::thread::spawn(move || {
@@ -193,11 +230,51 @@ impl App {
     }
 }
 
+fn build_ordered_messages(history: &BTreeMap<MessageId, Message>) -> Vec<&Message> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+
+    // Build child map (parent_id -> child_id)
+    let mut child_map: std::collections::HashMap<&MessageId, &MessageId> =
+        std::collections::HashMap::new();
+    for (id, msg) in history.iter() {
+        if let Some(parent_id) = &msg.parent_id {
+            child_map.insert(parent_id, id);
+        }
+    }
+
+    // Find tip: message ID that is not a parent of any message (not in child_map values)
+    let all_ids: std::collections::HashSet<&MessageId> =
+        history.keys().collect();
+    let child_ids: std::collections::HashSet<&MessageId> = child_map.values().cloned().collect();
+    
+    let tip_id = all_ids.difference(&child_ids).next().copied();
+
+    // Walk from tip backwards through parents
+    let mut ordered: Vec<&Message> = Vec::new();
+    let mut current_id = tip_id;
+
+    while let Some(id) = current_id {
+        if let Some(msg) = history.get(id) {
+            ordered.push(msg);
+            current_id = msg.parent_id.as_ref();
+        } else {
+            break;
+        }
+    }
+
+    ordered
+}
+
 impl Widget for AppState {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
+        // Build ordered list from tree by walking from tip to root
+        let messages: Vec<&Message> = build_ordered_messages(&self.chat_history);
+        
         let input_height = TextInput::new(&self.input).get_height(area.width);
         let layout = Layout::vertical([
             Constraint::Min(area.height.saturating_sub(input_height)),
@@ -206,7 +283,7 @@ impl Widget for AppState {
         .flex(Flex::End);
         let [chat_history_area, input_area] = layout.areas(area);
 
-        ChatHistory::new(&self.chat_history, self.scroll, self.auto_scroll).render(chat_history_area, buf);
+        ChatHistory::new(&messages, self.scroll, self.auto_scroll).render(chat_history_area, buf);
         TextInput::new(&self.input).render(input_area, buf);
     }
 }

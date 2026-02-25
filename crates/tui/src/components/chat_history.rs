@@ -4,16 +4,16 @@ use ratatui::{
     style::Style,
     widgets::{Block, BorderType, Widget},
 };
-use types::{ChatMessage, ChatRole};
+use types::{ChatRole, Message};
 
 pub struct ChatHistory<'a> {
-    messages: &'a [ChatMessage],
+    messages: &'a [&'a Message],
     scroll: u16,
     auto_scroll: bool,
 }
 
 impl<'a> ChatHistory<'a> {
-    pub fn new(messages: &'a [ChatMessage], scroll: u16, auto_scroll: bool) -> Self {
+    pub fn new(messages: &'a [&'a Message], scroll: u16, auto_scroll: bool) -> Self {
         Self {
             messages,
             scroll,
@@ -45,11 +45,23 @@ impl<'a> ChatHistory<'a> {
     }
 
     fn get_message_height(&self, content: &str, max_width: u16, role: &ChatRole) -> u16 {
-        let wrapped = Self::wrap_text(content, max_width as usize);
-        let lines = wrapped.len().max(1) as u16;
         match role {
-            ChatRole::User | ChatRole::Tool => lines + 2,
-            ChatRole::Assistant | ChatRole::System => lines,
+            ChatRole::System => {
+                Self::wrap_text(content, max_width as usize).len().max(1) as u16
+            }
+            ChatRole::User => {
+                Self::wrap_text(content, max_width as usize - 2)
+                    .len()
+                    .max(1) as u16
+                    + 2
+            }
+            ChatRole::Assistant => Self::wrap_text(content, max_width as usize).len().max(1) as u16,
+            ChatRole::Tool => {
+                Self::wrap_text(content, max_width as usize - 2)
+                    .len()
+                    .max(1) as u16
+                    + 2
+            }
         }
     }
 }
@@ -117,7 +129,7 @@ impl<'a> Widget for ChatHistory<'a> {
 impl<'a> ChatHistory<'a> {
     fn render_message_partial(
         &self,
-        msg: &ChatMessage,
+        msg: &Message,
         area: Rect,
         buf: &mut Buffer,
         start_y: u16,
@@ -152,7 +164,7 @@ impl<'a> ChatHistory<'a> {
 
     fn render_user_message_partial(
         &self,
-        msg: &ChatMessage,
+        msg: &Message,
         area: Rect,
         buf: &mut Buffer,
         start_y: u16,
@@ -220,7 +232,7 @@ impl<'a> ChatHistory<'a> {
 
     fn render_assistant_message_partial(
         &self,
-        msg: &ChatMessage,
+        msg: &Message,
         area: Rect,
         buf: &mut Buffer,
         start_y: u16,
@@ -263,7 +275,7 @@ impl<'a> ChatHistory<'a> {
 
     fn render_tool_message_partial(
         &self,
-        msg: &ChatMessage,
+        msg: &Message,
         area: Rect,
         buf: &mut Buffer,
         start_y: u16,
@@ -331,7 +343,7 @@ impl<'a> ChatHistory<'a> {
 
     fn render_system_message_partial(
         &self,
-        msg: &ChatMessage,
+        msg: &Message,
         area: Rect,
         buf: &mut Buffer,
         start_y: u16,

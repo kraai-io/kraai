@@ -146,7 +146,7 @@ impl AgentManager {
         self.providers.list_all_models().await
     }
 
-    async fn get_current_tip(&self) -> Result<Option<MessageId>> {
+    pub async fn get_current_tip(&self) -> Result<Option<MessageId>> {
         let session_id = match &self.current_session_id {
             Some(id) => id,
             None => return Ok(None),

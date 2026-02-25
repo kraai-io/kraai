@@ -143,6 +143,9 @@ enum Command {
     GetCurrentSessionId {
         response: oneshot::Sender<Option<String>>,
     },
+    GetCurrentTip {
+        response: oneshot::Sender<Option<String>>,
+    },
     GetChatHistory {
         response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
     },
@@ -244,6 +247,15 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::GetCurrentSessionId { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    /// Get the current tip message ID
+    pub async fn get_current_tip(&self) -> Result<Option<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetCurrentTip { response: tx })
             .await?;
         Ok(rx.await?)
     }
@@ -483,6 +495,19 @@ impl RuntimeInner {
                     .map(|s| s.to_string());
                 response
                     .send(session_id)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::GetCurrentTip { response } => {
+                let tip_id = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .get_current_tip()
+                    .await?
+                    .map(|id| id.to_string());
+                response
+                    .send(tip_id)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
