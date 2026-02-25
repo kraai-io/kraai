@@ -2267,6 +2267,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "types",
  "ulid",
 ]
@@ -2470,6 +2471,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tracing",
  "types",
 ]
 
@@ -3908,6 +3910,7 @@ dependencies = [
  "crossbeam-channel",
  "ratatui 0.30.0",
  "tokio",
+ "tracing",
  "types",
 ]
 

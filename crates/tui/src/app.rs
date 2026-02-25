@@ -87,7 +87,7 @@ impl App {
                     self.state.config_loaded = true;
                 }
                 Event::Error(msg) => {
-                    eprintln!("Error: {}", msg);
+                    tracing::error!("Error: {}", msg);
                 }
                 Event::StreamStart { message_id } => {
                     self.state
@@ -120,7 +120,7 @@ impl App {
                     self.state.current_streaming_id = None;
                 }
                 Event::StreamError { message_id, error } => {
-                    eprintln!("Stream error for {}: {}", message_id, error);
+                    tracing::error!("Stream error for {}: {}", message_id, error);
                     self.state.streaming_content.remove(&message_id);
                     self.state.current_streaming_id = None;
                 }

@@ -621,7 +621,7 @@ mod tests {
 
         let result = manager.load_config(config, helper).await;
         if let Err(ref e) = result {
-            eprintln!("Error: {:?}", e);
+            tracing::debug!("Error: {:?}", e);
         }
         assert!(result.is_ok());
         assert!(manager.has_provider(&ProviderId::new("mock")));

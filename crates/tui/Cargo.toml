@@ -10,4 +10,5 @@ color-eyre = { workspace = true }
 crossbeam-channel = "0.5"
 ratatui = { workspace = true }
 tokio = { workspace = true }
+tracing.workspace = true
 types = { workspace = true }
