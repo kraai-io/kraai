@@ -5,7 +5,10 @@ use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
     buffer::Buffer,
-    crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
+    crossterm::event::{
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, MouseEvent,
+        MouseEventKind,
+    },
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
@@ -113,6 +116,7 @@ pub struct App {
 pub struct AppState {
     exit: bool,
     input: String,
+    input_cursor: usize,
     chat_history: BTreeMap<MessageId, Message>,
     optimistic_messages: Vec<OptimisticMessage>,
     optimistic_seq: u64,
@@ -230,6 +234,7 @@ impl App {
         let state = AppState {
             exit: false,
             input: String::new(),
+            input_cursor: 0,
             chat_history: BTreeMap::new(),
             optimistic_messages: Vec::new(),
             optimistic_seq: 0,
@@ -264,13 +269,16 @@ impl App {
     pub fn run(&mut self, mut terminal: ratatui::DefaultTerminal) -> Result<()> {
         while !self.state.exit {
             self.process_events();
+            let area = terminal.size()?;
+            self.clamp_scroll_for_area(area.into());
 
             terminal.draw(|frame| {
                 let area = frame.area();
                 frame.render_widget(self.state.clone(), area);
 
                 if self.state.mode == UiMode::Chat {
-                    let input_height = TextInput::new(&self.state.input).get_height(area.width);
+                    let input_height =
+                        TextInput::new(&self.state.input, self.state.input_cursor).get_height(area.width);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
                         Constraint::Length(1),
@@ -279,8 +287,11 @@ impl App {
                     .flex(Flex::End);
                     let [_chat_area, _status_area, input_area] = layout.areas(area);
 
-                    let (cursor_x, cursor_y) =
-                        TextInput::new(&self.state.input).get_cursor_position(input_area);
+                    let (cursor_x, cursor_y) = TextInput::new(
+                        &self.state.input,
+                        self.state.input_cursor,
+                    )
+                    .get_cursor_position(input_area);
                     frame.set_cursor_position((cursor_x, cursor_y));
                 }
             })?;
@@ -313,8 +324,10 @@ impl App {
             }
             Event::StreamStart { .. } => {
                 self.state.is_streaming = true;
+                self.request(RuntimeRequest::GetCurrentTip);
             }
             Event::StreamChunk { .. } => {
+                self.request(RuntimeRequest::GetCurrentTip);
                 self.request(RuntimeRequest::GetChatHistory);
             }
             Event::StreamComplete { .. } => {
@@ -391,14 +404,14 @@ impl App {
             }
             RuntimeResponse::ChatHistory(Ok(history)) => {
                 self.state.chat_history = history;
-                self.state.optimistic_messages.clear();
-                self.state.auto_scroll = true;
+                self.reconcile_optimistic_messages();
             }
             RuntimeResponse::ChatHistory(Err(err)) => {
                 self.state.status = format!("Failed loading history: {err}");
             }
             RuntimeResponse::CurrentTip(Ok(tip)) => {
                 self.state.current_tip_id = tip;
+                self.reconcile_optimistic_messages();
             }
             RuntimeResponse::CurrentTip(Err(err)) => {
                 self.state.status = format!("Failed loading tip: {err}");
@@ -499,10 +512,29 @@ impl App {
                 CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     self.handle_key_event(key_event)
                 }
+                CrosstermEvent::Mouse(mouse_event) => self.handle_mouse_event(mouse_event),
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if self.state.mode != UiMode::Chat {
+            return;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                self.state.auto_scroll = false;
+                self.state.scroll = self.state.scroll.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.state.auto_scroll = false;
+                self.state.scroll = self.state.scroll.saturating_add(3);
+            }
+            _ => {}
+        }
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -539,28 +571,39 @@ impl App {
                 self.cycle_command_suggestion(false);
             }
             KeyCode::Char(c) => {
-                self.state.input.push(c);
+                self.insert_input_char(c);
                 self.reset_completion_cycle();
             }
             KeyCode::Backspace => {
-                self.state.input.pop();
+                self.backspace_input_char();
                 self.reset_completion_cycle();
             }
             KeyCode::Up => {
-                if has_command_popup_matches(&self.state.input) {
-                    self.cycle_command_suggestion(false);
-                } else {
-                    self.state.auto_scroll = false;
-                    self.state.scroll = self.state.scroll.saturating_sub(1);
-                }
+                self.state.input_cursor = 0;
             }
             KeyCode::Down => {
-                if has_command_popup_matches(&self.state.input) {
-                    self.cycle_command_suggestion(true);
-                } else {
-                    self.state.auto_scroll = false;
-                    self.state.scroll = self.state.scroll.saturating_add(1);
-                }
+                self.state.input_cursor = self.state.input.len();
+            }
+            KeyCode::Left => {
+                self.move_input_cursor_left();
+            }
+            KeyCode::Right => {
+                self.move_input_cursor_right();
+            }
+            KeyCode::PageUp => {
+                self.state.auto_scroll = false;
+                self.state.scroll = self.state.scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.state.auto_scroll = false;
+                self.state.scroll = self.state.scroll.saturating_add(10);
+            }
+            KeyCode::Home => {
+                self.state.auto_scroll = false;
+                self.state.scroll = 0;
+            }
+            KeyCode::End => {
+                self.state.auto_scroll = true;
             }
             _ => {}
         }
@@ -735,6 +778,7 @@ impl App {
             return;
         }
         self.state.input.clear();
+        self.state.input_cursor = 0;
 
         if let Some(command) = raw_input.strip_prefix('/') {
             self.handle_command(command.trim());
@@ -764,6 +808,7 @@ impl App {
         self.state.is_streaming = true;
         self.state.status = format!("Sending with {provider_id}/{model_id}");
         self.state.auto_scroll = true;
+        self.state.current_tip_id = None;
 
         self.request(RuntimeRequest::SendMessage {
             message: raw_input,
@@ -832,6 +877,62 @@ impl App {
         flatten_models_map(&self.state.models_by_provider)
     }
 
+    fn insert_input_char(&mut self, ch: char) {
+        let cursor = self.state.input_cursor.min(self.state.input.len());
+        if self.state.input.is_char_boundary(cursor) {
+            self.state.input.insert(cursor, ch);
+            self.state.input_cursor = cursor + ch.len_utf8();
+        }
+    }
+
+    fn backspace_input_char(&mut self) {
+        let cursor = self.state.input_cursor.min(self.state.input.len());
+        if cursor == 0 || !self.state.input.is_char_boundary(cursor) {
+            return;
+        }
+
+        let prev = self
+            .state
+            .input
+            .char_indices()
+            .take_while(|(idx, _)| *idx < cursor)
+            .last()
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        self.state.input.drain(prev..cursor);
+        self.state.input_cursor = prev;
+    }
+
+    fn move_input_cursor_left(&mut self) {
+        let cursor = self.state.input_cursor.min(self.state.input.len());
+        let prev = self
+            .state
+            .input
+            .char_indices()
+            .take_while(|(idx, _)| *idx < cursor)
+            .last()
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        self.state.input_cursor = prev;
+    }
+
+    fn move_input_cursor_right(&mut self) {
+        let cursor = self.state.input_cursor.min(self.state.input.len());
+        if cursor >= self.state.input.len() {
+            self.state.input_cursor = self.state.input.len();
+            return;
+        }
+
+        let next = self
+            .state
+            .input
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .find(|idx| *idx > cursor)
+            .unwrap_or(self.state.input.len());
+        self.state.input_cursor = next;
+    }
+
     fn set_tool_approval(&mut self, call_id: &str, approved: Option<bool>) {
         if let Some(tool) = self
             .state
@@ -853,6 +954,58 @@ impl App {
 
     fn request(&self, req: RuntimeRequest) {
         let _ = self.runtime_tx.send(req);
+    }
+
+    fn reconcile_optimistic_messages(&mut self) {
+        if self.state.optimistic_messages.is_empty() {
+            return;
+        }
+
+        let visible_chain = build_tip_chain(&self.state.chat_history, self.state.current_tip_id.as_deref());
+        let mut seen_users: HashMap<String, usize> = HashMap::new();
+        for msg in visible_chain {
+            if msg.role == ChatRole::User {
+                let key = msg.content.trim().to_string();
+                *seen_users.entry(key).or_insert(0) += 1;
+            }
+        }
+
+        self.state.optimistic_messages.retain(|optimistic| {
+            let key = optimistic.content.trim().to_string();
+            match seen_users.get_mut(&key) {
+                Some(count) if *count > 0 => {
+                    *count -= 1;
+                    false
+                }
+                _ => true,
+            }
+        });
+    }
+
+    fn clamp_scroll_for_area(&mut self, area: Rect) {
+        let input_height =
+            TextInput::new(&self.state.input, self.state.input_cursor).get_height(area.width);
+        let layout = Layout::vertical([
+            Constraint::Min(area.height.saturating_sub(input_height + 1)),
+            Constraint::Length(1),
+            Constraint::Length(input_height),
+        ])
+        .flex(Flex::End);
+        let [chat_history_area, _status_area, _input_area] = layout.areas(area);
+
+        let rendered_messages = self.state.rendered_messages();
+        let message_refs: Vec<&Message> = rendered_messages.iter().collect();
+        let max_scroll = ChatHistory::max_scroll(
+            &message_refs,
+            chat_history_area.width,
+            chat_history_area.height,
+        );
+
+        if self.state.auto_scroll {
+            self.state.scroll = max_scroll;
+        } else {
+            self.state.scroll = self.state.scroll.min(max_scroll);
+        }
     }
 }
 
@@ -876,10 +1029,16 @@ fn build_tip_chain<'a>(
         .find(|id| !parent_ids.contains(*id))
         .map(ToString::to_string);
 
-    let tip_id = current_tip_id
-        .filter(|id| history.contains_key(&MessageId::new((*id).to_string())))
-        .map(|id| MessageId::new(id.to_string()))
-        .or_else(|| inferred_tip.map(MessageId::new));
+    let current_tip_is_leaf = current_tip_id.is_some_and(|id| {
+        let message_id = MessageId::new(id.to_string());
+        history.contains_key(&message_id) && !parent_ids.contains(&message_id)
+    });
+
+    let tip_id = if current_tip_is_leaf {
+        current_tip_id.map(|id| MessageId::new(id.to_string()))
+    } else {
+        inferred_tip.map(MessageId::new)
+    };
 
     let mut chain = Vec::new();
     let mut cursor = tip_id;
@@ -913,11 +1072,8 @@ fn flatten_models_map(models_by_provider: &HashMap<String, Vec<Model>>) -> Vec<(
     flattened
 }
 
-impl Widget for AppState {
-    fn render(self, area: Rect, buf: &mut Buffer)
-    where
-        Self: Sized,
-    {
+impl AppState {
+    fn rendered_messages(&self) -> Vec<Message> {
         let mut rendered_messages: Vec<Message> =
             build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
                 .into_iter()
@@ -934,9 +1090,20 @@ impl Widget for AppState {
             });
         }
 
+        rendered_messages
+    }
+}
+
+impl Widget for AppState {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let rendered_messages = self.rendered_messages();
+
         let message_refs: Vec<&Message> = rendered_messages.iter().collect();
 
-        let input_height = TextInput::new(&self.input).get_height(area.width);
+        let input_height = TextInput::new(&self.input, self.input_cursor).get_height(area.width);
         let layout = Layout::vertical([
             Constraint::Min(area.height.saturating_sub(input_height + 1)),
             Constraint::Length(1),
@@ -969,7 +1136,7 @@ impl Widget for AppState {
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
 
-        TextInput::new(&self.input).render(input_area, buf);
+        TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
         if self.mode == UiMode::Chat {
             render_command_popup(&self, area, input_area, buf);
         }
@@ -998,12 +1165,6 @@ fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
         .copied()
         .filter(|(command, _)| command.starts_with(prefix))
         .collect()
-}
-
-fn has_command_popup_matches(input: &str) -> bool {
-    active_command_prefix(input)
-        .map(slash_command_matches)
-        .is_some_and(|matches| !matches.is_empty())
 }
 
 fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
@@ -1225,6 +1386,12 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("/tools     Open tools approval menu"),
         Line::raw("/new       Start a new session"),
         Line::raw("/quit      Exit the TUI"),
+        Line::raw(""),
+        Line::styled("Chat Navigation", Style::default().add_modifier(Modifier::BOLD)),
+        Line::raw("Up/Down    Scroll history"),
+        Line::raw("PgUp/PgDn  Scroll faster"),
+        Line::raw("End        Jump to latest"),
+        Line::raw("Home       Jump to top"),
         Line::raw(""),
         Line::raw("Esc closes menus."),
     ];

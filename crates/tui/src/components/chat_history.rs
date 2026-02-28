@@ -1,8 +1,8 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::Style,
-    widgets::{Block, BorderType, Widget},
+    style::{Color, Style},
+    widgets::Widget,
 };
 use types::{ChatRole, Message};
 
@@ -10,6 +10,11 @@ pub struct ChatHistory<'a> {
     messages: &'a [&'a Message],
     scroll: u16,
     auto_scroll: bool,
+}
+
+struct RenderedLine {
+    text: String,
+    style: Style,
 }
 
 impl<'a> ChatHistory<'a> {
@@ -21,46 +26,194 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn wrap_text(content: &str, max_width: usize) -> Vec<String> {
-        let mut result = Vec::new();
+    fn wrap_with_prefix(text: &str, width: usize, first_prefix: &str, cont_prefix: &str) -> Vec<String> {
+        if width == 0 {
+            return Vec::new();
+        }
 
-        for mut line in content.lines() {
-            if line.len() <= max_width {
-                result.push(line.to_string());
-            } else {
-                loop {
-                    let (a, b) = line.split_at(max_width);
-                    line = b;
-                    result.push(a.to_string());
+        let mut wrapped = Vec::new();
+        let mut first_visual_line = true;
 
-                    if line.len() <= max_width {
-                        result.push(line.to_string());
-                        break;
-                    }
+        let source_lines: Vec<&str> = if text.is_empty() {
+            vec![""]
+        } else {
+            text.lines().collect()
+        };
+
+        for source_line in source_lines {
+            let mut chars: Vec<char> = source_line.chars().collect();
+            if chars.is_empty() {
+                let prefix = if first_visual_line {
+                    first_prefix
+                } else {
+                    cont_prefix
+                };
+                wrapped.push(Self::fit_to_width(prefix, width));
+                first_visual_line = false;
+                continue;
+            }
+
+            loop {
+                let prefix = if first_visual_line {
+                    first_prefix
+                } else {
+                    cont_prefix
+                };
+                let prefix_width = prefix.chars().count();
+                let available = width.saturating_sub(prefix_width);
+
+                if available == 0 {
+                    wrapped.push(Self::fit_to_width(prefix, width));
+                    first_visual_line = false;
+                    continue;
+                }
+
+                let take_count = available.min(chars.len());
+                let chunk: String = chars.drain(0..take_count).collect();
+                wrapped.push(format!("{prefix}{chunk}"));
+                first_visual_line = false;
+
+                if chars.is_empty() {
+                    break;
                 }
             }
         }
 
-        result
+        if wrapped.is_empty() {
+            wrapped.push(Self::fit_to_width(first_prefix, width));
+        }
+
+        wrapped
     }
 
-    fn get_message_height(&self, content: &str, max_width: u16, role: &ChatRole) -> u16 {
-        match role {
-            ChatRole::System => Self::wrap_text(content, max_width as usize).len().max(1) as u16,
-            ChatRole::User => {
-                Self::wrap_text(content, max_width as usize - 2)
-                    .len()
-                    .max(1) as u16
-                    + 2
+    fn fit_to_width(content: &str, width: usize) -> String {
+        content.chars().take(width).collect()
+    }
+
+    fn compact_whitespace(content: &str) -> String {
+        content.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn extract_value(line: &str) -> String {
+        let trimmed = line.trim();
+        if let Some((_, value)) = trimmed.split_once(':') {
+            return Self::compact_whitespace(value);
+        }
+        Self::compact_whitespace(trimmed)
+    }
+
+    fn compact_tool_summary(content: &str) -> String {
+        let lines: Vec<&str> = content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        if lines.is_empty() {
+            return String::from("call unknown");
+        }
+
+        let mut call: Option<String> = None;
+        let mut args: Option<String> = None;
+        let mut error: Option<String> = None;
+
+        for line in &lines {
+            let lower = line.to_ascii_lowercase();
+
+            if call.is_none() && (lower.contains("tool") || lower.contains("call")) {
+                call = Some(Self::extract_value(line));
             }
-            ChatRole::Assistant => Self::wrap_text(content, max_width as usize).len().max(1) as u16,
-            ChatRole::Tool => {
-                Self::wrap_text(content, max_width as usize - 2)
-                    .len()
-                    .max(1) as u16
-                    + 2
+            if args.is_none()
+                && (lower.contains("args")
+                    || lower.contains("argument")
+                    || line.trim_start().starts_with('{')
+                    || line.trim_start().starts_with('['))
+            {
+                args = Some(Self::extract_value(line));
+            }
+            if error.is_none()
+                && (lower.contains("error") || lower.contains("failed") || lower.contains("denied"))
+            {
+                error = Some(Self::extract_value(line));
             }
         }
+
+        if call.is_none() {
+            call = Some(Self::compact_whitespace(lines[0]));
+        }
+
+        let mut parts = Vec::new();
+        if let Some(call) = call {
+            parts.push(format!("call {call}"));
+        }
+        if let Some(args) = args {
+            parts.push(format!("args {args}"));
+        }
+        if let Some(error) = error {
+            parts.push(format!("error {error}"));
+        }
+
+        parts.join(" | ")
+    }
+
+    fn build_rendered_lines(&self, width: u16) -> Vec<RenderedLine> {
+        let width = width as usize;
+        let mut rendered = Vec::new();
+
+        for msg in self.messages {
+            if msg.role == ChatRole::System {
+                continue;
+            }
+
+            if !rendered.is_empty() {
+                rendered.push(RenderedLine {
+                    text: String::new(),
+                    style: Style::default(),
+                });
+            }
+
+            match msg.role {
+                ChatRole::User => {
+                    let lines = Self::wrap_with_prefix(&msg.content, width, "You > ", "      ");
+                    for line in lines {
+                        rendered.push(RenderedLine {
+                            text: line,
+                            style: Style::default().fg(Color::Cyan),
+                        });
+                    }
+                }
+                ChatRole::Assistant => {
+                    let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
+                    for line in lines {
+                        rendered.push(RenderedLine {
+                            text: line,
+                            style: Style::default().fg(Color::Green),
+                        });
+                    }
+                }
+                ChatRole::Tool => {
+                    let compact = Self::compact_tool_summary(&msg.content);
+                    let lines = Self::wrap_with_prefix(&compact, width, "tool: ", "      ");
+                    for line in lines {
+                        rendered.push(RenderedLine {
+                            text: line,
+                            style: Style::default().fg(Color::Yellow),
+                        });
+                    }
+                }
+                ChatRole::System => {}
+            }
+        }
+
+        rendered
+    }
+
+    pub fn max_scroll(messages: &'a [&'a Message], width: u16, height: u16) -> u16 {
+        if width == 0 || height == 0 {
+            return 0;
+        }
+        let lines_len = Self::new(messages, 0, true).build_rendered_lines(width).len() as u16;
+        lines_len.saturating_sub(height)
     }
 }
 
@@ -69,316 +222,96 @@ impl<'a> Widget for ChatHistory<'a> {
     where
         Self: Sized,
     {
-        if area.width < 4 || area.height < 2 || self.messages.is_empty() {
+        if area.width == 0 || area.height == 0 {
             return;
         }
 
-        let total_height: u16 = self
-            .messages
-            .iter()
-            .map(|m| self.get_message_height(&m.content, area.width, &m.role))
-            .sum();
+        let lines = self.build_rendered_lines(area.width);
+        if lines.is_empty() {
+            return;
+        }
 
+        let total_height = lines.len() as u16;
         let max_scroll = total_height.saturating_sub(area.height);
-
         let scroll = if self.auto_scroll {
             max_scroll
         } else {
             self.scroll.min(max_scroll)
         };
 
-        let mut accumulated: u16 = 0;
-        let mut visible_start = 0;
-        let mut lines_to_skip: u16 = 0;
+        let start_idx = scroll as usize;
+        let end_idx = start_idx.saturating_add(area.height as usize).min(lines.len());
 
-        for (i, msg) in self.messages.iter().enumerate() {
-            let height = self.get_message_height(&msg.content, area.width, &msg.role);
+        for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
+            let y = area.y + visual_idx as u16;
 
-            if accumulated + height > scroll {
-                visible_start = i;
-                lines_to_skip = scroll.saturating_sub(accumulated);
-                break;
+            for x_offset in 0..area.width {
+                buf[(area.x + x_offset, y)]
+                    .set_char(' ')
+                    .set_style(Style::default());
             }
-            accumulated = accumulated.saturating_add(height);
-        }
 
-        let mut current_y = area.y;
-        let mut remaining_height = area.height;
-
-        for msg in &self.messages[visible_start..] {
-            if remaining_height == 0 {
-                break;
+            for (char_idx, ch) in line.text.chars().enumerate() {
+                let x = area.x + char_idx as u16;
+                if x >= area.x + area.width {
+                    break;
+                }
+                buf[(x, y)].set_char(ch).set_style(line.style);
             }
-            let used = self.render_message_partial(
-                msg,
-                area,
-                buf,
-                current_y,
-                lines_to_skip,
-                remaining_height,
-            );
-            current_y = current_y.saturating_add(used);
-            remaining_height = remaining_height.saturating_sub(used);
-            lines_to_skip = 0;
         }
     }
 }
 
-impl<'a> ChatHistory<'a> {
-    fn render_message_partial(
-        &self,
-        msg: &Message,
-        area: Rect,
-        buf: &mut Buffer,
-        start_y: u16,
-        lines_to_skip: u16,
-        max_height: u16,
-    ) -> u16 {
-        match msg.role {
-            ChatRole::User => {
-                self.render_user_message_partial(msg, area, buf, start_y, lines_to_skip, max_height)
-            }
-            ChatRole::Assistant => self.render_assistant_message_partial(
-                msg,
-                area,
-                buf,
-                start_y,
-                lines_to_skip,
-                max_height,
-            ),
-            ChatRole::Tool => {
-                self.render_tool_message_partial(msg, area, buf, start_y, lines_to_skip, max_height)
-            }
-            ChatRole::System => self.render_system_message_partial(
-                msg,
-                area,
-                buf,
-                start_y,
-                lines_to_skip,
-                max_height,
-            ),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::{MessageId, MessageStatus};
+
+    fn message(id: &str, role: ChatRole, content: &str) -> Message {
+        Message {
+            id: MessageId::new(id),
+            parent_id: None,
+            role,
+            content: content.to_string(),
+            status: MessageStatus::Complete,
         }
     }
 
-    fn render_user_message_partial(
-        &self,
-        msg: &Message,
-        area: Rect,
-        buf: &mut Buffer,
-        start_y: u16,
-        lines_to_skip: u16,
-        max_height: u16,
-    ) -> u16 {
-        let color = ratatui::style::Color::Cyan;
-        let style = Style::default().fg(color);
-
-        let inner_width = area.width.saturating_sub(2) as usize;
-        let wrapped = Self::wrap_text(&msg.content, inner_width);
-        let total_lines = wrapped.len() + 2;
-
-        let skip_usize = lines_to_skip as usize;
-        let available = max_height as usize;
-
-        let render_from = skip_usize.min(total_lines);
-        let render_count = available.min(total_lines.saturating_sub(render_from));
-
-        if render_count == 0 {
-            return 0;
-        }
-
-        for line_offset in 0..render_count {
-            let line_idx = render_from + line_offset;
-            let y = start_y + line_offset as u16;
-
-            match line_idx {
-                0 => {
-                    let border_area = Rect::new(area.x, y, area.width, 1);
-                    Block::bordered()
-                        .border_type(BorderType::Thick)
-                        .border_style(style)
-                        .render(border_area, buf);
-                }
-                n if n == total_lines - 1 => {
-                    let border_area = Rect::new(area.x, y, area.width, 1);
-                    Block::bordered()
-                        .border_type(BorderType::Thick)
-                        .border_style(style)
-                        .render(border_area, buf);
-                }
-                content_idx => {
-                    buf[(area.x, y)].set_char('│').set_style(style);
-                    buf[(area.x + area.width - 1, y)]
-                        .set_char('│')
-                        .set_style(style);
-
-                    let text_line_idx = content_idx - 1;
-                    if text_line_idx < wrapped.len() {
-                        let line = &wrapped[text_line_idx];
-                        for (char_idx, ch) in line.chars().enumerate() {
-                            let x = area.x + 1 + char_idx as u16;
-                            if x < area.x + area.width - 1 {
-                                buf[(x, y)].set_char(ch).set_style(style);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        render_count as u16
+    #[test]
+    fn wraps_unicode_without_panicking() {
+        let wrapped = ChatHistory::wrap_with_prefix("hello 👋 world", 8, "", "");
+        assert!(!wrapped.is_empty());
+        assert!(wrapped.iter().all(|line| line.chars().count() <= 8));
     }
 
-    fn render_assistant_message_partial(
-        &self,
-        msg: &Message,
-        area: Rect,
-        buf: &mut Buffer,
-        start_y: u16,
-        lines_to_skip: u16,
-        max_height: u16,
-    ) -> u16 {
-        let color = ratatui::style::Color::Green;
-        let style = Style::default().fg(color);
+    #[test]
+    fn filters_system_messages_from_rendered_lines() {
+        let system = message("1", ChatRole::System, "internal");
+        let assistant = message("2", ChatRole::Assistant, "visible");
+        let refs = [&system, &assistant];
 
-        let wrapped = Self::wrap_text(&msg.content, area.width as usize);
-        let total_lines = wrapped.len().max(1);
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(40);
 
-        let skip_usize = lines_to_skip as usize;
-        let available = max_height as usize;
-
-        let render_from = skip_usize.min(total_lines);
-        let render_count = available.min(total_lines.saturating_sub(render_from));
-
-        if render_count == 0 {
-            return 0;
-        }
-
-        for line_offset in 0..render_count {
-            let line_idx = render_from + line_offset;
-            let y = start_y + line_offset as u16;
-
-            if line_idx < wrapped.len() {
-                let line = &wrapped[line_idx];
-                for (char_idx, ch) in line.chars().enumerate() {
-                    let x = area.x + char_idx as u16;
-                    if x < area.x + area.width {
-                        buf[(x, y)].set_char(ch).set_style(style);
-                    }
-                }
-            }
-        }
-
-        render_count as u16
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "visible");
     }
 
-    fn render_tool_message_partial(
-        &self,
-        msg: &Message,
-        area: Rect,
-        buf: &mut Buffer,
-        start_y: u16,
-        lines_to_skip: u16,
-        max_height: u16,
-    ) -> u16 {
-        let color = ratatui::style::Color::Yellow;
-        let style = Style::default().fg(color);
+    #[test]
+    fn renders_tool_messages_in_compact_form() {
+        let tool = message(
+            "1",
+            ChatRole::Tool,
+            "tool_id: read_file\nargs: {\"path\":\"foo.txt\"}\nerror: denied",
+        );
+        let refs = [&tool];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
 
-        let inner_width = area.width.saturating_sub(2) as usize;
-        let wrapped = Self::wrap_text(&msg.content, inner_width);
-        let total_lines = wrapped.len() + 2;
-
-        let skip_usize = lines_to_skip as usize;
-        let available = max_height as usize;
-
-        let render_from = skip_usize.min(total_lines);
-        let render_count = available.min(total_lines.saturating_sub(render_from));
-
-        if render_count == 0 {
-            return 0;
-        }
-
-        for line_offset in 0..render_count {
-            let line_idx = render_from + line_offset;
-            let y = start_y + line_offset as u16;
-
-            match line_idx {
-                0 => {
-                    let border_area = Rect::new(area.x, y, area.width, 1);
-                    Block::bordered()
-                        .border_type(BorderType::Rounded)
-                        .border_style(style)
-                        .render(border_area, buf);
-                }
-                n if n == total_lines - 1 => {
-                    let border_area = Rect::new(area.x, y, area.width, 1);
-                    Block::bordered()
-                        .border_type(BorderType::Rounded)
-                        .border_style(style)
-                        .render(border_area, buf);
-                }
-                content_idx => {
-                    buf[(area.x, y)].set_char('│').set_style(style);
-                    buf[(area.x + area.width - 1, y)]
-                        .set_char('│')
-                        .set_style(style);
-
-                    let text_line_idx = content_idx - 1;
-                    if text_line_idx < wrapped.len() {
-                        let line = &wrapped[text_line_idx];
-                        for (char_idx, ch) in line.chars().enumerate() {
-                            let x = area.x + 1 + char_idx as u16;
-                            if x < area.x + area.width - 1 {
-                                buf[(x, y)].set_char(ch).set_style(style);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        render_count as u16
-    }
-
-    fn render_system_message_partial(
-        &self,
-        msg: &Message,
-        area: Rect,
-        buf: &mut Buffer,
-        start_y: u16,
-        lines_to_skip: u16,
-        max_height: u16,
-    ) -> u16 {
-        let color = ratatui::style::Color::Gray;
-        let style = Style::default().fg(color);
-
-        let wrapped = Self::wrap_text(&msg.content, area.width as usize);
-        let total_lines = wrapped.len().max(1);
-
-        let skip_usize = lines_to_skip as usize;
-        let available = max_height as usize;
-
-        let render_from = skip_usize.min(total_lines);
-        let render_count = available.min(total_lines.saturating_sub(render_from));
-
-        if render_count == 0 {
-            return 0;
-        }
-
-        for line_offset in 0..render_count {
-            let line_idx = render_from + line_offset;
-            let y = start_y + line_offset as u16;
-
-            if line_idx < wrapped.len() {
-                let line = &wrapped[line_idx];
-                for (char_idx, ch) in line.chars().enumerate() {
-                    let x = area.x + char_idx as u16;
-                    if x < area.x + area.width {
-                        buf[(x, y)].set_char(ch).set_style(style);
-                    }
-                }
-            }
-        }
-
-        render_count as u16
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].text.contains("tool:"));
+        assert!(lines[0].text.contains("call read_file"));
+        assert!(lines[0].text.contains("args {\"path\":\"foo.txt\"}"));
+        assert!(lines[0].text.contains("error denied"));
     }
 }

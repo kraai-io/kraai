@@ -1,6 +1,11 @@
 use agent_runtime::{Event, RuntimeBuilder};
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Sender, bounded};
+use ratatui::crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+};
+use std::io::stdout;
 
 use crate::app::App;
 
@@ -21,9 +26,11 @@ fn main() -> Result<()> {
     let mut app = App::new(runtime, event_rx);
 
     let terminal = ratatui::init();
+    execute!(stdout(), EnableMouseCapture)?;
 
     let result = app.run(terminal);
 
+    execute!(stdout(), DisableMouseCapture)?;
     ratatui::restore();
 
     result

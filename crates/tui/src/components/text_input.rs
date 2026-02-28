@@ -7,32 +7,37 @@ use ratatui::{
 
 pub struct TextInput<'a> {
     input: &'a str,
+    cursor: usize,
 }
 
 impl<'a> TextInput<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Self { input }
+    pub fn new(input: &'a str, cursor: usize) -> Self {
+        Self { input, cursor }
     }
 
     fn wrap_text(content: &str, max_width: usize) -> Vec<String> {
-        let mut result = Vec::new();
-
-        let mut line = content.to_string();
-        if line.len() <= max_width {
-            result.push(line);
-        } else {
-            loop {
-                let (a, b) = line.split_at(max_width);
-                result.push(a.to_string());
-                line = b.to_string();
-
-                if line.len() <= max_width {
-                    result.push(line);
-                    break;
-                }
-            }
+        if max_width == 0 {
+            return vec![String::new()];
         }
 
+        let mut result = Vec::new();
+        let mut current = String::new();
+
+        for ch in content.chars() {
+            if ch == '\n' {
+                result.push(current);
+                current = String::new();
+                continue;
+            }
+
+            if current.chars().count() >= max_width {
+                result.push(current);
+                current = String::new();
+            }
+            current.push(ch);
+        }
+
+        result.push(current);
         result
     }
 
@@ -45,7 +50,11 @@ impl<'a> TextInput<'a> {
     }
 
     pub fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
-        let display = format!("> {}", self.input);
+        let safe_cursor = self
+            .cursor
+            .min(self.input.len())
+            .min(next_char_boundary(self.input, self.cursor));
+        let display = format!("> {}", &self.input[..safe_cursor]);
         let max_width = area.width.saturating_sub(4) as usize;
         let lines = Self::wrap_text(&display, max_width);
 
@@ -54,7 +63,7 @@ impl<'a> TextInput<'a> {
         let last_line = lines.last().unwrap_or(&empty);
 
         let cursor_line_idx = (line_count.saturating_sub(1)) as u16;
-        let cursor_x = area.x + 2 + last_line.len() as u16;
+        let cursor_x = area.x + 2 + last_line.chars().count() as u16;
         let cursor_y = area.y + 1 + cursor_line_idx;
 
         (cursor_x, cursor_y)
@@ -65,7 +74,7 @@ impl<'a> Widget for TextInput<'a> {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
-    {
+        {
         Block::bordered()
             .border_type(BorderType::Rounded)
             .render(area, buf);
@@ -88,4 +97,18 @@ impl<'a> Widget for TextInput<'a> {
             }
         }
     }
+}
+
+fn next_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    if s.is_char_boundary(idx) {
+        return idx;
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
