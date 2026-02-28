@@ -15,6 +15,15 @@ use types::{ChatRole, Message, MessageId, MessageStatus};
 
 use crate::components::{ChatHistory, TextInput};
 
+const SLASH_COMMANDS: [(&str, &str); 6] = [
+    ("help", "Open command help"),
+    ("model", "Open model selector"),
+    ("new", "Start new session"),
+    ("quit", "Exit the TUI"),
+    ("sessions", "Open sessions menu"),
+    ("tools", "Open tools approval menu"),
+];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum UiMode {
     Chat,
@@ -123,6 +132,8 @@ pub struct AppState {
     model_menu_index: usize,
     sessions_menu_index: usize,
     tools_menu_index: usize,
+    command_completion_prefix: Option<String>,
+    command_completion_index: usize,
 }
 
 impl App {
@@ -237,6 +248,8 @@ impl App {
             model_menu_index: 0,
             sessions_menu_index: 0,
             tools_menu_index: 0,
+            command_completion_prefix: None,
+            command_completion_index: 0,
         };
 
         Self {
@@ -510,10 +523,25 @@ impl App {
 
     fn handle_chat_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Enter => self.handle_submit(),
-            KeyCode::Char(c) => self.state.input.push(c),
+            KeyCode::Enter => {
+                if !self.select_current_command_suggestion() {
+                    self.reset_completion_cycle();
+                    self.handle_submit();
+                }
+            }
+            KeyCode::Tab => {
+                self.cycle_command_suggestion(true);
+            }
+            KeyCode::BackTab => {
+                self.cycle_command_suggestion(false);
+            }
+            KeyCode::Char(c) => {
+                self.state.input.push(c);
+                self.reset_completion_cycle();
+            }
             KeyCode::Backspace => {
                 self.state.input.pop();
+                self.reset_completion_cycle();
             }
             KeyCode::Up => {
                 self.state.auto_scroll = false;
@@ -525,6 +553,60 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn reset_completion_cycle(&mut self) {
+        self.state.command_completion_prefix = None;
+        self.state.command_completion_index = 0;
+    }
+
+    fn cycle_command_suggestion(&mut self, forward: bool) {
+        let Some(prefix) = active_command_prefix(&self.state.input) else {
+            return;
+        };
+        let matches = slash_command_matches(prefix);
+        if matches.is_empty() {
+            self.state.status = format!("No command matches '/{prefix}'");
+            return;
+        }
+
+        let next_index = if self.state.command_completion_prefix.as_deref() == Some(prefix) {
+            if forward {
+                (self.state.command_completion_index + 1) % matches.len()
+            } else if self.state.command_completion_index == 0 {
+                matches.len() - 1
+            } else {
+                self.state.command_completion_index - 1
+            }
+        } else if forward {
+            usize::from(matches.len() > 1)
+        } else {
+            matches.len() - 1
+        };
+
+        self.state.command_completion_prefix = Some(prefix.to_string());
+        self.state.command_completion_index = next_index;
+    }
+
+    fn select_current_command_suggestion(&mut self) -> bool {
+        let Some(prefix) = active_command_prefix(&self.state.input) else {
+            return false;
+        };
+        let matches = slash_command_matches(prefix);
+        if matches.is_empty() {
+            return false;
+        }
+
+        let selected_idx = if self.state.command_completion_prefix.as_deref() == Some(prefix) {
+            self.state.command_completion_index.min(matches.len() - 1)
+        } else {
+            0
+        };
+
+        let command = matches[selected_idx].0;
+        self.state.input = format!("/{command} ");
+        self.reset_completion_cycle();
+        true
     }
 
     fn handle_model_menu_key_event(&mut self, key_event: KeyEvent) {
@@ -871,6 +953,9 @@ impl Widget for AppState {
             .render(status_area, buf);
 
         TextInput::new(&self.input).render(input_area, buf);
+        if self.mode == UiMode::Chat {
+            render_command_popup(&self, area, input_area, buf);
+        }
 
         match self.mode {
             UiMode::ModelMenu => render_model_menu(&self, area, buf),
@@ -880,6 +965,67 @@ impl Widget for AppState {
             UiMode::Chat => {}
         }
     }
+}
+
+fn active_command_prefix(input: &str) -> Option<&str> {
+    let cmd = input.strip_prefix('/')?;
+    if cmd.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(cmd)
+}
+
+fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
+    SLASH_COMMANDS
+        .iter()
+        .copied()
+        .filter(|(command, _)| command.starts_with(prefix))
+        .collect()
+}
+
+fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
+    let Some(prefix) = active_command_prefix(&state.input) else {
+        return;
+    };
+    let matches = slash_command_matches(prefix);
+    if matches.is_empty() {
+        return;
+    }
+
+    let visible_count = matches.len().min(6);
+    let popup_height = (visible_count as u16).saturating_add(2);
+    let popup_width = area.width.saturating_mul(3) / 5;
+    let popup_y = input_area.y.saturating_sub(popup_height);
+    let popup_area = Rect::new(area.x + 1, popup_y, popup_width.max(24), popup_height.max(3));
+
+    let selected_idx = if state.command_completion_prefix.as_deref() == Some(prefix) {
+        state.command_completion_index.min(matches.len().saturating_sub(1))
+    } else {
+        0
+    };
+
+    let mut lines = Vec::new();
+    for (idx, (command, description)) in matches.iter().take(visible_count).enumerate() {
+        let selected = idx == selected_idx;
+        let marker = if selected { ">" } else { " " };
+        lines.push(Line::styled(
+            format!("{marker} /{command:<9} {description}"),
+            if selected {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            },
+        ));
+    }
+
+    Clear.render(popup_area, buf);
+    Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .title("Command (Tab/Shift-Tab cycle, Enter select)")
+                .borders(Borders::ALL),
+        )
+        .render(popup_area, buf);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
