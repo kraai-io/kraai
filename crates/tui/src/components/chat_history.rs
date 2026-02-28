@@ -46,9 +46,7 @@ impl<'a> ChatHistory<'a> {
 
     fn get_message_height(&self, content: &str, max_width: u16, role: &ChatRole) -> u16 {
         match role {
-            ChatRole::System => {
-                Self::wrap_text(content, max_width as usize).len().max(1) as u16
-            }
+            ChatRole::System => Self::wrap_text(content, max_width as usize).len().max(1) as u16,
             ChatRole::User => {
                 Self::wrap_text(content, max_width as usize - 2)
                     .len()

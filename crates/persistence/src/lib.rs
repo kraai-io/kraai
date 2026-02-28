@@ -311,10 +311,7 @@ impl FileSessionStore {
 
         if !errors.is_empty() {
             for (id, e) in &errors {
-                tracing::error!(
-                    "Failed to delete orphaned message {}: {}",
-                    id, e
-                );
+                tracing::error!("Failed to delete orphaned message {}: {}", id, e);
             }
         }
 
@@ -397,19 +394,13 @@ impl FileSessionStore {
             match self.message_store.delete(msg_id).await {
                 Ok(()) => deleted_count += 1,
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to delete orphaned message {}: {}",
-                        msg_id, e
-                    );
+                    tracing::error!("Failed to delete orphaned message {}: {}", msg_id, e);
                 }
             }
         }
 
         if deleted_count > 0 {
-            tracing::info!(
-                "Cleaned up {} orphaned messages",
-                deleted_count
-            );
+            tracing::info!("Cleaned up {} orphaned messages", deleted_count);
         }
 
         Ok(deleted_count)

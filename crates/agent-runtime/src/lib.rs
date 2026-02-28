@@ -643,11 +643,7 @@ impl RuntimeInner {
                         .unwrap_or_default()
                 };
 
-                tracing::debug!(
-                    "Emitting ToolCallDetected: {} - {}",
-                    tool_id,
-                    description
-                );
+                tracing::debug!("Emitting ToolCallDetected: {} - {}", tool_id, description);
                 event_callback.on_event(Event::ToolCallDetected {
                     call_id: call_id.to_string(),
                     tool_id,

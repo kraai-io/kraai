@@ -139,7 +139,8 @@ pub struct AppState {
 impl App {
     pub fn new(runtime: RuntimeHandle, event_rx: Receiver<Event>) -> Self {
         let (runtime_tx, req_rx): (Sender<RuntimeRequest>, Receiver<RuntimeRequest>) = unbounded();
-        let (res_tx, runtime_rx): (Sender<RuntimeResponse>, Receiver<RuntimeResponse>) = unbounded();
+        let (res_tx, runtime_rx): (Sender<RuntimeResponse>, Receiver<RuntimeResponse>) =
+            unbounded();
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -360,7 +361,9 @@ impl App {
                 denied,
                 ..
             } => {
-                self.state.pending_tools.retain(|tool| tool.call_id != call_id);
+                self.state
+                    .pending_tools
+                    .retain(|tool| tool.call_id != call_id);
                 self.state.status = if denied {
                     format!("Tool denied: {tool_id}")
                 } else if success {
@@ -907,10 +910,11 @@ impl Widget for AppState {
     where
         Self: Sized,
     {
-        let mut rendered_messages: Vec<Message> = build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
-            .into_iter()
-            .cloned()
-            .collect();
+        let mut rendered_messages: Vec<Message> =
+            build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
+                .into_iter()
+                .cloned()
+                .collect();
 
         for optimistic in &self.optimistic_messages {
             rendered_messages.push(Message {
@@ -933,7 +937,8 @@ impl Widget for AppState {
         .flex(Flex::End);
         let [chat_history_area, status_area, input_area] = layout.areas(area);
 
-        ChatHistory::new(&message_refs, self.scroll, self.auto_scroll).render(chat_history_area, buf);
+        ChatHistory::new(&message_refs, self.scroll, self.auto_scroll)
+            .render(chat_history_area, buf);
 
         let selected_model = self
             .selected_provider_id
@@ -941,7 +946,11 @@ impl Widget for AppState {
             .zip(self.selected_model_id.as_ref())
             .map(|(p, m)| format!("{p}/{m}"))
             .unwrap_or_else(|| String::from("none"));
-        let stream_state = if self.is_streaming { "streaming" } else { "idle" };
+        let stream_state = if self.is_streaming {
+            "streaming"
+        } else {
+            "idle"
+        };
         let pending_tools = self.pending_tools.len();
         let status_line = format!(
             "{} | model={} | tools={} | {}",
@@ -996,10 +1005,17 @@ fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mu
     let popup_height = (visible_count as u16).saturating_add(2);
     let popup_width = area.width.saturating_mul(3) / 5;
     let popup_y = input_area.y.saturating_sub(popup_height);
-    let popup_area = Rect::new(area.x + 1, popup_y, popup_width.max(24), popup_height.max(3));
+    let popup_area = Rect::new(
+        area.x + 1,
+        popup_y,
+        popup_width.max(24),
+        popup_height.max(3),
+    );
 
     let selected_idx = if state.command_completion_prefix.as_deref() == Some(prefix) {
-        state.command_completion_index.min(matches.len().saturating_sub(1))
+        state
+            .command_completion_index
+            .min(matches.len().saturating_sub(1))
     } else {
         0
     };
@@ -1090,7 +1106,11 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
-    let marker = if state.sessions_menu_index == 0 { ">" } else { " " };
+    let marker = if state.sessions_menu_index == 0 {
+        ">"
+    } else {
+        " "
+    };
     lines.push(Line::styled(
         format!("{marker} Start new chat"),
         if state.sessions_menu_index == 0 {
@@ -1129,7 +1149,11 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let popup_area = centered_rect(area.width.saturating_mul(4) / 5, area.height.saturating_mul(2) / 3, area);
+    let popup_area = centered_rect(
+        area.width.saturating_mul(4) / 5,
+        area.height.saturating_mul(2) / 3,
+        area,
+    );
 
     let mut lines = vec![Line::styled(
         "Tools (a=approve, d=deny, e=execute approved, Esc=close)",
@@ -1148,7 +1172,10 @@ fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
                 None => "pending",
             };
             lines.push(Line::styled(
-                format!("{marker} [{}] {} - {}", status, tool.tool_id, tool.description),
+                format!(
+                    "{marker} [{}] {} - {}",
+                    status, tool.tool_id, tool.description
+                ),
                 if selected {
                     Style::default().fg(Color::Cyan)
                 } else {
@@ -1174,7 +1201,10 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(area.width.saturating_mul(3) / 5, area.height / 2, area);
 
     let lines = vec![
-        Line::styled("Slash Commands", Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled(
+            "Slash Commands",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Line::raw("/help      Open this help menu"),
         Line::raw("/model     Open model selector"),
         Line::raw("/sessions  Open sessions menu"),
