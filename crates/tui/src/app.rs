@@ -6,8 +6,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, MouseEvent,
-        MouseEventKind,
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind,
     },
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -277,8 +276,8 @@ impl App {
                 frame.render_widget(self.state.clone(), area);
 
                 if self.state.mode == UiMode::Chat {
-                    let input_height =
-                        TextInput::new(&self.state.input, self.state.input_cursor).get_height(area.width);
+                    let input_height = TextInput::new(&self.state.input, self.state.input_cursor)
+                        .get_height(area.width);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
                         Constraint::Length(1),
@@ -287,11 +286,9 @@ impl App {
                     .flex(Flex::End);
                     let [_chat_area, _status_area, input_area] = layout.areas(area);
 
-                    let (cursor_x, cursor_y) = TextInput::new(
-                        &self.state.input,
-                        self.state.input_cursor,
-                    )
-                    .get_cursor_position(input_area);
+                    let (cursor_x, cursor_y) =
+                        TextInput::new(&self.state.input, self.state.input_cursor)
+                            .get_cursor_position(input_area);
                     frame.set_cursor_position((cursor_x, cursor_y));
                 }
             })?;
@@ -961,7 +958,10 @@ impl App {
             return;
         }
 
-        let visible_chain = build_tip_chain(&self.state.chat_history, self.state.current_tip_id.as_deref());
+        let visible_chain = build_tip_chain(
+            &self.state.chat_history,
+            self.state.current_tip_id.as_deref(),
+        );
         let mut seen_users: HashMap<String, usize> = HashMap::new();
         for msg in visible_chain {
             if msg.role == ChatRole::User {
@@ -1387,7 +1387,10 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("/new       Start a new session"),
         Line::raw("/quit      Exit the TUI"),
         Line::raw(""),
-        Line::styled("Chat Navigation", Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled(
+            "Chat Navigation",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Line::raw("Up/Down    Scroll history"),
         Line::raw("PgUp/PgDn  Scroll faster"),
         Line::raw("End        Jump to latest"),

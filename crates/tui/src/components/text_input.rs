@@ -74,7 +74,7 @@ impl<'a> Widget for TextInput<'a> {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
-        {
+    {
         Block::bordered()
             .border_type(BorderType::Rounded)
             .render(area, buf);

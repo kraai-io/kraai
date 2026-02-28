@@ -26,7 +26,12 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn wrap_with_prefix(text: &str, width: usize, first_prefix: &str, cont_prefix: &str) -> Vec<String> {
+    fn wrap_with_prefix(
+        text: &str,
+        width: usize,
+        first_prefix: &str,
+        cont_prefix: &str,
+    ) -> Vec<String> {
         if width == 0 {
             return Vec::new();
         }
@@ -212,7 +217,9 @@ impl<'a> ChatHistory<'a> {
         if width == 0 || height == 0 {
             return 0;
         }
-        let lines_len = Self::new(messages, 0, true).build_rendered_lines(width).len() as u16;
+        let lines_len = Self::new(messages, 0, true)
+            .build_rendered_lines(width)
+            .len() as u16;
         lines_len.saturating_sub(height)
     }
 }
@@ -240,7 +247,9 @@ impl<'a> Widget for ChatHistory<'a> {
         };
 
         let start_idx = scroll as usize;
-        let end_idx = start_idx.saturating_add(area.height as usize).min(lines.len());
+        let end_idx = start_idx
+            .saturating_add(area.height as usize)
+            .min(lines.len());
 
         for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
             let y = area.y + visual_idx as u16;
