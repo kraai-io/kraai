@@ -547,12 +547,20 @@ impl App {
                 self.reset_completion_cycle();
             }
             KeyCode::Up => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_sub(1);
+                if has_command_popup_matches(&self.state.input) {
+                    self.cycle_command_suggestion(false);
+                } else {
+                    self.state.auto_scroll = false;
+                    self.state.scroll = self.state.scroll.saturating_sub(1);
+                }
             }
             KeyCode::Down => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_add(1);
+                if has_command_popup_matches(&self.state.input) {
+                    self.cycle_command_suggestion(true);
+                } else {
+                    self.state.auto_scroll = false;
+                    self.state.scroll = self.state.scroll.saturating_add(1);
+                }
             }
             _ => {}
         }
@@ -990,6 +998,12 @@ fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
         .copied()
         .filter(|(command, _)| command.starts_with(prefix))
         .collect()
+}
+
+fn has_command_popup_matches(input: &str) -> bool {
+    active_command_prefix(input)
+        .map(slash_command_matches)
+        .is_some_and(|matches| !matches.is_empty())
 }
 
 fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
