@@ -866,7 +866,10 @@ impl App {
 
         match key_event.code {
             KeyCode::Up => {
-                self.state.model_menu_index = self.state.model_menu_index.saturating_sub(1);
+                if len > 0 {
+                    self.state.model_menu_index =
+                        model_menu_previous_index(self.state.model_menu_index, len);
+                }
             }
             KeyCode::Down => {
                 if len > 0 {
@@ -2108,6 +2111,14 @@ fn model_menu_next_index(current_index: usize, len: usize) -> usize {
     (current_index + 1) % len
 }
 
+fn model_menu_previous_index(current_index: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+
+    (current_index + len - 1) % len
+}
+
 fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(
         area.width.saturating_mul(9) / 10,
@@ -2530,7 +2541,7 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
 
 #[cfg(test)]
 mod tests {
-    use super::{model_menu_next_index, model_menu_scroll_offset};
+    use super::{model_menu_next_index, model_menu_previous_index, model_menu_scroll_offset};
 
     #[test]
     fn model_menu_scroll_stays_at_top_when_selection_is_visible() {
@@ -2555,5 +2566,15 @@ mod tests {
     #[test]
     fn model_menu_next_index_advances_within_bounds() {
         assert_eq!(model_menu_next_index(2, 5), 3);
+    }
+
+    #[test]
+    fn model_menu_previous_index_wraps_at_start() {
+        assert_eq!(model_menu_previous_index(0, 5), 4);
+    }
+
+    #[test]
+    fn model_menu_previous_index_moves_back_within_bounds() {
+        assert_eq!(model_menu_previous_index(3, 5), 2);
     }
 }
