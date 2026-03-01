@@ -50,9 +50,6 @@ apps/
 
 ## Learnings
 
-<!-- Update this section as you discover patterns, and gotchas -->
-- In `crates/tui`, long transcripts must use event-driven redraw plus per-message render caching (`id` + fingerprint + width) to avoid reparsing/wrapping the entire chat on every update.
-
 ## Dependencies
 
 **Rust:** See `Cargo.toml` workspace.dependencies
