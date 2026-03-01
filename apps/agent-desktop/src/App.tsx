@@ -1,4 +1,8 @@
-import type { Model as BindingModel, Event, SettingsDocument } from "agent-ts-bindings";
+import type {
+	Model as BindingModel,
+	Event,
+	SettingsDocument,
+} from "agent-ts-bindings";
 import {
 	Bot,
 	ChevronDown,

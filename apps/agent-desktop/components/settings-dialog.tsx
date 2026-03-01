@@ -138,6 +138,17 @@ function errorFor(
 	return errors[path] ?? (fallback ? errors[fallback] : undefined);
 }
 
+function modelErrorPath(
+	settings: SettingsDocument,
+	selectedModel: ModelSettings | undefined,
+	field: "id" | "max_context",
+): string | undefined {
+	if (!selectedModel) return undefined;
+	const index = settings.models.indexOf(selectedModel);
+	if (index < 0) return undefined;
+	return `models[${index}].${field}`;
+}
+
 export function SettingsDialog({
 	open,
 	onOpenChange,
@@ -182,6 +193,16 @@ export function SettingsDialog({
 		);
 	}, [selectedProvider, settings.models]);
 	const selectedModel = modelsForSelectedProvider[selectedModelIndex];
+	const selectedModelIdErrorPath = modelErrorPath(
+		settings,
+		selectedModel,
+		"id",
+	);
+	const selectedModelMaxContextErrorPath = modelErrorPath(
+		settings,
+		selectedModel,
+		"max_context",
+	);
 
 	useEffect(() => {
 		if (!selectedProvider) {
@@ -300,7 +321,7 @@ export function SettingsDialog({
 			baseUrl:
 				providerType === ("Google" as ProviderType)
 					? undefined
-					: provider.baseUrl ?? "https://api.openai.com/v1",
+					: (provider.baseUrl ?? "https://api.openai.com/v1"),
 			envVarApiKey:
 				providerType === ("Google" as ProviderType)
 					? provider.envVarApiKey || "GEMINI_API_KEY"
@@ -336,252 +357,63 @@ export function SettingsDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="flex max-h-[90vh] w-[min(96vw,88rem)] max-w-7xl flex-col overflow-hidden p-0">
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden p-6">
-				<DialogHeader>
-					<DialogTitle className="flex items-center gap-2">
-						<Settings className="h-5 w-5" />
-						Settings
-					</DialogTitle>
-					<DialogDescription>
-						Manage shared providers and models for the desktop app and TUI.
-					</DialogDescription>
-				</DialogHeader>
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<Settings className="h-5 w-5" />
+							Settings
+						</DialogTitle>
+						<DialogDescription>
+							Manage shared providers and models for the desktop app and TUI.
+						</DialogDescription>
+					</DialogHeader>
 
-				{globalError ? (
-					<div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-						{globalError}
-					</div>
-				) : null}
-
-				<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-4">
-					<div className="space-y-4">
-					<div className="flex min-h-[16rem] flex-col rounded-lg border">
-						<div className="flex items-center justify-between border-b px-3 py-2">
-							<h3 className="text-sm font-semibold">Providers</h3>
-							<Button size="icon-xs" variant="ghost" onClick={handleAddProvider}>
-								<Plus />
-							</Button>
+					{globalError ? (
+						<div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+							{globalError}
 						</div>
-						<div className="min-h-0 flex-1 overflow-y-auto p-2">
-							{settings.providers.map((provider, index) => (
-								<button
-									type="button"
-									key={`${provider.id}-${index}`}
-									className={`mb-1 w-full rounded-md px-3 py-2 text-left text-sm ${
-										index === selectedProviderIndex
-											? "bg-accent"
-											: "hover:bg-muted"
-									}`}
-									onClick={() => {
-										setSelectedProviderIndex(index);
-										setSelectedModelIndex(0);
-									}}
-								>
-									<div className="font-medium">{provider.id || "New provider"}</div>
-									<div className="text-xs text-muted-foreground">
-										{provider.providerType === ("Google" as ProviderType)
-											? "Google"
-											: "OpenAI-compatible"}
-									</div>
-								</button>
-							))}
-							{settings.providers.length === 0 ? (
-								<p className="px-3 py-6 text-sm text-muted-foreground">
-									No providers configured
-								</p>
-							) : null}
-						</div>
-					</div>
+					) : null}
 
-						<div className="rounded-lg border p-4">
-							<div className="mb-3 flex items-center justify-between">
-								<h3 className="text-sm font-semibold">Provider Details</h3>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={handleDeleteProvider}
-									disabled={!selectedProvider}
-								>
-									<Trash2 className="h-4 w-4" />
-									Delete
-								</Button>
-							</div>
-
-							{selectedProvider ? (
-								<div className="grid gap-3 md:grid-cols-2">
-									<div className="space-y-1">
-										<label className="text-sm font-medium" htmlFor="provider-id">
-											Provider ID
-										</label>
-										<Input
-											id="provider-id"
-											value={selectedProvider.id}
-											onChange={(event) =>
-												updateProvider(selectedProviderIndex, (provider) => ({
-													...provider,
-													id: event.target.value,
-												}))
-											}
-										/>
-										{errorFor(
-											fieldErrors,
-											`providers[${selectedProviderIndex}].id`,
-										) ? (
-											<p className="text-xs text-destructive">
-												{
-													fieldErrors[
-														`providers[${selectedProviderIndex}].id`
-													]
-												}
-											</p>
-										) : null}
-									</div>
-
-									<div className="space-y-1">
-										<label className="text-sm font-medium">Provider Type</label>
-										<Select
-											value={selectedProvider.providerType}
-											onValueChange={handleProviderTypeChange}
-										>
-											<SelectTrigger className="w-full">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="OpenAi">OpenAI-compatible</SelectItem>
-												<SelectItem value="Google">Google</SelectItem>
-											</SelectContent>
-										</Select>
-									</div>
-
-									{selectedProvider.providerType === ("OpenAi" as ProviderType) ? (
-										<div className="space-y-1 md:col-span-2">
-											<label className="text-sm font-medium" htmlFor="base-url">
-												Base URL
-											</label>
-											<Input
-												id="base-url"
-												value={selectedProvider.baseUrl ?? ""}
-												onChange={(event) =>
-													updateProvider(selectedProviderIndex, (provider) => ({
-														...provider,
-														baseUrl: event.target.value,
-													}))
-												}
-											/>
-											{errorFor(
-												fieldErrors,
-												`providers[${selectedProviderIndex}].base_url`,
-											) ? (
-												<p className="text-xs text-destructive">
-													{
-														fieldErrors[
-															`providers[${selectedProviderIndex}].base_url`
-														]
-													}
-												</p>
-											) : null}
-										</div>
-									) : null}
-
-									<div className="space-y-1">
-										<label className="text-sm font-medium" htmlFor="api-key">
-											Inline API Key
-										</label>
-										<Input
-											id="api-key"
-											type="password"
-											value={selectedProvider.apiKey ?? ""}
-											onChange={(event) =>
-												updateProvider(selectedProviderIndex, (provider) => ({
-													...provider,
-													apiKey: event.target.value || undefined,
-												}))
-											}
-										/>
-									</div>
-
-									<div className="space-y-1">
-										<label className="text-sm font-medium" htmlFor="env-var">
-											Environment Variable
-										</label>
-										<Input
-											id="env-var"
-											value={selectedProvider.envVarApiKey ?? ""}
-											onChange={(event) =>
-												updateProvider(selectedProviderIndex, (provider) => ({
-													...provider,
-													envVarApiKey: event.target.value || undefined,
-												}))
-											}
-										/>
-										{errorFor(
-											fieldErrors,
-											`providers[${selectedProviderIndex}].credentials`,
-										) ? (
-											<p className="text-xs text-destructive">
-												{
-													fieldErrors[
-														`providers[${selectedProviderIndex}].credentials`
-													]
-												}
-											</p>
-										) : null}
-									</div>
-
-									<label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
-										<input
-											type="checkbox"
-											checked={selectedProvider.onlyListedModels}
-											onChange={(event) =>
-												updateProvider(selectedProviderIndex, (provider) => ({
-													...provider,
-													onlyListedModels: event.target.checked,
-												}))
-											}
-										/>
-										Only listed models
-									</label>
-								</div>
-							) : (
-								<p className="text-sm text-muted-foreground">
-									Add a provider to begin editing settings.
-								</p>
-							)}
-						</div>
-
+					<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-4">
 						<div className="space-y-4">
-							<div className="flex min-h-[14rem] flex-col rounded-lg border">
+							<div className="flex min-h-[16rem] flex-col rounded-lg border">
 								<div className="flex items-center justify-between border-b px-3 py-2">
-									<h3 className="text-sm font-semibold">Models</h3>
+									<h3 className="text-sm font-semibold">Providers</h3>
 									<Button
 										size="icon-xs"
 										variant="ghost"
-										onClick={handleAddModel}
-										disabled={!selectedProvider}
+										onClick={handleAddProvider}
 									>
 										<Plus />
 									</Button>
 								</div>
 								<div className="min-h-0 flex-1 overflow-y-auto p-2">
-									{modelsForSelectedProvider.map((model, index) => (
+									{settings.providers.map((provider, index) => (
 										<button
 											type="button"
-											key={`${model.providerId}-${model.id}-${index}`}
+											key={`${provider.id}-${index}`}
 											className={`mb-1 w-full rounded-md px-3 py-2 text-left text-sm ${
-												index === selectedModelIndex
+												index === selectedProviderIndex
 													? "bg-accent"
 													: "hover:bg-muted"
 											}`}
-											onClick={() => setSelectedModelIndex(index)}
+											onClick={() => {
+												setSelectedProviderIndex(index);
+												setSelectedModelIndex(0);
+											}}
 										>
-											<div className="font-medium">{model.id || "New model"}</div>
+											<div className="font-medium">
+												{provider.id || "New provider"}
+											</div>
 											<div className="text-xs text-muted-foreground">
-												{model.name || "No display name"}
+												{provider.providerType === ("Google" as ProviderType)
+													? "Google"
+													: "OpenAI-compatible"}
 											</div>
 										</button>
 									))}
-									{selectedProvider && modelsForSelectedProvider.length === 0 ? (
+									{settings.providers.length === 0 ? (
 										<p className="px-3 py-6 text-sm text-muted-foreground">
-											No models configured for this provider
+											No providers configured
 										</p>
 									) : null}
 								</div>
@@ -589,42 +421,45 @@ export function SettingsDialog({
 
 							<div className="rounded-lg border p-4">
 								<div className="mb-3 flex items-center justify-between">
-									<h3 className="text-sm font-semibold">Model Details</h3>
+									<h3 className="text-sm font-semibold">Provider Details</h3>
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={handleDeleteModel}
-										disabled={!selectedModel}
+										onClick={handleDeleteProvider}
+										disabled={!selectedProvider}
 									>
 										<Trash2 className="h-4 w-4" />
 										Delete
 									</Button>
 								</div>
 
-								{selectedModel ? (
+								{selectedProvider ? (
 									<div className="grid gap-3 md:grid-cols-2">
 										<div className="space-y-1">
-											<label className="text-sm font-medium" htmlFor="model-id">
-												Model ID
+											<label
+												className="text-sm font-medium"
+												htmlFor="provider-id"
+											>
+												Provider ID
 											</label>
 											<Input
-												id="model-id"
-												value={selectedModel.id}
+												id="provider-id"
+												value={selectedProvider.id}
 												onChange={(event) =>
-													updateModel(selectedModel.id, (model) => ({
-														...model,
+													updateProvider(selectedProviderIndex, (provider) => ({
+														...provider,
 														id: event.target.value,
 													}))
 												}
 											/>
 											{errorFor(
 												fieldErrors,
-												`models[${settings.models.findIndex((model) => model === selectedModel)}].id`,
+												`providers[${selectedProviderIndex}].id`,
 											) ? (
 												<p className="text-xs text-destructive">
 													{
 														fieldErrors[
-															`models[${settings.models.findIndex((model) => model === selectedModel)}].id`
+															`providers[${selectedProviderIndex}].id`
 														]
 													}
 												</p>
@@ -632,52 +467,273 @@ export function SettingsDialog({
 										</div>
 
 										<div className="space-y-1">
-											<label className="text-sm font-medium" htmlFor="model-name">
-												Display Name
+											<label
+												className="text-sm font-medium"
+												htmlFor="provider-type"
+											>
+												Provider Type
+											</label>
+											<Select
+												value={selectedProvider.providerType}
+												onValueChange={handleProviderTypeChange}
+											>
+												<SelectTrigger className="w-full" id="provider-type">
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectItem value="OpenAi">
+														OpenAI-compatible
+													</SelectItem>
+													<SelectItem value="Google">Google</SelectItem>
+												</SelectContent>
+											</Select>
+										</div>
+
+										{selectedProvider.providerType ===
+										("OpenAi" as ProviderType) ? (
+											<div className="space-y-1 md:col-span-2">
+												<label
+													className="text-sm font-medium"
+													htmlFor="base-url"
+												>
+													Base URL
+												</label>
+												<Input
+													id="base-url"
+													value={selectedProvider.baseUrl ?? ""}
+													onChange={(event) =>
+														updateProvider(
+															selectedProviderIndex,
+															(provider) => ({
+																...provider,
+																baseUrl: event.target.value,
+															}),
+														)
+													}
+												/>
+												{errorFor(
+													fieldErrors,
+													`providers[${selectedProviderIndex}].base_url`,
+												) ? (
+													<p className="text-xs text-destructive">
+														{
+															fieldErrors[
+																`providers[${selectedProviderIndex}].base_url`
+															]
+														}
+													</p>
+												) : null}
+											</div>
+										) : null}
+
+										<div className="space-y-1">
+											<label className="text-sm font-medium" htmlFor="api-key">
+												Inline API Key
 											</label>
 											<Input
-												id="model-name"
-												value={selectedModel.name ?? ""}
+												id="api-key"
+												type="password"
+												value={selectedProvider.apiKey ?? ""}
 												onChange={(event) =>
-													updateModel(selectedModel.id, (model) => ({
-														...model,
-														name: event.target.value || undefined,
+													updateProvider(selectedProviderIndex, (provider) => ({
+														...provider,
+														apiKey: event.target.value || undefined,
 													}))
 												}
 											/>
 										</div>
 
 										<div className="space-y-1">
-											<label
-												className="text-sm font-medium"
-												htmlFor="model-max-context"
-											>
-												Max Context
+											<label className="text-sm font-medium" htmlFor="env-var">
+												Environment Variable
 											</label>
 											<Input
-												id="model-max-context"
-												type="number"
-												value={selectedModel.maxContext ?? ""}
+												id="env-var"
+												value={selectedProvider.envVarApiKey ?? ""}
 												onChange={(event) =>
-													updateModel(selectedModel.id, (model) => ({
-														...model,
-														maxContext: event.target.value
-															? Number(event.target.value)
-															: undefined,
+													updateProvider(selectedProviderIndex, (provider) => ({
+														...provider,
+														envVarApiKey: event.target.value || undefined,
 													}))
 												}
 											/>
+											{errorFor(
+												fieldErrors,
+												`providers[${selectedProviderIndex}].credentials`,
+											) ? (
+												<p className="text-xs text-destructive">
+													{
+														fieldErrors[
+															`providers[${selectedProviderIndex}].credentials`
+														]
+													}
+												</p>
+											) : null}
 										</div>
+
+										<label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+											<input
+												type="checkbox"
+												checked={selectedProvider.onlyListedModels}
+												onChange={(event) =>
+													updateProvider(selectedProviderIndex, (provider) => ({
+														...provider,
+														onlyListedModels: event.target.checked,
+													}))
+												}
+											/>
+											Only listed models
+										</label>
 									</div>
 								) : (
 									<p className="text-sm text-muted-foreground">
-										Select a model to edit it.
+										Add a provider to begin editing settings.
 									</p>
 								)}
+							</div>
+
+							<div className="space-y-4">
+								<div className="flex min-h-[14rem] flex-col rounded-lg border">
+									<div className="flex items-center justify-between border-b px-3 py-2">
+										<h3 className="text-sm font-semibold">Models</h3>
+										<Button
+											size="icon-xs"
+											variant="ghost"
+											onClick={handleAddModel}
+											disabled={!selectedProvider}
+										>
+											<Plus />
+										</Button>
+									</div>
+									<div className="min-h-0 flex-1 overflow-y-auto p-2">
+										{modelsForSelectedProvider.map((model, index) => (
+											<button
+												type="button"
+												key={`${model.providerId}-${model.id}-${index}`}
+												className={`mb-1 w-full rounded-md px-3 py-2 text-left text-sm ${
+													index === selectedModelIndex
+														? "bg-accent"
+														: "hover:bg-muted"
+												}`}
+												onClick={() => setSelectedModelIndex(index)}
+											>
+												<div className="font-medium">
+													{model.id || "New model"}
+												</div>
+												<div className="text-xs text-muted-foreground">
+													{model.name || "No display name"}
+												</div>
+											</button>
+										))}
+										{selectedProvider &&
+										modelsForSelectedProvider.length === 0 ? (
+											<p className="px-3 py-6 text-sm text-muted-foreground">
+												No models configured for this provider
+											</p>
+										) : null}
+									</div>
+								</div>
+
+								<div className="rounded-lg border p-4">
+									<div className="mb-3 flex items-center justify-between">
+										<h3 className="text-sm font-semibold">Model Details</h3>
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={handleDeleteModel}
+											disabled={!selectedModel}
+										>
+											<Trash2 className="h-4 w-4" />
+											Delete
+										</Button>
+									</div>
+
+									{selectedModel ? (
+										<div className="grid gap-3 md:grid-cols-2">
+											<div className="space-y-1">
+												<label
+													className="text-sm font-medium"
+													htmlFor="model-id"
+												>
+													Model ID
+												</label>
+												<Input
+													id="model-id"
+													value={selectedModel.id}
+													onChange={(event) =>
+														updateModel(selectedModel.id, (model) => ({
+															...model,
+															id: event.target.value,
+														}))
+													}
+												/>
+												{selectedModelIdErrorPath &&
+												errorFor(fieldErrors, selectedModelIdErrorPath) ? (
+													<p className="text-xs text-destructive">
+														{fieldErrors[selectedModelIdErrorPath]}
+													</p>
+												) : null}
+											</div>
+
+											<div className="space-y-1">
+												<label
+													className="text-sm font-medium"
+													htmlFor="model-name"
+												>
+													Display Name
+												</label>
+												<Input
+													id="model-name"
+													value={selectedModel.name ?? ""}
+													onChange={(event) =>
+														updateModel(selectedModel.id, (model) => ({
+															...model,
+															name: event.target.value || undefined,
+														}))
+													}
+												/>
+											</div>
+
+											<div className="space-y-1">
+												<label
+													className="text-sm font-medium"
+													htmlFor="model-max-context"
+												>
+													Max Context
+												</label>
+												<Input
+													id="model-max-context"
+													type="number"
+													value={selectedModel.maxContext ?? ""}
+													onChange={(event) =>
+														updateModel(selectedModel.id, (model) => ({
+															...model,
+															maxContext: event.target.value
+																? Number(event.target.value)
+																: undefined,
+														}))
+													}
+												/>
+												{selectedModelMaxContextErrorPath &&
+												errorFor(
+													fieldErrors,
+													selectedModelMaxContextErrorPath,
+												) ? (
+													<p className="text-xs text-destructive">
+														{fieldErrors[selectedModelMaxContextErrorPath]}
+													</p>
+												) : null}
+											</div>
+										</div>
+									) : (
+										<p className="text-sm text-muted-foreground">
+											Select a model to edit it.
+										</p>
+									)}
+								</div>
+							</div>
 						</div>
 					</div>
-				</div>
-				</div>
 				</div>
 
 				<DialogFooter className="border-t px-6 py-4">
