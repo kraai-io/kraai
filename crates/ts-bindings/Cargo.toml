@@ -10,8 +10,8 @@ crate-type = ["cdylib"]
 [dependencies]
 agent-runtime = { workspace = true }
 color-eyre = { workspace = true }
-napi = { version = "3.8.2", features = ["async", "tokio_rt"] }
-napi-derive = "3.5.1"
+napi = { version = "3.8.3", features = ["async", "tokio_rt"] }
+napi-derive = "3.5.2"
 persistence = { workspace = true }
 types = { workspace = true }
 

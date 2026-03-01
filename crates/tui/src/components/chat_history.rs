@@ -179,13 +179,27 @@ impl<'a> ChatHistory<'a> {
 
             match msg.role {
                 ChatRole::User => {
+                    let user_style = Style::default()
+                        .fg(Color::Rgb(255, 255, 255))
+                        .bg(Color::DarkGray);
+
+                    rendered.push(RenderedLine {
+                        text: String::new(),
+                        style: user_style,
+                    });
+
                     let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
                     for line in lines {
                         rendered.push(RenderedLine {
                             text: line,
-                            style: Style::default().fg(Color::White).bg(Color::DarkGray),
+                            style: user_style,
                         });
                     }
+
+                    rendered.push(RenderedLine {
+                        text: String::new(),
+                        style: user_style,
+                    });
                 }
                 ChatRole::Assistant => {
                     let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
@@ -253,11 +267,15 @@ impl<'a> Widget for ChatHistory<'a> {
 
         for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
             let y = area.y + visual_idx as u16;
+            let row_style = match line.style.bg {
+                Some(bg) => Style::default().bg(bg),
+                None => Style::default(),
+            };
 
             for x_offset in 0..area.width {
                 buf[(area.x + x_offset, y)]
                     .set_char(' ')
-                    .set_style(Style::default());
+                    .set_style(row_style);
             }
 
             for (char_idx, ch) in line.text.chars().enumerate() {
@@ -331,7 +349,9 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(40);
 
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].text, "hello");
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "");
+        assert_eq!(lines[1].text, "hello");
+        assert_eq!(lines[2].text, "");
     }
 }
