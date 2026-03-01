@@ -3916,7 +3916,10 @@ dependencies = [
  "color-eyre",
  "crossbeam-channel",
  "ratatui 0.30.0",
+ "regex",
+ "serde_json",
  "tokio",
+ "toon-format",
  "tracing",
  "types",
 ]

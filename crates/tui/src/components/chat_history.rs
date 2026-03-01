@@ -1,9 +1,11 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::Widget,
 };
+use regex::Regex;
+use serde_json::{Map, Value};
 use types::{ChatRole, Message};
 
 pub struct ChatHistory<'a> {
@@ -95,70 +97,142 @@ impl<'a> ChatHistory<'a> {
         content.chars().take(width).collect()
     }
 
-    fn compact_whitespace(content: &str) -> String {
-        content.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    fn extract_value(line: &str) -> String {
-        let trimmed = line.trim();
-        if let Some((_, value)) = trimmed.split_once(':') {
-            return Self::compact_whitespace(value);
+    fn push_wrapped_lines(
+        lines: &mut Vec<RenderedLine>,
+        text: &str,
+        width: usize,
+        style: Style,
+        first_prefix: &str,
+        cont_prefix: &str,
+    ) {
+        if text.is_empty() {
+            return;
         }
-        Self::compact_whitespace(trimmed)
+
+        for line in Self::wrap_with_prefix(text, width, first_prefix, cont_prefix) {
+            lines.push(RenderedLine { text: line, style });
+        }
     }
 
-    fn compact_tool_summary(content: &str) -> String {
-        let lines: Vec<&str> = content
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+    fn parse_tool_call(toon_content: &str) -> Option<(String, Option<String>)> {
+        let value: Value = toon_format::decode_default(toon_content).ok()?;
+        let object = value.as_object()?;
+        let tool_name = object.get("tool")?.as_str()?;
+
+        let mut args: Map<String, Value> = Map::new();
+        for (key, val) in object {
+            if key != "tool" {
+                args.insert(key.clone(), val.clone());
+            }
+        }
+
+        let args_text = if args.is_empty() {
+            None
+        } else {
+            Some(toon_format::encode_default(&Value::Object(args)).ok()?)
+        };
+
+        Some((tool_name.to_string(), args_text))
+    }
+
+    fn render_tool_call_card(toon_content: &str, width: usize) -> Option<Vec<RenderedLine>> {
+        let (tool_name, args_text) = Self::parse_tool_call(toon_content)?;
+        let mut lines = Vec::new();
+        let header_style = Style::default()
+            .fg(Color::Rgb(255, 200, 80))
+            .add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(Color::Rgb(130, 230, 255));
+
+        Self::push_wrapped_lines(
+            &mut lines,
+            &tool_name,
+            width,
+            header_style,
+            "",
+            "",
+        );
+
+        if let Some(args_text) = args_text {
+            Self::push_wrapped_lines(&mut lines, &args_text, width, body_style, "  ", "  ");
+        } else {
+            lines.push(RenderedLine {
+                text: Self::fit_to_width("  (no args)", width),
+                style: body_style,
+            });
+        }
+
+        Some(lines)
+    }
+
+    fn render_assistant_message(content: &str, width: usize) -> Vec<RenderedLine> {
+        let mut lines = Vec::new();
+        let normal_style = Style::default().fg(Color::Green);
+
+        let tool_call_re = Regex::new(r"(?s)```tool_call\s*\n(.*?)```").expect("valid regex");
+        let mut cursor = 0usize;
+        let mut found_tool_call = false;
+
+        for caps in tool_call_re.captures_iter(content) {
+            let full_match = match caps.get(0) {
+                Some(m) => m,
+                None => continue,
+            };
+            found_tool_call = true;
+
+            let before = &content[cursor..full_match.start()];
+            Self::push_wrapped_lines(&mut lines, before, width, normal_style, "", "");
+
+            if let Some(raw_toon) = caps.get(1).map(|m| m.as_str()) {
+                if let Some(mut card_lines) = Self::render_tool_call_card(raw_toon, width) {
+                    lines.append(&mut card_lines);
+                } else {
+                    Self::push_wrapped_lines(
+                        &mut lines,
+                        full_match.as_str(),
+                        width,
+                        normal_style,
+                        "",
+                        "",
+                    );
+                }
+            }
+
+            cursor = full_match.end();
+        }
+
+        if !found_tool_call {
+            Self::push_wrapped_lines(&mut lines, content, width, normal_style, "", "");
+        } else {
+            let tail = &content[cursor..];
+            Self::push_wrapped_lines(&mut lines, tail, width, normal_style, "", "");
+        }
 
         if lines.is_empty() {
-            return String::from("call unknown");
+            lines.push(RenderedLine {
+                text: String::new(),
+                style: normal_style,
+            });
         }
 
-        let mut call: Option<String> = None;
-        let mut args: Option<String> = None;
-        let mut error: Option<String> = None;
+        lines
+    }
 
-        for line in &lines {
-            let lower = line.to_ascii_lowercase();
+    fn should_render_tool_message(content: &str) -> bool {
+        if content.contains("Failed to parse tool call:") {
+            return true;
+        }
 
-            if call.is_none() && (lower.contains("tool") || lower.contains("call")) {
-                call = Some(Self::extract_value(line));
-            }
-            if args.is_none()
-                && (lower.contains("args")
-                    || lower.contains("argument")
-                    || line.trim_start().starts_with('{')
-                    || line.trim_start().starts_with('['))
-            {
-                args = Some(Self::extract_value(line));
-            }
-            if error.is_none()
-                && (lower.contains("error") || lower.contains("failed") || lower.contains("denied"))
-            {
-                error = Some(Self::extract_value(line));
+        if content.contains("was denied by user") {
+            return true;
+        }
+
+        if let Some((_, json)) = content.split_once("result:\n") {
+            if let Ok(value) = serde_json::from_str::<Value>(json) {
+                return value.get("error").is_some();
             }
         }
 
-        if call.is_none() {
-            call = Some(Self::compact_whitespace(lines[0]));
-        }
-
-        let mut parts = Vec::new();
-        if let Some(call) = call {
-            parts.push(format!("call {call}"));
-        }
-        if let Some(args) = args {
-            parts.push(format!("args {args}"));
-        }
-        if let Some(error) = error {
-            parts.push(format!("error {error}"));
-        }
-
-        parts.join(" | ")
+        false
     }
 
     fn build_rendered_lines(&self, width: u16) -> Vec<RenderedLine> {
@@ -170,6 +244,53 @@ impl<'a> ChatHistory<'a> {
                 continue;
             }
 
+            let mut message_lines = match msg.role {
+                ChatRole::User => {
+                    let user_style = Style::default()
+                        .fg(Color::Rgb(255, 255, 255))
+                        .bg(Color::DarkGray);
+
+                    let mut lines = vec![RenderedLine {
+                        text: String::new(),
+                        style: user_style,
+                    }];
+
+                    for line in Self::wrap_with_prefix(&msg.content, width, "", "") {
+                        lines.push(RenderedLine {
+                            text: line,
+                            style: user_style,
+                        });
+                    }
+
+                    lines.push(RenderedLine {
+                        text: String::new(),
+                        style: user_style,
+                    });
+                    lines
+                }
+                ChatRole::Assistant => Self::render_assistant_message(&msg.content, width),
+                ChatRole::Tool => {
+                    if !Self::should_render_tool_message(&msg.content) {
+                        Vec::new()
+                    } else {
+                        let mut lines = Vec::new();
+                        for line in Self::wrap_with_prefix(&msg.content, width, "tool: ", "      ")
+                        {
+                            lines.push(RenderedLine {
+                                text: line,
+                                style: Style::default().fg(Color::Yellow),
+                            });
+                        }
+                        lines
+                    }
+                }
+                ChatRole::System => Vec::new(),
+            };
+
+            if message_lines.is_empty() {
+                continue;
+            }
+
             if !rendered.is_empty() {
                 rendered.push(RenderedLine {
                     text: String::new(),
@@ -177,51 +298,7 @@ impl<'a> ChatHistory<'a> {
                 });
             }
 
-            match msg.role {
-                ChatRole::User => {
-                    let user_style = Style::default()
-                        .fg(Color::Rgb(255, 255, 255))
-                        .bg(Color::DarkGray);
-
-                    rendered.push(RenderedLine {
-                        text: String::new(),
-                        style: user_style,
-                    });
-
-                    let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
-                    for line in lines {
-                        rendered.push(RenderedLine {
-                            text: line,
-                            style: user_style,
-                        });
-                    }
-
-                    rendered.push(RenderedLine {
-                        text: String::new(),
-                        style: user_style,
-                    });
-                }
-                ChatRole::Assistant => {
-                    let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
-                    for line in lines {
-                        rendered.push(RenderedLine {
-                            text: line,
-                            style: Style::default().fg(Color::Green),
-                        });
-                    }
-                }
-                ChatRole::Tool => {
-                    let compact = Self::compact_tool_summary(&msg.content);
-                    let lines = Self::wrap_with_prefix(&compact, width, "tool: ", "      ");
-                    for line in lines {
-                        rendered.push(RenderedLine {
-                            text: line,
-                            style: Style::default().fg(Color::Yellow),
-                        });
-                    }
-                }
-                ChatRole::System => {}
-            }
+            rendered.append(&mut message_lines);
         }
 
         rendered
@@ -325,21 +402,90 @@ mod tests {
     }
 
     #[test]
-    fn renders_tool_messages_in_compact_form() {
+    fn renders_assistant_tool_call_in_pretty_format() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "```tool_call\ntool: read_file\nfiles[1]: /tmp/a.txt\nmax_size: 10\n```",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+
+        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| *line == "read_file"));
+        assert!(rendered.iter().any(|line| line.contains("files[1]: /tmp/a.txt")));
+        assert!(rendered.iter().any(|line| line.contains("max_size: 10")));
+        assert!(!rendered.iter().any(|line| line.contains("```tool_call")));
+    }
+
+    #[test]
+    fn renders_mixed_assistant_text_and_tool_call() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "before\n```tool_call\ntool: read_file\nfiles[1]: /tmp/a.txt\n```\nafter",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| *line == "before"));
+        assert!(rendered.iter().any(|line| *line == "read_file"));
+        assert!(rendered.iter().any(|line| *line == "after"));
+    }
+
+    #[test]
+    fn falls_back_to_raw_tool_call_block_on_parse_failure() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "```tool_call\ntool read_file\nbad\n```",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("```tool_call")));
+    }
+
+    #[test]
+    fn hides_successful_tool_messages() {
+        let tool = message("1", ChatRole::Tool, "Tool 'read_file' result:\n{\n  \"ok\": true\n}");
+        let refs = [&tool];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn shows_tool_error_messages() {
         let tool = message(
             "1",
             ChatRole::Tool,
-            "tool_id: read_file\nargs: {\"path\":\"foo.txt\"}\nerror: denied",
+            "Tool 'read_file' result:\n{\n  \"error\": \"denied\"\n}",
         );
         let refs = [&tool];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
+        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| line.contains("tool: Tool 'read_file' result:")));
+        assert!(rendered.iter().any(|line| line.contains("\"error\": \"denied\"")));
+    }
+
+    #[test]
+    fn shows_denied_tool_messages() {
+        let tool = message("1", ChatRole::Tool, "Tool 'read_file' was denied by user");
+        let refs = [&tool];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("tool:"));
-        assert!(lines[0].text.contains("call read_file"));
-        assert!(lines[0].text.contains("args {\"path\":\"foo.txt\"}"));
-        assert!(lines[0].text.contains("error denied"));
+        assert!(lines[0].text.contains("denied by user"));
     }
 
     #[test]
