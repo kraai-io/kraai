@@ -1,11 +1,8 @@
 name: Build TUI Release Binaries
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     name: Build (${{ matrix.os }})
@@ -20,20 +17,15 @@ jobs:
             ext: ""
           - os: windows-latest
             ext: ".exe"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-
       - name: Build tui (release)
         run: cargo build -p tui --release
-
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:

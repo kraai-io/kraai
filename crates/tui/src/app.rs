@@ -1079,7 +1079,6 @@ impl App {
             self.invalidate_chat_cache();
         }
     }
-
 }
 
 fn build_tip_chain<'a>(
@@ -1148,7 +1147,10 @@ fn flatten_models_map(models_by_provider: &HashMap<String, Vec<Model>>) -> Vec<(
 fn message_fingerprint(msg: &Message) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     msg.id.as_str().hash(&mut hasher);
-    msg.parent_id.as_ref().map(|id| id.as_str()).hash(&mut hasher);
+    msg.parent_id
+        .as_ref()
+        .map(|id| id.as_str())
+        .hash(&mut hasher);
     match msg.role {
         ChatRole::System => 0u8,
         ChatRole::User => 1u8,

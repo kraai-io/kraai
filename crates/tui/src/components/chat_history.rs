@@ -145,7 +145,11 @@ impl<'a> ChatHistory<'a> {
         escape_re.replace_all(&text, "$1").to_string()
     }
 
-    fn inline_markdown_spans(text: &str, base_style: Style, inline_code_style: Style) -> Vec<RenderedSpan> {
+    fn inline_markdown_spans(
+        text: &str,
+        base_style: Style,
+        inline_code_style: Style,
+    ) -> Vec<RenderedSpan> {
         let inline_code_re = Regex::new(r"`([^`]+)`").expect("valid regex");
         let mut spans = Vec::new();
         let mut cursor = 0usize;
@@ -165,12 +169,13 @@ impl<'a> ChatHistory<'a> {
             }
 
             if let Some(code) = caps.get(1).map(|m| m.as_str())
-                && !code.is_empty() {
-                    spans.push(RenderedSpan {
-                        text: code.to_string(),
-                        style: inline_code_style,
-                    });
-                }
+                && !code.is_empty()
+            {
+                spans.push(RenderedSpan {
+                    text: code.to_string(),
+                    style: inline_code_style,
+                });
+            }
 
             cursor = full.end();
         }
@@ -259,10 +264,11 @@ impl<'a> ChatHistory<'a> {
             if take_count > 0 {
                 for (ch, style) in &styled_chars[idx..idx + take_count] {
                     if let Some(last) = line_spans.last_mut()
-                        && last.style == *style {
-                            last.text.push(*ch);
-                            continue;
-                        }
+                        && last.style == *style
+                    {
+                        last.text.push(*ch);
+                        continue;
+                    }
                     line_spans.push(RenderedSpan {
                         text: ch.to_string(),
                         style: *style,
@@ -283,7 +289,11 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn render_markdown_message(content: &str, width: usize, normal_style: Style) -> Vec<RenderedLine> {
+    fn render_markdown_message(
+        content: &str,
+        width: usize,
+        normal_style: Style,
+    ) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
         let heading_style = Style::default()
             .fg(Color::Rgb(255, 220, 120))
@@ -343,18 +353,20 @@ impl<'a> ChatHistory<'a> {
             }
 
             if let Some(caps) = quote_re.captures(source_line)
-                && let Some(text) = caps.get(1).map(|m| m.as_str()) {
-                    let spans = Self::inline_markdown_spans(text, quote_style, inline_code_style);
-                    Self::push_wrapped_spans(&mut lines, &spans, width, quote_style, "│ ", "│ ");
-                    continue;
-                }
+                && let Some(text) = caps.get(1).map(|m| m.as_str())
+            {
+                let spans = Self::inline_markdown_spans(text, quote_style, inline_code_style);
+                Self::push_wrapped_spans(&mut lines, &spans, width, quote_style, "│ ", "│ ");
+                continue;
+            }
 
             if let Some(caps) = unordered_list_re.captures(source_line)
-                && let Some(text) = caps.get(1).map(|m| m.as_str()) {
-                    let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
-                    Self::push_wrapped_spans(&mut lines, &spans, width, list_style, "• ", "  ");
-                    continue;
-                }
+                && let Some(text) = caps.get(1).map(|m| m.as_str())
+            {
+                let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
+                Self::push_wrapped_spans(&mut lines, &spans, width, list_style, "• ", "  ");
+                continue;
+            }
 
             if let Some(caps) = ordered_list_re.captures(source_line) {
                 let idx = caps.get(1).map(|m| m.as_str()).unwrap_or("1");
@@ -483,9 +495,10 @@ impl<'a> ChatHistory<'a> {
         }
 
         if let Some((_, json)) = content.split_once("result:\n")
-            && let Ok(value) = serde_json::from_str::<Value>(json) {
-                return value.get("error").is_some();
-            }
+            && let Ok(value) = serde_json::from_str::<Value>(json)
+        {
+            return value.get("error").is_some();
+        }
 
         false
     }
@@ -740,10 +753,7 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "read_file"));
         assert!(
             rendered
@@ -764,10 +774,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "before"));
         assert!(rendered.iter().any(|line| *line == "read_file"));
@@ -784,10 +791,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| line.contains("```tool_call")));
     }
@@ -817,10 +821,7 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
         assert!(
             rendered
                 .iter()
@@ -867,32 +868,26 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "Title"));
         assert!(rendered.iter().any(|line| *line == "• one"));
-        assert!(rendered.iter().any(|line| *line == "1. two (https://example.com)"));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| *line == "1. two (https://example.com)")
+        );
         assert!(rendered.iter().any(|line| *line == "│ quote"));
         assert!(rendered.iter().any(|line| *line == "inline"));
     }
 
     #[test]
     fn renders_fenced_code_block_with_label() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "```rust\nfn main() {}\n```",
-        );
+        let assistant = message("1", ChatRole::Assistant, "```rust\nfn main() {}\n```");
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "[code: rust]"));
         assert!(rendered.iter().any(|line| *line == "  fn main() {}"));
@@ -908,9 +903,10 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "alpha beta gamma");
 
-        let has_colored_inline_code = lines[0].spans.iter().any(|span| {
-            span.text == "beta" && span.style.fg == Some(Color::Rgb(255, 180, 90))
-        });
+        let has_colored_inline_code = lines[0]
+            .spans
+            .iter()
+            .any(|span| span.text == "beta" && span.style.fg == Some(Color::Rgb(255, 180, 90)));
         assert!(has_colored_inline_code);
     }
 }
