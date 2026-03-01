@@ -1,4 +1,8 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use agent_runtime::{Event, Model, RuntimeHandle, Session};
 use color_eyre::eyre::Result;
@@ -15,7 +19,7 @@ use ratatui::{
 };
 use types::{ChatRole, Message, MessageId, MessageStatus};
 
-use crate::components::{ChatHistory, TextInput};
+use crate::components::{ChatHistory, RenderedLine, TextInput};
 
 const SLASH_COMMANDS: [(&str, &str); 6] = [
     ("help", "Open command help"),
@@ -109,9 +113,9 @@ pub struct App {
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
     state: AppState,
+    last_stream_refresh: Option<Instant>,
 }
 
-#[derive(Clone)]
 pub struct AppState {
     exit: bool,
     input: String,
@@ -119,6 +123,8 @@ pub struct AppState {
     chat_history: BTreeMap<MessageId, Message>,
     optimistic_messages: Vec<OptimisticMessage>,
     optimistic_seq: u64,
+    chat_epoch: u64,
+    chat_render_cache: RefCell<ChatRenderCache>,
     scroll: u16,
     auto_scroll: bool,
     config_loaded: bool,
@@ -137,6 +143,20 @@ pub struct AppState {
     tools_menu_index: usize,
     command_completion_prefix: Option<String>,
     command_completion_index: usize,
+}
+
+#[derive(Default)]
+struct ChatRenderCache {
+    width: u16,
+    epoch: u64,
+    sections: Vec<Arc<Vec<RenderedLine>>>,
+    total_lines: u16,
+    message_cache: HashMap<String, CachedMessageRender>,
+}
+
+struct CachedMessageRender {
+    fingerprint: u64,
+    lines: Arc<Vec<RenderedLine>>,
 }
 
 impl App {
@@ -237,6 +257,8 @@ impl App {
             chat_history: BTreeMap::new(),
             optimistic_messages: Vec::new(),
             optimistic_seq: 0,
+            chat_epoch: 0,
+            chat_render_cache: RefCell::new(ChatRenderCache::default()),
             scroll: 0,
             auto_scroll: true,
             config_loaded: false,
@@ -262,18 +284,28 @@ impl App {
             runtime_tx,
             runtime_rx,
             state,
+            last_stream_refresh: None,
         }
     }
 
     pub fn run(&mut self, mut terminal: ratatui::DefaultTerminal) -> Result<()> {
+        let mut needs_redraw = true;
         while !self.state.exit {
-            self.process_events();
-            let area = terminal.size()?;
-            self.clamp_scroll_for_area(area.into());
+            needs_redraw |= self.process_events();
+            let event_timeout = if needs_redraw {
+                std::time::Duration::from_millis(0)
+            } else {
+                std::time::Duration::from_millis(100)
+            };
+            needs_redraw |= self.handle_events(event_timeout)?;
+
+            if !needs_redraw {
+                continue;
+            }
 
             terminal.draw(|frame| {
                 let area = frame.area();
-                frame.render_widget(self.state.clone(), area);
+                frame.render_widget(&self.state, area);
 
                 if self.state.mode == UiMode::Chat {
                     let input_height = TextInput::new(&self.state.input, self.state.input_cursor)
@@ -292,20 +324,25 @@ impl App {
                     frame.set_cursor_position((cursor_x, cursor_y));
                 }
             })?;
-
-            self.handle_events()?;
+            needs_redraw = false;
         }
         Ok(())
     }
 
-    fn process_events(&mut self) {
+    fn process_events(&mut self) -> bool {
+        let mut changed = false;
+
         while let Ok(event) = self.event_rx.try_recv() {
             self.handle_runtime_event(event);
+            changed = true;
         }
 
         while let Ok(response) = self.runtime_rx.try_recv() {
             self.handle_runtime_response(response);
+            changed = true;
         }
+
+        changed
     }
 
     fn handle_runtime_event(&mut self, event: Event) {
@@ -321,18 +358,28 @@ impl App {
             }
             Event::StreamStart { .. } => {
                 self.state.is_streaming = true;
+                self.last_stream_refresh = None;
                 self.request(RuntimeRequest::GetCurrentTip);
             }
             Event::StreamChunk { .. } => {
-                self.request(RuntimeRequest::GetCurrentTip);
-                self.request(RuntimeRequest::GetChatHistory);
+                let now = Instant::now();
+                let should_refresh = self.last_stream_refresh.map_or(true, |last| {
+                    now.duration_since(last) >= Duration::from_millis(50)
+                });
+                if should_refresh {
+                    self.last_stream_refresh = Some(now);
+                    self.request(RuntimeRequest::GetCurrentTip);
+                    self.request(RuntimeRequest::GetChatHistory);
+                }
             }
             Event::StreamComplete { .. } => {
                 self.state.is_streaming = false;
+                self.last_stream_refresh = None;
                 self.request_sync();
             }
             Event::StreamError { error, .. } => {
                 self.state.is_streaming = false;
+                self.last_stream_refresh = None;
                 self.state.status = format!("Stream error: {error}");
             }
             Event::HistoryUpdated => {
@@ -401,14 +448,18 @@ impl App {
             }
             RuntimeResponse::ChatHistory(Ok(history)) => {
                 self.state.chat_history = history;
+                self.invalidate_chat_cache();
                 self.reconcile_optimistic_messages();
             }
             RuntimeResponse::ChatHistory(Err(err)) => {
                 self.state.status = format!("Failed loading history: {err}");
             }
             RuntimeResponse::CurrentTip(Ok(tip)) => {
-                self.state.current_tip_id = tip;
-                self.reconcile_optimistic_messages();
+                if self.state.current_tip_id != tip {
+                    self.state.current_tip_id = tip;
+                    self.invalidate_chat_cache();
+                    self.reconcile_optimistic_messages();
+                }
             }
             RuntimeResponse::CurrentTip(Err(err)) => {
                 self.state.status = format!("Failed loading tip: {err}");
@@ -417,6 +468,7 @@ impl App {
                 self.state.status = String::from("Started new session");
                 self.state.chat_history.clear();
                 self.state.optimistic_messages.clear();
+                self.invalidate_chat_cache();
                 self.request_sync();
             }
             RuntimeResponse::ClearCurrentSession(Err(err)) => {
@@ -435,6 +487,7 @@ impl App {
                 self.state.auto_scroll = true;
                 self.state.scroll = 0;
                 self.state.status = String::from("Session loaded");
+                self.invalidate_chat_cache();
                 self.request_sync();
             }
             RuntimeResponse::LoadSession {
@@ -465,6 +518,7 @@ impl App {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.current_session_id = None;
                     self.state.chat_history.clear();
+                    self.invalidate_chat_cache();
                 }
             }
             RuntimeResponse::DeleteSession {
@@ -509,17 +563,34 @@ impl App {
         }
     }
 
-    fn handle_events(&mut self) -> Result<()> {
-        if event::poll(std::time::Duration::from_millis(16))? {
+    fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
+        if !event::poll(timeout)? {
+            return Ok(false);
+        }
+
+        let mut changed = false;
+        loop {
             match event::read()? {
                 CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    self.handle_key_event(key_event)
+                    self.handle_key_event(key_event);
+                    changed = true;
                 }
-                CrosstermEvent::Mouse(mouse_event) => self.handle_mouse_event(mouse_event),
+                CrosstermEvent::Mouse(mouse_event) => {
+                    self.handle_mouse_event(mouse_event);
+                    changed = true;
+                }
+                CrosstermEvent::Resize(_, _) => {
+                    changed = true;
+                }
                 _ => {}
             }
+
+            if !event::poll(std::time::Duration::from_millis(0))? {
+                break;
+            }
         }
-        Ok(())
+
+        Ok(changed)
     }
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
@@ -822,6 +893,7 @@ impl App {
         self.state.status = format!("Sending with {provider_id}/{model_id}");
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
+        self.invalidate_chat_cache();
 
         self.request(RuntimeRequest::SendMessage {
             message: raw_input,
@@ -969,10 +1041,16 @@ impl App {
         let _ = self.runtime_tx.send(req);
     }
 
+    fn invalidate_chat_cache(&mut self) {
+        self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
+    }
+
     fn reconcile_optimistic_messages(&mut self) {
         if self.state.optimistic_messages.is_empty() {
             return;
         }
+
+        let before_len = self.state.optimistic_messages.len();
 
         let visible_chain = build_tip_chain(
             &self.state.chat_history,
@@ -996,33 +1074,12 @@ impl App {
                 _ => true,
             }
         });
-    }
 
-    fn clamp_scroll_for_area(&mut self, area: Rect) {
-        let input_height =
-            TextInput::new(&self.state.input, self.state.input_cursor).get_height(area.width);
-        let layout = Layout::vertical([
-            Constraint::Min(area.height.saturating_sub(input_height + 1)),
-            Constraint::Length(1),
-            Constraint::Length(input_height),
-        ])
-        .flex(Flex::End);
-        let [chat_history_area, _status_area, _input_area] = layout.areas(area);
-
-        let rendered_messages = self.state.rendered_messages();
-        let message_refs: Vec<&Message> = rendered_messages.iter().collect();
-        let max_scroll = ChatHistory::max_scroll(
-            &message_refs,
-            chat_history_area.width,
-            chat_history_area.height,
-        );
-
-        if self.state.auto_scroll {
-            self.state.scroll = max_scroll;
-        } else {
-            self.state.scroll = self.state.scroll.min(max_scroll);
+        if self.state.optimistic_messages.len() != before_len {
+            self.invalidate_chat_cache();
         }
     }
+
 }
 
 fn build_tip_chain<'a>(
@@ -1088,7 +1145,80 @@ fn flatten_models_map(models_by_provider: &HashMap<String, Vec<Model>>) -> Vec<(
     flattened
 }
 
+fn message_fingerprint(msg: &Message) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    msg.id.as_str().hash(&mut hasher);
+    msg.parent_id.as_ref().map(|id| id.as_str()).hash(&mut hasher);
+    match msg.role {
+        ChatRole::System => 0u8,
+        ChatRole::User => 1u8,
+        ChatRole::Assistant => 2u8,
+        ChatRole::Tool => 3u8,
+    }
+    .hash(&mut hasher);
+    match &msg.status {
+        MessageStatus::Complete => 0u8.hash(&mut hasher),
+        MessageStatus::Streaming { call_id } => {
+            1u8.hash(&mut hasher);
+            call_id.as_str().hash(&mut hasher);
+        }
+        MessageStatus::ProcessingTools => 2u8.hash(&mut hasher),
+        MessageStatus::Cancelled => 3u8.hash(&mut hasher),
+    }
+    msg.content.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl AppState {
+    fn refresh_chat_render_cache(&self, width: u16) {
+        let needs_refresh = {
+            let cache = self.chat_render_cache.borrow();
+            cache.epoch != self.chat_epoch || cache.width != width
+        };
+        if !needs_refresh {
+            return;
+        }
+
+        let rendered_messages = self.rendered_messages();
+        let mut cache = self.chat_render_cache.borrow_mut();
+        let mut prior_entries = std::mem::take(&mut cache.message_cache);
+        if cache.width != width {
+            prior_entries.clear();
+        }
+
+        let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
+        let mut sections: Vec<Arc<Vec<RenderedLine>>> = Vec::new();
+        let mut total_lines: u16 = 0;
+
+        for msg in &rendered_messages {
+            let key = msg.id.as_str().to_string();
+            let fingerprint = message_fingerprint(msg);
+            let lines = match prior_entries.remove(&key) {
+                Some(entry) if entry.fingerprint == fingerprint => entry.lines,
+                _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
+            };
+
+            if lines.is_empty() {
+                continue;
+            }
+
+            if !sections.is_empty() {
+                sections.push(Arc::new(vec![ChatHistory::separator_line()]));
+                total_lines = total_lines.saturating_add(1);
+            }
+
+            total_lines = total_lines.saturating_add(lines.len().min(u16::MAX as usize) as u16);
+            sections.push(Arc::clone(&lines));
+            next_entries.insert(key, CachedMessageRender { fingerprint, lines });
+        }
+
+        cache.sections = sections;
+        cache.total_lines = total_lines;
+        cache.message_cache = next_entries;
+        cache.width = width;
+        cache.epoch = self.chat_epoch;
+    }
+
     fn rendered_messages(&self) -> Vec<Message> {
         let mut rendered_messages: Vec<Message> =
             build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
@@ -1110,15 +1240,11 @@ impl AppState {
     }
 }
 
-impl Widget for AppState {
+impl Widget for &AppState {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
-        let rendered_messages = self.rendered_messages();
-
-        let message_refs: Vec<&Message> = rendered_messages.iter().collect();
-
         let input_height = TextInput::new(&self.input, self.input_cursor).get_height(area.width);
         let layout = Layout::vertical([
             Constraint::Min(area.height.saturating_sub(input_height + 1)),
@@ -1128,8 +1254,18 @@ impl Widget for AppState {
         .flex(Flex::End);
         let [chat_history_area, status_area, input_area] = layout.areas(area);
 
-        ChatHistory::new(&message_refs, self.scroll, self.auto_scroll)
-            .render(chat_history_area, buf);
+        self.refresh_chat_render_cache(chat_history_area.width);
+        {
+            let cache = self.chat_render_cache.borrow();
+            ChatHistory::render_prebuilt_sections(
+                &cache.sections,
+                cache.total_lines,
+                chat_history_area,
+                buf,
+                self.scroll,
+                self.auto_scroll,
+            );
+        }
 
         let selected_model = self
             .selected_provider_id
@@ -1154,13 +1290,13 @@ impl Widget for AppState {
 
         TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
         if self.mode == UiMode::Chat {
-            render_command_popup(&self, area, input_area, buf);
+            render_command_popup(self, area, input_area, buf);
         }
 
         match self.mode {
-            UiMode::ModelMenu => render_model_menu(&self, area, buf),
-            UiMode::SessionsMenu => render_sessions_menu(&self, area, buf),
-            UiMode::ToolsMenu => render_tools_menu(&self, area, buf),
+            UiMode::ModelMenu => render_model_menu(self, area, buf),
+            UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
+            UiMode::ToolsMenu => render_tools_menu(self, area, buf),
             UiMode::Help => render_help_menu(area, buf),
             UiMode::Chat => {}
         }

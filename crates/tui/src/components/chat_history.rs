@@ -6,6 +6,7 @@ use ratatui::{
 };
 use regex::Regex;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 use types::{ChatRole, Message};
 
 pub struct ChatHistory<'a> {
@@ -14,7 +15,7 @@ pub struct ChatHistory<'a> {
     auto_scroll: bool,
 }
 
-struct RenderedLine {
+pub(crate) struct RenderedLine {
     spans: Vec<RenderedSpan>,
     bg: Option<Color>,
 }
@@ -26,6 +27,7 @@ struct RenderedSpan {
 }
 
 impl<'a> ChatHistory<'a> {
+    #[cfg(test)]
     pub fn new(messages: &'a [&'a Message], scroll: u16, auto_scroll: bool) -> Self {
         Self {
             messages,
@@ -489,93 +491,86 @@ impl<'a> ChatHistory<'a> {
     }
 
     fn build_rendered_lines(&self, width: u16) -> Vec<RenderedLine> {
+        Self::build_lines(self.messages, width)
+    }
+
+    pub(crate) fn separator_line() -> RenderedLine {
+        Self::single_span_line(String::new(), Style::default())
+    }
+
+    pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
         let width = width as usize;
-        let mut rendered = Vec::new();
+        if msg.role == ChatRole::System {
+            return Vec::new();
+        }
 
-        for msg in self.messages {
-            if msg.role == ChatRole::System {
-                continue;
+        match msg.role {
+            ChatRole::User => {
+                let user_style = Style::default()
+                    .fg(Color::Rgb(255, 255, 255))
+                    .bg(Color::DarkGray);
+
+                let mut lines = vec![Self::single_span_line(String::new(), user_style)];
+
+                for line in Self::wrap_with_prefix(&msg.content, width, "", "") {
+                    lines.push(Self::single_span_line(line, user_style));
+                }
+
+                lines.push(Self::single_span_line(String::new(), user_style));
+                lines
             }
-
-            let mut message_lines = match msg.role {
-                ChatRole::User => {
-                    let user_style = Style::default()
-                        .fg(Color::Rgb(255, 255, 255))
-                        .bg(Color::DarkGray);
-
-                    let mut lines = vec![Self::single_span_line(String::new(), user_style)];
-
-                    for line in Self::wrap_with_prefix(&msg.content, width, "", "") {
-                        lines.push(Self::single_span_line(line, user_style));
+            ChatRole::Assistant => Self::render_assistant_message(&msg.content, width),
+            ChatRole::Tool => {
+                if !Self::should_render_tool_message(&msg.content) {
+                    Vec::new()
+                } else {
+                    let mut lines = Vec::new();
+                    for line in Self::wrap_with_prefix(&msg.content, width, "tool: ", "      ") {
+                        lines.push(Self::single_span_line(
+                            line,
+                            Style::default().fg(Color::Yellow),
+                        ));
                     }
-
-                    lines.push(Self::single_span_line(String::new(), user_style));
                     lines
                 }
-                ChatRole::Assistant => Self::render_assistant_message(&msg.content, width),
-                ChatRole::Tool => {
-                    if !Self::should_render_tool_message(&msg.content) {
-                        Vec::new()
-                    } else {
-                        let mut lines = Vec::new();
-                        for line in Self::wrap_with_prefix(&msg.content, width, "tool: ", "      ")
-                        {
-                            lines.push(Self::single_span_line(
-                                line,
-                                Style::default().fg(Color::Yellow),
-                            ));
-                        }
-                        lines
-                    }
-                }
-                ChatRole::System => Vec::new(),
-            };
+            }
+            ChatRole::System => Vec::new(),
+        }
+    }
 
+    pub(crate) fn build_lines(messages: &[&Message], width: u16) -> Vec<RenderedLine> {
+        let mut rendered = Vec::new();
+        for msg in messages {
+            let mut message_lines = Self::build_message_lines(msg, width);
             if message_lines.is_empty() {
                 continue;
             }
 
             if !rendered.is_empty() {
-                rendered.push(Self::single_span_line(String::new(), Style::default()));
+                rendered.push(Self::separator_line());
             }
-
             rendered.append(&mut message_lines);
         }
-
         rendered
     }
 
-    pub fn max_scroll(messages: &'a [&'a Message], width: u16, height: u16) -> u16 {
-        if width == 0 || height == 0 {
-            return 0;
-        }
-        let lines_len = Self::new(messages, 0, true)
-            .build_rendered_lines(width)
-            .len() as u16;
-        lines_len.saturating_sub(height)
-    }
-}
-
-impl<'a> Widget for ChatHistory<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer)
-    where
-        Self: Sized,
-    {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let lines = self.build_rendered_lines(area.width);
-        if lines.is_empty() {
+    pub(crate) fn render_prebuilt(
+        lines: &[RenderedLine],
+        area: Rect,
+        buf: &mut Buffer,
+        scroll: u16,
+        auto_scroll: bool,
+    ) {
+        if area.width == 0 || area.height == 0 || lines.is_empty() {
             return;
         }
 
         let total_height = lines.len() as u16;
         let max_scroll = total_height.saturating_sub(area.height);
-        let scroll = if self.auto_scroll {
+        let scroll = if auto_scroll {
             max_scroll
         } else {
-            self.scroll.min(max_scroll)
+            scroll.min(max_scroll)
         };
 
         let start_idx = scroll as usize;
@@ -608,6 +603,86 @@ impl<'a> Widget for ChatHistory<'a> {
                 }
             }
         }
+    }
+
+    pub(crate) fn render_prebuilt_sections(
+        sections: &[Arc<Vec<RenderedLine>>],
+        total_lines: u16,
+        area: Rect,
+        buf: &mut Buffer,
+        scroll: u16,
+        auto_scroll: bool,
+    ) {
+        if area.width == 0 || area.height == 0 || total_lines == 0 {
+            return;
+        }
+
+        let max_scroll = total_lines.saturating_sub(area.height);
+        let scroll = if auto_scroll {
+            max_scroll
+        } else {
+            scroll.min(max_scroll)
+        };
+
+        let start_idx = scroll as usize;
+        let mut consumed = 0usize;
+        let mut visual_idx = 0usize;
+
+        for section in sections {
+            if visual_idx >= area.height as usize {
+                break;
+            }
+
+            let section_len = section.len();
+            if consumed + section_len <= start_idx {
+                consumed += section_len;
+                continue;
+            }
+
+            let local_start = start_idx.saturating_sub(consumed);
+            for line in section.iter().skip(local_start) {
+                if visual_idx >= area.height as usize {
+                    break;
+                }
+
+                let y = area.y + visual_idx as u16;
+                let row_style = match line.bg {
+                    Some(bg) => Style::default().bg(bg),
+                    None => Style::default(),
+                };
+
+                for x_offset in 0..area.width {
+                    buf[(area.x + x_offset, y)]
+                        .set_char(' ')
+                        .set_style(row_style);
+                }
+
+                let mut char_idx = 0usize;
+                'outer: for span in &line.spans {
+                    for ch in span.text.chars() {
+                        let x = area.x + char_idx as u16;
+                        if x >= area.x + area.width {
+                            break 'outer;
+                        }
+                        buf[(x, y)].set_char(ch).set_style(span.style);
+                        char_idx += 1;
+                    }
+                }
+
+                visual_idx += 1;
+            }
+            consumed += section_len;
+        }
+    }
+}
+
+impl<'a> Widget for ChatHistory<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let lines = self.build_rendered_lines(area.width);
+        Self::render_prebuilt(&lines, area, buf, self.scroll, self.auto_scroll);
     }
 }
 
