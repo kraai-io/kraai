@@ -179,11 +179,11 @@ impl<'a> ChatHistory<'a> {
 
             match msg.role {
                 ChatRole::User => {
-                    let lines = Self::wrap_with_prefix(&msg.content, width, "You > ", "      ");
+                    let lines = Self::wrap_with_prefix(&msg.content, width, "", "");
                     for line in lines {
                         rendered.push(RenderedLine {
                             text: line,
-                            style: Style::default().fg(Color::Cyan),
+                            style: Style::default().fg(Color::White).bg(Color::DarkGray),
                         });
                     }
                 }
@@ -322,5 +322,16 @@ mod tests {
         assert!(lines[0].text.contains("call read_file"));
         assert!(lines[0].text.contains("args {\"path\":\"foo.txt\"}"));
         assert!(lines[0].text.contains("error denied"));
+    }
+
+    #[test]
+    fn renders_user_messages_without_prefix() {
+        let user = message("1", ChatRole::User, "hello");
+        let refs = [&user];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(40);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "hello");
     }
 }

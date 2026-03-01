@@ -428,6 +428,12 @@ impl App {
             } => {
                 self.state.mode = UiMode::Chat;
                 self.state.current_session_id = Some(session_id);
+                self.state.current_tip_id = None;
+                self.state.chat_history.clear();
+                self.state.optimistic_messages.clear();
+                self.state.is_streaming = false;
+                self.state.auto_scroll = true;
+                self.state.scroll = 0;
                 self.state.status = String::from("Session loaded");
                 self.request_sync();
             }
@@ -656,6 +662,7 @@ impl App {
 
         let command = matches[selected_idx].0;
         self.state.input = format!("/{command} ");
+        self.state.input_cursor = self.state.input.len();
         self.reset_completion_cycle();
         true
     }
