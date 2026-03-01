@@ -143,14 +143,7 @@ impl<'a> ChatHistory<'a> {
             .add_modifier(Modifier::BOLD);
         let body_style = Style::default().fg(Color::Rgb(130, 230, 255));
 
-        Self::push_wrapped_lines(
-            &mut lines,
-            &tool_name,
-            width,
-            header_style,
-            "",
-            "",
-        );
+        Self::push_wrapped_lines(&mut lines, &tool_name, width, header_style, "", "");
 
         if let Some(args_text) = args_text {
             Self::push_wrapped_lines(&mut lines, &args_text, width, body_style, "  ", "  ");
@@ -414,7 +407,11 @@ mod tests {
 
         let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "read_file"));
-        assert!(rendered.iter().any(|line| line.contains("files[1]: /tmp/a.txt")));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("files[1]: /tmp/a.txt"))
+        );
         assert!(rendered.iter().any(|line| line.contains("max_size: 10")));
         assert!(!rendered.iter().any(|line| line.contains("```tool_call")));
     }
@@ -453,7 +450,11 @@ mod tests {
 
     #[test]
     fn hides_successful_tool_messages() {
-        let tool = message("1", ChatRole::Tool, "Tool 'read_file' result:\n{\n  \"ok\": true\n}");
+        let tool = message(
+            "1",
+            ChatRole::Tool,
+            "Tool 'read_file' result:\n{\n  \"ok\": true\n}",
+        );
         let refs = [&tool];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
@@ -473,8 +474,16 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| line.contains("tool: Tool 'read_file' result:")));
-        assert!(rendered.iter().any(|line| line.contains("\"error\": \"denied\"")));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("tool: Tool 'read_file' result:"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("\"error\": \"denied\""))
+        );
     }
 
     #[test]
