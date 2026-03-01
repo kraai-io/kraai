@@ -57,6 +57,8 @@ apps/
 
 ### Gotchas
 - Slash command completion UX in TUI:
+  - When the slash-command popup is open (`/<prefix>` with no whitespace), `Down`/`Up` must mirror `Tab`/`Shift-Tab` cycling.
+  - `Enter` should execute the selected slash command directly (do not first write it into the input).
 
 ## Dependencies
 

@@ -562,7 +562,7 @@ impl App {
     fn handle_chat_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Enter => {
-                if !self.select_current_command_suggestion() {
+                if !self.execute_current_command_suggestion() {
                     self.reset_completion_cycle();
                     self.handle_submit();
                 }
@@ -582,10 +582,18 @@ impl App {
                 self.reset_completion_cycle();
             }
             KeyCode::Up => {
-                self.state.input_cursor = 0;
+                if active_command_prefix(&self.state.input).is_some() {
+                    self.cycle_command_suggestion(false);
+                } else {
+                    self.state.input_cursor = 0;
+                }
             }
             KeyCode::Down => {
-                self.state.input_cursor = self.state.input.len();
+                if active_command_prefix(&self.state.input).is_some() {
+                    self.cycle_command_suggestion(true);
+                } else {
+                    self.state.input_cursor = self.state.input.len();
+                }
             }
             KeyCode::Left => {
                 self.move_input_cursor_left();
@@ -645,7 +653,7 @@ impl App {
         self.state.command_completion_index = next_index;
     }
 
-    fn select_current_command_suggestion(&mut self) -> bool {
+    fn execute_current_command_suggestion(&mut self) -> bool {
         let Some(prefix) = active_command_prefix(&self.state.input) else {
             return false;
         };
@@ -661,9 +669,10 @@ impl App {
         };
 
         let command = matches[selected_idx].0;
-        self.state.input = format!("/{command} ");
-        self.state.input_cursor = self.state.input.len();
+        self.state.input.clear();
+        self.state.input_cursor = 0;
         self.reset_completion_cycle();
+        self.handle_command(command);
         true
     }
 
@@ -1220,7 +1229,7 @@ fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mu
     Paragraph::new(Text::from(lines))
         .block(
             Block::default()
-                .title("Command (Tab/Shift-Tab cycle, Enter select)")
+                .title("Command (Tab/Down next, Shift-Tab/Up prev, Enter run)")
                 .borders(Borders::ALL),
         )
         .render(popup_area, buf);
