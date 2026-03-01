@@ -1,4 +1,4 @@
-import type { Model as BindingModel, Event } from "agent-ts-bindings";
+import type { Model as BindingModel, Event, SettingsDocument } from "agent-ts-bindings";
 import {
 	Bot,
 	ChevronDown,
@@ -6,6 +6,7 @@ import {
 	ChevronRight,
 	Plus,
 	Send,
+	Settings2,
 	Square,
 	Trash2,
 	Wrench,
@@ -13,6 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { ModelSelector } from "@/components/model-selector";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -65,6 +67,8 @@ interface Session {
 interface WindowAPI {
 	initRuntime: (callback: (event: Event) => void) => void;
 	listModels: () => Promise<Record<string, BindingModel[]>>;
+	getSettings: () => Promise<SettingsDocument>;
+	saveSettings: (settings: SettingsDocument) => Promise<void>;
 	sendMessage: (
 		message: string,
 		modelId: string,
@@ -100,6 +104,7 @@ function App(): React.JSX.Element {
 	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -416,6 +421,14 @@ function App(): React.JSX.Element {
 
 	return (
 		<div className="flex h-screen bg-background">
+			<SettingsDialog
+				open={isSettingsOpen}
+				onOpenChange={setIsSettingsOpen}
+				onSaved={() => {
+					loadModels();
+				}}
+			/>
+
 			{/* Delete Session Dialog */}
 			<Dialog open={sessionToDelete !== null}>
 				<DialogContent>
@@ -588,6 +601,14 @@ function App(): React.JSX.Element {
 						</div>
 						<h1 className="text-lg font-semibold tracking-tight">Agent</h1>
 					</div>
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => setIsSettingsOpen(true)}
+						title="Settings"
+					>
+						<Settings2 className="h-4 w-4" />
+					</Button>
 					<Button
 						variant="ghost"
 						size="icon"

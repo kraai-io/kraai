@@ -4,7 +4,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agent_runtime::{Event, Model, RuntimeHandle, Session};
+use agent_runtime::{
+    Event, Model, ModelSettings, ProviderSettings, ProviderType, RuntimeHandle, Session,
+    SettingsDocument,
+};
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
@@ -21,11 +24,12 @@ use types::{ChatRole, Message, MessageId, MessageStatus};
 
 use crate::components::{ChatHistory, RenderedLine, TextInput};
 
-const SLASH_COMMANDS: [(&str, &str); 6] = [
+const SLASH_COMMANDS: [(&str, &str); 7] = [
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("new", "Start new session"),
     ("quit", "Exit the TUI"),
+    ("settings", "Open settings editor"),
     ("sessions", "Open sessions menu"),
     ("tools", "Open tools approval menu"),
 ];
@@ -34,9 +38,41 @@ const SLASH_COMMANDS: [(&str, &str); 6] = [
 enum UiMode {
     Chat,
     ModelMenu,
+    SettingsMenu,
     SessionsMenu,
     ToolsMenu,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsFocus {
+    ProviderList,
+    ProviderForm,
+    ModelList,
+    ModelForm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsProviderField {
+    Id,
+    Type,
+    BaseUrl,
+    ApiKey,
+    EnvVarApiKey,
+    OnlyListedModels,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsModelField {
+    Id,
+    Name,
+    MaxContext,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveSettingsEditor {
+    Provider(SettingsProviderField),
+    Model(SettingsModelField),
 }
 
 #[derive(Clone, Debug)]
@@ -56,10 +92,14 @@ struct OptimisticMessage {
 
 enum RuntimeRequest {
     ListModels,
+    GetSettings,
     SendMessage {
         message: String,
         model_id: String,
         provider_id: String,
+    },
+    SaveSettings {
+        settings: SettingsDocument,
     },
     GetChatHistory,
     GetCurrentTip,
@@ -83,7 +123,9 @@ enum RuntimeRequest {
 
 enum RuntimeResponse {
     Models(Result<HashMap<String, Vec<Model>>, String>),
+    Settings(Result<SettingsDocument, String>),
     SendMessage(Result<(), String>),
+    SaveSettings(Result<(), String>),
     ChatHistory(Result<BTreeMap<MessageId, Message>, String>),
     CurrentTip(Result<Option<String>, String>),
     ClearCurrentSession(Result<(), String>),
@@ -143,6 +185,16 @@ pub struct AppState {
     tools_menu_index: usize,
     command_completion_prefix: Option<String>,
     command_completion_index: usize,
+    settings_draft: Option<SettingsDocument>,
+    settings_errors: HashMap<String, String>,
+    settings_focus: SettingsFocus,
+    settings_provider_index: usize,
+    settings_model_index: usize,
+    settings_provider_field_index: usize,
+    settings_model_field_index: usize,
+    settings_editor: Option<ActiveSettingsEditor>,
+    settings_editor_input: String,
+    settings_delete_armed: bool,
 }
 
 #[derive(Default)]
@@ -176,6 +228,12 @@ impl App {
                             .map_err(|e| e.to_string());
                         let _ = res_tx.send(RuntimeResponse::Models(result));
                     }
+                    RuntimeRequest::GetSettings => {
+                        let result = rt
+                            .block_on(runtime.get_settings())
+                            .map_err(|e| e.to_string());
+                        let _ = res_tx.send(RuntimeResponse::Settings(result));
+                    }
                     RuntimeRequest::SendMessage {
                         message,
                         model_id,
@@ -185,6 +243,12 @@ impl App {
                             .block_on(runtime.send_message(message, model_id, provider_id))
                             .map_err(|e| e.to_string());
                         let _ = res_tx.send(RuntimeResponse::SendMessage(result));
+                    }
+                    RuntimeRequest::SaveSettings { settings } => {
+                        let result = rt
+                            .block_on(runtime.save_settings(settings))
+                            .map_err(|e| e.to_string());
+                        let _ = res_tx.send(RuntimeResponse::SaveSettings(result));
                     }
                     RuntimeRequest::GetChatHistory => {
                         let result = rt
@@ -277,6 +341,16 @@ impl App {
             tools_menu_index: 0,
             command_completion_prefix: None,
             command_completion_index: 0,
+            settings_draft: None,
+            settings_errors: HashMap::new(),
+            settings_focus: SettingsFocus::ProviderList,
+            settings_provider_index: 0,
+            settings_model_index: 0,
+            settings_provider_field_index: 0,
+            settings_model_field_index: 0,
+            settings_editor: None,
+            settings_editor_input: String::new(),
+            settings_delete_armed: false,
         };
 
         Self {
@@ -441,10 +515,39 @@ impl App {
             RuntimeResponse::Models(Err(err)) => {
                 self.state.status = format!("Failed loading models: {err}");
             }
+            RuntimeResponse::Settings(Ok(settings)) => {
+                self.state.settings_draft = Some(settings);
+                self.state.settings_errors.clear();
+                self.state.settings_focus = SettingsFocus::ProviderList;
+                self.state.settings_provider_index = 0;
+                self.state.settings_model_index = 0;
+                self.state.settings_provider_field_index = 0;
+                self.state.settings_model_field_index = 0;
+                self.state.settings_editor = None;
+                self.state.settings_editor_input.clear();
+                self.state.settings_delete_armed = false;
+                self.state.mode = UiMode::SettingsMenu;
+                self.state.status = String::from("Editing settings");
+            }
+            RuntimeResponse::Settings(Err(err)) => {
+                self.state.status = format!("Failed loading settings: {err}");
+            }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
                 self.state.is_streaming = false;
                 self.state.status = format!("Send failed: {err}");
+            }
+            RuntimeResponse::SaveSettings(Ok(())) => {
+                self.state.settings_errors.clear();
+                self.state.settings_delete_armed = false;
+                self.state.settings_editor = None;
+                self.state.settings_editor_input.clear();
+                self.state.mode = UiMode::Chat;
+                self.state.status = String::from("Settings saved");
+            }
+            RuntimeResponse::SaveSettings(Err(err)) => {
+                self.state.settings_errors = parse_settings_errors(&err);
+                self.state.status = format!("Failed saving settings: {err}");
             }
             RuntimeResponse::ChatHistory(Ok(history)) => {
                 self.state.chat_history = history;
@@ -613,6 +716,15 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if matches!(key_event.code, KeyCode::Esc) {
+            if self.state.mode == UiMode::SettingsMenu {
+                if self.state.settings_editor.take().is_some() {
+                    self.state.settings_editor_input.clear();
+                } else {
+                    self.state.mode = UiMode::Chat;
+                    self.state.status = String::from("Settings editor closed");
+                }
+                return;
+            }
             self.state.mode = UiMode::Chat;
             return;
         }
@@ -620,6 +732,7 @@ impl App {
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
+            UiMode::SettingsMenu => self.handle_settings_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
             UiMode::ToolsMenu => self.handle_tools_menu_key_event(key_event),
             UiMode::Help => {
@@ -856,6 +969,438 @@ impl App {
         }
     }
 
+    fn handle_settings_key_event(&mut self, key_event: KeyEvent) {
+        if self.state.settings_editor.is_some() {
+            self.handle_settings_editor_key_event(key_event);
+            return;
+        }
+
+        match key_event.code {
+            KeyCode::Tab => self.cycle_settings_focus(true),
+            KeyCode::BackTab => self.cycle_settings_focus(false),
+            KeyCode::Up => self.move_settings_selection(-1),
+            KeyCode::Down => self.move_settings_selection(1),
+            KeyCode::Left => self.adjust_settings_field(false),
+            KeyCode::Right => self.adjust_settings_field(true),
+            KeyCode::Enter => self.activate_settings_field(),
+            KeyCode::Char('a') => self.add_settings_item(),
+            KeyCode::Char('x') => self.delete_settings_item(),
+            KeyCode::Char('s') => self.save_settings_draft(),
+            KeyCode::Char(' ') => self.toggle_settings_field(),
+            _ => {}
+        }
+    }
+
+    fn handle_settings_editor_key_event(&mut self, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Enter => self.commit_settings_editor(),
+            KeyCode::Backspace => {
+                self.state.settings_editor_input.pop();
+            }
+            KeyCode::Char(c) => {
+                self.state.settings_editor_input.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn cycle_settings_focus(&mut self, forward: bool) {
+        self.state.settings_delete_armed = false;
+        self.state.settings_focus = match (self.state.settings_focus, forward) {
+            (SettingsFocus::ProviderList, true) => SettingsFocus::ProviderForm,
+            (SettingsFocus::ProviderForm, true) => SettingsFocus::ModelList,
+            (SettingsFocus::ModelList, true) => SettingsFocus::ModelForm,
+            (SettingsFocus::ModelForm, true) => SettingsFocus::ProviderList,
+            (SettingsFocus::ProviderList, false) => SettingsFocus::ModelForm,
+            (SettingsFocus::ProviderForm, false) => SettingsFocus::ProviderList,
+            (SettingsFocus::ModelList, false) => SettingsFocus::ProviderForm,
+            (SettingsFocus::ModelForm, false) => SettingsFocus::ModelList,
+        };
+    }
+
+    fn move_settings_selection(&mut self, delta: isize) {
+        self.state.settings_delete_armed = false;
+        match self.state.settings_focus {
+            SettingsFocus::ProviderList => {
+                let len = self
+                    .state
+                    .settings_draft
+                    .as_ref()
+                    .map_or(0, |draft| draft.providers.len());
+                self.state.settings_provider_index =
+                    adjust_index(self.state.settings_provider_index, len, delta);
+                self.state.settings_model_index = 0;
+            }
+            SettingsFocus::ProviderForm => {
+                let len = self.current_provider_fields().len();
+                self.state.settings_provider_field_index =
+                    adjust_index(self.state.settings_provider_field_index, len, delta);
+            }
+            SettingsFocus::ModelList => {
+                let len = self.current_model_indices().len();
+                self.state.settings_model_index =
+                    adjust_index(self.state.settings_model_index, len, delta);
+            }
+            SettingsFocus::ModelForm => {
+                let len = SETTINGS_MODEL_FIELDS.len();
+                self.state.settings_model_field_index =
+                    adjust_index(self.state.settings_model_field_index, len, delta);
+            }
+        }
+    }
+
+    fn adjust_settings_field(&mut self, forward: bool) {
+        match self.state.settings_focus {
+            SettingsFocus::ProviderForm => {
+                if self.current_provider_field() == Some(SettingsProviderField::Type) {
+                    self.cycle_provider_type(forward);
+                } else if self.current_provider_field()
+                    == Some(SettingsProviderField::OnlyListedModels)
+                {
+                    self.toggle_settings_field();
+                }
+            }
+            SettingsFocus::ModelForm | SettingsFocus::ProviderList | SettingsFocus::ModelList => {}
+        }
+    }
+
+    fn activate_settings_field(&mut self) {
+        self.state.settings_delete_armed = false;
+        match self.state.settings_focus {
+            SettingsFocus::ProviderForm => match self.current_provider_field() {
+                Some(SettingsProviderField::Type) => self.cycle_provider_type(true),
+                Some(SettingsProviderField::OnlyListedModels) => self.toggle_settings_field(),
+                Some(field) => self.start_provider_editor(field),
+                None => {}
+            },
+            SettingsFocus::ModelForm => {
+                if let Some(field) = self.current_model_field() {
+                    self.start_model_editor(field);
+                }
+            }
+            SettingsFocus::ProviderList | SettingsFocus::ModelList => {}
+        }
+    }
+
+    fn toggle_settings_field(&mut self) {
+        if self.current_provider_field() != Some(SettingsProviderField::OnlyListedModels) {
+            return;
+        }
+
+        let provider_index = self.state.settings_provider_index;
+        if let Some(provider) = self
+            .state
+            .settings_draft
+            .as_mut()
+            .and_then(|draft| draft.providers.get_mut(provider_index))
+        {
+            provider.only_listed_models = !provider.only_listed_models;
+        }
+    }
+
+    fn add_settings_item(&mut self) {
+        self.state.settings_delete_armed = false;
+        match self.state.settings_focus {
+            SettingsFocus::ProviderList | SettingsFocus::ProviderForm => {
+                if let Some(draft) = self.state.settings_draft.as_mut() {
+                    let next_index = draft.providers.len();
+                    draft.providers.push(ProviderSettings {
+                        id: format!("provider-{}", next_index + 1),
+                        provider_type: ProviderType::OpenAi,
+                        base_url: Some(String::from("https://api.openai.com/v1")),
+                        api_key: None,
+                        env_var_api_key: Some(String::from("OPENAI_API_KEY")),
+                        only_listed_models: true,
+                    });
+                    self.state.settings_provider_index = next_index;
+                    self.state.settings_model_index = 0;
+                    self.state.status = String::from("Added provider");
+                }
+            }
+            SettingsFocus::ModelList | SettingsFocus::ModelForm => {
+                let provider_id = self.current_provider().map(|provider| provider.id.clone());
+                if let (Some(draft), Some(provider_id)) =
+                    (self.state.settings_draft.as_mut(), provider_id)
+                {
+                    let next_count = draft
+                        .models
+                        .iter()
+                        .filter(|model| model.provider_id == provider_id)
+                        .count();
+                    draft.models.push(ModelSettings {
+                        id: format!("model-{}", next_count + 1),
+                        provider_id,
+                        name: None,
+                        max_context: None,
+                    });
+                    self.state.settings_model_index = next_count;
+                    self.state.status = String::from("Added model");
+                }
+            }
+        }
+    }
+
+    fn delete_settings_item(&mut self) {
+        if !self.state.settings_delete_armed {
+            self.state.settings_delete_armed = true;
+            self.state.status = String::from("Press x again to confirm delete");
+            return;
+        }
+
+        self.state.settings_delete_armed = false;
+        match self.state.settings_focus {
+            SettingsFocus::ProviderList | SettingsFocus::ProviderForm => {
+                let provider_id = self.current_provider().map(|provider| provider.id.clone());
+                if let (Some(draft), Some(provider_id)) =
+                    (self.state.settings_draft.as_mut(), provider_id)
+                {
+                    draft
+                        .providers
+                        .retain(|provider| provider.id != provider_id);
+                    draft
+                        .models
+                        .retain(|model| model.provider_id != provider_id);
+                    self.state.settings_provider_index = self
+                        .state
+                        .settings_provider_index
+                        .saturating_sub(1)
+                        .min(draft.providers.len().saturating_sub(1));
+                    self.state.settings_model_index = 0;
+                    self.state.status = String::from("Deleted provider");
+                }
+            }
+            SettingsFocus::ModelList | SettingsFocus::ModelForm => {
+                let selected = self
+                    .current_model()
+                    .map(|model| (model.provider_id.clone(), model.id.clone()));
+                if let (Some(draft), Some((provider_id, model_id))) =
+                    (self.state.settings_draft.as_mut(), selected)
+                {
+                    draft.models.retain(|model| {
+                        !(model.provider_id == provider_id && model.id == model_id)
+                    });
+                    self.state.settings_model_index =
+                        self.state.settings_model_index.saturating_sub(1);
+                    self.state.status = String::from("Deleted model");
+                }
+            }
+        }
+    }
+
+    fn save_settings_draft(&mut self) {
+        if let Some(settings) = self.state.settings_draft.clone() {
+            self.request(RuntimeRequest::SaveSettings { settings });
+        }
+    }
+
+    fn start_provider_editor(&mut self, field: SettingsProviderField) {
+        let Some(provider) = self.current_provider() else {
+            return;
+        };
+        let value = match field {
+            SettingsProviderField::Id => provider.id.clone(),
+            SettingsProviderField::BaseUrl => provider.base_url.clone().unwrap_or_default(),
+            SettingsProviderField::ApiKey => provider.api_key.clone().unwrap_or_default(),
+            SettingsProviderField::EnvVarApiKey => {
+                provider.env_var_api_key.clone().unwrap_or_default()
+            }
+            SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => return,
+        };
+        self.state.settings_editor = Some(ActiveSettingsEditor::Provider(field));
+        self.state.settings_editor_input = value;
+    }
+
+    fn start_model_editor(&mut self, field: SettingsModelField) {
+        let Some(model) = self.current_model() else {
+            return;
+        };
+        let value = match field {
+            SettingsModelField::Id => model.id.clone(),
+            SettingsModelField::Name => model.name.clone().unwrap_or_default(),
+            SettingsModelField::MaxContext => model
+                .max_context
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        };
+        self.state.settings_editor = Some(ActiveSettingsEditor::Model(field));
+        self.state.settings_editor_input = value;
+    }
+
+    fn commit_settings_editor(&mut self) {
+        let Some(editor) = self.state.settings_editor.take() else {
+            return;
+        };
+        let value = self.state.settings_editor_input.trim().to_string();
+
+        match editor {
+            ActiveSettingsEditor::Provider(field) => {
+                let provider_index = self.state.settings_provider_index;
+                if let Some(draft) = self.state.settings_draft.as_mut()
+                    && let Some(provider) = draft.providers.get_mut(provider_index)
+                {
+                    match field {
+                        SettingsProviderField::Id => {
+                            let previous_id = provider.id.clone();
+                            provider.id = value.clone();
+                            for model in &mut draft.models {
+                                if model.provider_id == previous_id {
+                                    model.provider_id = value.clone();
+                                }
+                            }
+                        }
+                        SettingsProviderField::BaseUrl => {
+                            provider.base_url = if value.is_empty() { None } else { Some(value) };
+                        }
+                        SettingsProviderField::ApiKey => {
+                            provider.api_key = if value.is_empty() { None } else { Some(value) };
+                        }
+                        SettingsProviderField::EnvVarApiKey => {
+                            provider.env_var_api_key =
+                                if value.is_empty() { None } else { Some(value) };
+                        }
+                        SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => {}
+                    }
+                }
+            }
+            ActiveSettingsEditor::Model(field) => {
+                if let Some(global_index) = self.current_model_global_index()
+                    && let Some(model) = self
+                        .state
+                        .settings_draft
+                        .as_mut()
+                        .and_then(|draft| draft.models.get_mut(global_index))
+                {
+                    match field {
+                        SettingsModelField::Id => model.id = value,
+                        SettingsModelField::Name => {
+                            model.name = if value.is_empty() { None } else { Some(value) };
+                        }
+                        SettingsModelField::MaxContext => {
+                            model.max_context = value.parse::<u32>().ok();
+                        }
+                    }
+                }
+            }
+        }
+
+        self.state.settings_editor_input.clear();
+    }
+
+    fn cycle_provider_type(&mut self, forward: bool) {
+        let provider_index = self.state.settings_provider_index;
+        if let Some(provider) = self
+            .state
+            .settings_draft
+            .as_mut()
+            .and_then(|draft| draft.providers.get_mut(provider_index))
+        {
+            provider.provider_type = match (provider.provider_type.clone(), forward) {
+                (ProviderType::OpenAi, true) => ProviderType::Google,
+                (ProviderType::Google, true) => ProviderType::OpenAi,
+                (ProviderType::OpenAi, false) => ProviderType::Google,
+                (ProviderType::Google, false) => ProviderType::OpenAi,
+            };
+
+            match provider.provider_type {
+                ProviderType::OpenAi => {
+                    if provider.base_url.is_none() {
+                        provider.base_url = Some(String::from("https://api.openai.com/v1"));
+                    }
+                    if provider.env_var_api_key.as_deref() == Some("GEMINI_API_KEY")
+                        || provider.env_var_api_key.is_none()
+                    {
+                        provider.env_var_api_key = Some(String::from("OPENAI_API_KEY"));
+                    }
+                }
+                ProviderType::Google => {
+                    provider.base_url = None;
+                    if provider.env_var_api_key.as_deref() == Some("OPENAI_API_KEY")
+                        || provider.env_var_api_key.is_none()
+                    {
+                        provider.env_var_api_key = Some(String::from("GEMINI_API_KEY"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn current_provider(&self) -> Option<&ProviderSettings> {
+        self.state
+            .settings_draft
+            .as_ref()
+            .and_then(|draft| draft.providers.get(self.state.settings_provider_index))
+    }
+
+    fn current_provider_fields(&self) -> Vec<SettingsProviderField> {
+        match self
+            .current_provider()
+            .map(|provider| &provider.provider_type)
+        {
+            Some(ProviderType::OpenAi) => vec![
+                SettingsProviderField::Id,
+                SettingsProviderField::Type,
+                SettingsProviderField::BaseUrl,
+                SettingsProviderField::ApiKey,
+                SettingsProviderField::EnvVarApiKey,
+                SettingsProviderField::OnlyListedModels,
+            ],
+            Some(ProviderType::Google) => vec![
+                SettingsProviderField::Id,
+                SettingsProviderField::Type,
+                SettingsProviderField::ApiKey,
+                SettingsProviderField::EnvVarApiKey,
+                SettingsProviderField::OnlyListedModels,
+            ],
+            None => Vec::new(),
+        }
+    }
+
+    fn current_provider_field(&self) -> Option<SettingsProviderField> {
+        self.current_provider_fields()
+            .get(self.state.settings_provider_field_index)
+            .copied()
+    }
+
+    fn current_model_indices(&self) -> Vec<usize> {
+        let Some(provider) = self.current_provider() else {
+            return Vec::new();
+        };
+        self.state
+            .settings_draft
+            .as_ref()
+            .map(|draft| {
+                draft
+                    .models
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, model)| {
+                        (model.provider_id == provider.id).then_some(index)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn current_model_global_index(&self) -> Option<usize> {
+        self.current_model_indices()
+            .get(self.state.settings_model_index)
+            .copied()
+    }
+
+    fn current_model(&self) -> Option<&ModelSettings> {
+        let index = self.current_model_global_index()?;
+        self.state
+            .settings_draft
+            .as_ref()
+            .and_then(|draft| draft.models.get(index))
+    }
+
+    fn current_model_field(&self) -> Option<SettingsModelField> {
+        SETTINGS_MODEL_FIELDS
+            .get(self.state.settings_model_field_index)
+            .copied()
+    }
+
     fn handle_submit(&mut self) {
         let raw_input = self.state.input.trim().to_string();
         if raw_input.is_empty() {
@@ -916,6 +1461,9 @@ impl App {
             "model" => {
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
+            }
+            "settings" => {
+                self.request(RuntimeRequest::GetSettings);
             }
             "sessions" => {
                 self.state.mode = UiMode::SessionsMenu;
@@ -1297,6 +1845,7 @@ impl Widget for &AppState {
 
         match self.mode {
             UiMode::ModelMenu => render_model_menu(self, area, buf),
+            UiMode::SettingsMenu => render_settings_menu(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
             UiMode::ToolsMenu => render_tools_menu(self, area, buf),
             UiMode::Help => render_help_menu(area, buf),
@@ -1319,6 +1868,105 @@ fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
         .copied()
         .filter(|(command, _)| command.starts_with(prefix))
         .collect()
+}
+
+const SETTINGS_MODEL_FIELDS: [SettingsModelField; 3] = [
+    SettingsModelField::Id,
+    SettingsModelField::Name,
+    SettingsModelField::MaxContext,
+];
+
+fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+
+    if delta.is_negative() {
+        current.saturating_sub(delta.unsigned_abs())
+    } else {
+        (current + delta as usize).min(len - 1)
+    }
+}
+
+fn provider_type_label(provider_type: &ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::OpenAi => "OpenAI-compatible",
+        ProviderType::Google => "Google",
+    }
+}
+
+fn settings_provider_field_label(field: SettingsProviderField) -> &'static str {
+    match field {
+        SettingsProviderField::Id => "Provider ID",
+        SettingsProviderField::Type => "Provider Type",
+        SettingsProviderField::BaseUrl => "Base URL",
+        SettingsProviderField::ApiKey => "Inline API Key",
+        SettingsProviderField::EnvVarApiKey => "Env Var",
+        SettingsProviderField::OnlyListedModels => "Only Listed Models",
+    }
+}
+
+fn settings_provider_field_value(
+    provider: &ProviderSettings,
+    field: SettingsProviderField,
+) -> String {
+    match field {
+        SettingsProviderField::Id => provider.id.clone(),
+        SettingsProviderField::Type => String::from(provider_type_label(&provider.provider_type)),
+        SettingsProviderField::BaseUrl => provider.base_url.clone().unwrap_or_default(),
+        SettingsProviderField::ApiKey => {
+            if provider
+                .api_key
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                String::from("••••••")
+            } else {
+                String::new()
+            }
+        }
+        SettingsProviderField::EnvVarApiKey => provider.env_var_api_key.clone().unwrap_or_default(),
+        SettingsProviderField::OnlyListedModels => {
+            if provider.only_listed_models {
+                String::from("yes")
+            } else {
+                String::from("no")
+            }
+        }
+    }
+}
+
+fn settings_model_field_label(field: SettingsModelField) -> &'static str {
+    match field {
+        SettingsModelField::Id => "Model ID",
+        SettingsModelField::Name => "Display Name",
+        SettingsModelField::MaxContext => "Max Context",
+    }
+}
+
+fn settings_model_field_value(model: &ModelSettings, field: SettingsModelField) -> String {
+    match field {
+        SettingsModelField::Id => model.id.clone(),
+        SettingsModelField::Name => model.name.clone().unwrap_or_default(),
+        SettingsModelField::MaxContext => model
+            .max_context
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_settings_errors(message: &str) -> HashMap<String, String> {
+    let mut errors = HashMap::new();
+    for line in message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Some((field, error)) = line.split_once(": ") {
+            errors.insert(field.to_string(), error.to_string());
+        }
+    }
+    errors
 }
 
 fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
@@ -1425,6 +2073,294 @@ fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     Paragraph::new(Text::from(lines))
         .block(Block::default().title("/model").borders(Borders::ALL))
         .render(popup_area, buf);
+}
+
+fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
+    let popup_area = centered_rect(
+        area.width.saturating_mul(9) / 10,
+        area.height.saturating_mul(4) / 5,
+        area,
+    );
+
+    Clear.render(popup_area, buf);
+    let outer = Block::default().title("/settings").borders(Borders::ALL);
+    let inner = outer.inner(popup_area);
+    outer.render(popup_area, buf);
+
+    let [header_area, body_area, footer_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(8),
+        Constraint::Length(3),
+    ])
+    .areas(inner);
+
+    let header = if let Some(editor) = state.settings_editor {
+        let target = match editor {
+            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(field),
+            ActiveSettingsEditor::Model(field) => settings_model_field_label(field),
+        };
+        vec![
+            Line::styled(
+                "Settings Editor",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Line::raw(format!("Editing {target}: {}", state.settings_editor_input)),
+        ]
+    } else {
+        vec![
+            Line::styled(
+                "Settings Editor",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Line::raw("Tab=next pane, Enter=edit/toggle, a=add, x=delete, s=save, Esc=close"),
+        ]
+    };
+    Paragraph::new(Text::from(header)).render(header_area, buf);
+
+    let [
+        providers_area,
+        provider_form_area,
+        models_area,
+        model_form_area,
+    ] = Layout::horizontal([
+        Constraint::Percentage(24),
+        Constraint::Percentage(26),
+        Constraint::Percentage(24),
+        Constraint::Percentage(26),
+    ])
+    .areas(body_area);
+
+    let mut provider_lines = vec![Line::styled(
+        "Providers",
+        pane_style(state.settings_focus == SettingsFocus::ProviderList),
+    )];
+    if let Some(draft) = &state.settings_draft {
+        if draft.providers.is_empty() {
+            provider_lines.push(Line::raw("No providers"));
+        } else {
+            for (idx, provider) in draft.providers.iter().enumerate() {
+                let selected = idx == state.settings_provider_index;
+                provider_lines.push(Line::styled(
+                    format!(
+                        "{} {}",
+                        if selected { ">" } else { " " },
+                        if provider.id.is_empty() {
+                            "<new provider>"
+                        } else {
+                            provider.id.as_str()
+                        }
+                    ),
+                    selection_style(
+                        state.settings_focus == SettingsFocus::ProviderList && selected,
+                    ),
+                ));
+            }
+        }
+    }
+    Paragraph::new(Text::from(provider_lines))
+        .block(Block::default().borders(Borders::ALL))
+        .render(providers_area, buf);
+
+    let mut provider_form_lines = vec![Line::styled(
+        "Provider Fields",
+        pane_style(state.settings_focus == SettingsFocus::ProviderForm),
+    )];
+    if let Some(provider) = state
+        .settings_draft
+        .as_ref()
+        .and_then(|draft| draft.providers.get(state.settings_provider_index))
+    {
+        let fields = state
+            .settings_draft
+            .as_ref()
+            .and_then(|_| Some(()))
+            .map(|_| match provider.provider_type {
+                ProviderType::OpenAi => vec![
+                    SettingsProviderField::Id,
+                    SettingsProviderField::Type,
+                    SettingsProviderField::BaseUrl,
+                    SettingsProviderField::ApiKey,
+                    SettingsProviderField::EnvVarApiKey,
+                    SettingsProviderField::OnlyListedModels,
+                ],
+                ProviderType::Google => vec![
+                    SettingsProviderField::Id,
+                    SettingsProviderField::Type,
+                    SettingsProviderField::ApiKey,
+                    SettingsProviderField::EnvVarApiKey,
+                    SettingsProviderField::OnlyListedModels,
+                ],
+            })
+            .unwrap_or_default();
+        for (idx, field) in fields.iter().enumerate() {
+            let selected = idx == state.settings_provider_field_index;
+            let error_key = match field {
+                SettingsProviderField::Id => {
+                    format!("providers[{}].id", state.settings_provider_index)
+                }
+                SettingsProviderField::BaseUrl => {
+                    format!("providers[{}].base_url", state.settings_provider_index)
+                }
+                SettingsProviderField::ApiKey | SettingsProviderField::EnvVarApiKey => {
+                    format!("providers[{}].credentials", state.settings_provider_index)
+                }
+                SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => {
+                    String::new()
+                }
+            };
+            let mut line = format!(
+                "{} {:<18} {}",
+                if selected { ">" } else { " " },
+                settings_provider_field_label(*field),
+                settings_provider_field_value(provider, *field)
+            );
+            if let Some(error) = state.settings_errors.get(&error_key)
+                && !error_key.is_empty()
+            {
+                line.push_str(&format!("  ! {error}"));
+            }
+            provider_form_lines.push(Line::styled(
+                line,
+                selection_style(state.settings_focus == SettingsFocus::ProviderForm && selected),
+            ));
+        }
+    } else {
+        provider_form_lines.push(Line::raw("No provider selected"));
+    }
+    Paragraph::new(Text::from(provider_form_lines))
+        .block(Block::default().borders(Borders::ALL))
+        .render(provider_form_area, buf);
+
+    let mut model_lines = vec![Line::styled(
+        "Models",
+        pane_style(state.settings_focus == SettingsFocus::ModelList),
+    )];
+    let model_indices = if let Some(provider) = state
+        .settings_draft
+        .as_ref()
+        .and_then(|draft| draft.providers.get(state.settings_provider_index))
+    {
+        state
+            .settings_draft
+            .as_ref()
+            .map(|draft| {
+                draft
+                    .models
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, model)| (model.provider_id == provider.id).then_some(idx))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    if model_indices.is_empty() {
+        model_lines.push(Line::raw("No models"));
+    } else if let Some(draft) = &state.settings_draft {
+        for (idx, model_index) in model_indices.iter().enumerate() {
+            if let Some(model) = draft.models.get(*model_index) {
+                model_lines.push(Line::styled(
+                    format!(
+                        "{} {}",
+                        if idx == state.settings_model_index {
+                            ">"
+                        } else {
+                            " "
+                        },
+                        if model.id.is_empty() {
+                            "<new model>"
+                        } else {
+                            model.id.as_str()
+                        }
+                    ),
+                    selection_style(
+                        state.settings_focus == SettingsFocus::ModelList
+                            && idx == state.settings_model_index,
+                    ),
+                ));
+            }
+        }
+    }
+    Paragraph::new(Text::from(model_lines))
+        .block(Block::default().borders(Borders::ALL))
+        .render(models_area, buf);
+
+    let mut model_form_lines = vec![Line::styled(
+        "Model Fields",
+        pane_style(state.settings_focus == SettingsFocus::ModelForm),
+    )];
+    if let Some(model_index) = model_indices.get(state.settings_model_index).copied() {
+        if let Some(model) = state
+            .settings_draft
+            .as_ref()
+            .and_then(|draft| draft.models.get(model_index))
+        {
+            for (idx, field) in SETTINGS_MODEL_FIELDS.iter().enumerate() {
+                let selected = idx == state.settings_model_field_index;
+                let error_key = match field {
+                    SettingsModelField::Id => format!("models[{model_index}].id"),
+                    SettingsModelField::Name => String::new(),
+                    SettingsModelField::MaxContext => format!("models[{model_index}].max_context"),
+                };
+                let mut line = format!(
+                    "{} {:<18} {}",
+                    if selected { ">" } else { " " },
+                    settings_model_field_label(*field),
+                    settings_model_field_value(model, *field)
+                );
+                if let Some(error) = state.settings_errors.get(&error_key)
+                    && !error_key.is_empty()
+                {
+                    line.push_str(&format!("  ! {error}"));
+                }
+                model_form_lines.push(Line::styled(
+                    line,
+                    selection_style(state.settings_focus == SettingsFocus::ModelForm && selected),
+                ));
+            }
+        }
+    } else {
+        model_form_lines.push(Line::raw("No model selected"));
+    }
+    Paragraph::new(Text::from(model_form_lines))
+        .block(Block::default().borders(Borders::ALL))
+        .render(model_form_area, buf);
+
+    let footer_text = if state.settings_delete_armed {
+        String::from("Delete armed: press x again to confirm")
+    } else if let Some(editor) = state.settings_editor {
+        let field = match editor {
+            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(field),
+            ActiveSettingsEditor::Model(field) => settings_model_field_label(field),
+        };
+        format!("Editing {field}: Enter=commit, Esc=cancel")
+    } else {
+        String::from("Providers and models are shared with the desktop app")
+    };
+    Paragraph::new(Line::raw(footer_text))
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().borders(Borders::ALL))
+        .render(footer_area, buf);
+}
+
+fn pane_style(active: bool) -> Style {
+    if active {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    }
+}
+
+fn selection_style(active: bool) -> Style {
+    if active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    }
 }
 
 fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
@@ -1536,6 +2472,7 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         ),
         Line::raw("/help      Open this help menu"),
         Line::raw("/model     Open model selector"),
+        Line::raw("/settings  Open settings editor"),
         Line::raw("/sessions  Open sessions menu"),
         Line::raw("/tools     Open tools approval menu"),
         Line::raw("/new       Start a new session"),

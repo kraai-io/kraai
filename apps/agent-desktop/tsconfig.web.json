@@ -5,6 +5,7 @@
     "src/**/*",
     "src/**/*.tsx",
     "components/**/*",
+    "lib/**/*",
     "electron/preload/*.d.ts"
   ],
   "compilerOptions": {

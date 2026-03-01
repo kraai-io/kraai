@@ -1,4 +1,5 @@
 import { electronAPI } from "@electron-toolkit/preload";
+import type { SettingsDocument } from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
 // Type definitions matching NAPI-RS Event enum
@@ -65,6 +66,14 @@ const api = {
 	// Async methods that call into Rust via main process
 	async listModels(): Promise<string[]> {
 		return await ipcRenderer.invoke("agent:listModels");
+	},
+
+	async getSettings(): Promise<SettingsDocument> {
+		return await ipcRenderer.invoke("agent:getSettings");
+	},
+
+	async saveSettings(settings: SettingsDocument): Promise<void> {
+		await ipcRenderer.invoke("agent:saveSettings", settings);
 	},
 
 	async sendMessage(

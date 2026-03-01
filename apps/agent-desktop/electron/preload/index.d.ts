@@ -1,21 +1,33 @@
 import { ElectronAPI } from "@electron-toolkit/preload";
-
-interface Event {
-	eventType: string;
-	field0?: string;
-}
+import type {
+	Event,
+	Model,
+	Session,
+	SettingsDocument,
+	Message,
+} from "agent-ts-bindings";
 
 type EventHandler = (event: Event) => void;
 
 interface API {
 	initRuntime: (onEvent: EventHandler) => Promise<void>;
-	listModels: () => Promise<string[]>;
+	listModels: () => Promise<Record<string, Model[]>>;
+	getSettings: () => Promise<SettingsDocument>;
+	saveSettings: (settings: SettingsDocument) => Promise<void>;
 	sendMessage: (
 		message: string,
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
-	getChatHistory: () => Promise<Array<{ role: number; content: string }>>;
+	clearCurrentSession: () => void;
+	getChatHistoryTree: () => Promise<Record<string, Message>>;
+	approveTool: (callId: string) => Promise<void>;
+	denyTool: (callId: string) => Promise<void>;
+	executeApprovedTools: () => Promise<void>;
+	listSessions: () => Promise<Session[]>;
+	loadSession: (sessionId: string) => Promise<boolean>;
+	deleteSession: (sessionId: string) => Promise<void>;
+	getCurrentSessionId: () => Promise<string | null>;
 }
 
 declare global {

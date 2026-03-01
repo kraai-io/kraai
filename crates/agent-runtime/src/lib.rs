@@ -4,9 +4,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use agent::AgentManager;
-use color_eyre::eyre::{Context, Result, eyre};
+use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use persistence::SessionMeta;
-use provider_core::{ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use provider_core::{
+    ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
+};
 use tool_core::ToolManager;
 use tool_read_file::ReadFileTool;
 use types::{MessageId, ModelId, ProviderId};
@@ -48,6 +50,46 @@ impl From<SessionMeta> for Session {
             title: meta.title,
         }
     }
+}
+
+/// Supported provider types for settings editing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderType {
+    OpenAi,
+    Google,
+}
+
+/// Editable provider settings shared across clients.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderSettings {
+    pub id: String,
+    pub provider_type: ProviderType,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub env_var_api_key: Option<String>,
+    pub only_listed_models: bool,
+}
+
+/// Editable model settings shared across clients.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelSettings {
+    pub id: String,
+    pub provider_id: String,
+    pub name: Option<String>,
+    pub max_context: Option<u32>,
+}
+
+/// Full editable settings document persisted to providers.toml.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsDocument {
+    pub providers: Vec<ProviderSettings>,
+    pub models: Vec<ModelSettings>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SettingsValidationError {
+    field: String,
+    message: String,
 }
 
 /// Streaming events sent from the runtime to clients
@@ -123,6 +165,13 @@ enum Command {
     ListModels {
         response: oneshot::Sender<HashMap<String, Vec<Model>>>,
     },
+    GetSettings {
+        response: oneshot::Sender<SettingsDocument>,
+    },
+    SaveSettings {
+        settings: SettingsDocument,
+        response: oneshot::Sender<()>,
+    },
     SendMessage {
         message: String,
         model_id: ModelId,
@@ -177,6 +226,27 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::ListModels { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    /// Get the editable settings document.
+    pub async fn get_settings(&self) -> Result<SettingsDocument> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetSettings { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    /// Save the editable settings document and reload providers.
+    pub async fn save_settings(&self, settings: SettingsDocument) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::SaveSettings {
+                settings,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
     }
@@ -429,6 +499,20 @@ impl RuntimeInner {
                     .collect();
                 response
                     .send(models)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::GetSettings { response } => {
+                let settings = read_settings_document(&settings_path()?)?;
+                response
+                    .send(settings)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::SaveSettings { settings, response } => {
+                self.save_settings_document(settings).await?;
+                response
+                    .send(())
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
@@ -790,18 +874,28 @@ impl RuntimeInner {
         let callback = self.event_callback.clone();
 
         tokio::spawn(async move {
-            let config_loc = directories::BaseDirs::new()
-                .expect("Failed to find user directories")
-                .home_dir()
-                .join(".agent-desktop/providers.toml");
+            let config_loc = match settings_path() {
+                Ok(path) => path,
+                Err(error) => {
+                    callback.on_event(Event::Error(format!("Config path error: {error}")));
+                    return;
+                }
+            };
+            let config_dir = match config_loc.parent() {
+                Some(path) => path.to_path_buf(),
+                None => {
+                    callback.on_event(Event::Error(String::from("Config path has no parent")));
+                    return;
+                }
+            };
 
             let (tx, rx) = std::sync::mpsc::channel();
             let mut watcher =
                 notify::recommended_watcher(tx).expect("Failed to create config watcher");
 
             watcher
-                .watch(&config_loc, RecursiveMode::NonRecursive)
-                .expect("Failed to watch config file");
+                .watch(&config_dir, RecursiveMode::NonRecursive)
+                .expect("Failed to watch config directory");
 
             for res in rx {
                 match res {
@@ -809,8 +903,8 @@ impl RuntimeInner {
                         if event.kind.is_access() {
                             continue;
                         }
-                        if event.kind.is_remove() {
-                            let _ = watcher.watch(&config_loc, RecursiveMode::NonRecursive);
+                        if !event.paths.iter().any(|path| path == &config_loc) {
+                            continue;
                         }
                         let _ = command_tx.send(Command::LoadConfig).await;
                     }
@@ -823,10 +917,7 @@ impl RuntimeInner {
     }
 
     async fn load_providers_config(&self) -> Result<()> {
-        let config_loc = directories::BaseDirs::new()
-            .expect("Failed to find user directories")
-            .home_dir()
-            .join(".agent-desktop/providers.toml");
+        let config_loc = settings_path()?;
 
         if !config_loc.exists() {
             return Err(eyre!("Config file doesn't exist at {:?}", config_loc));
@@ -852,4 +943,279 @@ impl RuntimeInner {
 
         Ok(())
     }
+
+    async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
+        let config_loc = settings_path()?;
+        write_settings_document(&config_loc, &settings).await?;
+        self.load_providers_config().await?;
+        tracing::info!("Loaded config");
+        self.send_event(Event::ConfigLoaded);
+        Ok(())
+    }
+}
+
+fn settings_path() -> Result<std::path::PathBuf> {
+    Ok(directories::BaseDirs::new()
+        .context("Failed to find user directories")?
+        .home_dir()
+        .join(".agent-desktop/providers.toml"))
+}
+
+fn read_settings_document(path: &std::path::Path) -> Result<SettingsDocument> {
+    if !path.exists() {
+        return Ok(SettingsDocument::default());
+    }
+
+    let config_slice = std::fs::read(path)?;
+    let config: ProviderManagerConfig =
+        toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
+    settings_from_provider_config(config)
+}
+
+async fn write_settings_document(
+    path: &std::path::Path,
+    settings: &SettingsDocument,
+) -> Result<()> {
+    let errors = validate_settings(settings);
+    if !errors.is_empty() {
+        let message = errors
+            .into_iter()
+            .map(|error| format!("{}: {}", error.field, error.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(eyre!(message));
+    }
+
+    let config = provider_config_from_settings(settings)?;
+    let toml_string = toml::to_string_pretty(&config)?;
+
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let temp_path = path.with_extension("toml.tmp");
+    tokio::fs::write(&temp_path, toml_string).await?;
+    tokio::fs::rename(&temp_path, path).await?;
+    Ok(())
+}
+
+fn settings_from_provider_config(config: ProviderManagerConfig) -> Result<SettingsDocument> {
+    let providers = config
+        .providers
+        .into_iter()
+        .map(provider_settings_from_config)
+        .collect::<Result<Vec<_>>>()?;
+    let models = config
+        .models
+        .into_iter()
+        .map(model_settings_from_config)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SettingsDocument { providers, models })
+}
+
+fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSettings> {
+    let provider_type = match config.r#type.as_str() {
+        "openai" => ProviderType::OpenAi,
+        "google" => ProviderType::Google,
+        other => return Err(eyre!("Unsupported provider type in settings: {other}")),
+    };
+    let table = as_table(&config.config);
+    let base_url = table_string(table, "base_url");
+    let api_key = table_string(table, "api_key");
+    let env_var_api_key = table_string(table, "env_var_api_key");
+    let only_listed_models = table_bool(table, "only_listed_models").unwrap_or(false);
+
+    Ok(ProviderSettings {
+        id: config.id.to_string(),
+        provider_type,
+        base_url,
+        api_key,
+        env_var_api_key,
+        only_listed_models,
+    })
+}
+
+fn model_settings_from_config(config: ModelConfig) -> Result<ModelSettings> {
+    let table = as_table(&config.config);
+    let id = table_string(table, "id").ok_or_else(|| eyre!("Model config missing id"))?;
+    let name = table_string(table, "name");
+    let max_context = table
+        .get("max_context")
+        .and_then(toml::Value::as_integer)
+        .map(|value| u32::try_from(value).map_err(|_| eyre!("Invalid max_context: {value}")))
+        .transpose()?;
+
+    Ok(ModelSettings {
+        id,
+        provider_id: config.provider_id.to_string(),
+        name,
+        max_context,
+    })
+}
+
+fn provider_config_from_settings(settings: &SettingsDocument) -> Result<ProviderManagerConfig> {
+    let providers = settings
+        .providers
+        .iter()
+        .map(provider_config_entry_from_settings)
+        .collect::<Result<Vec<_>>>()?;
+    let models = settings
+        .models
+        .iter()
+        .map(model_config_entry_from_settings)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ProviderManagerConfig { providers, models })
+}
+
+fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<ProviderConfig> {
+    let mut table = toml::map::Map::new();
+    match settings.provider_type {
+        ProviderType::OpenAi => {
+            let base_url = trim_optional(&settings.base_url)
+                .ok_or_else(|| eyre!("OpenAI providers require a base_url"))?;
+            table.insert(String::from("base_url"), toml::Value::String(base_url));
+        }
+        ProviderType::Google => {}
+    }
+
+    if let Some(api_key) = trim_optional(&settings.api_key) {
+        table.insert(String::from("api_key"), toml::Value::String(api_key));
+    }
+    if let Some(env_var_api_key) = trim_optional(&settings.env_var_api_key) {
+        table.insert(
+            String::from("env_var_api_key"),
+            toml::Value::String(env_var_api_key),
+        );
+    }
+    table.insert(
+        String::from("only_listed_models"),
+        toml::Value::Boolean(settings.only_listed_models),
+    );
+
+    Ok(ProviderConfig {
+        id: ProviderId::new(settings.id.trim().to_string()),
+        r#type: match settings.provider_type {
+            ProviderType::OpenAi => String::from("openai"),
+            ProviderType::Google => String::from("google"),
+        },
+        config: toml::Value::Table(table),
+    })
+}
+
+fn model_config_entry_from_settings(settings: &ModelSettings) -> Result<ModelConfig> {
+    let mut table = toml::map::Map::new();
+    table.insert(
+        String::from("id"),
+        toml::Value::String(settings.id.trim().to_string()),
+    );
+    if let Some(name) = trim_optional(&settings.name) {
+        table.insert(String::from("name"), toml::Value::String(name));
+    }
+    if let Some(max_context) = settings.max_context {
+        table.insert(
+            String::from("max_context"),
+            toml::Value::Integer(i64::from(max_context)),
+        );
+    }
+
+    Ok(ModelConfig {
+        provider_id: ProviderId::new(settings.provider_id.trim().to_string()),
+        config: toml::Value::Table(table),
+    })
+}
+
+fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError> {
+    let mut errors = Vec::new();
+    let mut provider_ids = std::collections::BTreeSet::new();
+
+    for (index, provider) in settings.providers.iter().enumerate() {
+        let field_prefix = format!("providers[{index}]");
+        let id = provider.id.trim();
+        if id.is_empty() {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.id"),
+                message: String::from("Provider ID is required"),
+            });
+        } else if !provider_ids.insert(id.to_string()) {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.id"),
+                message: String::from("Provider ID must be unique"),
+            });
+        }
+
+        if matches!(provider.provider_type, ProviderType::OpenAi)
+            && trim_optional(&provider.base_url).is_none()
+        {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.base_url"),
+                message: String::from("Base URL is required for OpenAI-compatible providers"),
+            });
+        }
+
+        if trim_optional(&provider.api_key).is_none()
+            && trim_optional(&provider.env_var_api_key).is_none()
+        {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.credentials"),
+                message: String::from("Provide either an API key or an environment variable name"),
+            });
+        }
+    }
+
+    for (index, model) in settings.models.iter().enumerate() {
+        let field_prefix = format!("models[{index}]");
+        if model.id.trim().is_empty() {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.id"),
+                message: String::from("Model ID is required"),
+            });
+        }
+        if model.provider_id.trim().is_empty() {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.provider_id"),
+                message: String::from("Provider ID is required"),
+            });
+        } else if !provider_ids.contains(model.provider_id.trim()) {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.provider_id"),
+                message: String::from("Model must reference an existing provider"),
+            });
+        }
+        if let Some(max_context) = model.max_context
+            && max_context == 0
+        {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.max_context"),
+                message: String::from("Max context must be greater than zero"),
+            });
+        }
+    }
+
+    errors
+}
+
+fn as_table(value: &toml::Value) -> &toml::map::Map<String, toml::Value> {
+    value
+        .as_table()
+        .expect("provider/model config should be a table")
+}
+
+fn table_string(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn table_bool(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<bool> {
+    table.get(key).and_then(toml::Value::as_bool)
+}
+
+fn trim_optional(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }

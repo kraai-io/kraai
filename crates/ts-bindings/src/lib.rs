@@ -117,6 +117,128 @@ impl From<SessionMeta> for Session {
   }
 }
 
+/// Supported provider types for settings editing.
+#[napi(string_enum)]
+#[derive(Clone, Debug)]
+pub enum ProviderType {
+  OpenAi,
+  Google,
+}
+
+impl From<agent_runtime::ProviderType> for ProviderType {
+  fn from(value: agent_runtime::ProviderType) -> Self {
+    match value {
+      agent_runtime::ProviderType::OpenAi => ProviderType::OpenAi,
+      agent_runtime::ProviderType::Google => ProviderType::Google,
+    }
+  }
+}
+
+impl From<ProviderType> for agent_runtime::ProviderType {
+  fn from(value: ProviderType) -> Self {
+    match value {
+      ProviderType::OpenAi => agent_runtime::ProviderType::OpenAi,
+      ProviderType::Google => agent_runtime::ProviderType::Google,
+    }
+  }
+}
+
+/// Provider settings exposed to TypeScript.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct ProviderSettings {
+  pub id: String,
+  pub provider_type: ProviderType,
+  pub base_url: Option<String>,
+  pub api_key: Option<String>,
+  pub env_var_api_key: Option<String>,
+  pub only_listed_models: bool,
+}
+
+impl From<agent_runtime::ProviderSettings> for ProviderSettings {
+  fn from(value: agent_runtime::ProviderSettings) -> Self {
+    ProviderSettings {
+      id: value.id,
+      provider_type: value.provider_type.into(),
+      base_url: value.base_url,
+      api_key: value.api_key,
+      env_var_api_key: value.env_var_api_key,
+      only_listed_models: value.only_listed_models,
+    }
+  }
+}
+
+impl From<ProviderSettings> for agent_runtime::ProviderSettings {
+  fn from(value: ProviderSettings) -> Self {
+    agent_runtime::ProviderSettings {
+      id: value.id,
+      provider_type: value.provider_type.into(),
+      base_url: value.base_url,
+      api_key: value.api_key,
+      env_var_api_key: value.env_var_api_key,
+      only_listed_models: value.only_listed_models,
+    }
+  }
+}
+
+/// Model settings exposed to TypeScript.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct ModelSettings {
+  pub id: String,
+  pub provider_id: String,
+  pub name: Option<String>,
+  pub max_context: Option<u32>,
+}
+
+impl From<agent_runtime::ModelSettings> for ModelSettings {
+  fn from(value: agent_runtime::ModelSettings) -> Self {
+    ModelSettings {
+      id: value.id,
+      provider_id: value.provider_id,
+      name: value.name,
+      max_context: value.max_context,
+    }
+  }
+}
+
+impl From<ModelSettings> for agent_runtime::ModelSettings {
+  fn from(value: ModelSettings) -> Self {
+    agent_runtime::ModelSettings {
+      id: value.id,
+      provider_id: value.provider_id,
+      name: value.name,
+      max_context: value.max_context,
+    }
+  }
+}
+
+/// Full settings document exposed to TypeScript.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct SettingsDocument {
+  pub providers: Vec<ProviderSettings>,
+  pub models: Vec<ModelSettings>,
+}
+
+impl From<agent_runtime::SettingsDocument> for SettingsDocument {
+  fn from(value: agent_runtime::SettingsDocument) -> Self {
+    SettingsDocument {
+      providers: value.providers.into_iter().map(Into::into).collect(),
+      models: value.models.into_iter().map(Into::into).collect(),
+    }
+  }
+}
+
+impl From<SettingsDocument> for agent_runtime::SettingsDocument {
+  fn from(value: SettingsDocument) -> Self {
+    agent_runtime::SettingsDocument {
+      providers: value.providers.into_iter().map(Into::into).collect(),
+      models: value.models.into_iter().map(Into::into).collect(),
+    }
+  }
+}
+
 impl From<agent_runtime::Session> for Session {
   fn from(s: agent_runtime::Session) -> Self {
     Session {
@@ -276,6 +398,25 @@ impl AgentRuntime {
     self
       .handle
       .send_message(message, model_id, provider_id)
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn get_settings(&self) -> napi::Result<SettingsDocument> {
+    self
+      .handle
+      .get_settings()
+      .await
+      .map(Into::into)
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn save_settings(&self, settings: SettingsDocument) -> napi::Result<()> {
+    self
+      .handle
+      .save_settings(settings.into())
       .await
       .map_err(to_napi_error)
   }

@@ -37,6 +37,16 @@ function setupIpcHandlers() {
 		return await runtime.listModels();
 	});
 
+	ipcMain.handle("agent:getSettings", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.getSettings();
+	});
+
+	ipcMain.handle("agent:saveSettings", async (_, settings) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.saveSettings(settings);
+	});
+
 	// sendMessage - async
 	ipcMain.handle(
 		"agent:sendMessage",
