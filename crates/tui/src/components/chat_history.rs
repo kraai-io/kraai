@@ -219,11 +219,10 @@ impl<'a> ChatHistory<'a> {
             return true;
         }
 
-        if let Some((_, json)) = content.split_once("result:\n") {
-            if let Ok(value) = serde_json::from_str::<Value>(json) {
+        if let Some((_, json)) = content.split_once("result:\n")
+            && let Ok(value) = serde_json::from_str::<Value>(json) {
                 return value.get("error").is_some();
             }
-        }
 
         false
     }
