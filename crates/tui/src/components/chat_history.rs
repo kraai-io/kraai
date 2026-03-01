@@ -15,6 +15,12 @@ pub struct ChatHistory<'a> {
 }
 
 struct RenderedLine {
+    spans: Vec<RenderedSpan>,
+    bg: Option<Color>,
+}
+
+#[derive(Clone)]
+struct RenderedSpan {
     text: String,
     style: Style,
 }
@@ -110,8 +116,263 @@ impl<'a> ChatHistory<'a> {
         }
 
         for line in Self::wrap_with_prefix(text, width, first_prefix, cont_prefix) {
-            lines.push(RenderedLine { text: line, style });
+            lines.push(Self::single_span_line(line, style));
         }
+    }
+
+    fn single_span_line(text: String, style: Style) -> RenderedLine {
+        RenderedLine {
+            spans: vec![RenderedSpan { text, style }],
+            bg: style.bg,
+        }
+    }
+
+    fn strip_non_code_inline_markdown(text: &str) -> String {
+        let image_re = Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex");
+        let link_re = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex");
+        let strong_re = Regex::new(r"\*\*([^*]+)\*\*|__([^_]+)__").expect("valid regex");
+        let emphasis_re = Regex::new(r"\*([^*]+)\*|_([^_]+)_").expect("valid regex");
+        let strike_re = Regex::new(r"~~([^~]+)~~").expect("valid regex");
+        let escape_re = Regex::new(r"\\([\\`*_{}\[\]()#+.!~-])").expect("valid regex");
+
+        let text = image_re.replace_all(text, "$1").to_string();
+        let text = link_re.replace_all(&text, "$1 ($2)").to_string();
+        let text = strong_re.replace_all(&text, "$1$2").to_string();
+        let text = emphasis_re.replace_all(&text, "$1$2").to_string();
+        let text = strike_re.replace_all(&text, "$1").to_string();
+        escape_re.replace_all(&text, "$1").to_string()
+    }
+
+    fn inline_markdown_spans(text: &str, base_style: Style, inline_code_style: Style) -> Vec<RenderedSpan> {
+        let inline_code_re = Regex::new(r"`([^`]+)`").expect("valid regex");
+        let mut spans = Vec::new();
+        let mut cursor = 0usize;
+
+        for caps in inline_code_re.captures_iter(text) {
+            let full = match caps.get(0) {
+                Some(m) => m,
+                None => continue,
+            };
+            let before = &text[cursor..full.start()];
+            let before_plain = Self::strip_non_code_inline_markdown(before);
+            if !before_plain.is_empty() {
+                spans.push(RenderedSpan {
+                    text: before_plain,
+                    style: base_style,
+                });
+            }
+
+            if let Some(code) = caps.get(1).map(|m| m.as_str())
+                && !code.is_empty() {
+                    spans.push(RenderedSpan {
+                        text: code.to_string(),
+                        style: inline_code_style,
+                    });
+                }
+
+            cursor = full.end();
+        }
+
+        let tail = &text[cursor..];
+        let tail_plain = Self::strip_non_code_inline_markdown(tail);
+        if !tail_plain.is_empty() {
+            spans.push(RenderedSpan {
+                text: tail_plain,
+                style: base_style,
+            });
+        }
+
+        if spans.is_empty() {
+            spans.push(RenderedSpan {
+                text: String::new(),
+                style: base_style,
+            });
+        }
+
+        spans
+    }
+
+    fn push_wrapped_spans(
+        lines: &mut Vec<RenderedLine>,
+        spans: &[RenderedSpan],
+        width: usize,
+        base_style: Style,
+        first_prefix: &str,
+        cont_prefix: &str,
+    ) {
+        if width == 0 {
+            return;
+        }
+
+        let mut styled_chars = Vec::new();
+        for span in spans {
+            for ch in span.text.chars() {
+                styled_chars.push((ch, span.style));
+            }
+        }
+
+        let mut idx = 0usize;
+        let total = styled_chars.len();
+        let mut first_visual_line = true;
+
+        loop {
+            if idx >= total && total > 0 {
+                break;
+            }
+
+            let prefix = if first_visual_line {
+                first_prefix
+            } else {
+                cont_prefix
+            };
+            let prefix_width = prefix.chars().count();
+            let available = width.saturating_sub(prefix_width);
+
+            let mut line_spans = Vec::new();
+            if !prefix.is_empty() {
+                line_spans.push(RenderedSpan {
+                    text: prefix.to_string(),
+                    style: base_style,
+                });
+            }
+
+            if available == 0 {
+                lines.push(RenderedLine {
+                    spans: line_spans,
+                    bg: base_style.bg,
+                });
+                first_visual_line = false;
+                if total == 0 {
+                    break;
+                }
+                continue;
+            }
+
+            let take_count = if total == 0 {
+                0
+            } else {
+                available.min(total.saturating_sub(idx))
+            };
+
+            if take_count > 0 {
+                for (ch, style) in &styled_chars[idx..idx + take_count] {
+                    if let Some(last) = line_spans.last_mut()
+                        && last.style == *style {
+                            last.text.push(*ch);
+                            continue;
+                        }
+                    line_spans.push(RenderedSpan {
+                        text: ch.to_string(),
+                        style: *style,
+                    });
+                }
+                idx += take_count;
+            }
+
+            lines.push(RenderedLine {
+                spans: line_spans,
+                bg: base_style.bg,
+            });
+
+            first_visual_line = false;
+            if total == 0 || idx >= total {
+                break;
+            }
+        }
+    }
+
+    fn render_markdown_message(content: &str, width: usize, normal_style: Style) -> Vec<RenderedLine> {
+        let mut lines = Vec::new();
+        let heading_style = Style::default()
+            .fg(Color::Rgb(255, 220, 120))
+            .add_modifier(Modifier::BOLD);
+        let quote_style = Style::default()
+            .fg(Color::Rgb(170, 170, 170))
+            .add_modifier(Modifier::ITALIC);
+        let code_style = Style::default().fg(Color::Rgb(130, 230, 255));
+        let inline_code_style = Style::default().fg(Color::Rgb(255, 180, 90));
+        let list_style = normal_style;
+
+        let heading_re = Regex::new(r"^\s*(#{1,6})\s+(.*)$").expect("valid regex");
+        let quote_re = Regex::new(r"^\s*>\s?(.*)$").expect("valid regex");
+        let unordered_list_re = Regex::new(r"^\s*[-*+]\s+(.*)$").expect("valid regex");
+        let ordered_list_re = Regex::new(r"^\s*(\d+)\.\s+(.*)$").expect("valid regex");
+        let fence_re = Regex::new(r"^\s*```([A-Za-z0-9_-]+)?\s*$").expect("valid regex");
+
+        let mut in_fenced_code = false;
+        let mut code_lang = String::new();
+
+        for source_line in content.lines() {
+            if let Some(caps) = fence_re.captures(source_line) {
+                if in_fenced_code {
+                    in_fenced_code = false;
+                    code_lang.clear();
+                } else {
+                    in_fenced_code = true;
+                    code_lang = caps
+                        .get(1)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+                    if !code_lang.is_empty() {
+                        Self::push_wrapped_lines(
+                            &mut lines,
+                            &format!("[code: {code_lang}]"),
+                            width,
+                            code_style,
+                            "",
+                            "",
+                        );
+                    }
+                }
+                continue;
+            }
+
+            if in_fenced_code {
+                Self::push_wrapped_lines(&mut lines, source_line, width, code_style, "  ", "  ");
+                continue;
+            }
+
+            if let Some(caps) = heading_re.captures(source_line) {
+                if let Some(text) = caps.get(2).map(|m| m.as_str()) {
+                    let spans = Self::inline_markdown_spans(text, heading_style, inline_code_style);
+                    Self::push_wrapped_spans(&mut lines, &spans, width, heading_style, "", "");
+                }
+                continue;
+            }
+
+            if let Some(caps) = quote_re.captures(source_line)
+                && let Some(text) = caps.get(1).map(|m| m.as_str()) {
+                    let spans = Self::inline_markdown_spans(text, quote_style, inline_code_style);
+                    Self::push_wrapped_spans(&mut lines, &spans, width, quote_style, "│ ", "│ ");
+                    continue;
+                }
+
+            if let Some(caps) = unordered_list_re.captures(source_line)
+                && let Some(text) = caps.get(1).map(|m| m.as_str()) {
+                    let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
+                    Self::push_wrapped_spans(&mut lines, &spans, width, list_style, "• ", "  ");
+                    continue;
+                }
+
+            if let Some(caps) = ordered_list_re.captures(source_line) {
+                let idx = caps.get(1).map(|m| m.as_str()).unwrap_or("1");
+                if let Some(text) = caps.get(2).map(|m| m.as_str()) {
+                    let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
+                    let prefix = format!("{idx}. ");
+                    Self::push_wrapped_spans(&mut lines, &spans, width, list_style, &prefix, "   ");
+                    continue;
+                }
+            }
+
+            let spans = Self::inline_markdown_spans(source_line, normal_style, inline_code_style);
+            Self::push_wrapped_spans(&mut lines, &spans, width, normal_style, "", "");
+        }
+
+        if lines.is_empty() {
+            lines.push(Self::single_span_line(String::new(), normal_style));
+        }
+
+        lines
     }
 
     fn parse_tool_call(toon_content: &str) -> Option<(String, Option<String>)> {
@@ -148,10 +409,10 @@ impl<'a> ChatHistory<'a> {
         if let Some(args_text) = args_text {
             Self::push_wrapped_lines(&mut lines, &args_text, width, body_style, "  ", "  ");
         } else {
-            lines.push(RenderedLine {
-                text: Self::fit_to_width("  (no args)", width),
-                style: body_style,
-            });
+            lines.push(Self::single_span_line(
+                Self::fit_to_width("  (no args)", width),
+                body_style,
+            ));
         }
 
         Some(lines)
@@ -159,7 +420,7 @@ impl<'a> ChatHistory<'a> {
 
     fn render_assistant_message(content: &str, width: usize) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
-        let normal_style = Style::default().fg(Color::Green);
+        let normal_style = Style::default().fg(Color::White);
 
         let tool_call_re = Regex::new(r"(?s)```tool_call\s*\n(.*?)```").expect("valid regex");
         let mut cursor = 0usize;
@@ -173,7 +434,8 @@ impl<'a> ChatHistory<'a> {
             found_tool_call = true;
 
             let before = &content[cursor..full_match.start()];
-            Self::push_wrapped_lines(&mut lines, before, width, normal_style, "", "");
+            let mut before_lines = Self::render_markdown_message(before, width, normal_style);
+            lines.append(&mut before_lines);
 
             if let Some(raw_toon) = caps.get(1).map(|m| m.as_str()) {
                 if let Some(mut card_lines) = Self::render_tool_call_card(raw_toon, width) {
@@ -194,17 +456,16 @@ impl<'a> ChatHistory<'a> {
         }
 
         if !found_tool_call {
-            Self::push_wrapped_lines(&mut lines, content, width, normal_style, "", "");
+            let mut parsed = Self::render_markdown_message(content, width, normal_style);
+            lines.append(&mut parsed);
         } else {
             let tail = &content[cursor..];
-            Self::push_wrapped_lines(&mut lines, tail, width, normal_style, "", "");
+            let mut parsed = Self::render_markdown_message(tail, width, normal_style);
+            lines.append(&mut parsed);
         }
 
         if lines.is_empty() {
-            lines.push(RenderedLine {
-                text: String::new(),
-                style: normal_style,
-            });
+            lines.push(Self::single_span_line(String::new(), normal_style));
         }
 
         lines
@@ -242,22 +503,13 @@ impl<'a> ChatHistory<'a> {
                         .fg(Color::Rgb(255, 255, 255))
                         .bg(Color::DarkGray);
 
-                    let mut lines = vec![RenderedLine {
-                        text: String::new(),
-                        style: user_style,
-                    }];
+                    let mut lines = vec![Self::single_span_line(String::new(), user_style)];
 
                     for line in Self::wrap_with_prefix(&msg.content, width, "", "") {
-                        lines.push(RenderedLine {
-                            text: line,
-                            style: user_style,
-                        });
+                        lines.push(Self::single_span_line(line, user_style));
                     }
 
-                    lines.push(RenderedLine {
-                        text: String::new(),
-                        style: user_style,
-                    });
+                    lines.push(Self::single_span_line(String::new(), user_style));
                     lines
                 }
                 ChatRole::Assistant => Self::render_assistant_message(&msg.content, width),
@@ -268,10 +520,10 @@ impl<'a> ChatHistory<'a> {
                         let mut lines = Vec::new();
                         for line in Self::wrap_with_prefix(&msg.content, width, "tool: ", "      ")
                         {
-                            lines.push(RenderedLine {
-                                text: line,
-                                style: Style::default().fg(Color::Yellow),
-                            });
+                            lines.push(Self::single_span_line(
+                                line,
+                                Style::default().fg(Color::Yellow),
+                            ));
                         }
                         lines
                     }
@@ -284,10 +536,7 @@ impl<'a> ChatHistory<'a> {
             }
 
             if !rendered.is_empty() {
-                rendered.push(RenderedLine {
-                    text: String::new(),
-                    style: Style::default(),
-                });
+                rendered.push(Self::single_span_line(String::new(), Style::default()));
             }
 
             rendered.append(&mut message_lines);
@@ -336,7 +585,7 @@ impl<'a> Widget for ChatHistory<'a> {
 
         for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
             let y = area.y + visual_idx as u16;
-            let row_style = match line.style.bg {
+            let row_style = match line.bg {
                 Some(bg) => Style::default().bg(bg),
                 None => Style::default(),
             };
@@ -347,12 +596,16 @@ impl<'a> Widget for ChatHistory<'a> {
                     .set_style(row_style);
             }
 
-            for (char_idx, ch) in line.text.chars().enumerate() {
-                let x = area.x + char_idx as u16;
-                if x >= area.x + area.width {
-                    break;
+            let mut char_idx = 0usize;
+            'outer: for span in &line.spans {
+                for ch in span.text.chars() {
+                    let x = area.x + char_idx as u16;
+                    if x >= area.x + area.width {
+                        break 'outer;
+                    }
+                    buf[(x, y)].set_char(ch).set_style(span.style);
+                    char_idx += 1;
                 }
-                buf[(x, y)].set_char(ch).set_style(line.style);
             }
         }
     }
@@ -362,6 +615,14 @@ impl<'a> Widget for ChatHistory<'a> {
 mod tests {
     use super::*;
     use types::{MessageId, MessageStatus};
+
+    fn line_text(line: &RenderedLine) -> String {
+        let mut text = String::new();
+        for span in &line.spans {
+            text.push_str(&span.text);
+        }
+        text
+    }
 
     fn message(id: &str, role: ChatRole, content: &str) -> Message {
         Message {
@@ -390,7 +651,7 @@ mod tests {
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].text, "visible");
+        assert_eq!(line_text(&lines[0]), "visible");
     }
 
     #[test]
@@ -404,7 +665,10 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "read_file"));
         assert!(
             rendered
@@ -425,7 +689,10 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "before"));
         assert!(rendered.iter().any(|line| *line == "read_file"));
@@ -442,7 +709,10 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| line.contains("```tool_call")));
     }
@@ -472,7 +742,10 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
         assert!(
             rendered
                 .iter()
@@ -493,7 +766,7 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("denied by user"));
+        assert!(line_text(&lines[0]).contains("denied by user"));
     }
 
     #[test]
@@ -504,8 +777,65 @@ mod tests {
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].text, "");
-        assert_eq!(lines[1].text, "hello");
-        assert_eq!(lines[2].text, "");
+        assert_eq!(line_text(&lines[0]), "");
+        assert_eq!(line_text(&lines[1]), "hello");
+        assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn renders_basic_markdown_blocks_for_assistant_messages() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "# Title\n- **one**\n1. [two](https://example.com)\n> quote\n`inline`",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| *line == "Title"));
+        assert!(rendered.iter().any(|line| *line == "• one"));
+        assert!(rendered.iter().any(|line| *line == "1. two (https://example.com)"));
+        assert!(rendered.iter().any(|line| *line == "│ quote"));
+        assert!(rendered.iter().any(|line| *line == "inline"));
+    }
+
+    #[test]
+    fn renders_fenced_code_block_with_label() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "```rust\nfn main() {}\n```",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| *line == "[code: rust]"));
+        assert!(rendered.iter().any(|line| *line == "  fn main() {}"));
+    }
+
+    #[test]
+    fn renders_inline_code_with_distinct_color() {
+        let assistant = message("1", ChatRole::Assistant, "alpha `beta` gamma");
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(line_text(&lines[0]), "alpha beta gamma");
+
+        let has_colored_inline_code = lines[0].spans.iter().any(|span| {
+            span.text == "beta" && span.style.fg == Some(Color::Rgb(255, 180, 90))
+        });
+        assert!(has_colored_inline_code);
     }
 }

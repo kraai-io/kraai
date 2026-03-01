@@ -50,15 +50,7 @@ apps/
 
 ## Learnings
 
-<!-- Update this section as you discover patterns, gotchas, and solutions -->
-
-### Discovered Patterns
-- LLM providers follow a trait-based pattern via provider-core
-
-### Gotchas
-- Slash command completion UX in TUI:
-  - When the slash-command popup is open (`/<prefix>` with no whitespace), `Down`/`Up` must mirror `Tab`/`Shift-Tab` cycling.
-  - `Enter` should execute the selected slash command directly (do not first write it into the input).
+<!-- Update this section as you discover patterns, and gotchas -->
 
 ## Dependencies
 
