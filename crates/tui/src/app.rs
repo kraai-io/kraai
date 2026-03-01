@@ -437,9 +437,9 @@ impl App {
             }
             Event::StreamChunk { .. } => {
                 let now = Instant::now();
-                let should_refresh = self.last_stream_refresh.map_or(true, |last| {
-                    now.duration_since(last) >= Duration::from_millis(50)
-                });
+                let should_refresh = self
+                    .last_stream_refresh
+                    .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(50));
                 if should_refresh {
                     self.last_stream_refresh = Some(now);
                     self.request(RuntimeRequest::GetCurrentTip);
@@ -870,7 +870,8 @@ impl App {
             }
             KeyCode::Down => {
                 if len > 0 {
-                    self.state.model_menu_index = (self.state.model_menu_index + 1).min(len - 1);
+                    self.state.model_menu_index =
+                        model_menu_next_index(self.state.model_menu_index, len);
                 }
             }
             KeyCode::Enter => {
@@ -2069,10 +2070,42 @@ fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         }
     }
 
+    let visible_lines = popup_area.height.saturating_sub(2) as usize;
+    let selected_line = if models.is_empty() {
+        1
+    } else {
+        state.model_menu_index.saturating_add(1)
+    };
+    let scroll_offset = model_menu_scroll_offset(selected_line, lines.len(), visible_lines);
+
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
         .block(Block::default().title("/model").borders(Borders::ALL))
+        .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
+}
+
+fn model_menu_scroll_offset(
+    selected_line: usize,
+    total_lines: usize,
+    visible_lines: usize,
+) -> usize {
+    if visible_lines == 0 || total_lines <= visible_lines {
+        return 0;
+    }
+
+    let max_scroll = total_lines - visible_lines;
+    selected_line
+        .saturating_sub(visible_lines.saturating_sub(1))
+        .min(max_scroll)
+}
+
+fn model_menu_next_index(current_index: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+
+    (current_index + 1) % len
 }
 
 fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
@@ -2173,7 +2206,6 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         let fields = state
             .settings_draft
             .as_ref()
-            .and_then(|_| Some(()))
             .map(|_| match provider.provider_type {
                 ProviderType::OpenAi => vec![
                     SettingsProviderField::Id,
@@ -2494,4 +2526,34 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
     Paragraph::new(Text::from(lines))
         .block(Block::default().title("/help").borders(Borders::ALL))
         .render(popup_area, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{model_menu_next_index, model_menu_scroll_offset};
+
+    #[test]
+    fn model_menu_scroll_stays_at_top_when_selection_is_visible() {
+        assert_eq!(model_menu_scroll_offset(3, 20, 8), 0);
+    }
+
+    #[test]
+    fn model_menu_scroll_follows_selection_past_bottom() {
+        assert_eq!(model_menu_scroll_offset(9, 20, 8), 2);
+    }
+
+    #[test]
+    fn model_menu_scroll_clamps_to_max_scroll() {
+        assert_eq!(model_menu_scroll_offset(19, 20, 8), 12);
+    }
+
+    #[test]
+    fn model_menu_next_index_wraps_at_end() {
+        assert_eq!(model_menu_next_index(4, 5), 0);
+    }
+
+    #[test]
+    fn model_menu_next_index_advances_within_bounds() {
+        assert_eq!(model_menu_next_index(2, 5), 3);
+    }
 }
