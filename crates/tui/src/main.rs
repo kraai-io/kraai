@@ -2,7 +2,10 @@ use agent_runtime::{Event, RuntimeBuilder};
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Sender, bounded};
 use ratatui::crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
 };
 use std::io::stdout;
@@ -26,11 +29,15 @@ fn main() -> Result<()> {
     let mut app = App::new(runtime, event_rx);
 
     let terminal = ratatui::init();
-    execute!(stdout(), EnableMouseCapture)?;
+    execute!(
+        stdout(),
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )?;
 
     let result = app.run(terminal);
 
-    execute!(stdout(), DisableMouseCapture)?;
+    execute!(stdout(), DisableMouseCapture, PopKeyboardEnhancementFlags)?;
     ratatui::restore();
 
     result

@@ -13,7 +13,8 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind,
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+        MouseEventKind,
     },
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -752,7 +753,10 @@ impl App {
     fn handle_chat_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Enter => {
-                if !self.execute_current_command_suggestion() {
+                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.insert_input_char('\n');
+                    self.reset_completion_cycle();
+                } else if !self.execute_current_command_suggestion() {
                     self.reset_completion_cycle();
                     self.handle_submit();
                 }
@@ -2541,6 +2545,8 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
             "Chat Navigation",
             Style::default().add_modifier(Modifier::BOLD),
         ),
+        Line::raw("Enter       Send message"),
+        Line::raw("Shift+Enter Add newline"),
         Line::raw("Up/Down    Scroll history"),
         Line::raw("PgUp/PgDn  Scroll faster"),
         Line::raw("End        Jump to latest"),
