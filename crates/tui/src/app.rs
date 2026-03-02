@@ -200,6 +200,49 @@ pub struct AppState {
     settings_delete_armed: bool,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            exit: false,
+            input: String::new(),
+            input_cursor: 0,
+            chat_history: BTreeMap::new(),
+            optimistic_messages: Vec::new(),
+            optimistic_seq: 0,
+            chat_epoch: 0,
+            chat_render_cache: RefCell::new(ChatRenderCache::default()),
+            scroll: 0,
+            auto_scroll: true,
+            config_loaded: false,
+            mode: UiMode::Chat,
+            status: String::from("Type /help for commands"),
+            is_streaming: false,
+            models_by_provider: HashMap::new(),
+            selected_provider_id: None,
+            selected_model_id: None,
+            pending_tools: Vec::new(),
+            sessions: Vec::new(),
+            current_session_id: None,
+            current_tip_id: None,
+            model_menu_index: 0,
+            sessions_menu_index: 0,
+            tools_menu_index: 0,
+            command_completion_prefix: None,
+            command_completion_index: 0,
+            settings_draft: None,
+            settings_errors: HashMap::new(),
+            settings_focus: SettingsFocus::ProviderList,
+            settings_provider_index: 0,
+            settings_model_index: 0,
+            settings_provider_field_index: 0,
+            settings_model_field_index: 0,
+            settings_editor: None,
+            settings_editor_input: String::new(),
+            settings_delete_armed: false,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ChatRenderCache {
     width: u16,
@@ -317,50 +360,11 @@ impl App {
             }
         });
 
-        let state = AppState {
-            exit: false,
-            input: String::new(),
-            input_cursor: 0,
-            chat_history: BTreeMap::new(),
-            optimistic_messages: Vec::new(),
-            optimistic_seq: 0,
-            chat_epoch: 0,
-            chat_render_cache: RefCell::new(ChatRenderCache::default()),
-            scroll: 0,
-            auto_scroll: true,
-            config_loaded: false,
-            mode: UiMode::Chat,
-            status: String::from("Type /help for commands"),
-            is_streaming: false,
-            models_by_provider: HashMap::new(),
-            selected_provider_id: None,
-            selected_model_id: None,
-            pending_tools: Vec::new(),
-            sessions: Vec::new(),
-            current_session_id: None,
-            current_tip_id: None,
-            model_menu_index: 0,
-            sessions_menu_index: 0,
-            tools_menu_index: 0,
-            command_completion_prefix: None,
-            command_completion_index: 0,
-            settings_draft: None,
-            settings_errors: HashMap::new(),
-            settings_focus: SettingsFocus::ProviderList,
-            settings_provider_index: 0,
-            settings_model_index: 0,
-            settings_provider_field_index: 0,
-            settings_model_field_index: 0,
-            settings_editor: None,
-            settings_editor_input: String::new(),
-            settings_delete_armed: false,
-        };
-
         Self {
             event_rx,
             runtime_tx,
             runtime_rx,
-            state,
+            state: AppState::default(),
             last_stream_refresh: None,
         }
     }
@@ -2573,7 +2577,241 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
 
 #[cfg(test)]
 mod tests {
-    use super::{menu_scroll_offset, model_menu_next_index, model_menu_previous_index};
+    use std::collections::{BTreeMap, HashMap};
+
+    use agent_runtime::{
+        Event, Model, ModelSettings, ProviderSettings, ProviderType, Session, SettingsDocument,
+    };
+    use crossbeam_channel::{Receiver, unbounded};
+    use ratatui::{
+        buffer::Buffer,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+        layout::Rect,
+        widgets::Widget,
+    };
+    use types::{ChatRole, Message, MessageId, MessageStatus};
+
+    use super::{
+        ActiveSettingsEditor, App, AppState, OptimisticMessage, PendingTool, RuntimeRequest,
+        RuntimeResponse, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode,
+        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
+    };
+
+    struct TestHarness {
+        app: App,
+        requests_rx: Receiver<RuntimeRequest>,
+    }
+
+    fn test_harness() -> TestHarness {
+        let (_event_tx, event_rx) = unbounded();
+        let (runtime_tx, requests_rx) = unbounded();
+        let (_response_tx, runtime_rx) = unbounded();
+
+        TestHarness {
+            app: App {
+                event_rx,
+                runtime_tx,
+                runtime_rx,
+                state: AppState::default(),
+                last_stream_refresh: None,
+            },
+            requests_rx,
+        }
+    }
+
+    impl TestHarness {
+        fn drain_requests(&self) -> Vec<RuntimeRequest> {
+            let mut requests = Vec::new();
+            while let Ok(request) = self.requests_rx.try_recv() {
+                requests.push(request);
+            }
+            requests
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn shift_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
+    fn message(id: &str, parent_id: Option<&str>, role: ChatRole, content: &str) -> Message {
+        Message {
+            id: MessageId::new(id),
+            parent_id: parent_id.map(MessageId::new),
+            role,
+            content: content.to_string(),
+            status: MessageStatus::Complete,
+        }
+    }
+
+    fn sample_models() -> HashMap<String, Vec<Model>> {
+        HashMap::from([
+            (
+                String::from("google"),
+                vec![Model {
+                    id: String::from("gemini-2.0-flash"),
+                    name: String::from("Gemini 2.0 Flash"),
+                }],
+            ),
+            (
+                String::from("openai"),
+                vec![
+                    Model {
+                        id: String::from("gpt-4.1-mini"),
+                        name: String::from("GPT-4.1 Mini"),
+                    },
+                    Model {
+                        id: String::from("gpt-4o-mini"),
+                        name: String::from("GPT-4o Mini"),
+                    },
+                ],
+            ),
+        ])
+    }
+
+    fn sample_settings() -> SettingsDocument {
+        SettingsDocument {
+            providers: vec![
+                ProviderSettings {
+                    id: String::from("openai"),
+                    provider_type: ProviderType::OpenAi,
+                    base_url: Some(String::from("https://api.openai.com/v1")),
+                    api_key: None,
+                    env_var_api_key: Some(String::from("OPENAI_API_KEY")),
+                    only_listed_models: true,
+                },
+                ProviderSettings {
+                    id: String::from("google"),
+                    provider_type: ProviderType::Google,
+                    base_url: None,
+                    api_key: None,
+                    env_var_api_key: Some(String::from("GEMINI_API_KEY")),
+                    only_listed_models: true,
+                },
+            ],
+            models: vec![
+                ModelSettings {
+                    id: String::from("gpt-4o-mini"),
+                    provider_id: String::from("openai"),
+                    name: Some(String::from("GPT-4o Mini")),
+                    max_context: Some(128_000),
+                },
+                ModelSettings {
+                    id: String::from("gemini-2.0-flash"),
+                    provider_id: String::from("google"),
+                    name: Some(String::from("Gemini 2.0 Flash")),
+                    max_context: Some(1_000_000),
+                },
+            ],
+        }
+    }
+
+    fn sample_sessions() -> Vec<Session> {
+        vec![
+            Session {
+                id: String::from("sess-1"),
+                tip_id: Some(String::from("m2")),
+                created_at: 1,
+                updated_at: 2,
+                title: Some(String::from("Refactor ideas")),
+            },
+            Session {
+                id: String::from("sess-2"),
+                tip_id: Some(String::from("m3")),
+                created_at: 3,
+                updated_at: 4,
+                title: Some(String::from("Testing plan")),
+            },
+        ]
+    }
+
+    fn sample_pending_tools() -> Vec<PendingTool> {
+        vec![
+            PendingTool {
+                call_id: String::from("call-1"),
+                tool_id: String::from("read_file"),
+                args: String::from("{\"path\":\"src/app.rs\"}"),
+                description: String::from("Inspect the app module"),
+                risk_level: String::from("read_only_workspace"),
+                reasons: vec![
+                    String::from("Reads local source files"),
+                    String::from("Needed to answer the user"),
+                ],
+                approved: Some(true),
+            },
+            PendingTool {
+                call_id: String::from("call-2"),
+                tool_id: String::from("write_file"),
+                args: String::from("{\"path\":\"src/app.rs\",\"content\":\"...\"}"),
+                description: String::from("Patch the app module"),
+                risk_level: String::from("undoable_workspace_write"),
+                reasons: vec![String::from("Updates tracked source code")],
+                approved: None,
+            },
+        ]
+    }
+
+    fn populated_state() -> AppState {
+        AppState {
+            config_loaded: true,
+            status: String::from("Ready"),
+            models_by_provider: sample_models(),
+            selected_provider_id: Some(String::from("openai")),
+            selected_model_id: Some(String::from("gpt-4o-mini")),
+            pending_tools: sample_pending_tools(),
+            sessions: sample_sessions(),
+            current_session_id: Some(String::from("sess-2")),
+            current_tip_id: Some(String::from("m2")),
+            settings_draft: Some(sample_settings()),
+            chat_history: BTreeMap::from([
+                (
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "How should we test the TUI?"),
+                ),
+                (
+                    MessageId::new("m2"),
+                    message(
+                        "m2",
+                        Some("m1"),
+                        ChatRole::Assistant,
+                        "Use render tests, interaction tests, and a small number of end-to-end smoke tests.",
+                    ),
+                ),
+            ]),
+            ..AppState::default()
+        }
+    }
+
+    fn render_state_snapshot(state: &AppState, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        state.render(area, &mut buffer);
+        buffer_to_snapshot(&buffer)
+    }
+
+    fn buffer_to_snapshot(buffer: &Buffer) -> String {
+        let mut lines = Vec::new();
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            let trimmed = line.trim_end();
+            if !trimmed.is_empty() {
+                lines.push(format!("{y:02}: {trimmed}"));
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn assert_snapshot(actual: &str, expected: &str) {
+        if actual != expected {
+            panic!("snapshot mismatch\n--- actual ---\n{actual}\n--- expected ---\n{expected}");
+        }
+    }
 
     #[test]
     fn model_menu_scroll_stays_at_top_when_selection_is_visible() {
@@ -2618,5 +2856,410 @@ mod tests {
     #[test]
     fn model_menu_previous_index_moves_back_within_bounds() {
         assert_eq!(model_menu_previous_index(3, 5), 2);
+    }
+
+    #[test]
+    fn renders_chat_screen_snapshot() {
+        let mut state = populated_state();
+        state.input = String::from("Add tests for the settings menu");
+        state.input_cursor = state.input.len();
+
+        let rendered = render_state_snapshot(&state, 72, 18);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+04: Use render tests, interaction tests, and a small number of end-to-end sm
+05: oke tests.
+14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+16:  > Add tests for the settings menu"#,
+        );
+    }
+
+    #[test]
+    fn renders_command_popup_snapshot() {
+        let mut state = populated_state();
+        state.input = String::from("/s");
+        state.input_cursor = state.input.len();
+
+        let rendered = render_state_snapshot(&state, 72, 18);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+04: Use render tests, interaction tests, and a small number of end-to-end sm
+05: oke tests.
+11:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
+12:  │> /settings  Open settings editor        │
+13:  │  /sessions  Open sessions menu          │
+14: R└─────────────────────────────────────────┘ idle
+16:  > /s"#,
+        );
+    }
+
+    #[test]
+    fn renders_model_menu_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::ModelMenu;
+        state.model_menu_index = 1;
+
+        let rendered = render_state_snapshot(&state, 72, 18);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+04: Use rende┌/model──────────────────────────────────────────────┐to-end sm
+05: oke tests│Select model (Enter to choose, Esc to close)        │
+06:          │  google / Gemini 2.0 Flash                         │
+07:          │> openai / GPT-4.1 Mini                             │
+08:          │  openai / GPT-4o Mini (current)                    │
+09:          │                                                    │
+10:          │                                                    │
+11:          │                                                    │
+12:          └────────────────────────────────────────────────────┘
+14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+16:  >"#,
+        );
+    }
+
+    #[test]
+    fn renders_settings_menu_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::SettingsMenu;
+        state.settings_focus = SettingsFocus::ProviderForm;
+        state.settings_provider_field_index = 2;
+        state.settings_model_field_index = 2;
+        state.settings_errors = HashMap::from([
+            (
+                String::from("providers[0].base_url"),
+                String::from("must be a valid URL"),
+            ),
+            (
+                String::from("models[0].max_context"),
+                String::from("must be a positive integer"),
+            ),
+        ]);
+
+        let rendered = render_state_snapshot(&state, 100, 22);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+02:      ┌/settings───────────────────────────────────────────────────────────────────────────────┐
+03:      │Settings Editor                                                                         │
+04: Use r│Tab=next pane, Enter=edit/toggle, a=add, x=delete, s=save, Esc=close                    │
+05:      │┌───────────────────┐┌─────────────────────┐┌───────────────────┐┌─────────────────────┐│
+06:      ││Providers          ││Provider Fields      ││Models             ││Model Fields         ││
+07:      ││> openai           ││  Provider ID        ││> gpt-4o-mini      ││  Model ID           ││
+08:      ││  google           ││  Provider Type      ││                   ││  Display Name       ││
+09:      ││                   ││> Base URL           ││                   ││> Max Context        ││
+10:      ││                   ││  Inline API Key     ││                   ││                     ││
+11:      ││                   ││  Env Var            ││                   ││                     ││
+12:      ││                   ││  Only Listed Models ││                   ││                     ││
+13:      ││                   ││                     ││                   ││                     ││
+14:      │└───────────────────┘└─────────────────────┘└───────────────────┘└─────────────────────┘│
+15:      │┌──────────────────────────────────────────────────────────────────────────────────────┐│
+16:      ││Providers and models are shared with the desktop app                                  ││
+17:      │└──────────────────────────────────────────────────────────────────────────────────────┘│
+18: Ready└────────────────────────────────────────────────────────────────────────────────────────┘
+20:  >"#,
+        );
+    }
+
+    #[test]
+    fn renders_sessions_menu_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::SessionsMenu;
+        state.sessions_menu_index = 2;
+
+        let rendered = render_state_snapshot(&state, 72, 18);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+04: Use ren┌/sessions──────────────────────────────────────────────┐o-end sm
+05: oke tes│Sessions (Enter=load/new, x=delete, Esc=close)         │
+06:        │  Start new chat                                       │
+07:        │  Refactor ideas                                       │
+08:        │> Testing plan (current)                               │
+09:        │                                                       │
+10:        │                                                       │
+11:        │                                                       │
+12:        └───────────────────────────────────────────────────────┘
+14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+16:  >"#,
+        );
+    }
+
+    #[test]
+    fn renders_tools_menu_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::ToolsMenu;
+        state.tools_menu_index = 1;
+
+        let rendered = render_state_snapshot(&state, 80, 20);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+03:         ┌/tools────────────────────────────────────────────────────────┐
+04: Use rend│Tools (a=approve, d=deny, e=execute approved, Esc=close)      │oke test
+05: s.      │  [approved] read_file - Inspect the app module               │
+06:         │> [pending] write_file - Patch the app module                 │
+07:         │    args: {"path":"src/app.rs","content":"..."}               │
+08:         │    risk: undoable_workspace_write                            │
+09:         │    why: Updates tracked source code                          │
+10:         │                                                              │
+11:         │                                                              │
+12:         │                                                              │
+13:         │                                                              │
+14:         │                                                              │
+15:         └──────────────────────────────────────────────────────────────┘
+16: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+18:  >"#,
+        );
+    }
+
+    #[test]
+    fn renders_help_menu_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::Help;
+
+        let rendered = render_state_snapshot(&state, 72, 18);
+
+        assert_snapshot(
+            &rendered,
+            r#"01: How should we test the TUI?
+04: Use render tes┌/help────────────────────────────────────┐f end-to-end sm
+05: oke tests.    │Slash Commands                           │
+06:               │/help      Open this help menu           │
+07:               │/model     Open model selector           │
+08:               │/settings  Open settings editor          │
+09:               │/sessions  Open sessions menu            │
+10:               │/tools     Open tools approval menu      │
+11:               │/new       Start a new session           │
+12:               └─────────────────────────────────────────┘
+14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+16:  >"#,
+        );
+    }
+
+    #[test]
+    fn tab_cycles_slash_command_and_enter_executes_selected_command() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Tab));
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert_eq!(harness.app.state.mode, UiMode::SessionsMenu);
+        assert!(harness.app.state.input.is_empty());
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 2);
+        assert!(matches!(requests[0], RuntimeRequest::ListSessions));
+        assert!(matches!(requests[1], RuntimeRequest::GetCurrentSessionId));
+    }
+
+    #[test]
+    fn submit_sends_message_request_and_tracks_optimistic_message() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("hello world");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(harness.app.state.input.is_empty());
+        assert!(harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(harness.app.state.optimistic_messages[0].content, "hello world");
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            RuntimeRequest::SendMessage {
+                message,
+                model_id,
+                provider_id,
+            } => {
+                assert_eq!(message, "hello world");
+                assert_eq!(model_id, "gpt-4o-mini");
+                assert_eq!(provider_id, "openai");
+            }
+            other => panic!("unexpected request: {}", request_name(other)),
+        }
+    }
+
+    #[test]
+    fn shift_enter_in_chat_inserts_newline_without_submitting() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("hello");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(shift_key(KeyCode::Enter));
+
+        assert_eq!(harness.app.state.input, "hello\n");
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn escape_closes_settings_editor_before_closing_settings_menu() {
+        let mut harness = test_harness();
+        harness.app.state.mode = UiMode::SettingsMenu;
+        harness.app.state.settings_draft = Some(sample_settings());
+        harness.app.state.settings_editor =
+            Some(ActiveSettingsEditor::Provider(SettingsProviderField::Id));
+        harness.app.state.settings_editor_input = String::from("draft-openai");
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(harness.app.state.mode, UiMode::SettingsMenu);
+        assert_eq!(harness.app.state.settings_editor, None);
+        assert!(harness.app.state.settings_editor_input.is_empty());
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert_eq!(harness.app.state.status, "Settings editor closed");
+    }
+
+    #[test]
+    fn tool_menu_execute_approved_returns_to_chat_and_requests_execution() {
+        let mut harness = test_harness();
+        harness.app.state.mode = UiMode::ToolsMenu;
+        harness.app.state.pending_tools = sample_pending_tools();
+
+        harness.app.handle_key_event(key(KeyCode::Char('e')));
+
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0], RuntimeRequest::ExecuteApprovedTools));
+    }
+
+    #[test]
+    fn settings_save_error_populates_field_errors() {
+        let mut harness = test_harness();
+        harness.app.state.mode = UiMode::SettingsMenu;
+        harness.app.handle_runtime_response(RuntimeResponse::SaveSettings(Err(
+            String::from(
+                "providers[0].id: duplicate provider\nmodels[0].max_context: invalid context",
+            ),
+        )));
+
+        assert_eq!(
+            harness.app.state.settings_errors.get("providers[0].id"),
+            Some(&String::from("duplicate provider"))
+        );
+        assert_eq!(
+            harness.app.state.settings_errors.get("models[0].max_context"),
+            Some(&String::from("invalid context"))
+        );
+        assert!(
+            harness
+                .app
+                .state
+                .status
+                .starts_with("Failed saving settings:")
+        );
+    }
+
+    #[test]
+    fn chat_history_response_reconciles_matching_optimistic_messages() {
+        let mut harness = test_harness();
+        harness.app.state.optimistic_messages.push(OptimisticMessage {
+            local_id: String::from("local-user-1"),
+            content: String::from("hello world"),
+        });
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory(Ok(BTreeMap::from([(
+                MessageId::new("m1"),
+                message("m1", None, ChatRole::User, "hello world"),
+            )]))));
+
+        assert!(harness.app.state.optimistic_messages.is_empty());
+        assert_eq!(harness.app.state.chat_history.len(), 1);
+    }
+
+    #[test]
+    fn settings_response_opens_editor_with_clean_state() {
+        let mut harness = test_harness();
+        harness.app.state.settings_errors = HashMap::from([(
+            String::from("providers[0].id"),
+            String::from("old error"),
+        )]);
+        harness.app.state.settings_editor =
+            Some(ActiveSettingsEditor::Model(SettingsModelField::Name));
+        harness.app.state.settings_editor_input = String::from("stale");
+        harness.app.state.settings_delete_armed = true;
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Settings(Ok(sample_settings())));
+
+        assert_eq!(harness.app.state.mode, UiMode::SettingsMenu);
+        assert_eq!(harness.app.state.status, "Editing settings");
+        assert!(harness.app.state.settings_errors.is_empty());
+        assert_eq!(harness.app.state.settings_editor, None);
+        assert!(harness.app.state.settings_editor_input.is_empty());
+        assert!(!harness.app.state.settings_delete_armed);
+    }
+
+    #[test]
+    fn approve_tool_response_marks_pending_tool_as_approved() {
+        let mut harness = test_harness();
+        harness.app.state.pending_tools = sample_pending_tools();
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ApproveTool {
+                call_id: String::from("call-2"),
+                result: Ok(()),
+            });
+
+        assert_eq!(harness.app.state.pending_tools[1].approved, Some(true));
+    }
+
+    #[test]
+    fn tool_call_event_adds_pending_tool_and_status() {
+        let mut harness = test_harness();
+
+        harness.app.handle_runtime_event(Event::ToolCallDetected {
+            call_id: String::from("call-3"),
+            tool_id: String::from("read_file"),
+            args: String::from("{\"path\":\"Cargo.toml\"}"),
+            description: String::from("Read the workspace manifest"),
+            risk_level: String::from("read_only_workspace"),
+            reasons: vec![String::from("Reads local config")],
+        });
+
+        assert_eq!(harness.app.state.pending_tools.len(), 1);
+        assert_eq!(
+            harness.app.state.status,
+            "1 tool call(s) pending. Use /tools"
+        );
+    }
+
+    fn request_name(request: &RuntimeRequest) -> &'static str {
+        match request {
+            RuntimeRequest::ListModels => "ListModels",
+            RuntimeRequest::GetSettings => "GetSettings",
+            RuntimeRequest::SendMessage { .. } => "SendMessage",
+            RuntimeRequest::SaveSettings { .. } => "SaveSettings",
+            RuntimeRequest::GetChatHistory => "GetChatHistory",
+            RuntimeRequest::GetCurrentTip => "GetCurrentTip",
+            RuntimeRequest::ClearCurrentSession => "ClearCurrentSession",
+            RuntimeRequest::LoadSession { .. } => "LoadSession",
+            RuntimeRequest::ListSessions => "ListSessions",
+            RuntimeRequest::DeleteSession { .. } => "DeleteSession",
+            RuntimeRequest::GetCurrentSessionId => "GetCurrentSessionId",
+            RuntimeRequest::ApproveTool { .. } => "ApproveTool",
+            RuntimeRequest::DenyTool { .. } => "DenyTool",
+            RuntimeRequest::ExecuteApprovedTools => "ExecuteApprovedTools",
+        }
     }
 }
