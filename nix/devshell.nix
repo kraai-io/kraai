@@ -23,6 +23,7 @@
 
           just
 
+          ripgrep
           wine
           pkg-config
           openssl
