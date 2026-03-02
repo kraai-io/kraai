@@ -68,7 +68,7 @@ check: format lint test-all
 reset: clean
     pnpm install
 
-setup: install-deps build-bindings
+setup: install-deps build-bindings-debug
 
 # Get the current system (e.g., "x86_64-linux", "aarch64-linux")
 
