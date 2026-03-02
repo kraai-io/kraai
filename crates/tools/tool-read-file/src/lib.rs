@@ -55,10 +55,7 @@ impl Tool for ReadFileTool {
         for file in &parsed.files {
             let normalized = normalize_tool_path(ctx.workspace_root, file);
             if normalized.starts_with(ctx.workspace_root) {
-                reasons.push(format!(
-                    "Reads workspace file {}",
-                    normalized.display()
-                ));
+                reasons.push(format!("Reads workspace file {}", normalized.display()));
             } else {
                 risk = RiskLevel::OutsideWorkspace;
                 reasons.push(format!(

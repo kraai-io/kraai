@@ -54,7 +54,9 @@ pub trait Tool: Send + Sync {
         ToolCallAssessment {
             risk: RiskLevel::OutsideWorkspace,
             policy: ExecutionPolicy::AlwaysAsk,
-            reasons: vec![String::from("Tool does not define a custom autonomy policy")],
+            reasons: vec![String::from(
+                "Tool does not define a custom autonomy policy",
+            )],
         }
     }
 
