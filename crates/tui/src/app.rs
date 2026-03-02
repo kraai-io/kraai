@@ -188,6 +188,7 @@ pub struct AppState {
     tools_menu_index: usize,
     command_completion_prefix: Option<String>,
     command_completion_index: usize,
+    command_popup_dismissed: bool,
     settings_draft: Option<SettingsDocument>,
     settings_errors: HashMap<String, String>,
     settings_focus: SettingsFocus,
@@ -229,6 +230,7 @@ impl Default for AppState {
             tools_menu_index: 0,
             command_completion_prefix: None,
             command_completion_index: 0,
+            command_popup_dismissed: false,
             settings_draft: None,
             settings_errors: HashMap::new(),
             settings_focus: SettingsFocus::ProviderList,
@@ -727,6 +729,11 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if matches!(key_event.code, KeyCode::Esc) {
+            if self.state.mode == UiMode::Chat && self.command_popup_visible() {
+                self.state.command_popup_dismissed = true;
+                self.reset_completion_cycle();
+                return;
+            }
             if self.state.mode == UiMode::SettingsMenu {
                 if self.state.settings_editor.take().is_some() {
                     self.state.settings_editor_input.clear();
@@ -773,10 +780,16 @@ impl App {
             }
             KeyCode::Char(c) => {
                 self.insert_input_char(c);
+                if active_command_prefix(&self.state.input).is_none() {
+                    self.state.command_popup_dismissed = false;
+                }
                 self.reset_completion_cycle();
             }
             KeyCode::Backspace => {
                 self.backspace_input_char();
+                if active_command_prefix(&self.state.input).is_none() {
+                    self.state.command_popup_dismissed = false;
+                }
                 self.reset_completion_cycle();
             }
             KeyCode::Up => {
@@ -824,6 +837,9 @@ impl App {
     }
 
     fn cycle_command_suggestion(&mut self, forward: bool) {
+        if self.state.command_popup_dismissed {
+            return;
+        }
         let Some(prefix) = active_command_prefix(&self.state.input) else {
             return;
         };
@@ -852,6 +868,9 @@ impl App {
     }
 
     fn execute_current_command_suggestion(&mut self) -> bool {
+        if self.state.command_popup_dismissed {
+            return false;
+        }
         let Some(prefix) = active_command_prefix(&self.state.input) else {
             return false;
         };
@@ -869,9 +888,20 @@ impl App {
         let command = matches[selected_idx].0;
         self.state.input.clear();
         self.state.input_cursor = 0;
+        self.state.command_popup_dismissed = false;
         self.reset_completion_cycle();
         self.handle_command(command);
         true
+    }
+
+    fn command_popup_visible(&self) -> bool {
+        if self.state.command_popup_dismissed {
+            return false;
+        }
+
+        active_command_prefix(&self.state.input)
+            .map(slash_command_matches)
+            .is_some_and(|matches| !matches.is_empty())
     }
 
     fn handle_model_menu_key_event(&mut self, key_event: KeyEvent) {
@@ -1428,8 +1458,13 @@ impl App {
         }
         self.state.input.clear();
         self.state.input_cursor = 0;
+        let command_popup_dismissed = self.state.command_popup_dismissed;
+        self.state.command_popup_dismissed = false;
 
-        if let Some(command) = raw_input.strip_prefix('/') {
+        if !command_popup_dismissed
+            && let Some(command) = raw_input.strip_prefix('/')
+            && is_known_slash_command(command)
+        {
             self.handle_command(command.trim());
             return;
         }
@@ -1882,6 +1917,13 @@ fn active_command_prefix(input: &str) -> Option<&str> {
     Some(cmd)
 }
 
+fn is_known_slash_command(command_line: &str) -> bool {
+    command_line
+        .split_whitespace()
+        .next()
+        .is_some_and(|command| SLASH_COMMANDS.iter().any(|(known, _)| *known == command))
+}
+
 fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
     SLASH_COMMANDS
         .iter()
@@ -1990,6 +2032,9 @@ fn parse_settings_errors(message: &str) -> HashMap<String, String> {
 }
 
 fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
+    if state.command_popup_dismissed {
+        return;
+    }
     let Some(prefix) = active_command_prefix(&state.input) else {
         return;
     };
@@ -3095,6 +3140,41 @@ mod tests {
     }
 
     #[test]
+    fn submit_unknown_slash_command_sends_message() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("/not-a-command");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(harness.app.state.input.is_empty());
+        assert!(harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(
+            harness.app.state.optimistic_messages[0].content,
+            "/not-a-command"
+        );
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            RuntimeRequest::SendMessage {
+                message,
+                model_id,
+                provider_id,
+            } => {
+                assert_eq!(message, "/not-a-command");
+                assert_eq!(model_id, "gpt-4o-mini");
+                assert_eq!(provider_id, "openai");
+            }
+            other => panic!("unexpected request: {}", request_name(other)),
+        }
+    }
+
+    #[test]
     fn shift_enter_in_chat_inserts_newline_without_submitting() {
         let mut harness = test_harness();
         harness.app.state.input = String::from("hello");
@@ -3123,6 +3203,95 @@ mod tests {
         harness.app.handle_key_event(key(KeyCode::Esc));
         assert_eq!(harness.app.state.mode, UiMode::Chat);
         assert_eq!(harness.app.state.status, "Settings editor closed");
+    }
+
+    #[test]
+    fn escape_dismisses_command_popup_in_chat() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        assert!(harness.app.command_popup_visible());
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert!(harness.app.state.command_popup_dismissed);
+        assert!(!harness.app.command_popup_visible());
+        assert_eq!(harness.app.state.input, "/s");
+    }
+
+    #[test]
+    fn escape_then_typing_partial_command_submits_message() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+        harness.app.handle_key_event(key(KeyCode::Char('e')));
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(harness.app.state.input.is_empty());
+        assert!(harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(harness.app.state.optimistic_messages[0].content, "/se");
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            RuntimeRequest::SendMessage {
+                message,
+                model_id,
+                provider_id,
+            } => {
+                assert_eq!(message, "/se");
+                assert_eq!(model_id, "gpt-4o-mini");
+                assert_eq!(provider_id, "openai");
+            }
+            other => panic!("unexpected request: {}", request_name(other)),
+        }
+    }
+
+    #[test]
+    fn escape_then_typing_full_command_submits_message() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+        for ch in "ettings".chars() {
+            harness.app.handle_key_event(key(KeyCode::Char(ch)));
+        }
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert!(harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(
+            harness.app.state.optimistic_messages[0].content,
+            "/settings"
+        );
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            RuntimeRequest::SendMessage {
+                message,
+                model_id,
+                provider_id,
+            } => {
+                assert_eq!(message, "/settings");
+                assert_eq!(model_id, "gpt-4o-mini");
+                assert_eq!(provider_id, "openai");
+            }
+            other => panic!("unexpected request: {}", request_name(other)),
+        }
     }
 
     #[test]
