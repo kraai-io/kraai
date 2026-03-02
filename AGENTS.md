@@ -48,6 +48,8 @@ apps/
 - All TypeScript code was written by an LLM
 - Use the types defined by the bindings in crates/ts-bindings/index.d.ts
 
+IMPORTANT: If you see a bad pattern in the code, don't be quick to copy it. It is best to squash bad patterns before they propogate. You should inform the user that you found the bad pattern, and then follow their instructions. Do not implement new features using these bad patterns without explicit confirmation.
+
 ## Learnings
 
 ## Dependencies
