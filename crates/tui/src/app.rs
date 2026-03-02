@@ -904,12 +904,14 @@ impl App {
 
         match key_event.code {
             KeyCode::Up => {
-                self.state.sessions_menu_index = self.state.sessions_menu_index.saturating_sub(1);
+                if total > 0 {
+                    self.state.sessions_menu_index =
+                        (self.state.sessions_menu_index + total - 1) % total;
+                }
             }
             KeyCode::Down => {
                 if total > 0 {
-                    self.state.sessions_menu_index =
-                        (self.state.sessions_menu_index + 1).min(total - 1);
+                    self.state.sessions_menu_index = (self.state.sessions_menu_index + 1) % total;
                 }
             }
             KeyCode::Enter => {
@@ -2010,9 +2012,16 @@ fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mu
     } else {
         0
     };
+    let visible_lines = popup_area.height.saturating_sub(2) as usize;
+    let scroll_offset = menu_scroll_offset(selected_idx, matches.len(), visible_lines);
 
     let mut lines = Vec::new();
-    for (idx, (command, description)) in matches.iter().take(visible_count).enumerate() {
+    for (idx, (command, description)) in matches
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(visible_count)
+    {
         let selected = idx == selected_idx;
         let marker = if selected { ">" } else { " " };
         lines.push(Line::styled(
@@ -2089,7 +2098,7 @@ fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     } else {
         state.model_menu_index.saturating_add(1)
     };
-    let scroll_offset = model_menu_scroll_offset(selected_line, lines.len(), visible_lines);
+    let scroll_offset = menu_scroll_offset(selected_line, lines.len(), visible_lines);
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
@@ -2098,11 +2107,7 @@ fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         .render(popup_area, buf);
 }
 
-fn model_menu_scroll_offset(
-    selected_line: usize,
-    total_lines: usize,
-    visible_lines: usize,
-) -> usize {
+fn menu_scroll_offset(selected_line: usize, total_lines: usize, visible_lines: usize) -> usize {
     if visible_lines == 0 || total_lines <= visible_lines {
         return 0;
     }
@@ -2418,6 +2423,10 @@ fn selection_style(active: bool) -> Style {
 
 fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(area.width.saturating_mul(4) / 5, area.height / 2, area);
+    let visible_lines = popup_area.height.saturating_sub(2) as usize;
+    let total_lines = state.sessions.len() + 2;
+    let selected_line = state.sessions_menu_index.saturating_add(1);
+    let scroll_offset = menu_scroll_offset(selected_line, total_lines, visible_lines);
 
     let mut lines = vec![Line::styled(
         "Sessions (Enter=load/new, x=delete, Esc=close)",
@@ -2463,6 +2472,7 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
         .block(Block::default().title("/sessions").borders(Borders::ALL))
+        .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
 
@@ -2563,21 +2573,31 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
 
 #[cfg(test)]
 mod tests {
-    use super::{model_menu_next_index, model_menu_previous_index, model_menu_scroll_offset};
+    use super::{menu_scroll_offset, model_menu_next_index, model_menu_previous_index};
 
     #[test]
     fn model_menu_scroll_stays_at_top_when_selection_is_visible() {
-        assert_eq!(model_menu_scroll_offset(3, 20, 8), 0);
+        assert_eq!(menu_scroll_offset(3, 20, 8), 0);
     }
 
     #[test]
     fn model_menu_scroll_follows_selection_past_bottom() {
-        assert_eq!(model_menu_scroll_offset(9, 20, 8), 2);
+        assert_eq!(menu_scroll_offset(9, 20, 8), 2);
     }
 
     #[test]
     fn model_menu_scroll_clamps_to_max_scroll() {
-        assert_eq!(model_menu_scroll_offset(19, 20, 8), 12);
+        assert_eq!(menu_scroll_offset(19, 20, 8), 12);
+    }
+
+    #[test]
+    fn menu_scroll_with_zero_visible_lines_stays_at_top() {
+        assert_eq!(menu_scroll_offset(10, 20, 0), 0);
+    }
+
+    #[test]
+    fn menu_scroll_when_content_fits_stays_at_top() {
+        assert_eq!(menu_scroll_offset(4, 5, 8), 0);
     }
 
     #[test]
