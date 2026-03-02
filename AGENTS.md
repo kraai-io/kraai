@@ -64,9 +64,7 @@ IMPORTANT: We do not keep legacy code around. This is a project in its demo / al
 1. Run `just lint` before committing to catch issues
 2. TypeScript changes require `just typecheck-desktop`
 3. Rust changes require `cargo clippy -- -D warnings`
-5. After modifying ts-bindings, rebuild with `just build-bindings`
+5. After modifying ts-bindings, rebuild with `just build-bindings-debug`
 6. Update this file when:
-   - New patterns are discovered
-   - Non-obvious issues are solved
    - Architecture changes occur
    - New commands become frequently used
