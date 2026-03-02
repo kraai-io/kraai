@@ -3121,7 +3121,10 @@ mod tests {
         assert!(harness.app.state.input.is_empty());
         assert!(harness.app.state.is_streaming);
         assert_eq!(harness.app.state.optimistic_messages.len(), 1);
-        assert_eq!(harness.app.state.optimistic_messages[0].content, "hello world");
+        assert_eq!(
+            harness.app.state.optimistic_messages[0].content,
+            "hello world"
+        );
 
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 1);
@@ -3312,18 +3315,22 @@ mod tests {
     fn settings_save_error_populates_field_errors() {
         let mut harness = test_harness();
         harness.app.state.mode = UiMode::SettingsMenu;
-        harness.app.handle_runtime_response(RuntimeResponse::SaveSettings(Err(
-            String::from(
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::SaveSettings(Err(String::from(
                 "providers[0].id: duplicate provider\nmodels[0].max_context: invalid context",
-            ),
-        )));
+            ))));
 
         assert_eq!(
             harness.app.state.settings_errors.get("providers[0].id"),
             Some(&String::from("duplicate provider"))
         );
         assert_eq!(
-            harness.app.state.settings_errors.get("models[0].max_context"),
+            harness
+                .app
+                .state
+                .settings_errors
+                .get("models[0].max_context"),
             Some(&String::from("invalid context"))
         );
         assert!(
@@ -3338,10 +3345,14 @@ mod tests {
     #[test]
     fn chat_history_response_reconciles_matching_optimistic_messages() {
         let mut harness = test_harness();
-        harness.app.state.optimistic_messages.push(OptimisticMessage {
-            local_id: String::from("local-user-1"),
-            content: String::from("hello world"),
-        });
+        harness
+            .app
+            .state
+            .optimistic_messages
+            .push(OptimisticMessage {
+                local_id: String::from("local-user-1"),
+                content: String::from("hello world"),
+            });
 
         harness
             .app
@@ -3357,10 +3368,8 @@ mod tests {
     #[test]
     fn settings_response_opens_editor_with_clean_state() {
         let mut harness = test_harness();
-        harness.app.state.settings_errors = HashMap::from([(
-            String::from("providers[0].id"),
-            String::from("old error"),
-        )]);
+        harness.app.state.settings_errors =
+            HashMap::from([(String::from("providers[0].id"), String::from("old error"))]);
         harness.app.state.settings_editor =
             Some(ActiveSettingsEditor::Model(SettingsModelField::Name));
         harness.app.state.settings_editor_input = String::from("stale");

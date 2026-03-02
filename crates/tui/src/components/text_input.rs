@@ -14,7 +14,9 @@ const H_PADDING: u16 = 1;
 const V_PADDING: u16 = 1;
 const PROMPT: &str = "> ";
 const CONTINUATION_PREFIX: &str = "  ";
-const INPUT_STYLE: Style = Style::new().fg(Color::Rgb(255, 255, 255)).bg(Color::DarkGray);
+const INPUT_STYLE: Style = Style::new()
+    .fg(Color::Rgb(255, 255, 255))
+    .bg(Color::DarkGray);
 
 impl<'a> TextInput<'a> {
     pub fn new(input: &'a str, cursor: usize) -> Self {
@@ -56,7 +58,11 @@ impl<'a> TextInput<'a> {
             let mut start = 0usize;
             while start < chars.len() {
                 let end = (start + available).min(chars.len());
-                let line_prefix = if start == 0 { prefix } else { CONTINUATION_PREFIX };
+                let line_prefix = if start == 0 {
+                    prefix
+                } else {
+                    CONTINUATION_PREFIX
+                };
                 let chunk: String = chars[start..end].iter().collect();
                 wrapped.push(format!("{line_prefix}{chunk}"));
                 start = end;
