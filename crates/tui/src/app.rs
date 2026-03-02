@@ -81,6 +81,8 @@ struct PendingTool {
     tool_id: String,
     args: String,
     description: String,
+    risk_level: String,
+    reasons: Vec<String>,
     approved: Option<bool>,
 }
 
@@ -465,6 +467,8 @@ impl App {
                 tool_id,
                 args,
                 description,
+                risk_level,
+                reasons,
             } => {
                 let exists = self
                     .state
@@ -477,6 +481,8 @@ impl App {
                         tool_id,
                         args,
                         description,
+                        risk_level,
+                        reasons,
                         approved: None,
                     });
                     self.state.status = format!(
@@ -2495,6 +2501,16 @@ fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
                     format!("    args: {}", tool.args),
                     Style::default().fg(Color::DarkGray),
                 ));
+                lines.push(Line::styled(
+                    format!("    risk: {}", tool.risk_level),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                for reason in &tool.reasons {
+                    lines.push(Line::styled(
+                        format!("    why: {reason}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
             }
         }
     }

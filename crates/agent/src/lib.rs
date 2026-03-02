@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use color_eyre::eyre::Result;
@@ -10,7 +11,7 @@ use tokio::sync::RwLock;
 use tool_core::{ToolManager, ToolOutput, toon_parser};
 use types::{
     CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId,
-    ToolCall, ToolId, ToolResult,
+    RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
 };
 use ulid::Ulid;
 
@@ -18,6 +19,7 @@ use ulid::Ulid;
 pub struct PendingToolCall {
     pub call: ToolCall,
     pub description: String,
+    pub assessment: ToolCallAssessment,
     pub status: PermissionStatus,
 }
 
@@ -31,6 +33,7 @@ pub enum PermissionStatus {
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
+    workspace_root: PathBuf,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     current_session_id: Option<String>,
@@ -41,16 +44,27 @@ pub struct AgentManager {
     last_provider: Option<ProviderId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DetectedToolCall {
+    pub call_id: CallId,
+    pub tool_id: String,
+    pub description: String,
+    pub assessment: ToolCallAssessment,
+    pub requires_confirmation: bool,
+}
+
 impl AgentManager {
     pub fn new(
         providers: ProviderManager,
         tools: ToolManager,
+        workspace_root: PathBuf,
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
     ) -> Self {
         Self {
             providers,
             tools,
+            workspace_root,
             message_store,
             session_store,
             current_session_id: None,
@@ -420,18 +434,33 @@ impl AgentManager {
     pub async fn parse_tool_calls_from_content(
         &mut self,
         content: &str,
-    ) -> (Vec<(CallId, String, String)>, Vec<(String, String)>) {
+    ) -> (Vec<DetectedToolCall>, Vec<(String, String)>) {
         let result = toon_parser::parse_tool_calls(content);
 
         let mut detected_calls = Vec::new();
         for parsed in result.successful {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
+            let assessment = self
+                .tools
+                .assess_tool(
+                    &tool_id,
+                    &parsed.args,
+                    &tool_core::ToolContext {
+                        workspace_root: &self.workspace_root,
+                    },
+                )
+                .unwrap_or_else(|_| ToolCallAssessment {
+                    risk: RiskLevel::OutsideWorkspace,
+                    policy: types::ExecutionPolicy::AlwaysAsk,
+                    reasons: vec![format!("Unknown tool: {}", parsed.tool_id)],
+                });
             let description = self
                 .tools
                 .describe_tool(&tool_id, parsed.args.clone())
                 .await
                 .unwrap_or_else(|_| format!("Unknown tool: {}", parsed.tool_id));
+            let requires_confirmation = !assessment.is_auto_approved(default_autonomy_threshold());
 
             let call = ToolCall {
                 call_id: call_id.clone(),
@@ -444,11 +473,22 @@ impl AgentManager {
                 PendingToolCall {
                     call,
                     description: description.clone(),
-                    status: PermissionStatus::Pending,
+                    assessment: assessment.clone(),
+                    status: if requires_confirmation {
+                        PermissionStatus::Pending
+                    } else {
+                        PermissionStatus::Approved
+                    },
                 },
             );
 
-            detected_calls.push((call_id, parsed.tool_id, description));
+            detected_calls.push(DetectedToolCall {
+                call_id,
+                tool_id: parsed.tool_id,
+                description,
+                assessment,
+                requires_confirmation,
+            });
         }
 
         let failed_calls: Vec<(String, String)> = result
@@ -477,7 +517,7 @@ impl AgentManager {
     pub async fn process_message_for_tools(
         &mut self,
         message_id: &MessageId,
-    ) -> Result<Vec<(CallId, String, String)>> {
+    ) -> Result<Vec<DetectedToolCall>> {
         let history = self.get_chat_history().await?;
         let message = match history.get(message_id) {
             Some(m) => m,
@@ -512,12 +552,17 @@ impl AgentManager {
     }
 
     pub async fn execute_approved_tools(&mut self) -> Vec<ToolResult> {
-        let pending = std::mem::take(&mut self.pending_tool_calls);
-
-        let approved: Vec<_> = pending
+        let approved: Vec<_> = self
+            .pending_tool_calls
             .iter()
             .filter(|(_, p)| p.status == PermissionStatus::Approved)
             .map(|(call_id, p)| (call_id.clone(), p.call.tool_id.clone(), p.call.args.clone()))
+            .collect();
+        let denied: Vec<_> = self
+            .pending_tool_calls
+            .iter()
+            .filter(|(_, p)| p.status == PermissionStatus::Denied)
+            .map(|(call_id, p)| (call_id.clone(), p.call.tool_id.clone()))
             .collect();
 
         let mut results = Vec::new();
@@ -538,15 +583,17 @@ impl AgentManager {
             });
         }
 
-        for (call_id, pending) in pending.iter() {
-            if pending.status == PermissionStatus::Denied {
-                results.push(ToolResult {
-                    call_id: call_id.clone(),
-                    tool_id: pending.call.tool_id.clone(),
-                    output: serde_json::json!({ "error": "Permission denied by user" }),
-                    permission_denied: true,
-                });
-            }
+        for (call_id, tool_id) in denied {
+            results.push(ToolResult {
+                call_id,
+                tool_id,
+                output: serde_json::json!({ "error": "Permission denied by user" }),
+                permission_denied: true,
+            });
+        }
+
+        for result in &results {
+            self.pending_tool_calls.remove(&result.call_id);
         }
 
         results
@@ -582,4 +629,14 @@ impl AgentManager {
             .get(call_id)
             .map(|p| p.call.args.clone())
     }
+
+    pub fn get_pending_tool_assessment(&self, call_id: &CallId) -> Option<ToolCallAssessment> {
+        self.pending_tool_calls
+            .get(call_id)
+            .map(|p| p.assessment.clone())
+    }
+}
+
+fn default_autonomy_threshold() -> RiskLevel {
+    RiskLevel::ReadOnlyWorkspace
 }

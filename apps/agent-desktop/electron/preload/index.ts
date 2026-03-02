@@ -17,6 +17,8 @@ type Event =
 			toolId: string;
 			args: string;
 			description: string;
+			riskLevel: string;
+			reasons: string[];
 	  }
 	| {
 			type: "ToolResultReady";

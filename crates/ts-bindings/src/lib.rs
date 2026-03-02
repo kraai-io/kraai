@@ -277,6 +277,8 @@ pub enum Event {
     tool_id: String,
     args: String,
     description: String,
+    risk_level: String,
+    reasons: Vec<String>,
   },
   ToolResultReady {
     call_id: String,
@@ -307,11 +309,15 @@ impl From<agent_runtime::Event> for Event {
         tool_id,
         args,
         description,
+        risk_level,
+        reasons,
       } => Event::ToolCallDetected {
         call_id,
         tool_id,
         args,
         description,
+        risk_level,
+        reasons,
       },
       agent_runtime::Event::ToolResultReady {
         call_id,

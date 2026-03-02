@@ -1,11 +1,15 @@
 pub mod toon_parser;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use types::ToolId;
+use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolId};
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -36,11 +40,23 @@ impl ToolOutput {
     }
 }
 
+pub struct ToolContext<'a> {
+    pub workspace_root: &'a Path,
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn schema(&self) -> &'static str;
+
+    fn assess(&self, _args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        ToolCallAssessment {
+            risk: RiskLevel::OutsideWorkspace,
+            policy: ExecutionPolicy::AlwaysAsk,
+            reasons: vec![String::from("Tool does not define a custom autonomy policy")],
+        }
+    }
 
     async fn call(&self, args: serde_json::Value) -> ToolOutput;
 
@@ -100,6 +116,19 @@ impl ToolManager {
         Ok(tool.call(args).await)
     }
 
+    pub fn assess_tool(
+        &self,
+        id: &ToolId,
+        args: &serde_json::Value,
+        ctx: &ToolContext<'_>,
+    ) -> Result<ToolCallAssessment, ToolError> {
+        let tool = self
+            .tools
+            .get(id)
+            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
+        Ok(tool.assess(args, ctx))
+    }
+
     pub async fn describe_tool(
         &self,
         id: &ToolId,
@@ -111,4 +140,33 @@ impl ToolManager {
             .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
         Ok(tool.describe(args).await)
     }
+}
+
+pub fn normalize_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
+    let path = Path::new(raw_path);
+    let is_absolute = path.is_absolute();
+    let base = if is_absolute {
+        PathBuf::new()
+    } else {
+        workspace_root.to_path_buf()
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in base.join(path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normalized.parent().is_some() {
+                    normalized.pop();
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+
+    if is_absolute && !normalized.is_absolute() {
+        normalized = Path::new("/").join(normalized);
+    }
+
+    normalized
 }

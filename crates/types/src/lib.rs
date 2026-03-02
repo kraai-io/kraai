@@ -43,6 +43,50 @@ pub struct ToolCall {
     pub args: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RiskLevel {
+    ReadOnlyWorkspace = 0,
+    UndoableWorkspaceWrite = 1,
+    NonUndoableWorkspaceWrite = 2,
+    OutsideWorkspace = 3,
+}
+
+impl RiskLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnlyWorkspace => "read_only_workspace",
+            Self::UndoableWorkspaceWrite => "undoable_workspace_write",
+            Self::NonUndoableWorkspaceWrite => "non_undoable_workspace_write",
+            Self::OutsideWorkspace => "outside_workspace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionPolicy {
+    AutonomousUpTo(RiskLevel),
+    AlwaysAsk,
+    NeverAllow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallAssessment {
+    pub risk: RiskLevel,
+    pub policy: ExecutionPolicy,
+    pub reasons: Vec<String>,
+}
+
+impl ToolCallAssessment {
+    pub fn is_auto_approved(&self, threshold: RiskLevel) -> bool {
+        match self.policy {
+            ExecutionPolicy::AutonomousUpTo(max_risk) => {
+                self.risk <= max_risk && self.risk <= threshold
+            }
+            ExecutionPolicy::AlwaysAsk | ExecutionPolicy::NeverAllow => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub call_id: CallId,

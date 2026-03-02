@@ -119,6 +119,8 @@ pub enum Event {
         tool_id: String,
         args: String,
         description: String,
+        risk_level: String,
+        reasons: Vec<String>,
     },
     /// Tool execution result ready
     ToolResultReady {
@@ -391,10 +393,14 @@ impl RuntimeBuilder {
                 let providers = ProviderManager::new();
                 let mut tools = ToolManager::new();
                 tools.register_tool(ReadFileTool {});
+                let workspace_root = std::env::current_dir()
+                    .and_then(|path| path.canonicalize())
+                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
 
                 let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                     providers,
                     tools,
+                    workspace_root,
                     message_store,
                     session_store,
                 )));
@@ -717,23 +723,39 @@ impl RuntimeInner {
                 return;
             }
 
+            let mut has_auto_approved_tools = false;
+
             // Emit tool call events
-            for (call_id, tool_id, description) in tool_calls {
+            for tool_call in tool_calls {
                 let args_json = {
                     let agent = agent_manager.lock().await;
                     agent
-                        .get_pending_tool_args(&call_id)
+                        .get_pending_tool_args(&tool_call.call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
 
-                tracing::debug!("Emitting ToolCallDetected: {} - {}", tool_id, description);
-                event_callback.on_event(Event::ToolCallDetected {
-                    call_id: call_id.to_string(),
-                    tool_id,
-                    args: args_json,
-                    description,
-                });
+                if tool_call.requires_confirmation {
+                    tracing::debug!(
+                        "Emitting ToolCallDetected: {} - {}",
+                        tool_call.tool_id,
+                        tool_call.description
+                    );
+                    event_callback.on_event(Event::ToolCallDetected {
+                        call_id: tool_call.call_id.to_string(),
+                        tool_id: tool_call.tool_id,
+                        args: args_json,
+                        description: tool_call.description,
+                        risk_level: tool_call.assessment.risk.as_str().to_string(),
+                        reasons: tool_call.assessment.reasons,
+                    });
+                } else {
+                    has_auto_approved_tools = true;
+                }
+            }
+
+            if has_auto_approved_tools {
+                let _ = command_tx.send(Command::ExecuteApprovedTools).await;
             }
         });
     }
@@ -771,8 +793,11 @@ impl RuntimeInner {
             tracing::debug!("Emitting HistoryUpdated event after tool results");
             event_callback.on_event(Event::HistoryUpdated);
 
-            // Start continuation stream
-            Self::start_continuation(agent_manager, event_callback, command_tx).await;
+            let has_pending_tools = { agent_manager.lock().await.has_pending_tools() };
+            if !has_pending_tools {
+                // Start continuation stream
+                Self::start_continuation(agent_manager, event_callback, command_tx).await;
+            }
         });
     }
 
@@ -848,24 +873,34 @@ impl RuntimeInner {
                 return;
             }
 
-            for (call_id, tool_id, description) in tool_calls {
+            let mut has_auto_approved_tools = false;
+
+            for tool_call in tool_calls {
                 let args_json = {
                     let agent = agent_manager.lock().await;
                     agent
-                        .get_pending_tool_args(&call_id)
+                        .get_pending_tool_args(&tool_call.call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
 
-                event_callback.on_event(Event::ToolCallDetected {
-                    call_id: call_id.to_string(),
-                    tool_id,
-                    args: args_json,
-                    description,
-                });
+                if tool_call.requires_confirmation {
+                    event_callback.on_event(Event::ToolCallDetected {
+                        call_id: tool_call.call_id.to_string(),
+                        tool_id: tool_call.tool_id,
+                        args: args_json,
+                        description: tool_call.description,
+                        risk_level: tool_call.assessment.risk.as_str().to_string(),
+                        reasons: tool_call.assessment.reasons,
+                    });
+                } else {
+                    has_auto_approved_tools = true;
+                }
             }
 
-            let _ = command_tx;
+            if has_auto_approved_tools {
+                let _ = command_tx.send(Command::ExecuteApprovedTools).await;
+            }
         })
     }
 

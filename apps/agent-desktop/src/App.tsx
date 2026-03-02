@@ -53,6 +53,8 @@ interface PendingTool {
 	toolId: string;
 	args: string;
 	description: string;
+	riskLevel: string;
+	reasons: string[];
 	approved: boolean | null;
 }
 
@@ -299,6 +301,8 @@ function App(): React.JSX.Element {
 							toolId: event.toolId,
 							args: event.args,
 							description: event.description,
+							riskLevel: event.riskLevel,
+							reasons: event.reasons,
 							approved: null,
 						},
 					]);
@@ -549,6 +553,14 @@ function App(): React.JSX.Element {
 									<div className="text-muted-foreground mt-1">
 										{unhandledTools[0].description}
 									</div>
+									<div className="mt-2 text-xs uppercase tracking-wide text-muted-foreground">
+										Risk: {unhandledTools[0].riskLevel.replaceAll("_", " ")}
+									</div>
+									{unhandledTools[0].reasons.length > 0 && (
+										<div className="mt-2 whitespace-pre-line text-xs text-muted-foreground">
+											{unhandledTools[0].reasons.join("\n")}
+										</div>
+									)}
 									{unhandledTools[0].args &&
 										unhandledTools[0].args !== "{}" && (
 											<pre className="mt-2 text-xs bg-background rounded p-2 overflow-x-auto">

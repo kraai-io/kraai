@@ -2,8 +2,9 @@ use std::io::Read;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tool_core::{Tool, ToolOutput};
+use tool_core::{Tool, ToolContext, ToolOutput, normalize_tool_path};
 use toon_schema::ToonSchema;
+use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 pub struct ReadFileTool {}
 
@@ -34,6 +35,44 @@ impl Tool for ReadFileTool {
 
     fn schema(&self) -> &'static str {
         ReadFileToolArgs::toon_schema()
+    }
+
+    fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        let parsed: ReadFileToolArgs = match serde_json::from_value(args.clone()) {
+            Ok(args) => args,
+            Err(error) => {
+                return ToolCallAssessment {
+                    risk: RiskLevel::OutsideWorkspace,
+                    policy: ExecutionPolicy::AlwaysAsk,
+                    reasons: vec![format!("Unable to validate read_files arguments: {error}")],
+                };
+            }
+        };
+
+        let mut reasons = Vec::new();
+        let mut risk = RiskLevel::ReadOnlyWorkspace;
+
+        for file in &parsed.files {
+            let normalized = normalize_tool_path(ctx.workspace_root, file);
+            if normalized.starts_with(ctx.workspace_root) {
+                reasons.push(format!(
+                    "Reads workspace file {}",
+                    normalized.display()
+                ));
+            } else {
+                risk = RiskLevel::OutsideWorkspace;
+                reasons.push(format!(
+                    "Reads file outside workspace {}",
+                    normalized.display()
+                ));
+            }
+        }
+
+        ToolCallAssessment {
+            risk,
+            policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+            reasons,
+        }
     }
 
     async fn call(&self, args: serde_json::Value) -> ToolOutput {
