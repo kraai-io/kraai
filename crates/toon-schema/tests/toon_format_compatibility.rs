@@ -12,12 +12,12 @@ fn extract_example_lines(schema: &str) -> Vec<String> {
     let lines: Vec<&str> = schema.lines().collect();
     let tool_call_start = lines
         .iter()
-        .position(|l| *l == "```tool_call")
+        .position(|l| *l == "<tool_call>")
         .expect("Should have tool_call block");
     let tool_call_end = lines
         .iter()
-        .position(|l| *l == "```")
-        .expect("Should have closing ```");
+        .position(|l| *l == "</tool_call>")
+        .expect("Should have closing </tool_call>");
 
     lines[tool_call_start + 1..tool_call_end]
         .iter()

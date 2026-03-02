@@ -436,7 +436,8 @@ impl<'a> ChatHistory<'a> {
         let mut lines = Vec::new();
         let normal_style = Style::default().fg(Color::White);
 
-        let tool_call_re = Regex::new(r"(?s)```tool_call\s*\n(.*?)```").expect("valid regex");
+        let tool_call_re =
+            Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex");
         let mut cursor = 0usize;
         let mut found_tool_call = false;
 
@@ -747,7 +748,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "```tool_call\ntool: read_file\nfiles[1]: /tmp/a.txt\nmax_size: 10\n```",
+            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\nmax_size: 10\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -761,7 +762,7 @@ mod tests {
                 .any(|line| line.contains("files[1]: /tmp/a.txt"))
         );
         assert!(rendered.iter().any(|line| line.contains("max_size: 10")));
-        assert!(!rendered.iter().any(|line| line.contains("```tool_call")));
+        assert!(!rendered.iter().any(|line| line.contains("<tool_call>")));
     }
 
     #[test]
@@ -769,7 +770,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "before\n```tool_call\ntool: read_file\nfiles[1]: /tmp/a.txt\n```\nafter",
+            "before\n<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>\nafter",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -786,16 +787,15 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "```tool_call\ntool read_file\nbad\n```",
+            "<tool_call>\ntool read_file\nbad\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.contains("```tool_call")));
+        assert!(rendered.iter().any(|line| line.contains("<tool_call>")));
     }
-
     #[test]
     fn hides_successful_tool_messages() {
         let tool = message(

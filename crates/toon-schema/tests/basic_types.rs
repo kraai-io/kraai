@@ -85,8 +85,8 @@ fn test_basic_types() {
     assert_eq!(lines[8], "", "Ninth line should be empty separator");
     assert_eq!(lines[9], "Example:", "Tenth line should be example header");
     assert_eq!(
-        lines[10], "```tool_call",
-        "Eleventh line should be markdown code block start"
+        lines[10], "<tool_call>",
+        "Eleventh line should be XML-style tool call start"
     );
     assert_eq!(
         lines[11], "tool: Person",
@@ -105,8 +105,8 @@ fn test_basic_types() {
         "Fifteenth line should be example active"
     );
     assert_eq!(
-        lines[15], "```",
-        "Sixteenth line should be markdown code block end"
+        lines[15], "</tool_call>",
+        "Sixteenth line should be XML-style tool call end"
     );
 }
 

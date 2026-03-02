@@ -31,24 +31,28 @@ pub enum ParseError {
 }
 
 pub fn parse_tool_calls(text: &str) -> ParseResult {
-    let re = Regex::new(r"```tool_call\s*\n([\s\S]*?)```").unwrap();
     let mut successful = Vec::new();
     let mut failed = Vec::new();
 
-    for caps in re.captures_iter(text) {
-        if let Some(toon_content) = caps.get(1) {
-            let raw = toon_content.as_str().to_string();
-            match parse_single_tool_call(&raw) {
-                Ok(parsed) => successful.push(parsed),
-                Err(e) => failed.push(FailedToolCall {
-                    raw_content: raw,
-                    error: e.to_string(),
-                }),
-            }
+    for raw in extract_tool_call_blocks(text) {
+        match parse_single_tool_call(&raw) {
+            Ok(parsed) => successful.push(parsed),
+            Err(e) => failed.push(FailedToolCall {
+                raw_content: raw,
+                error: e.to_string(),
+            }),
         }
     }
 
     ParseResult { successful, failed }
+}
+
+fn extract_tool_call_blocks(text: &str) -> Vec<String> {
+    let re = Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").unwrap();
+
+    re.captures_iter(text)
+        .filter_map(|caps| caps.get(1).map(|content| content.as_str().to_string()))
+        .collect()
 }
 
 fn parse_single_tool_call(toon_content: &str) -> Result<ParsedToolCall, ParseError> {
@@ -84,10 +88,10 @@ mod tests {
 
     #[test]
     fn test_parse_simple_tool_call() {
-        let text = r#"```tool_call
+        let text = r#"<tool_call>
 tool: read_files
 files[2]: /etc/passwd,/etc/hosts
-```"#;
+</tool_call>"#;
 
         let result = parse_tool_calls(text);
         assert_eq!(result.successful.len(), 1);
@@ -97,17 +101,17 @@ files[2]: /etc/passwd,/etc/hosts
 
     #[test]
     fn test_parse_multiple_tool_calls() {
-        let text = r#"```tool_call
+        let text = r#"<tool_call>
 tool: read_files
 files[1]: /etc/passwd
-```
+</tool_call>
 
 Some text in between.
 
-```tool_call
+<tool_call>
 tool: another_tool
 arg: value
-```"#;
+</tool_call>"#;
 
         let result = parse_tool_calls(text);
         assert_eq!(result.successful.len(), 2);
@@ -126,9 +130,9 @@ arg: value
 
     #[test]
     fn test_missing_tool_field() {
-        let text = r#"```tool_call
+        let text = r#"<tool_call>
 files[1]: /etc/passwd
-```"#;
+</tool_call>"#;
 
         let result = parse_tool_calls(text);
         assert!(result.successful.is_empty());
@@ -138,12 +142,12 @@ files[1]: /etc/passwd
 
     #[test]
     fn test_parse_with_args() {
-        let text = r#"```tool_call
+        let text = r#"<tool_call>
 tool: read_files
 files[2]: /etc/passwd,/etc/hosts
 encoding: utf-8
 max_size: 1048576
-```"#;
+</tool_call>"#;
 
         let result = parse_tool_calls(text);
         assert_eq!(result.successful.len(), 1);
@@ -159,12 +163,12 @@ max_size: 1048576
     fn test_parse_real_format() {
         let text = r#"Some response text.
 
-```tool_call
+<tool_call>
 tool: read_files
 files[2]: /etc/passwd,/etc/hosts
 encoding: utf-8
 max_size: 1048576
-```
+</tool_call>
 
 More text after."#;
 
@@ -176,19 +180,19 @@ More text after."#;
 
     #[test]
     fn test_mixed_valid_and_invalid() {
-        let text = r#"```tool_call
+        let text = r#"<tool_call>
 tool: valid_tool
 arg: value
-```
+</tool_call>
 
-```tool_call
+<tool_call>
 invalid_field: value
-```
+</tool_call>
 
-```tool_call
+<tool_call>
 tool: another_valid
 x: 1
-```"#;
+</tool_call>"#;
 
         let result = parse_tool_calls(text);
         assert_eq!(result.successful.len(), 2);

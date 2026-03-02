@@ -96,8 +96,8 @@ fn test_basic_types_exact_structure() {
     assert_eq!(lines[example_idx], "Example:", "Should have Example header");
     assert_eq!(
         lines[example_idx + 1],
-        "```tool_call",
-        "Example should start with markdown code block"
+        "<tool_call>",
+        "Example should start with XML-style tool call tag"
     );
     assert_eq!(
         lines[example_idx + 2],
@@ -117,8 +117,8 @@ fn test_basic_types_exact_structure() {
     );
     assert_eq!(
         lines[example_idx + 6],
-        "```",
-        "Example should end with markdown code block"
+        "</tool_call>",
+        "Example should end with XML-style tool call tag"
     );
 }
 

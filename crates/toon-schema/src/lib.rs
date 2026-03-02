@@ -153,13 +153,13 @@ fn generate_complete_schema(schema: &Schema) -> syn::Result<String> {
 
     lines.push(String::new());
     lines.push("Example:".to_string());
-    lines.push("```tool_call".to_string());
+    lines.push("<tool_call>".to_string());
     lines.push(format!("tool: {}", schema.name));
 
     let example_lines = encode_example_toon(&schema.fields)?;
     lines.extend(example_lines);
 
-    lines.push("```".to_string());
+    lines.push("</tool_call>".to_string());
 
     Ok(lines.join("\n"))
 }
