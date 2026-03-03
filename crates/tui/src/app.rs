@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,13 +9,14 @@ use agent_runtime::{
     Event, Model, ModelSettings, ProviderSettings, ProviderType, RuntimeHandle, Session,
     SettingsDocument,
 };
+use base64::Engine;
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-        MouseEventKind,
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
     },
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -23,7 +25,7 @@ use ratatui::{
 };
 use types::{ChatRole, Message, MessageId, MessageStatus};
 
-use crate::components::{ChatHistory, RenderedLine, TextInput};
+use crate::components::{ChatHistory, RenderedLine, TextInput, VisibleChatView};
 
 const SLASH_COMMANDS: [(&str, &str); 7] = [
     ("help", "Open command help"),
@@ -93,6 +95,30 @@ struct OptimisticMessage {
     content: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChatCellPosition {
+    line: usize,
+    column: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChatSelection {
+    anchor: ChatCellPosition,
+    focus: ChatCellPosition,
+}
+
+impl ChatSelection {
+    fn normalized(self) -> (ChatCellPosition, ChatCellPosition) {
+        if self.anchor.line < self.focus.line
+            || (self.anchor.line == self.focus.line && self.anchor.column <= self.focus.column)
+        {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+}
+
 enum RuntimeRequest {
     ListModels,
     GetSettings,
@@ -157,6 +183,7 @@ pub struct App {
     event_rx: Receiver<Event>,
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
+    clipboard: Option<arboard::Clipboard>,
     state: AppState,
     last_stream_refresh: Option<Instant>,
 }
@@ -172,6 +199,8 @@ pub struct AppState {
     chat_render_cache: RefCell<ChatRenderCache>,
     scroll: u16,
     auto_scroll: bool,
+    selection: Option<ChatSelection>,
+    visible_chat_view: Option<VisibleChatView>,
     config_loaded: bool,
     mode: UiMode,
     status: String,
@@ -214,6 +243,8 @@ impl Default for AppState {
             chat_render_cache: RefCell::new(ChatRenderCache::default()),
             scroll: 0,
             auto_scroll: true,
+            selection: None,
+            visible_chat_view: None,
             config_loaded: false,
             mode: UiMode::Chat,
             status: String::from("Type /help for commands"),
@@ -366,6 +397,7 @@ impl App {
             event_rx,
             runtime_tx,
             runtime_rx,
+            clipboard: None,
             state: AppState::default(),
             last_stream_refresh: None,
         }
@@ -388,6 +420,32 @@ impl App {
 
             terminal.draw(|frame| {
                 let area = frame.area();
+                if self.state.mode == UiMode::Chat {
+                    let input_height = TextInput::new(&self.state.input, self.state.input_cursor)
+                        .get_height(area.width);
+                    let layout = Layout::vertical([
+                        Constraint::Min(area.height.saturating_sub(input_height + 1)),
+                        Constraint::Length(1),
+                        Constraint::Length(input_height),
+                    ])
+                    .flex(Flex::End);
+                    let [chat_area, _, _] = layout.areas(area);
+                    self.state.refresh_chat_render_cache(chat_area.width);
+                    let view = {
+                        let cache = self.state.chat_render_cache.borrow();
+                        ChatHistory::visible_view_from_sections(
+                            &cache.sections,
+                            cache.total_lines,
+                            chat_area,
+                            self.state.scroll,
+                            self.state.auto_scroll,
+                        )
+                    };
+                    self.state.visible_chat_view = Some(view);
+                } else {
+                    self.state.visible_chat_view = None;
+                }
+
                 frame.render_widget(&self.state, area);
 
                 if self.state.mode == UiMode::Chat {
@@ -529,6 +587,8 @@ impl App {
                 self.state.status = format!("Failed loading models: {err}");
             }
             RuntimeResponse::Settings(Ok(settings)) => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
                 self.state.settings_draft = Some(settings);
                 self.state.settings_errors.clear();
                 self.state.settings_focus = SettingsFocus::ProviderList;
@@ -696,6 +756,8 @@ impl App {
                     changed = true;
                 }
                 CrosstermEvent::Resize(_, _) => {
+                    self.clear_chat_selection();
+                    self.state.visible_chat_view = None;
                     changed = true;
                 }
                 _ => {}
@@ -715,13 +777,39 @@ impl App {
         }
 
         match mouse_event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row) {
+                    self.state.selection = Some(ChatSelection {
+                        anchor: position,
+                        focus: position,
+                    });
+                } else {
+                    self.clear_chat_selection();
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
+                    && let Some(selection) = self.state.selection.as_mut()
+                {
+                    selection.focus = position;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
+                    && let Some(selection) = self.state.selection.as_mut()
+                {
+                    selection.focus = position;
+                }
+            }
             MouseEventKind::ScrollUp => {
                 self.state.auto_scroll = false;
                 self.state.scroll = self.state.scroll.saturating_sub(3);
+                self.clear_chat_selection();
             }
             MouseEventKind::ScrollDown => {
                 self.state.auto_scroll = false;
                 self.state.scroll = self.state.scroll.saturating_add(3);
+                self.clear_chat_selection();
             }
             _ => {}
         }
@@ -743,6 +831,8 @@ impl App {
                 }
                 return;
             }
+            self.clear_chat_selection();
+            self.state.visible_chat_view = None;
             self.state.mode = UiMode::Chat;
             return;
         }
@@ -755,6 +845,7 @@ impl App {
             UiMode::ToolsMenu => self.handle_tools_menu_key_event(key_event),
             UiMode::Help => {
                 if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
+                    self.clear_chat_selection();
                     self.state.mode = UiMode::Chat;
                 }
             }
@@ -762,6 +853,11 @@ impl App {
     }
 
     fn handle_chat_key_event(&mut self, key_event: KeyEvent) {
+        if is_copy_shortcut(key_event) {
+            self.copy_selection_to_clipboard();
+            return;
+        }
+
         match key_event.code {
             KeyCode::Enter => {
                 if key_event.modifiers.contains(KeyModifiers::SHIFT) {
@@ -815,17 +911,21 @@ impl App {
             KeyCode::PageUp => {
                 self.state.auto_scroll = false;
                 self.state.scroll = self.state.scroll.saturating_sub(10);
+                self.clear_chat_selection();
             }
             KeyCode::PageDown => {
                 self.state.auto_scroll = false;
                 self.state.scroll = self.state.scroll.saturating_add(10);
+                self.clear_chat_selection();
             }
             KeyCode::Home => {
                 self.state.auto_scroll = false;
                 self.state.scroll = 0;
+                self.clear_chat_selection();
             }
             KeyCode::End => {
                 self.state.auto_scroll = true;
+                self.clear_chat_selection();
             }
             _ => {}
         }
@@ -1514,6 +1614,8 @@ impl App {
                 self.state.exit = true;
             }
             "model" => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
             }
@@ -1521,17 +1623,23 @@ impl App {
                 self.request(RuntimeRequest::GetSettings);
             }
             "sessions" => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::SessionsMenu;
                 self.request(RuntimeRequest::ListSessions);
                 self.request(RuntimeRequest::GetCurrentSessionId);
             }
             "tools" => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::ToolsMenu;
             }
             "new" => {
                 self.request(RuntimeRequest::ClearCurrentSession);
             }
             "help" => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::Help;
             }
             _ => {
@@ -1563,6 +1671,113 @@ impl App {
 
     fn flatten_models(&self) -> Vec<(String, Model)> {
         flatten_models_map(&self.state.models_by_provider)
+    }
+
+    fn clear_chat_selection(&mut self) {
+        self.state.selection = None;
+    }
+
+    fn hit_test_chat_cell(&self, column: u16, row: u16) -> Option<ChatCellPosition> {
+        let view = self.state.visible_chat_view.as_ref()?;
+        if column < view.area.x
+            || row < view.area.y
+            || column >= view.area.x.saturating_add(view.area.width)
+            || row >= view.area.y.saturating_add(view.area.height)
+        {
+            return None;
+        }
+
+        let line_index = row.saturating_sub(view.area.y) as usize;
+        let line = view.lines.get(line_index)?;
+        let line_width = line.text.chars().count();
+        if line_width == 0 {
+            return Some(ChatCellPosition {
+                line: line_index,
+                column: 0,
+            });
+        }
+
+        let local_x = column.saturating_sub(view.area.x) as usize;
+        Some(ChatCellPosition {
+            line: line_index,
+            column: local_x.min(line_width.saturating_sub(1)),
+        })
+    }
+
+    fn selected_chat_text(&self) -> Option<String> {
+        let selection = self.state.selection?;
+        let view = self.state.visible_chat_view.as_ref()?;
+        selection_text(view, selection)
+    }
+
+    fn copy_selection_to_clipboard(&mut self) {
+        let result = self.copy_selection_to_clipboard_inner();
+
+        self.state.status = match result {
+            Ok(true) => String::from("Copied selection to clipboard"),
+            Ok(false) => String::from("No selection to copy"),
+            Err(err) => format!("Copy failed: {err}"),
+        };
+    }
+
+    fn copy_selection_to_clipboard_inner(&mut self) -> Result<bool, String> {
+        let Some(text) = self.selected_chat_text() else {
+            return Ok(false);
+        };
+        if text.is_empty() {
+            return Ok(false);
+        }
+
+        let mut errors = Vec::new();
+        let mut copied = false;
+
+        match copy_via_osc52(&text) {
+            Ok(()) => copied = true,
+            Err(err) => errors.push(format!("terminal clipboard failed: {err}")),
+        }
+
+        match self.clipboard_mut() {
+            Ok(clipboard) => match clipboard.set_text(text) {
+                Ok(()) => copied = true,
+                Err(err) => errors.push(format!("clipboard write failed: {err}")),
+            },
+            Err(err) => errors.push(err),
+        }
+
+        if copied {
+            Ok(true)
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    #[cfg(test)]
+    fn copy_selection_with<F>(&mut self, copy: F) -> Result<bool, String>
+    where
+        F: FnOnce(&str) -> Result<(), String>,
+    {
+        let Some(text) = self.selected_chat_text() else {
+            return Ok(false);
+        };
+        if text.is_empty() {
+            return Ok(false);
+        }
+
+        copy(&text)?;
+        Ok(true)
+    }
+
+    fn clipboard_mut(&mut self) -> Result<&mut arboard::Clipboard, String> {
+        if self.clipboard.is_none() {
+            self.clipboard = Some(
+                arboard::Clipboard::new()
+                    .map_err(|err| format!("clipboard unavailable: {err}"))?,
+            );
+        }
+
+        self.clipboard
+            .as_mut()
+            .ok_or_else(|| String::from("clipboard unavailable"))
     }
 
     fn insert_input_char(&mut self, ch: char) {
@@ -1646,6 +1861,8 @@ impl App {
 
     fn invalidate_chat_cache(&mut self) {
         self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
+        self.clear_chat_selection();
+        self.state.visible_chat_view = None;
     }
 
     fn reconcile_optimistic_messages(&mut self) {
@@ -1871,6 +2088,7 @@ impl Widget for &AppState {
                 self.auto_scroll,
             );
         }
+        render_chat_selection_overlay(self.visible_chat_view.as_ref(), self.selection, buf);
 
         let selected_model = self
             .selected_provider_id
@@ -1907,6 +2125,125 @@ impl Widget for &AppState {
             UiMode::Chat => {}
         }
     }
+}
+
+fn render_chat_selection_overlay(
+    visible_chat_view: Option<&VisibleChatView>,
+    selection: Option<ChatSelection>,
+    buf: &mut Buffer,
+) {
+    let (Some(view), Some(selection)) = (visible_chat_view, selection) else {
+        return;
+    };
+    let Some((start, end)) = normalized_selection_range(view, selection) else {
+        return;
+    };
+
+    for line_index in start.line..=end.line {
+        let Some(line) = view.lines.get(line_index) else {
+            continue;
+        };
+        let line_width = line.text.chars().count();
+        if line_width == 0 {
+            continue;
+        }
+
+        let start_col = if line_index == start.line {
+            start.column.min(line_width.saturating_sub(1))
+        } else {
+            0
+        };
+        let end_col = if line_index == end.line {
+            end.column.min(line_width.saturating_sub(1))
+        } else {
+            line_width.saturating_sub(1)
+        };
+
+        for column in start_col..=end_col {
+            let x = view.area.x + column as u16;
+            let y = line.y;
+            let cell = &mut buf[(x, y)];
+            cell.set_fg(Color::Black);
+            cell.set_bg(Color::Cyan);
+        }
+    }
+}
+
+fn normalized_selection_range(
+    view: &VisibleChatView,
+    selection: ChatSelection,
+) -> Option<(ChatCellPosition, ChatCellPosition)> {
+    let (mut start, mut end) = selection.normalized();
+    let start_width = view.lines.get(start.line)?.text.chars().count();
+    let end_width = view.lines.get(end.line)?.text.chars().count();
+
+    if start_width > 0 {
+        start.column = start.column.min(start_width.saturating_sub(1));
+    } else {
+        start.column = 0;
+    }
+
+    if end_width > 0 {
+        end.column = end.column.min(end_width.saturating_sub(1));
+    } else {
+        end.column = 0;
+    }
+
+    Some((start, end))
+}
+
+fn selection_text(view: &VisibleChatView, selection: ChatSelection) -> Option<String> {
+    let (start, end) = normalized_selection_range(view, selection)?;
+    let mut selected_lines = Vec::new();
+
+    for line_index in start.line..=end.line {
+        let line = view.lines.get(line_index)?;
+        let chars: Vec<char> = line.text.chars().collect();
+        let line_width = chars.len();
+
+        let text = if line_width == 0 {
+            String::new()
+        } else {
+            let start_col = if line_index == start.line {
+                start.column.min(line_width.saturating_sub(1))
+            } else {
+                0
+            };
+            let end_col = if line_index == end.line {
+                end.column.min(line_width.saturating_sub(1))
+            } else {
+                line_width.saturating_sub(1)
+            };
+            chars[start_col..=end_col].iter().collect()
+        };
+
+        selected_lines.push(text);
+    }
+
+    Some(selected_lines.join("\n"))
+}
+
+fn is_copy_shortcut(key_event: KeyEvent) -> bool {
+    match key_event.code {
+        KeyCode::Char(c) => {
+            key_event.modifiers.contains(KeyModifiers::CONTROL)
+                && (key_event.modifiers.contains(KeyModifiers::SHIFT) || c.is_ascii_uppercase())
+                && c.eq_ignore_ascii_case(&'c')
+        }
+        _ => false,
+    }
+}
+
+fn copy_via_osc52(text: &str) -> Result<(), String> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+    let sequence = format!("\x1b]52;c;{encoded}\x07");
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(sequence.as_bytes())
+        .map_err(|err| format!("stdout write failed: {err}"))?;
+    stdout
+        .flush()
+        .map_err(|err| format!("stdout flush failed: {err}"))
 }
 
 fn active_command_prefix(input: &str) -> Option<&str> {
@@ -2610,6 +2947,8 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("PgUp/PgDn  Scroll faster"),
         Line::raw("End        Jump to latest"),
         Line::raw("Home       Jump to top"),
+        Line::raw("Drag mouse Select chat text"),
+        Line::raw("Ctrl+Shift+C Copy selection"),
         Line::raw(""),
         Line::raw("Esc closes menus."),
     ];
@@ -2630,17 +2969,21 @@ mod tests {
     use crossbeam_channel::{Receiver, unbounded};
     use ratatui::{
         buffer::Buffer,
-        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
         layout::Rect,
+        style::{Color, Style},
         widgets::Widget,
     };
     use types::{ChatRole, Message, MessageId, MessageStatus};
 
     use super::{
-        ActiveSettingsEditor, App, AppState, OptimisticMessage, PendingTool, RuntimeRequest,
-        RuntimeResponse, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode,
+        ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection,
+        OptimisticMessage, PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus,
+        SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut,
         menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
+        render_chat_selection_overlay, selection_text,
     };
+    use crate::components::VisibleChatView;
 
     struct TestHarness {
         app: App,
@@ -2657,6 +3000,7 @@ mod tests {
                 event_rx,
                 runtime_tx,
                 runtime_rx,
+                clipboard: None,
                 state: AppState::default(),
                 last_stream_refresh: None,
             },
@@ -2680,6 +3024,10 @@ mod tests {
 
     fn shift_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
+    fn ctrl_shift_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
     }
 
     fn message(id: &str, parent_id: Option<&str>, role: ChatRole, content: &str) -> Message {
@@ -2850,6 +3198,10 @@ mod tests {
             }
         }
         lines.join("\n")
+    }
+
+    fn visible_chat_view(lines: &[&str], area: Rect) -> VisibleChatView {
+        VisibleChatView::from_strings(area, lines)
     }
 
     fn assert_snapshot(actual: &str, expected: &str) {
@@ -3087,6 +3439,99 @@ mod tests {
 14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
 16:  >"#,
         );
+    }
+
+    #[test]
+    fn selection_text_preserves_visible_line_breaks() {
+        let view = visible_chat_view(&["alpha", "", "beta"], Rect::new(0, 0, 10, 3));
+        let selection = ChatSelection {
+            anchor: ChatCellPosition { line: 0, column: 2 },
+            focus: ChatCellPosition { line: 2, column: 2 },
+        };
+
+        assert_eq!(selection_text(&view, selection), Some(String::from("pha\n\nbet")));
+    }
+
+    #[test]
+    fn copy_shortcut_requires_control_and_shift() {
+        assert!(is_copy_shortcut(ctrl_shift_key(KeyCode::Char('c'))));
+        assert!(!is_copy_shortcut(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+    }
+
+    #[test]
+    fn copy_selection_uses_rendered_chat_text() {
+        let mut harness = test_harness();
+        harness.app.state.visible_chat_view =
+            Some(visible_chat_view(&["alpha beta", "gamma"], Rect::new(0, 0, 12, 2)));
+        harness.app.state.selection = Some(ChatSelection {
+            anchor: ChatCellPosition { line: 0, column: 6 },
+            focus: ChatCellPosition { line: 1, column: 2 },
+        });
+
+        let mut copied = None;
+        let result = harness.app.copy_selection_with(|text| {
+            copied = Some(text.to_string());
+            Ok(())
+        });
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(copied, Some(String::from("beta\ngam")));
+    }
+
+    #[test]
+    fn mouse_drag_updates_selection_in_chat_view() {
+        let mut harness = test_harness();
+        harness.app.state.visible_chat_view =
+            Some(visible_chat_view(&["alpha", "beta"], Rect::new(0, 0, 10, 2)));
+
+        harness.app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        harness.app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 2,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            harness.app.state.selection,
+            Some(ChatSelection {
+                anchor: ChatCellPosition { line: 0, column: 1 },
+                focus: ChatCellPosition { line: 1, column: 2 },
+            })
+        );
+    }
+
+    #[test]
+    fn selection_overlay_marks_buffer_cells() {
+        let area = Rect::new(0, 0, 8, 2);
+        let view = visible_chat_view(&["alpha", "beta"], area);
+        let mut buffer = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buffer[(x, y)].set_char(' ').set_style(Style::default().fg(Color::White));
+            }
+        }
+
+        render_chat_selection_overlay(
+            Some(&view),
+            Some(ChatSelection {
+                anchor: ChatCellPosition { line: 0, column: 1 },
+                focus: ChatCellPosition { line: 1, column: 1 },
+            }),
+            &mut buffer,
+        );
+
+        assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
+        assert_eq!(buffer[(1, 0)].fg, Color::Black);
+        assert_eq!(buffer[(1, 1)].bg, Color::Cyan);
     }
 
     #[test]

@@ -20,6 +20,35 @@ pub(crate) struct RenderedLine {
     bg: Option<Color>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VisibleChatLine {
+    pub y: u16,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VisibleChatView {
+    pub area: Rect,
+    pub lines: Vec<VisibleChatLine>,
+}
+
+impl VisibleChatView {
+    #[cfg(test)]
+    pub(crate) fn from_strings(area: Rect, lines: &[&str]) -> Self {
+        Self {
+            area,
+            lines: lines
+                .iter()
+                .enumerate()
+                .map(|(idx, line)| VisibleChatLine {
+                    y: area.y + idx as u16,
+                    text: (*line).to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct RenderedSpan {
     text: String,
@@ -512,6 +541,14 @@ impl<'a> ChatHistory<'a> {
         Self::single_span_line(String::new(), Style::default())
     }
 
+    pub(crate) fn line_text(line: &RenderedLine) -> String {
+        let mut text = String::new();
+        for span in &line.spans {
+            text.push_str(&span.text);
+        }
+        text
+    }
+
     pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
         let width = width as usize;
         if msg.role == ChatRole::System {
@@ -688,6 +725,61 @@ impl<'a> ChatHistory<'a> {
             consumed += section_len;
         }
     }
+
+    pub(crate) fn visible_view_from_sections(
+        sections: &[Arc<Vec<RenderedLine>>],
+        total_lines: u16,
+        area: Rect,
+        scroll: u16,
+        auto_scroll: bool,
+    ) -> VisibleChatView {
+        if area.width == 0 || area.height == 0 || total_lines == 0 {
+            return VisibleChatView {
+                area,
+                lines: Vec::new(),
+            };
+        }
+
+        let max_scroll = total_lines.saturating_sub(area.height);
+        let scroll = if auto_scroll {
+            max_scroll
+        } else {
+            scroll.min(max_scroll)
+        };
+
+        let start_idx = scroll as usize;
+        let mut consumed = 0usize;
+        let mut visual_idx = 0usize;
+        let mut lines = Vec::new();
+
+        for section in sections {
+            if visual_idx >= area.height as usize {
+                break;
+            }
+
+            let section_len = section.len();
+            if consumed + section_len <= start_idx {
+                consumed += section_len;
+                continue;
+            }
+
+            let local_start = start_idx.saturating_sub(consumed);
+            for line in section.iter().skip(local_start) {
+                if visual_idx >= area.height as usize {
+                    break;
+                }
+
+                lines.push(VisibleChatLine {
+                    y: area.y + visual_idx as u16,
+                    text: Self::line_text(line),
+                });
+                visual_idx += 1;
+            }
+            consumed += section_len;
+        }
+
+        VisibleChatView { area, lines }
+    }
 }
 
 impl<'a> Widget for ChatHistory<'a> {
@@ -704,14 +796,6 @@ impl<'a> Widget for ChatHistory<'a> {
 mod tests {
     use super::*;
     use types::{MessageId, MessageStatus};
-
-    fn line_text(line: &RenderedLine) -> String {
-        let mut text = String::new();
-        for span in &line.spans {
-            text.push_str(&span.text);
-        }
-        text
-    }
 
     fn message(id: &str, role: ChatRole, content: &str) -> Message {
         Message {
@@ -740,7 +824,7 @@ mod tests {
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(line_text(&lines[0]), "visible");
+        assert_eq!(ChatHistory::line_text(&lines[0]), "visible");
     }
 
     #[test]
@@ -754,7 +838,7 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "read_file"));
         assert!(
             rendered
@@ -775,7 +859,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "before"));
         assert!(rendered.iter().any(|line| *line == "read_file"));
@@ -792,7 +876,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| line.contains("<tool_call>")));
     }
@@ -821,7 +905,7 @@ mod tests {
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
         assert!(
             rendered
                 .iter()
@@ -842,7 +926,7 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         assert_eq!(lines.len(), 1);
-        assert!(line_text(&lines[0]).contains("denied by user"));
+        assert!(ChatHistory::line_text(&lines[0]).contains("denied by user"));
     }
 
     #[test]
@@ -853,9 +937,9 @@ mod tests {
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 3);
-        assert_eq!(line_text(&lines[0]), "");
-        assert_eq!(line_text(&lines[1]), "hello");
-        assert_eq!(line_text(&lines[2]), "");
+        assert_eq!(ChatHistory::line_text(&lines[0]), "");
+        assert_eq!(ChatHistory::line_text(&lines[1]), "hello");
+        assert_eq!(ChatHistory::line_text(&lines[2]), "");
     }
 
     #[test]
@@ -868,7 +952,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "Title"));
         assert!(rendered.iter().any(|line| *line == "• one"));
@@ -887,7 +971,7 @@ mod tests {
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == "[code: rust]"));
         assert!(rendered.iter().any(|line| *line == "  fn main() {}"));
@@ -901,7 +985,7 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(line_text(&lines[0]), "alpha beta gamma");
+        assert_eq!(ChatHistory::line_text(&lines[0]), "alpha beta gamma");
 
         let has_colored_inline_code = lines[0]
             .spans

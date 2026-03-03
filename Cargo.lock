@@ -3913,6 +3913,8 @@ name = "tui"
 version = "0.1.0"
 dependencies = [
  "agent-runtime",
+ "arboard",
+ "base64",
  "color-eyre",
  "crossbeam-channel",
  "ratatui 0.30.0",

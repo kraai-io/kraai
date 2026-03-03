@@ -6,6 +6,8 @@ version = "0.1.0"
 
 [dependencies]
 agent-runtime = { workspace = true }
+arboard = "3.6.1"
+base64 = "0.22.1"
 color-eyre = { workspace = true }
 crossbeam-channel = "0.5"
 ratatui = { workspace = true }
