@@ -15,8 +15,8 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEvent, MouseEventKind,
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
     },
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -778,7 +778,8 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row) {
+                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
+                {
                     self.state.selection = Some(ChatSelection {
                         anchor: position,
                         focus: position,
@@ -1770,8 +1771,7 @@ impl App {
     fn clipboard_mut(&mut self) -> Result<&mut arboard::Clipboard, String> {
         if self.clipboard.is_none() {
             self.clipboard = Some(
-                arboard::Clipboard::new()
-                    .map_err(|err| format!("clipboard unavailable: {err}"))?,
+                arboard::Clipboard::new().map_err(|err| format!("clipboard unavailable: {err}"))?,
             );
         }
 
@@ -2969,7 +2969,9 @@ mod tests {
     use crossbeam_channel::{Receiver, unbounded};
     use ratatui::{
         buffer::Buffer,
-        crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
+        crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        },
         layout::Rect,
         style::{Color, Style},
         widgets::Widget,
@@ -2977,11 +2979,10 @@ mod tests {
     use types::{ChatRole, Message, MessageId, MessageStatus};
 
     use super::{
-        ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection,
-        OptimisticMessage, PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus,
-        SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut,
-        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
-        render_chat_selection_overlay, selection_text,
+        ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
+        PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus, SettingsModelField,
+        SettingsProviderField, UiMode, is_copy_shortcut, menu_scroll_offset, model_menu_next_index,
+        model_menu_previous_index, render_chat_selection_overlay, selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -3449,7 +3450,10 @@ mod tests {
             focus: ChatCellPosition { line: 2, column: 2 },
         };
 
-        assert_eq!(selection_text(&view, selection), Some(String::from("pha\n\nbet")));
+        assert_eq!(
+            selection_text(&view, selection),
+            Some(String::from("pha\n\nbet"))
+        );
     }
 
     #[test]
@@ -3464,8 +3468,10 @@ mod tests {
     #[test]
     fn copy_selection_uses_rendered_chat_text() {
         let mut harness = test_harness();
-        harness.app.state.visible_chat_view =
-            Some(visible_chat_view(&["alpha beta", "gamma"], Rect::new(0, 0, 12, 2)));
+        harness.app.state.visible_chat_view = Some(visible_chat_view(
+            &["alpha beta", "gamma"],
+            Rect::new(0, 0, 12, 2),
+        ));
         harness.app.state.selection = Some(ChatSelection {
             anchor: ChatCellPosition { line: 0, column: 6 },
             focus: ChatCellPosition { line: 1, column: 2 },
@@ -3484,8 +3490,10 @@ mod tests {
     #[test]
     fn mouse_drag_updates_selection_in_chat_view() {
         let mut harness = test_harness();
-        harness.app.state.visible_chat_view =
-            Some(visible_chat_view(&["alpha", "beta"], Rect::new(0, 0, 10, 2)));
+        harness.app.state.visible_chat_view = Some(visible_chat_view(
+            &["alpha", "beta"],
+            Rect::new(0, 0, 10, 2),
+        ));
 
         harness.app.handle_mouse_event(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -3516,7 +3524,9 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         for y in 0..area.height {
             for x in 0..area.width {
-                buffer[(x, y)].set_char(' ').set_style(Style::default().fg(Color::White));
+                buffer[(x, y)]
+                    .set_char(' ')
+                    .set_style(Style::default().fg(Color::White));
             }
         }
 

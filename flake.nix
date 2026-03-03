@@ -12,9 +12,19 @@
   nixConfig = {
     extra-substituters = ["https://cache.garnix.io"];
     extra-trusted-public-keys = ["cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="];
+    extra-experimental-features = [
+      "ca-derivations"
+      "dynamic-derivations"
+      "recursive-nix"
+    ];
   };
 
   inputs = {
+    drowse = {
+      url = "github:figsoda/drowse";
+      inputs.flake-parts.follows = "flake-parts";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
