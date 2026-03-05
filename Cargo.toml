@@ -4,7 +4,6 @@ members = [
   "crates/agent-runtime",
   "crates/agent-ts-bindings",
   "crates/llm-providers/provider-core",
-  "crates/llm-providers/provider-google",
   "crates/llm-providers/provider-openai",
   "crates/persistence",
   "crates/tools/tool-core",
@@ -31,7 +30,6 @@ agent = { path = "crates/agent" }
 agent-runtime = { path = "crates/agent-runtime" }
 persistence = { path = "crates/persistence" }
 provider-core = { path = "crates/llm-providers/provider-core" }
-provider-google = { path = "crates/llm-providers/provider-google" }
 provider-openai = { path = "crates/llm-providers/provider-openai" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-read-file = { path = "crates/tools/tool-read-file" }

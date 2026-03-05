@@ -140,14 +140,12 @@ impl From<agent_runtime::WorkspaceState> for WorkspaceState {
 #[derive(Clone, Debug)]
 pub enum ProviderType {
   OpenAi,
-  Google,
 }
 
 impl From<agent_runtime::ProviderType> for ProviderType {
   fn from(value: agent_runtime::ProviderType) -> Self {
     match value {
       agent_runtime::ProviderType::OpenAi => ProviderType::OpenAi,
-      agent_runtime::ProviderType::Google => ProviderType::Google,
     }
   }
 }
@@ -156,7 +154,6 @@ impl From<ProviderType> for agent_runtime::ProviderType {
   fn from(value: ProviderType) -> Self {
     match value {
       ProviderType::OpenAi => agent_runtime::ProviderType::OpenAi,
-      ProviderType::Google => agent_runtime::ProviderType::Google,
     }
   }
 }

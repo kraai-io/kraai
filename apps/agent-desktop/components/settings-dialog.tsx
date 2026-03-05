@@ -318,14 +318,8 @@ export function SettingsDialog({
 		updateProvider(selectedProviderIndex, (provider) => ({
 			...provider,
 			providerType,
-			baseUrl:
-				providerType === ("Google" as ProviderType)
-					? undefined
-					: (provider.baseUrl ?? "https://api.openai.com/v1"),
-			envVarApiKey:
-				providerType === ("Google" as ProviderType)
-					? provider.envVarApiKey || "GEMINI_API_KEY"
-					: provider.envVarApiKey || "OPENAI_API_KEY",
+			baseUrl: provider.baseUrl ?? "https://api.openai.com/v1",
+			envVarApiKey: provider.envVarApiKey || "OPENAI_API_KEY",
 		}));
 	};
 
@@ -405,9 +399,7 @@ export function SettingsDialog({
 												{provider.id || "New provider"}
 											</div>
 											<div className="text-xs text-muted-foreground">
-												{provider.providerType === ("Google" as ProviderType)
-													? "Google"
-													: "OpenAI-compatible"}
+												OpenAI-compatible
 											</div>
 										</button>
 									))}
@@ -484,7 +476,6 @@ export function SettingsDialog({
 													<SelectItem value="OpenAi">
 														OpenAI-compatible
 													</SelectItem>
-													<SelectItem value="Google">Google</SelectItem>
 												</SelectContent>
 											</Select>
 										</div>

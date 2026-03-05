@@ -25,7 +25,6 @@ crates/
   agent-ts-bindings/ - napi-rs bindings for TypeScript
   llm-providers/
     provider-core/   - LLM provider trait definitions
-    provider-google/ - Google LLM implementation
     provider-openai/ - OpenAI LLM implementation
   tools/
     tool-core/       - Tool trait definitions

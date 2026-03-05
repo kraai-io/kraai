@@ -16,7 +16,6 @@ use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
-use provider_google::GoogleFactory;
 use provider_openai::OpenAIFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -65,7 +64,6 @@ pub struct WorkspaceState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderType {
     OpenAi,
-    Google,
 }
 
 /// Editable provider settings shared across clients.
@@ -1027,9 +1025,6 @@ impl RuntimeInner {
 
         let mut helper = ProviderManagerHelper::default();
         helper
-            .register_factory::<GoogleFactory>()
-            .map_err(|e| eyre!("{}", e))?;
-        helper
             .register_factory::<OpenAIFactory>()
             .map_err(|e| eyre!("{}", e))?;
 
@@ -1127,7 +1122,6 @@ fn settings_from_provider_config(config: ProviderManagerConfig) -> Result<Settin
 fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSettings> {
     let provider_type = match config.r#type.as_str() {
         "openai" => ProviderType::OpenAi,
-        "google" => ProviderType::Google,
         other => return Err(eyre!("Unsupported provider type in settings: {other}")),
     };
     let table = as_table(&config.config);
@@ -1186,7 +1180,6 @@ fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<Pr
                 .ok_or_else(|| eyre!("OpenAI providers require a base_url"))?;
             table.insert(String::from("base_url"), toml::Value::String(base_url));
         }
-        ProviderType::Google => {}
     }
 
     if let Some(api_key) = trim_optional(&settings.api_key) {
@@ -1207,7 +1200,6 @@ fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<Pr
         id: ProviderId::new(settings.id.trim().to_string()),
         r#type: match settings.provider_type {
             ProviderType::OpenAi => String::from("openai"),
-            ProviderType::Google => String::from("google"),
         },
         config: toml::Value::Table(table),
     })

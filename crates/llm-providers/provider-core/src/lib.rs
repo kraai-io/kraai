@@ -70,7 +70,6 @@ pub struct ProviderManager {
 /// ```ignore
 /// let mut helper = ProviderManagerHelper::default();
 /// helper.register_factory::<OpenAIFactory>();
-/// helper.register_factory::<GoogleFactory>();
 ///
 /// let mut manager = ProviderManager::new();
 /// manager.load_config(config, helper).await?;
@@ -111,7 +110,7 @@ pub struct ModelConfig {
 pub struct ProviderConfig {
     /// Unique identifier for this provider instance.
     pub id: ProviderId,
-    /// Type of provider (e.g., "openai", "google").
+    /// Type of provider (e.g., "openai").
     pub r#type: String,
     /// Provider-specific configuration.
     #[serde(flatten)]

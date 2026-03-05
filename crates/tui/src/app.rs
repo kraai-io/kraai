@@ -1438,6 +1438,7 @@ impl App {
     }
 
     fn cycle_provider_type(&mut self, forward: bool) {
+        let _ = forward;
         let provider_index = self.state.settings_provider_index;
         if let Some(provider) = self
             .state
@@ -1445,32 +1446,12 @@ impl App {
             .as_mut()
             .and_then(|draft| draft.providers.get_mut(provider_index))
         {
-            provider.provider_type = match (provider.provider_type.clone(), forward) {
-                (ProviderType::OpenAi, true) => ProviderType::Google,
-                (ProviderType::Google, true) => ProviderType::OpenAi,
-                (ProviderType::OpenAi, false) => ProviderType::Google,
-                (ProviderType::Google, false) => ProviderType::OpenAi,
-            };
-
-            match provider.provider_type {
-                ProviderType::OpenAi => {
-                    if provider.base_url.is_none() {
-                        provider.base_url = Some(String::from("https://api.openai.com/v1"));
-                    }
-                    if provider.env_var_api_key.as_deref() == Some("GEMINI_API_KEY")
-                        || provider.env_var_api_key.is_none()
-                    {
-                        provider.env_var_api_key = Some(String::from("OPENAI_API_KEY"));
-                    }
-                }
-                ProviderType::Google => {
-                    provider.base_url = None;
-                    if provider.env_var_api_key.as_deref() == Some("OPENAI_API_KEY")
-                        || provider.env_var_api_key.is_none()
-                    {
-                        provider.env_var_api_key = Some(String::from("GEMINI_API_KEY"));
-                    }
-                }
+            provider.provider_type = ProviderType::OpenAi;
+            if provider.base_url.is_none() {
+                provider.base_url = Some(String::from("https://api.openai.com/v1"));
+            }
+            if provider.env_var_api_key.is_none() {
+                provider.env_var_api_key = Some(String::from("OPENAI_API_KEY"));
             }
         }
     }
@@ -1491,13 +1472,6 @@ impl App {
                 SettingsProviderField::Id,
                 SettingsProviderField::Type,
                 SettingsProviderField::BaseUrl,
-                SettingsProviderField::ApiKey,
-                SettingsProviderField::EnvVarApiKey,
-                SettingsProviderField::OnlyListedModels,
-            ],
-            Some(ProviderType::Google) => vec![
-                SettingsProviderField::Id,
-                SettingsProviderField::Type,
                 SettingsProviderField::ApiKey,
                 SettingsProviderField::EnvVarApiKey,
                 SettingsProviderField::OnlyListedModels,
@@ -2290,7 +2264,6 @@ fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
 fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::OpenAi => "OpenAI-compatible",
-        ProviderType::Google => "Google",
     }
 }
 
@@ -2623,13 +2596,6 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
                     SettingsProviderField::Id,
                     SettingsProviderField::Type,
                     SettingsProviderField::BaseUrl,
-                    SettingsProviderField::ApiKey,
-                    SettingsProviderField::EnvVarApiKey,
-                    SettingsProviderField::OnlyListedModels,
-                ],
-                ProviderType::Google => vec![
-                    SettingsProviderField::Id,
-                    SettingsProviderField::Type,
                     SettingsProviderField::ApiKey,
                     SettingsProviderField::EnvVarApiKey,
                     SettingsProviderField::OnlyListedModels,
@@ -3042,28 +3008,19 @@ mod tests {
     }
 
     fn sample_models() -> HashMap<String, Vec<Model>> {
-        HashMap::from([
-            (
-                String::from("google"),
-                vec![Model {
-                    id: String::from("gemini-2.0-flash"),
-                    name: String::from("Gemini 2.0 Flash"),
-                }],
-            ),
-            (
-                String::from("openai"),
-                vec![
-                    Model {
-                        id: String::from("gpt-4.1-mini"),
-                        name: String::from("GPT-4.1 Mini"),
-                    },
-                    Model {
-                        id: String::from("gpt-4o-mini"),
-                        name: String::from("GPT-4o Mini"),
-                    },
-                ],
-            ),
-        ])
+        HashMap::from([(
+            String::from("openai"),
+            vec![
+                Model {
+                    id: String::from("gpt-4.1-mini"),
+                    name: String::from("GPT-4.1 Mini"),
+                },
+                Model {
+                    id: String::from("gpt-4o-mini"),
+                    name: String::from("GPT-4o Mini"),
+                },
+            ],
+        )])
     }
 
     fn sample_settings() -> SettingsDocument {
@@ -3077,14 +3034,6 @@ mod tests {
                     env_var_api_key: Some(String::from("OPENAI_API_KEY")),
                     only_listed_models: true,
                 },
-                ProviderSettings {
-                    id: String::from("google"),
-                    provider_type: ProviderType::Google,
-                    base_url: None,
-                    api_key: None,
-                    env_var_api_key: Some(String::from("GEMINI_API_KEY")),
-                    only_listed_models: true,
-                },
             ],
             models: vec![
                 ModelSettings {
@@ -3092,12 +3041,6 @@ mod tests {
                     provider_id: String::from("openai"),
                     name: Some(String::from("GPT-4o Mini")),
                     max_context: Some(128_000),
-                },
-                ModelSettings {
-                    id: String::from("gemini-2.0-flash"),
-                    provider_id: String::from("google"),
-                    name: Some(String::from("Gemini 2.0 Flash")),
-                    max_context: Some(1_000_000),
                 },
             ],
         }
@@ -3310,9 +3253,9 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use rende┌/model──────────────────────────────────────────────┐to-end sm
 05: oke tests│Select model (Enter to choose, Esc to close)        │
-06:          │  google / Gemini 2.0 Flash                         │
-07:          │> openai / GPT-4.1 Mini                             │
-08:          │  openai / GPT-4o Mini (current)                    │
+06:          │  openai / GPT-4.1 Mini                             │
+07:          │> openai / GPT-4o Mini (current)                    │
+08:          │                                                    │
 09:          │                                                    │
 10:          │                                                    │
 11:          │                                                    │
@@ -3351,7 +3294,7 @@ mod tests {
 05:      │┌───────────────────┐┌─────────────────────┐┌───────────────────┐┌─────────────────────┐│
 06:      ││Providers          ││Provider Fields      ││Models             ││Model Fields         ││
 07:      ││> openai           ││  Provider ID        ││> gpt-4o-mini      ││  Model ID           ││
-08:      ││  google           ││  Provider Type      ││                   ││  Display Name       ││
+08:      ││                   ││  Provider Type      ││                   ││  Display Name       ││
 09:      ││                   ││> Base URL           ││                   ││> Max Context        ││
 10:      ││                   ││  Inline API Key     ││                   ││                     ││
 11:      ││                   ││  Env Var            ││                   ││                     ││
