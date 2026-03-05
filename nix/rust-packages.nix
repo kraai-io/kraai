@@ -42,7 +42,7 @@
         fileset = lib.fileset.unions [
           ../Cargo.toml
           ../Cargo.lock
-          # ../crates
+          (craneLib.fileset.commonCargoSources ../crates)
           (craneLib.fileset.commonCargoSources crate)
         ];
       };
