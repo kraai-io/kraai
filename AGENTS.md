@@ -22,7 +22,7 @@ crates/
   agent-runtime/     - Agent runtime
   persistence/       - Data persistence layer
   types/             - Shared type definitions
-  ts-bindings/       - napi-rs bindings for TypeScript
+  agent-ts-bindings/ - napi-rs bindings for TypeScript
   llm-providers/
     provider-core/   - LLM provider trait definitions
     provider-google/ - Google LLM implementation
@@ -46,7 +46,7 @@ apps/
 
 **TypeScript:**
 - All TypeScript code was written by an LLM
-- Use the types defined by the bindings in crates/ts-bindings/index.d.ts
+- Use the types defined by the bindings in crates/agent-ts-bindings/index.d.ts
 
 IMPORTANT: If you see a bad pattern in the code, don't be quick to copy it. It is best to squash bad patterns before they propogate. You should inform the user that you found the bad pattern, and then follow their instructions. Do not implement new features using these bad patterns without explicit confirmation.
 IMPORTANT: We do not keep legacy code around. This is a project in its demo / alpha stage. There are 0 users.
@@ -64,7 +64,7 @@ IMPORTANT: We do not keep legacy code around. This is a project in its demo / al
 1. Run `just lint` before committing to catch issues
 2. TypeScript changes require `just typecheck-desktop`
 3. Rust changes require `cargo clippy -- -D warnings`
-5. After modifying ts-bindings, rebuild with `just build-bindings-debug`
+5. After modifying agent-ts-bindings, rebuild with `just build-bindings-debug`
 6. Update this file when:
    - Architecture changes occur
    - New commands become frequently used

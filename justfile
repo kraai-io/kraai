@@ -13,21 +13,21 @@ clean:
     cargo clean
     pnpm clean
     pnpm -r clean
-    rm -rf crates/ts-bindings/dist crates/ts-bindings/index.js crates/ts-bindings/index.d.ts crates/ts-bindings/browser.js
-    rm -rf crates/ts-bindings/*.node
+    rm -rf crates/agent-ts-bindings/dist crates/agent-ts-bindings/index.js crates/agent-ts-bindings/index.d.ts crates/agent-ts-bindings/browser.js
+    rm -rf crates/agent-ts-bindings/*.node
     rm -rf dist/ releases/
 
 build-bindings:
-    cd crates/ts-bindings && pnpm build
+    cd crates/agent-ts-bindings && pnpm build
 
 build-bindings-debug:
-    cd crates/ts-bindings && pnpm build:debug
+    cd crates/agent-ts-bindings && pnpm build:debug
 
 test-bindings:
-    cd crates/ts-bindings && pnpm test
+    cd crates/agent-ts-bindings && pnpm test
 
 clean-bindings:
-    cd crates/ts-bindings && pnpm clean
+    cd crates/agent-ts-bindings && pnpm clean
 
 dev-nohr: build-bindings-debug dev-desktop
 
@@ -127,10 +127,10 @@ dist-build-bindings TARGET="native":
             exit 1
         fi
         echo "Building bindings for native target: $TARGET_TRIPLE"
-        cd crates/ts-bindings && pnpm napi build --platform --release --target "$TARGET_TRIPLE"
+        cd crates/agent-ts-bindings && pnpm napi build --platform --release --target "$TARGET_TRIPLE"
     else
         echo "Building bindings for target: {{ TARGET }}"
-        cd crates/ts-bindings && pnpm napi build --platform --release --target "{{ TARGET }}"
+        cd crates/agent-ts-bindings && pnpm napi build --platform --release --target "{{ TARGET }}"
     fi
 
 # Build electron app (typecheck + vite build)
