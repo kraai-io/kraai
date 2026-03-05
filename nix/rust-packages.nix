@@ -8,7 +8,13 @@
       p.rust-bin.stable.latest.default.override {
         extensions = ["llvm-tools-preview"];
       });
-    src = craneLib.cleanCargoSource ../.;
+    src = lib.fileset.toSource {
+      root = ../.;
+      fileset = lib.fileset.unions [
+        (craneLib.fileset.commonCargoSources ../.)
+        (lib.fileset.maybeMissing ../crates/toon-schema/tests)
+      ];
+    };
 
     commonArgs = {
       inherit src;
