@@ -49,7 +49,7 @@ apps/
 - Use the types defined by the bindings in crates/agent-ts-bindings/index.d.ts
 
 IMPORTANT: If you see a bad pattern in the code, don't be quick to copy it. It is best to squash bad patterns before they propogate. You should inform the user that you found the bad pattern, and then follow their instructions. Do not implement new features using these bad patterns without explicit confirmation.
-IMPORTANT: We do not keep legacy code around. This is a project in its demo / alpha stage. There are 0 users.
+IMPORTANT: We do not keep legacy code around. We don't care about backwards compatibility. This is a project in its demo / alpha stage. We ship fast, and fix fast.
 
 ## Learnings
 
