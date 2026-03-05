@@ -2709,7 +2709,10 @@ mod tests {
 
         assert!(changed);
         assert_eq!(harness.app.state.input, "before line 1\nline 2");
-        assert_eq!(harness.app.state.input_cursor, harness.app.state.input.len());
+        assert_eq!(
+            harness.app.state.input_cursor,
+            harness.app.state.input.len()
+        );
         assert!(harness.drain_requests().is_empty());
     }
 
