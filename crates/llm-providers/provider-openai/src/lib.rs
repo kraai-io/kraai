@@ -158,6 +158,7 @@ pub struct OpenAIModelConfig {
 /// Provider configuration for OpenAI-compatible APIs.
 #[derive(Deserialize)]
 pub struct OpenAIConfig {
+    #[allow(rustdoc::bare_urls)]
     /// Base URL for the API (e.g., "https://api.openai.com/v1").
     pub base_url: String,
     /// API key. If not provided, falls back to `env_var_api_key`.
