@@ -114,6 +114,9 @@
         // {
           inherit cargoArtifacts;
           cargoLlvmCovCommand = "nextest";
+          nativeBuildInputs = [
+            pkgs.cargo-nextest
+          ];
         }
       );
 
