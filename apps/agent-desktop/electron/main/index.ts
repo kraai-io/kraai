@@ -1,7 +1,14 @@
 import { join } from "node:path";
 import { electronApp, is, optimizer } from "@electron-toolkit/utils";
 import { AgentRuntime, type Event } from "agent-ts-bindings";
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import {
+	app,
+	BrowserWindow,
+	type OpenDialogOptions,
+	dialog,
+	ipcMain,
+	shell,
+} from "electron";
 import icon from "../../resources/icon.png?asset";
 
 // Store the runtime and main window
@@ -108,6 +115,31 @@ function setupIpcHandlers() {
 	ipcMain.handle("agent:getCurrentSessionId", async () => {
 		if (!runtime) throw new Error("Runtime not initialized");
 		return await runtime.getCurrentSessionId();
+	});
+
+	ipcMain.handle("agent:getCurrentWorkspaceState", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.getCurrentWorkspaceState();
+	});
+
+	ipcMain.handle("agent:setCurrentWorkspaceDir", async (_, workspaceDir: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		await runtime.setCurrentWorkspaceDir(workspaceDir);
+	});
+
+	ipcMain.handle("agent:pickWorkspaceDir", async (_, defaultPath?: string) => {
+		const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+		const options: OpenDialogOptions = {
+			properties: ["openDirectory"],
+			defaultPath,
+		};
+		const result = owner
+			? await dialog.showOpenDialog(owner, options)
+			: await dialog.showOpenDialog(options);
+		if (result.canceled || result.filePaths.length === 0) {
+			return null;
+		}
+		return result.filePaths[0];
 	});
 
 	console.log("[MAIN] IPC handlers set up");

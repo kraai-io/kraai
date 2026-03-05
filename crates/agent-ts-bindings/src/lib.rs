@@ -100,6 +100,7 @@ impl From<agent_runtime::Model> for Model {
 pub struct Session {
   pub id: String,
   pub tip_id: Option<String>,
+  pub workspace_dir: String,
   pub created_at: f64,
   pub updated_at: f64,
   pub title: Option<String>,
@@ -110,9 +111,26 @@ impl From<SessionMeta> for Session {
     Session {
       id: meta.id,
       tip_id: meta.tip_id.map(|id| id.to_string()),
+      workspace_dir: meta.workspace_dir.display().to_string(),
       created_at: meta.created_at as f64,
       updated_at: meta.updated_at as f64,
       title: meta.title,
+    }
+  }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct WorkspaceState {
+  pub workspace_dir: String,
+  pub applies_next_chat: bool,
+}
+
+impl From<agent_runtime::WorkspaceState> for WorkspaceState {
+  fn from(value: agent_runtime::WorkspaceState) -> Self {
+    WorkspaceState {
+      workspace_dir: value.workspace_dir,
+      applies_next_chat: value.applies_next_chat,
     }
   }
 }
@@ -244,6 +262,7 @@ impl From<agent_runtime::Session> for Session {
     Session {
       id: s.id,
       tip_id: s.tip_id,
+      workspace_dir: s.workspace_dir,
       created_at: s.created_at as f64,
       updated_at: s.updated_at as f64,
       title: s.title,
@@ -486,6 +505,25 @@ impl AgentRuntime {
     self
       .handle
       .get_current_session_id()
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn get_current_workspace_state(&self) -> napi::Result<Option<WorkspaceState>> {
+    self
+      .handle
+      .get_current_workspace_state()
+      .await
+      .map(|value| value.map(Into::into))
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn set_current_workspace_dir(&self, workspace_dir: String) -> napi::Result<()> {
+    self
+      .handle
+      .set_current_workspace_dir(workspace_dir)
       .await
       .map_err(to_napi_error)
   }

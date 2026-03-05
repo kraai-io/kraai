@@ -8,6 +8,7 @@ import {
 	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
+	FolderOpen,
 	Plus,
 	Send,
 	Settings2,
@@ -65,9 +66,15 @@ interface Model extends BindingModel {
 interface Session {
 	id: string;
 	tipId?: string;
+	workspaceDir: string;
 	createdAt: number;
 	updatedAt: number;
 	title?: string;
+}
+
+interface WorkspaceState {
+	workspaceDir: string;
+	appliesNextChat: boolean;
 }
 
 interface WindowAPI {
@@ -89,6 +96,9 @@ interface WindowAPI {
 	loadSession: (sessionId: string) => Promise<boolean>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	getCurrentSessionId: () => Promise<string | null>;
+	getCurrentWorkspaceState: () => Promise<WorkspaceState | null>;
+	setCurrentWorkspaceDir: (workspaceDir: string) => Promise<void>;
+	pickWorkspaceDir: (defaultPath?: string) => Promise<string | null>;
 }
 
 declare global {
@@ -111,6 +121,8 @@ function App(): React.JSX.Element {
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+	const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
+	const [workspaceAppliesNextChat, setWorkspaceAppliesNextChat] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -173,6 +185,19 @@ function App(): React.JSX.Element {
 			setCurrentSessionId(currentId);
 		} catch (err) {
 			console.error("[UI] Failed to load sessions:", err);
+		}
+	}, []);
+
+	const loadWorkspaceState = useCallback(async () => {
+		const api = window.api;
+		if (!api) return;
+
+		try {
+			const state = await api.getCurrentWorkspaceState();
+			setWorkspaceDir(state?.workspaceDir ?? null);
+			setWorkspaceAppliesNextChat(state?.appliesNextChat ?? false);
+		} catch (err) {
+			console.error("[UI] Failed to load workspace state:", err);
 		}
 	}, []);
 
@@ -250,12 +275,14 @@ function App(): React.JSX.Element {
 					loadModels();
 					loadSessions();
 					loadChatHistory();
+					loadWorkspaceState();
 					break;
 				case "Error":
 					console.error("[UI] Error:", event.field0);
 					setIsLoading(false);
 					break;
 				case "StreamStart":
+					loadWorkspaceState();
 					setMessages((prev) => [
 						...prev,
 						{
@@ -322,6 +349,7 @@ function App(): React.JSX.Element {
 					console.log("[UI] HistoryUpdated event received");
 					loadChatHistory();
 					loadSessions();
+					loadWorkspaceState();
 					break;
 			}
 		});
@@ -333,6 +361,7 @@ function App(): React.JSX.Element {
 		forceScrollToBottom,
 		scrollToBottom,
 		loadSessions,
+		loadWorkspaceState,
 	]);
 
 	useEffect(() => {
@@ -384,6 +413,8 @@ function App(): React.JSX.Element {
 		setMessages([]);
 		setPendingTools([]);
 		setCurrentSessionId(null);
+		setWorkspaceDir(null);
+		setWorkspaceAppliesNextChat(false);
 		window.api?.clearCurrentSession();
 	};
 
@@ -393,6 +424,7 @@ function App(): React.JSX.Element {
 			setCurrentSessionId(sessionId);
 			setIsSidebarOpen(false);
 			await loadChatHistory();
+			await loadWorkspaceState();
 		}
 	};
 
@@ -402,6 +434,8 @@ function App(): React.JSX.Element {
 		if (sessionId === currentSessionId) {
 			setMessages([]);
 			setCurrentSessionId(null);
+			setWorkspaceDir(null);
+			setWorkspaceAppliesNextChat(false);
 		}
 		setSessionToDelete(null);
 	};
@@ -424,8 +458,25 @@ function App(): React.JSX.Element {
 		await window.api?.executeApprovedTools();
 	};
 
+	const handlePickWorkspace = async () => {
+		try {
+			const selected = await window.api?.pickWorkspaceDir(workspaceDir ?? undefined);
+			if (!selected) return;
+			await window.api?.setCurrentWorkspaceDir(selected);
+			await loadWorkspaceState();
+			await loadSessions();
+		} catch (err) {
+			console.error("[UI] Failed to set workspace directory:", err);
+		}
+	};
+
 	const unhandledTools = pendingTools.filter((t) => t.approved === null);
 	const hasApprovedTools = pendingTools.some((t) => t.approved === true);
+	const workspaceLabel = workspaceDir
+		? workspaceDir.length > 40
+			? `...${workspaceDir.slice(-37)}`
+			: workspaceDir
+		: "Select workspace";
 
 	return (
 		<div className="flex h-screen bg-background">
@@ -705,25 +756,41 @@ function App(): React.JSX.Element {
 								style={{ height: "auto", overflow: "hidden" }}
 								disabled={isLoading}
 							/>
-							<div className="flex items-center justify-between pt-2">
+							<div className="flex items-center justify-between gap-2 pt-2">
 								<ModelSelector
 									models={models}
 									value={selectedModel}
 									onChange={setSelectedModel}
 								/>
-								<Button
-									size="icon"
-									className="h-8 w-8 rounded-xl"
-									onClick={handleSend}
-									disabled={!inputValue.trim() || isLoading || !selectedModel}
-								>
-									{isLoading ? (
-										<Square className="h-3.5 w-3.5" />
-									) : (
-										<Send className="h-3.5 w-3.5" />
-									)}
-								</Button>
+								<div className="flex items-center gap-2">
+									<Button
+										variant="outline"
+										className="h-8 max-w-64 justify-start gap-2 px-2 text-xs"
+										onClick={handlePickWorkspace}
+										title={workspaceDir ?? "Select workspace directory"}
+									>
+										<FolderOpen className="h-3.5 w-3.5 shrink-0" />
+										<span className="truncate">{workspaceLabel}</span>
+									</Button>
+									<Button
+										size="icon"
+										className="h-8 w-8 rounded-xl"
+										onClick={handleSend}
+										disabled={!inputValue.trim() || isLoading || !selectedModel}
+									>
+										{isLoading ? (
+											<Square className="h-3.5 w-3.5" />
+										) : (
+											<Send className="h-3.5 w-3.5" />
+										)}
+									</Button>
+								</div>
 							</div>
+							{workspaceAppliesNextChat && (
+								<p className="pt-2 px-1 text-xs text-muted-foreground">
+									Workspace update will apply on next chat turn.
+								</p>
+							)}
 						</div>
 					</div>
 				</div>

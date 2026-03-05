@@ -28,6 +28,12 @@ interface API {
 	loadSession: (sessionId: string) => Promise<boolean>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	getCurrentSessionId: () => Promise<string | null>;
+	getCurrentWorkspaceState: () => Promise<{
+		workspaceDir: string;
+		appliesNextChat: boolean;
+	} | null>;
+	setCurrentWorkspaceDir: (workspaceDir: string) => Promise<void>;
+	pickWorkspaceDir: (defaultPath?: string) => Promise<string | null>;
 }
 
 declare global {

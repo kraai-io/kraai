@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent::AgentManager;
@@ -35,6 +36,7 @@ pub struct Model {
 pub struct Session {
     pub id: String,
     pub tip_id: Option<String>,
+    pub workspace_dir: String,
     pub created_at: u64,
     pub updated_at: u64,
     pub title: Option<String>,
@@ -45,11 +47,18 @@ impl From<SessionMeta> for Session {
         Session {
             id: meta.id,
             tip_id: meta.tip_id.map(|id| id.to_string()),
+            workspace_dir: meta.workspace_dir.display().to_string(),
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             title: meta.title,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkspaceState {
+    pub workspace_dir: String,
+    pub applies_next_chat: bool,
 }
 
 /// Supported provider types for settings editing.
@@ -194,6 +203,13 @@ enum Command {
     GetCurrentSessionId {
         response: oneshot::Sender<Option<String>>,
     },
+    GetCurrentWorkspaceState {
+        response: oneshot::Sender<Option<WorkspaceState>>,
+    },
+    SetCurrentWorkspaceDir {
+        workspace_dir: String,
+        response: oneshot::Sender<()>,
+    },
     GetCurrentTip {
         response: oneshot::Sender<Option<String>>,
     },
@@ -323,6 +339,25 @@ impl RuntimeHandle {
         Ok(rx.await?)
     }
 
+    pub async fn get_current_workspace_state(&self) -> Result<Option<WorkspaceState>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetCurrentWorkspaceState { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn set_current_workspace_dir(&self, workspace_dir: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::SetCurrentWorkspaceDir {
+                workspace_dir,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
     /// Get the current tip message ID
     pub async fn get_current_tip(&self) -> Result<Option<String>> {
         let (tx, rx) = oneshot::channel();
@@ -393,14 +428,14 @@ impl RuntimeBuilder {
                 let providers = ProviderManager::new();
                 let mut tools = ToolManager::new();
                 tools.register_tool(ReadFileTool {});
-                let workspace_root = std::env::current_dir()
+                let default_workspace_dir = std::env::current_dir()
                     .and_then(|path| path.canonicalize())
                     .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
 
                 let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                     providers,
                     tools,
-                    workspace_root,
+                    default_workspace_dir,
                     message_store,
                     session_store,
                 )));
@@ -586,6 +621,34 @@ impl RuntimeInner {
                 response
                     .send(session_id)
                     .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::GetCurrentWorkspaceState { response } => {
+                let workspace_state = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .get_current_workspace_dir_state()
+                    .map(|(workspace_dir, applies_next_chat)| WorkspaceState {
+                        workspace_dir: workspace_dir.display().to_string(),
+                        applies_next_chat,
+                    });
+                response
+                    .send(workspace_state)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::SetCurrentWorkspaceDir {
+                workspace_dir,
+                response,
+            } => {
+                let workspace_dir = canonicalize_workspace_dir(&workspace_dir)?;
+                self.agent_manager
+                    .lock()
+                    .await
+                    .set_current_workspace_dir(workspace_dir)
+                    .await?;
+                response.send(()).map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::GetCurrentTip { response } => {
@@ -987,6 +1050,18 @@ impl RuntimeInner {
         self.send_event(Event::ConfigLoaded);
         Ok(())
     }
+}
+
+fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
+    let raw = PathBuf::from(path);
+    if !raw.exists() {
+        return Err(eyre!("Workspace directory does not exist: {}", raw.display()));
+    }
+    if !raw.is_dir() {
+        return Err(eyre!("Workspace path is not a directory: {}", raw.display()));
+    }
+
+    Ok(raw.canonicalize().unwrap_or(raw))
 }
 
 fn settings_path() -> Result<std::path::PathBuf> {

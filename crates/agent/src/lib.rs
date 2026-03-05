@@ -33,7 +33,9 @@ pub enum PermissionStatus {
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
-    workspace_root: PathBuf,
+    default_workspace_dir: PathBuf,
+    active_tool_config: types::ToolCallGlobalConfig,
+    pending_tool_config: Option<types::ToolCallGlobalConfig>,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     current_session_id: Option<String>,
@@ -57,14 +59,19 @@ impl AgentManager {
     pub fn new(
         providers: ProviderManager,
         tools: ToolManager,
-        workspace_root: PathBuf,
+        default_workspace_dir: PathBuf,
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
     ) -> Self {
+        let active_tool_config = types::ToolCallGlobalConfig {
+            workspace_dir: default_workspace_dir.clone(),
+        };
         Self {
             providers,
             tools,
-            workspace_root,
+            default_workspace_dir,
+            active_tool_config,
+            pending_tool_config: None,
             message_store,
             session_store,
             current_session_id: None,
@@ -83,6 +90,10 @@ impl AgentManager {
     /// Clear the current session (for starting fresh - session created on first message)
     pub async fn clear_current_session(&mut self) {
         self.current_session_id = None;
+        self.active_tool_config = types::ToolCallGlobalConfig {
+            workspace_dir: self.default_workspace_dir.clone(),
+        };
+        self.pending_tool_config = None;
         self.pending_tool_calls.clear();
         self.last_model = None;
         self.last_provider = None;
@@ -101,6 +112,10 @@ impl AgentManager {
                 self.cleanup_hot_cache_for_session(&session).await?;
 
                 self.current_session_id = Some(session_id.to_string());
+                self.active_tool_config = types::ToolCallGlobalConfig {
+                    workspace_dir: session.workspace_dir,
+                };
+                self.pending_tool_config = None;
                 Ok(true)
             }
             None => Ok(false),
@@ -146,6 +161,33 @@ impl AgentManager {
     /// Get current session ID
     pub fn get_current_session_id(&self) -> Option<&str> {
         self.current_session_id.as_deref()
+    }
+
+    pub async fn set_current_workspace_dir(&mut self, workspace_dir: PathBuf) -> Result<()> {
+        let session_id = self.ensure_session().await?;
+        if let Some(mut session) = self.session_store.get(&session_id).await? {
+            session.workspace_dir = workspace_dir.clone();
+            session.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_secs();
+            self.session_store.save(&session).await?;
+        }
+
+        self.pending_tool_config = Some(types::ToolCallGlobalConfig { workspace_dir });
+        Ok(())
+    }
+
+    pub fn get_current_workspace_dir_state(&self) -> Option<(PathBuf, bool)> {
+        self.current_session_id.as_ref()?;
+        let applies_next_chat = self.pending_tool_config.is_some();
+        let workspace_dir = self
+            .pending_tool_config
+            .as_ref()
+            .unwrap_or(&self.active_tool_config)
+            .workspace_dir
+            .clone();
+        Some((workspace_dir, applies_next_chat))
     }
 
     pub async fn set_providers(
@@ -196,6 +238,7 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<(MessageId, BoxStream<'static, Result<String>>)> {
+        self.promote_pending_tool_config();
         self.last_model = Some(model_id.clone());
         self.last_provider = Some(provider_id.clone());
 
@@ -294,6 +337,7 @@ impl AgentManager {
         let session = SessionMeta {
             id: session_id.clone(),
             tip_id: None,
+            workspace_dir: self.default_workspace_dir.clone(),
             created_at: now,
             updated_at: now,
             title: None,
@@ -301,6 +345,10 @@ impl AgentManager {
 
         self.session_store.save(&session).await?;
         self.current_session_id = Some(session_id.clone());
+        self.active_tool_config = types::ToolCallGlobalConfig {
+            workspace_dir: self.default_workspace_dir.clone(),
+        };
+        self.pending_tool_config = None;
 
         Ok(session_id)
     }
@@ -447,7 +495,7 @@ impl AgentManager {
                     &tool_id,
                     &parsed.args,
                     &tool_core::ToolContext {
-                        workspace_root: &self.workspace_root,
+                        global_config: &self.active_tool_config,
                     },
                 )
                 .unwrap_or_else(|_| ToolCallAssessment {
@@ -634,6 +682,12 @@ impl AgentManager {
         self.pending_tool_calls
             .get(call_id)
             .map(|p| p.assessment.clone())
+    }
+
+    fn promote_pending_tool_config(&mut self) {
+        if let Some(config) = self.pending_tool_config.take() {
+            self.active_tool_config = config;
+        }
     }
 }
 

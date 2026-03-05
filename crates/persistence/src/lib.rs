@@ -13,6 +13,7 @@ use types::{Message, MessageId};
 pub struct SessionMeta {
     pub id: String,
     pub tip_id: Option<MessageId>,
+    pub workspace_dir: PathBuf,
     pub created_at: u64,
     pub updated_at: u64,
     pub title: Option<String>,

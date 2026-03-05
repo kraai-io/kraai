@@ -53,8 +53,8 @@ impl Tool for ReadFileTool {
         let mut risk = RiskLevel::ReadOnlyWorkspace;
 
         for file in &parsed.files {
-            let normalized = normalize_tool_path(ctx.workspace_root, file);
-            if normalized.starts_with(ctx.workspace_root) {
+            let normalized = normalize_tool_path(&ctx.global_config.workspace_dir, file);
+            if normalized.starts_with(&ctx.global_config.workspace_dir) {
                 reasons.push(format!("Reads workspace file {}", normalized.display()));
             } else {
                 risk = RiskLevel::OutsideWorkspace;

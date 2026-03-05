@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolId};
+use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolId};
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -41,7 +41,7 @@ impl ToolOutput {
 }
 
 pub struct ToolContext<'a> {
-    pub workspace_root: &'a Path,
+    pub global_config: &'a ToolCallGlobalConfig,
 }
 
 #[async_trait]

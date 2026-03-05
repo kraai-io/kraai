@@ -1,5 +1,5 @@
 import { electronAPI } from "@electron-toolkit/preload";
-import type { SettingsDocument } from "agent-ts-bindings";
+import type { Model, SettingsDocument } from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
 // Type definitions matching NAPI-RS Event enum
@@ -36,9 +36,15 @@ type EventHandler = (event: Event) => void;
 interface Session {
 	id: string;
 	tipId?: string;
+	workspaceDir: string;
 	createdAt: number;
 	updatedAt: number;
 	title?: string;
+}
+
+interface WorkspaceState {
+	workspaceDir: string;
+	appliesNextChat: boolean;
 }
 
 // Matching NAPI-RS generated types (from index.d.ts)
@@ -66,7 +72,7 @@ const api = {
 	},
 
 	// Async methods that call into Rust via main process
-	async listModels(): Promise<string[]> {
+	async listModels(): Promise<Record<string, Model[]>> {
 		return await ipcRenderer.invoke("agent:listModels");
 	},
 
@@ -120,6 +126,18 @@ const api = {
 
 	async getCurrentSessionId(): Promise<string | null> {
 		return await ipcRenderer.invoke("agent:getCurrentSessionId");
+	},
+
+	async getCurrentWorkspaceState(): Promise<WorkspaceState | null> {
+		return await ipcRenderer.invoke("agent:getCurrentWorkspaceState");
+	},
+
+	async setCurrentWorkspaceDir(workspaceDir: string): Promise<void> {
+		await ipcRenderer.invoke("agent:setCurrentWorkspaceDir", workspaceDir);
+	},
+
+	async pickWorkspaceDir(defaultPath?: string): Promise<string | null> {
+		return await ipcRenderer.invoke("agent:pickWorkspaceDir", defaultPath);
 	},
 };
 

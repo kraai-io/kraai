@@ -3108,6 +3108,7 @@ mod tests {
             Session {
                 id: String::from("sess-1"),
                 tip_id: Some(String::from("m2")),
+                workspace_dir: String::from("/tmp/project-a"),
                 created_at: 1,
                 updated_at: 2,
                 title: Some(String::from("Refactor ideas")),
@@ -3115,6 +3116,7 @@ mod tests {
             Session {
                 id: String::from("sess-2"),
                 tip_id: Some(String::from("m3")),
+                workspace_dir: String::from("/tmp/project-b"),
                 created_at: 3,
                 updated_at: 4,
                 title: Some(String::from("Testing plan")),
