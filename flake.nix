@@ -18,6 +18,10 @@
   };
 
   inputs = {
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
     crane = {
       url = "github:ipetkov/crane";
     };

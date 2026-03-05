@@ -2,6 +2,7 @@
 members = [
   "crates/agent",
   "crates/agent-runtime",
+  "crates/agent-ts-bindings",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-google",
   "crates/llm-providers/provider-openai",
@@ -9,9 +10,9 @@ members = [
   "crates/tools/tool-core",
   "crates/tools/tool-read-file",
   "crates/toon-schema",
-  "crates/ts-bindings",
   "crates/tui",
   "crates/types",
+  "crates/workspace-hack",
 ]
 resolver = "3"
 
@@ -36,6 +37,7 @@ tool-core = { path = "crates/tools/tool-core" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
 toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
+workspace-hack = { path = "crates/workspace-hack" }
 
 async-openai = { version = "0.33.0", features = [
   "byot",

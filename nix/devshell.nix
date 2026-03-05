@@ -15,6 +15,9 @@
           cargo-edit
           cargo-msrv
           cargo-watch
+          cargo-audit
+          cargo-deny
+          cargo-hakari
           rust-bin.stable.latest.default
           rust-analyzer
 

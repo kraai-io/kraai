@@ -19,3 +19,4 @@ tool-core = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
 ulid = { workspace = true }
+workspace-hack = { workspace = true }

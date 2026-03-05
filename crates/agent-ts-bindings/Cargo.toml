@@ -1,6 +1,6 @@
 [package]
 edition.workspace = true
-name = "agent_ts_bindings"
+name = "agent-ts-bindings"
 rust-version.workspace = true
 version = "0.1.0"
 
@@ -14,6 +14,7 @@ napi = { version = "3.8.3", features = ["async", "tokio_rt"] }
 napi-derive = "3.5.2"
 persistence = { workspace = true }
 types = { workspace = true }
+workspace-hack = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

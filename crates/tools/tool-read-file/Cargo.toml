@@ -12,3 +12,4 @@ tool-core = { workspace = true }
 toon-format = { workspace = true }
 toon-schema = { workspace = true }
 types = { workspace = true }
+workspace-hack = { workspace = true }

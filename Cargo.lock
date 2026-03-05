@@ -35,6 +35,7 @@ dependencies = [
  "tracing",
  "types",
  "ulid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -59,10 +60,11 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
-name = "agent_ts_bindings"
+name = "agent-ts-bindings"
 version = "0.1.0"
 dependencies = [
  "agent-runtime",
@@ -72,6 +74,7 @@ dependencies = [
  "napi-derive",
  "persistence",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2277,6 +2280,7 @@ dependencies = [
  "tracing",
  "types",
  "ulid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2480,6 +2484,7 @@ dependencies = [
  "toml",
  "tracing",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2495,6 +2500,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2510,6 +2516,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3711,6 +3718,7 @@ dependencies = [
  "toon-format",
  "toon-schema",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3724,6 +3732,7 @@ dependencies = [
  "toon-format",
  "toon-schema",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3760,6 +3769,7 @@ dependencies = [
  "syn 2.0.117",
  "toon-format",
  "trybuild",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3927,6 +3937,7 @@ dependencies = [
  "toon-format",
  "tracing",
  "types",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3952,6 +3963,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4688,6 +4700,40 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.0",
+ "chrono",
+ "crossterm 0.29.0",
+ "futures-channel",
+ "futures-core",
+ "futures-sink",
+ "hashbrown 0.16.1",
+ "libc",
+ "linux-raw-sys 0.12.1",
+ "log",
+ "memchr",
+ "miniz_oxide",
+ "mio",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "rustix 1.1.4",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "smallvec",
+ "syn 2.0.117",
+ "time",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

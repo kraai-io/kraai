@@ -4,32 +4,13 @@
     pkgs,
     ...
   }: let
-    fs = lib.fileset;
-    workspaceManifest = lib.importTOML ../Cargo.toml;
-    workspaceMembers =
-      map (
-        memberPath: let
-          manifest = lib.importTOML (../. + "/${memberPath}/Cargo.toml");
-        in {
-          inherit memberPath;
-          name = manifest.package.name;
-          version = manifest.package.version;
-        }
-      )
-      workspaceManifest.workspace.members;
-    rustSources = fs.toSource {
-      root = ../.;
-      fileset = fs.unions [
-        ../Cargo.lock
-        ../Cargo.toml
-        ../crates
-      ];
-    };
-
     craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
+    src = craneLib.cleanCargoSource ../.;
 
     commonArgs = {
-      src = craneLib.cleanCargoSource rustSources;
+      inherit src;
+      pname = "agent";
+      version = "0.0.0";
       strictDeps = true;
       nativeBuildInputs = with pkgs; [
         pkg-config
@@ -39,59 +20,98 @@
       ];
     };
 
-    workspaceVersion = (builtins.head workspaceMembers).version;
+    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-    cargoArtifacts = craneLib.buildDepsOnly (commonArgs
-      // {
-        pname = "workspace-deps";
-        version = workspaceVersion;
-      });
-
-    tuiMember = lib.findFirst (member: member.name == "tui") null workspaceMembers;
-    tuiVersion =
-      if tuiMember == null
-      then throw "workspace member 'tui' not found"
-      else tuiMember.version;
-
-    tuiPackage = craneLib.buildPackage (commonArgs
+    individualCrateArgs = crate:
+      commonArgs
       // {
         inherit cargoArtifacts;
-        pname = "tui";
-        version = tuiVersion;
-        cargoExtraArgs = "-p tui";
-        doCheck = true;
-      });
+        inherit
+          (craneLib.crateNameFromCargoToml {
+            src = craneLib.cleanCargoSource crate;
+          })
+          version
+          pname
+          ;
+        doCheck = false;
+      };
 
-    cargoTestChecks = builtins.listToAttrs (map (member: {
-        name = "${member.name}";
-        value = craneLib.cargoTest (commonArgs
-          // {
-            inherit cargoArtifacts;
-            pname = "${member.name}";
-            inherit (member) version;
-            cargoExtraArgs = "-p ${member.name}";
-          });
-      })
-      workspaceMembers);
-    cargoClippyChecks = builtins.listToAttrs (map (member: {
-        name = "${member.name}";
-        value = craneLib.cargoClippy (commonArgs
-          // {
-            inherit cargoArtifacts;
-            pname = "${member.name}";
-            inherit (member) version;
-            cargoClippyExtraArgs = "-p ${member.name} --all-targets -- --deny warnings";
-          });
-      })
-      workspaceMembers);
+    fileSetForCrate = crate:
+      lib.fileset.toSource {
+        root = ../.;
+        fileset = lib.fileset.unions [
+          ../Cargo.toml
+          ../Cargo.lock
+          # ../crates
+          (craneLib.fileset.commonCargoSources crate)
+        ];
+      };
+
+    tui = craneLib.buildPackage (individualCrateArgs ../crates/tui
+      // {
+        cargoExtraArgs = "-p tui";
+        src = fileSetForCrate ../crates/tui;
+      });
   in {
-    packages = rec {
-      tui = tuiPackage;
+    packages = {
+      inherit tui;
       default = tui;
     };
 
-    checks =
-      cargoTestChecks
-      // cargoClippyChecks;
+    checks = {
+      inherit tui;
+
+      # clippy = craneLib.cargoClippy (
+      #   commonArgs
+      #   // {
+      #     inherit cargoArtifacts;
+      #     cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+      #   }
+      # );
+
+      # doc = craneLib.cargoDoc (
+      #   commonArgs
+      #   // {
+      #     inherit cargoArtifacts;
+      #     env.RUSTDOCFLAGS = "--deny warnings";
+      #   }
+      # );
+
+      # audit = craneLib.cargoAudit {
+      #   inherit src;
+      #   inherit (inputs) advisory-db;
+      # };
+
+      # deny = craneLib.cargoDeny {
+      #   inherit src;
+      # };
+
+      # nextest = craneLib.cargoNextest (
+      #   commonArgs
+      #   // {
+      #     inherit cargoArtifacts;
+      #     partitions = 1;
+      #     partitionType = "count";
+      #     cargoNextestPartitionsExtraArgs = "--no-tests=pass";
+      #   }
+      # );
+
+      # hakari = craneLib.mkCargoDerivation {
+      #   inherit src;
+      #   pname = "hakari";
+      #   cargoArtifacts = null;
+      #   doInstallCargoArtifacts = false;
+
+      #   buildPhaseCargoCommand = ''
+      #     cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
+      #     cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+      #     cargo hakari verify
+      #   '';
+
+      #   nativeBuildInputs = [
+      #     pkgs.cargo-hakari
+      #   ];
+      # };
+    };
   };
 }
