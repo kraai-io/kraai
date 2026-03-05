@@ -8,6 +8,7 @@
       # See: https://github.com/biomejs/biome/issues/7899
       settings.excludes = [
         "apps/agent-desktop/src/styles/globals.css"
+        "crates/workspace-hack/Cargo.toml"
       ];
 
       programs.alejandra.enable = true;

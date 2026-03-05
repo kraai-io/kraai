@@ -69,49 +69,54 @@
       #   }
       # );
 
-      # doc = craneLib.cargoDoc (
-      #   commonArgs
-      #   // {
-      #     inherit cargoArtifacts;
-      #     env.RUSTDOCFLAGS = "--deny warnings";
-      #   }
-      # );
+      doc = craneLib.cargoDoc (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
+          env.RUSTDOCFLAGS = "--deny warnings";
+        }
+      );
 
-      # audit = craneLib.cargoAudit {
-      #   inherit src;
-      #   inherit (inputs) advisory-db;
-      # };
+      audit = craneLib.cargoAudit {
+        inherit src;
+        inherit (inputs) advisory-db;
+        pname = "agent";
+        version = "0.0.0";
+      };
 
-      # deny = craneLib.cargoDeny {
-      #   inherit src;
-      # };
+      deny = craneLib.cargoDeny {
+        inherit src;
+        pname = "agent";
+        version = "0.0.0";
+      };
 
-      # nextest = craneLib.cargoNextest (
-      #   commonArgs
-      #   // {
-      #     inherit cargoArtifacts;
-      #     partitions = 1;
-      #     partitionType = "count";
-      #     cargoNextestPartitionsExtraArgs = "--no-tests=pass";
-      #   }
-      # );
+      nextest = craneLib.cargoNextest (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
+          partitions = 1;
+          partitionType = "count";
+          cargoNextestPartitionsExtraArgs = "--no-tests=pass";
+        }
+      );
 
-      # hakari = craneLib.mkCargoDerivation {
-      #   inherit src;
-      #   pname = "hakari";
-      #   cargoArtifacts = null;
-      #   doInstallCargoArtifacts = false;
+      hakari = craneLib.mkCargoDerivation {
+        inherit src;
+        pname = "hakari";
+        version = "0.0.0";
+        cargoArtifacts = null;
+        doInstallCargoArtifacts = false;
 
-      #   buildPhaseCargoCommand = ''
-      #     cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
-      #     cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
-      #     cargo hakari verify
-      #   '';
+        buildPhaseCargoCommand = ''
+          cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
+          cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+          cargo hakari verify
+        '';
 
-      #   nativeBuildInputs = [
-      #     pkgs.cargo-hakari
-      #   ];
-      # };
+        nativeBuildInputs = [
+          pkgs.cargo-hakari
+        ];
+      };
     };
   };
 }
