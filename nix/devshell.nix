@@ -18,6 +18,7 @@
           cargo-audit
           cargo-deny
           cargo-hakari
+          cargo-nextest
           rust-bin.stable.latest.default
           rust-analyzer
 
