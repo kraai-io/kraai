@@ -31,8 +31,9 @@
 
 use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
 use syn::{
-    Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, GenericArgument, Lit, Meta,
-    PathArguments, Type as SynType, TypePath, punctuated::Punctuated, token::Comma,
+    Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, Fields, GenericArgument,
+    Lit, Meta, PathArguments, Type as SynType, TypePath, punctuated::Punctuated,
+    spanned::Spanned, token::Comma,
 };
 
 pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
@@ -71,13 +72,33 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
 
     // Parse fields
     let fields: Vec<Field> = match &input.data {
-        Data::Struct(DataStruct { fields, .. }) => fields
-            .iter()
-            .map(parse_field)
-            .collect::<syn::Result<Vec<_>>>()?
-            .into_iter()
-            .flatten() // Filter out skipped fields
-            .collect(),
+        Data::Struct(DataStruct { fields, .. }) => {
+            let named_fields = match fields {
+                Fields::Named(fields) => &fields.named,
+                Fields::Unnamed(_) => {
+                    return Err(syn::Error::new(
+                        input.ident.span(),
+                        "ToonSchema can only be derived for structs with named fields\n\
+                         help: change the struct to use named fields like `struct Tool { field: String }`",
+                    ));
+                }
+                Fields::Unit => {
+                    return Err(syn::Error::new(
+                        input.ident.span(),
+                        "ToonSchema cannot be derived for unit structs\n\
+                         help: add at least one named field or remove the derive",
+                    ));
+                }
+            };
+
+            named_fields
+                .iter()
+                .map(parse_field)
+                .collect::<syn::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten() // Filter out skipped fields
+                .collect()
+        }
         _ => {
             return Err(syn::Error::new(
                 input.ident.span(),
@@ -103,7 +124,13 @@ pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {
 }
 
 fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
-    let mut name = field.ident.as_ref().unwrap().to_string();
+    let field_ident = field.ident.as_ref().ok_or_else(|| {
+        syn::Error::new(
+            field.ty.span(),
+            "ToonSchema can only be derived for structs with named fields",
+        )
+    })?;
+    let mut name = field_ident.to_string();
     let mut description = None;
     let mut example = None;
     let mut skipped = false;
@@ -112,7 +139,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     let mut min: Option<u32> = None;
     let mut max: Option<u32> = None;
     let mut default_value: Option<String> = None;
-    let field_span = field.ident.as_ref().unwrap().span();
+    let field_span = field_ident.span();
 
     // Parse attributes
     for attr in &field.attrs {
@@ -238,7 +265,7 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
                 "custom ranges (min/max) are only valid for Vec<T> fields\n\
                  help: field '{}' has type {:?}\n\
                  hint: remove min/max attributes or change type to Vec<T>",
-                field.ident.as_ref().unwrap(),
+                field_ident,
                 quote::quote!(#field.ty)
             ),
         ));
@@ -259,7 +286,6 @@ fn parse_field(field: &SynField) -> syn::Result<Option<Field>> {
     };
 
     // Validate that example is provided (compile-time check)
-    let field_ident = field.ident.as_ref().unwrap();
     let example = example.ok_or_else(|| {
         syn::Error::new(
             field_span,
@@ -313,7 +339,13 @@ fn analyze_type(
 ) -> syn::Result<Type> {
     match ty {
         SynType::Path(TypePath { path, .. }) => {
-            let segment = path.segments.last().unwrap();
+            let segment = path.segments.last().ok_or_else(|| {
+                syn::Error::new(
+                    span,
+                    "unsupported path type\n\
+                     help: use a concrete supported type like String, bool, Option<T>, or Vec<T>",
+                )
+            })?;
             let ident = segment.ident.to_string();
 
             match ident.as_str() {

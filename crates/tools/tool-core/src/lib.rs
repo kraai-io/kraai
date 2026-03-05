@@ -15,6 +15,8 @@ use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig
 pub enum ToolError {
     #[error("Tool not found: {0}")]
     ToolNotFound(ToolId),
+    #[error("Failed to serialize tool output: {0}")]
+    OutputSerialization(#[from] serde_json::Error),
 }
 
 #[derive(Deserialize)]
@@ -35,8 +37,10 @@ impl ToolOutput {
     }
 
     pub fn success<D: Serialize>(data: D) -> Self {
-        let data = serde_json::to_value(data).unwrap();
-        Self::Success { data }
+        match serde_json::to_value(data) {
+            Ok(data) => Self::Success { data },
+            Err(error) => Self::error(format!("failed to serialize tool output: {error}")),
+        }
     }
 }
 
@@ -171,4 +175,35 @@ pub fn normalize_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
     }
 
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::ser::{Error as _, Serialize, Serializer};
+
+    use super::ToolOutput;
+
+    struct FailingSerialize;
+
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("intentional failure"))
+        }
+    }
+
+    #[test]
+    fn tool_output_success_falls_back_to_error_on_serialize_failure() {
+        let output = ToolOutput::success(FailingSerialize);
+
+        match output {
+            ToolOutput::Error { message } => {
+                assert!(message.contains("failed to serialize tool output"));
+                assert!(message.contains("intentional failure"));
+            }
+            ToolOutput::Success { .. } => panic!("expected tool serialization failure"),
+        }
+    }
 }

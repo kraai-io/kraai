@@ -415,68 +415,108 @@ impl RuntimeBuilder {
         let callback = self.callback.clone();
 
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                Self::init_tracing();
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(error) => {
+                    callback.on_event(Event::Error(format!(
+                        "Failed to create tokio runtime: {error}"
+                    )));
+                    return;
+                }
+            };
 
-                let (message_store, session_store) = persistence::init()
-                    .await
-                    .expect("Failed to initialize persistence layer");
-
-                let providers = ProviderManager::new();
-                let mut tools = ToolManager::new();
-                tools.register_tool(ReadFileTool {});
-                let default_workspace_dir = std::env::current_dir()
-                    .and_then(|path| path.canonicalize())
-                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-
-                let agent_manager = Arc::new(Mutex::new(AgentManager::new(
-                    providers,
-                    tools,
-                    default_workspace_dir,
-                    message_store,
-                    session_store,
-                )));
-
-                let runtime = RuntimeInner {
-                    event_callback: callback,
-                    command_tx: command_tx_for_runtime,
-                    agent_manager,
-                };
-
-                runtime.run(command_rx).await;
-            });
+            if let Err(error) =
+                rt.block_on(Self::run_background(callback.clone(), command_tx_for_runtime, command_rx))
+            {
+                callback.on_event(Event::Error(error.to_string()));
+            }
         });
 
         handle
     }
 
-    fn init_tracing() {
-        use std::sync::Once;
+    async fn run_background(
+        callback: Arc<dyn EventCallback>,
+        command_tx: mpsc::Sender<Command>,
+        command_rx: mpsc::Receiver<Command>,
+    ) -> Result<()> {
+        Self::init_tracing()?;
+
+        let (message_store, session_store) = persistence::init()
+            .await
+            .wrap_err("Failed to initialize persistence layer")?;
+
+        let providers = ProviderManager::new();
+        let mut tools = ToolManager::new();
+        tools.register_tool(ReadFileTool {});
+        let default_workspace_dir = std::env::current_dir()
+            .and_then(|path| path.canonicalize())
+            .or_else(|_| std::env::current_dir())
+            .wrap_err("Failed to determine current workspace directory")?;
+
+        let agent_manager = Arc::new(Mutex::new(AgentManager::new(
+            providers,
+            tools,
+            default_workspace_dir,
+            message_store,
+            session_store,
+        )));
+
+        let runtime = RuntimeInner {
+            event_callback: callback,
+            command_tx,
+            agent_manager,
+        };
+
+        runtime.run(command_rx).await;
+        Ok(())
+    }
+
+    fn init_tracing() -> Result<()> {
+        use std::sync::{Mutex, Once};
         static INIT: Once = Once::new();
+        static TRACING_INIT_RESULT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 
         INIT.call_once(|| {
-            let log_dir = directories::BaseDirs::new()
-                .expect("Failed to find user directories")
-                .home_dir()
-                .join(".agent-desktop/logs");
+            let result = (|| -> Result<()> {
+                let log_dir = directories::BaseDirs::new()
+                    .context("Failed to find user directories")?
+                    .home_dir()
+                    .join(".agent-desktop/logs");
 
-            std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+                std::fs::create_dir_all(&log_dir)
+                    .wrap_err_with(|| format!("Failed to create log directory {}", log_dir.display()))?;
 
-            let file_appender = tracing_appender::rolling::daily(&log_dir, "agent.log");
+                let file_appender = tracing_appender::rolling::daily(&log_dir, "agent.log");
 
-            let subscriber = tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-                )
-                .with_writer(file_appender)
-                .with_ansi(false)
-                .finish();
+                let subscriber = tracing_subscriber::fmt()
+                    .with_env_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    )
+                    .with_writer(file_appender)
+                    .with_ansi(false)
+                    .finish();
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
+                tracing::subscriber::set_global_default(subscriber)
+                    .map_err(|error| eyre!("Failed to set tracing subscriber: {error}"))?;
+                Ok(())
+            })();
+
+            if let Ok(mut slot) = TRACING_INIT_RESULT.lock() {
+                *slot = Some(result.map_err(|error| error.to_string()));
+            }
         });
+
+        TRACING_INIT_RESULT
+            .lock()
+            .map_err(|_| eyre!("Tracing init mutex poisoned"))?
+            .as_ref()
+            .map(|result| match result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(eyre!(error.clone())),
+            })
+            .unwrap_or_else(|| Ok(()))
     }
 }
 
@@ -986,12 +1026,23 @@ impl RuntimeInner {
             };
 
             let (tx, rx) = std::sync::mpsc::channel();
-            let mut watcher =
-                notify::recommended_watcher(tx).expect("Failed to create config watcher");
+            let mut watcher = match notify::recommended_watcher(tx) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    callback.on_event(Event::Error(format!(
+                        "Failed to create config watcher: {error}"
+                    )));
+                    return;
+                }
+            };
 
-            watcher
-                .watch(&config_dir, RecursiveMode::NonRecursive)
-                .expect("Failed to watch config directory");
+            if let Err(error) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
+                callback.on_event(Event::Error(format!(
+                    "Failed to watch config directory {}: {error}",
+                    config_dir.display()
+                )));
+                return;
+            }
 
             for res in rx {
                 match res {
@@ -1124,7 +1175,7 @@ fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSetti
         "openai" => ProviderType::OpenAi,
         other => return Err(eyre!("Unsupported provider type in settings: {other}")),
     };
-    let table = as_table(&config.config);
+    let table = as_table(&config.config)?;
     let base_url = table_string(table, "base_url");
     let api_key = table_string(table, "api_key");
     let env_var_api_key = table_string(table, "env_var_api_key");
@@ -1141,7 +1192,7 @@ fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSetti
 }
 
 fn model_settings_from_config(config: ModelConfig) -> Result<ModelSettings> {
-    let table = as_table(&config.config);
+    let table = as_table(&config.config)?;
     let id = table_string(table, "id").ok_or_else(|| eyre!("Model config missing id"))?;
     let name = table_string(table, "name");
     let max_context = table
@@ -1297,10 +1348,10 @@ fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError
     errors
 }
 
-fn as_table(value: &toml::Value) -> &toml::map::Map<String, toml::Value> {
+fn as_table(value: &toml::Value) -> Result<&toml::map::Map<String, toml::Value>> {
     value
         .as_table()
-        .expect("provider/model config should be a table")
+        .ok_or_else(|| eyre!("provider/model config should be a table"))
 }
 
 fn table_string(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<String> {

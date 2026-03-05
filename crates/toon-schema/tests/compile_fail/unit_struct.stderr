@@ -1,0 +1,6 @@
+error: ToonSchema cannot be derived for unit structs
+       help: add at least one named field or remove the derive
+ --> tests/compile_fail/unit_struct.rs:6:8
+  |
+6 | struct UnitStruct;
+  |        ^^^^^^^^^^

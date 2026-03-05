@@ -1,6 +1,10 @@
 use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 use toon_format::{ToonError, decode_default};
+
+static TOOL_CALL_BLOCK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
 
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {
@@ -48,9 +52,8 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
 }
 
 fn extract_tool_call_blocks(text: &str) -> Vec<String> {
-    let re = Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").unwrap();
-
-    re.captures_iter(text)
+    TOOL_CALL_BLOCK_RE
+        .captures_iter(text)
         .filter_map(|caps| caps.get(1).map(|content| content.as_str().to_string()))
         .collect()
 }

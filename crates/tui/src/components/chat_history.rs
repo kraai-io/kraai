@@ -6,8 +6,35 @@ use ratatui::{
 };
 use regex::Regex;
 use serde_json::{Map, Value};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use types::{ChatRole, Message};
+
+static IMAGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex"));
+static LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex"));
+static STRONG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*|__([^_]+)__").expect("valid regex"));
+static EMPHASIS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\*([^*]+)\*|_([^_]+)_").expect("valid regex"));
+static STRIKE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"~~([^~]+)~~").expect("valid regex"));
+static ESCAPE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\([\\`*_{}\[\]()#+.!~-])").expect("valid regex"));
+static INLINE_CODE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid regex"));
+static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(#{1,6})\s+(.*)$").expect("valid regex"));
+static QUOTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*>\s?(.*)$").expect("valid regex"));
+static UNORDERED_LIST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*[-*+]\s+(.*)$").expect("valid regex"));
+static ORDERED_LIST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(\d+)\.\s+(.*)$").expect("valid regex"));
+static FENCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*```([A-Za-z0-9_-]+)?\s*$").expect("valid regex"));
+static TOOL_CALL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
 
 pub struct ChatHistory<'a> {
     messages: &'a [&'a Message],
@@ -159,19 +186,12 @@ impl<'a> ChatHistory<'a> {
     }
 
     fn strip_non_code_inline_markdown(text: &str) -> String {
-        let image_re = Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex");
-        let link_re = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex");
-        let strong_re = Regex::new(r"\*\*([^*]+)\*\*|__([^_]+)__").expect("valid regex");
-        let emphasis_re = Regex::new(r"\*([^*]+)\*|_([^_]+)_").expect("valid regex");
-        let strike_re = Regex::new(r"~~([^~]+)~~").expect("valid regex");
-        let escape_re = Regex::new(r"\\([\\`*_{}\[\]()#+.!~-])").expect("valid regex");
-
-        let text = image_re.replace_all(text, "$1").to_string();
-        let text = link_re.replace_all(&text, "$1 ($2)").to_string();
-        let text = strong_re.replace_all(&text, "$1$2").to_string();
-        let text = emphasis_re.replace_all(&text, "$1$2").to_string();
-        let text = strike_re.replace_all(&text, "$1").to_string();
-        escape_re.replace_all(&text, "$1").to_string()
+        let text = IMAGE_RE.replace_all(text, "$1").to_string();
+        let text = LINK_RE.replace_all(&text, "$1 ($2)").to_string();
+        let text = STRONG_RE.replace_all(&text, "$1$2").to_string();
+        let text = EMPHASIS_RE.replace_all(&text, "$1$2").to_string();
+        let text = STRIKE_RE.replace_all(&text, "$1").to_string();
+        ESCAPE_RE.replace_all(&text, "$1").to_string()
     }
 
     fn inline_markdown_spans(
@@ -179,11 +199,10 @@ impl<'a> ChatHistory<'a> {
         base_style: Style,
         inline_code_style: Style,
     ) -> Vec<RenderedSpan> {
-        let inline_code_re = Regex::new(r"`([^`]+)`").expect("valid regex");
         let mut spans = Vec::new();
         let mut cursor = 0usize;
 
-        for caps in inline_code_re.captures_iter(text) {
+        for caps in INLINE_CODE_RE.captures_iter(text) {
             let full = match caps.get(0) {
                 Some(m) => m,
                 None => continue,
@@ -334,17 +353,11 @@ impl<'a> ChatHistory<'a> {
         let inline_code_style = Style::default().fg(Color::Rgb(255, 180, 90));
         let list_style = normal_style;
 
-        let heading_re = Regex::new(r"^\s*(#{1,6})\s+(.*)$").expect("valid regex");
-        let quote_re = Regex::new(r"^\s*>\s?(.*)$").expect("valid regex");
-        let unordered_list_re = Regex::new(r"^\s*[-*+]\s+(.*)$").expect("valid regex");
-        let ordered_list_re = Regex::new(r"^\s*(\d+)\.\s+(.*)$").expect("valid regex");
-        let fence_re = Regex::new(r"^\s*```([A-Za-z0-9_-]+)?\s*$").expect("valid regex");
-
         let mut in_fenced_code = false;
         let mut code_lang = String::new();
 
         for source_line in content.lines() {
-            if let Some(caps) = fence_re.captures(source_line) {
+            if let Some(caps) = FENCE_RE.captures(source_line) {
                 if in_fenced_code {
                     in_fenced_code = false;
                     code_lang.clear();
@@ -373,7 +386,7 @@ impl<'a> ChatHistory<'a> {
                 continue;
             }
 
-            if let Some(caps) = heading_re.captures(source_line) {
+            if let Some(caps) = HEADING_RE.captures(source_line) {
                 if let Some(text) = caps.get(2).map(|m| m.as_str()) {
                     let spans = Self::inline_markdown_spans(text, heading_style, inline_code_style);
                     Self::push_wrapped_spans(&mut lines, &spans, width, heading_style, "", "");
@@ -381,7 +394,7 @@ impl<'a> ChatHistory<'a> {
                 continue;
             }
 
-            if let Some(caps) = quote_re.captures(source_line)
+            if let Some(caps) = QUOTE_RE.captures(source_line)
                 && let Some(text) = caps.get(1).map(|m| m.as_str())
             {
                 let spans = Self::inline_markdown_spans(text, quote_style, inline_code_style);
@@ -389,7 +402,7 @@ impl<'a> ChatHistory<'a> {
                 continue;
             }
 
-            if let Some(caps) = unordered_list_re.captures(source_line)
+            if let Some(caps) = UNORDERED_LIST_RE.captures(source_line)
                 && let Some(text) = caps.get(1).map(|m| m.as_str())
             {
                 let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
@@ -397,7 +410,7 @@ impl<'a> ChatHistory<'a> {
                 continue;
             }
 
-            if let Some(caps) = ordered_list_re.captures(source_line) {
+            if let Some(caps) = ORDERED_LIST_RE.captures(source_line) {
                 let idx = caps.get(1).map(|m| m.as_str()).unwrap_or("1");
                 if let Some(text) = caps.get(2).map(|m| m.as_str()) {
                     let spans = Self::inline_markdown_spans(text, list_style, inline_code_style);
@@ -465,12 +478,10 @@ impl<'a> ChatHistory<'a> {
         let mut lines = Vec::new();
         let normal_style = Style::default().fg(Color::White);
 
-        let tool_call_re =
-            Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex");
         let mut cursor = 0usize;
         let mut found_tool_call = false;
 
-        for caps in tool_call_re.captures_iter(content) {
+        for caps in TOOL_CALL_RE.captures_iter(content) {
             let full_match = match caps.get(0) {
                 Some(m) => m,
                 None => continue,
