@@ -100,6 +100,14 @@
         }
       );
 
+      llvm-cov = craneLib.cargoLlvmCov (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
+          cargoLlvmCovCommand = "nextest";
+        }
+      );
+
       hakari = craneLib.mkCargoDerivation {
         inherit src;
         pname = "hakari";

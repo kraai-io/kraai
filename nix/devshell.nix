@@ -19,7 +19,10 @@
           cargo-deny
           cargo-hakari
           cargo-nextest
-          rust-bin.stable.latest.default
+          cargo-llvm-cov
+          (rust-bin.stable.latest.default.override {
+            extensions = ["llvm-tools-preview"];
+          })
           rust-analyzer
 
           pnpm
