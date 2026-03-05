@@ -696,21 +696,8 @@ impl App {
 
         let mut changed = false;
         loop {
-            match event::read()? {
-                CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    self.handle_key_event(key_event);
-                    changed = true;
-                }
-                CrosstermEvent::Mouse(mouse_event) => {
-                    self.handle_mouse_event(mouse_event);
-                    changed = true;
-                }
-                CrosstermEvent::Resize(_, _) => {
-                    self.clear_chat_selection();
-                    self.state.visible_chat_view = None;
-                    changed = true;
-                }
-                _ => {}
+            if self.handle_terminal_event(event::read()?) {
+                changed = true;
             }
 
             if !event::poll(std::time::Duration::from_millis(0))? {
@@ -719,6 +706,29 @@ impl App {
         }
 
         Ok(changed)
+    }
+
+    fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        match event {
+            CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                self.handle_key_event(key_event);
+                true
+            }
+            CrosstermEvent::Mouse(mouse_event) => {
+                self.handle_mouse_event(mouse_event);
+                true
+            }
+            CrosstermEvent::Paste(text) => {
+                self.handle_paste(text);
+                true
+            }
+            CrosstermEvent::Resize(_, _) => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
@@ -869,6 +879,18 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn handle_paste(&mut self, text: String) {
+        if self.state.mode != UiMode::Chat || text.is_empty() {
+            return;
+        }
+
+        self.insert_input_text(&text);
+        if active_command_prefix(&self.state.input).is_none() {
+            self.state.command_popup_dismissed = false;
+        }
+        self.reset_completion_cycle();
     }
 
     fn reset_completion_cycle(&mut self) {
@@ -1701,6 +1723,14 @@ impl App {
         }
     }
 
+    fn insert_input_text(&mut self, text: &str) {
+        let cursor = self.state.input_cursor.min(self.state.input.len());
+        if self.state.input.is_char_boundary(cursor) {
+            self.state.input.insert_str(cursor, text);
+            self.state.input_cursor = cursor + text.len();
+        }
+    }
+
     fn backspace_input_char(&mut self) {
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if cursor == 0 || !self.state.input.is_char_boundary(cursor) {
@@ -1942,7 +1972,8 @@ mod tests {
     use ratatui::{
         buffer::Buffer,
         crossterm::event::{
-            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+            Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
+            MouseEventKind,
         },
         layout::Rect,
         style::{Color, Style},
@@ -2663,6 +2694,38 @@ mod tests {
         harness.app.handle_key_event(shift_key(KeyCode::Enter));
 
         assert_eq!(harness.app.state.input, "hello\n");
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn paste_with_newlines_in_chat_inserts_text_without_submitting() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("before ");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        let changed = harness
+            .app
+            .handle_terminal_event(CrosstermEvent::Paste(String::from("line 1\nline 2")));
+
+        assert!(changed);
+        assert_eq!(harness.app.state.input, "before line 1\nline 2");
+        assert_eq!(harness.app.state.input_cursor, harness.app.state.input.len());
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn paste_inserts_text_at_cursor_position() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("hello world");
+        harness.app.state.input_cursor = "hello ".len();
+
+        let changed = harness
+            .app
+            .handle_terminal_event(CrosstermEvent::Paste(String::from("big\n")));
+
+        assert!(changed);
+        assert_eq!(harness.app.state.input, "hello big\nworld");
+        assert_eq!(harness.app.state.input_cursor, "hello big\n".len());
         assert!(harness.drain_requests().is_empty());
     }
 

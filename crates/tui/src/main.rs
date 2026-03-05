@@ -3,8 +3,8 @@ use color_eyre::eyre::Result;
 use crossbeam_channel::{Sender, bounded};
 use ratatui::crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
 };
@@ -32,12 +32,18 @@ fn main() -> Result<()> {
     execute!(
         stdout(),
         EnableMouseCapture,
+        EnableBracketedPaste,
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )?;
 
     let result = app.run(terminal);
 
-    execute!(stdout(), DisableMouseCapture, PopKeyboardEnhancementFlags)?;
+    execute!(
+        stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        PopKeyboardEnhancementFlags
+    )?;
     ratatui::restore();
 
     result
