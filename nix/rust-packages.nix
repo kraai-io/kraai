@@ -4,7 +4,10 @@
     pkgs,
     ...
   }: let
-    craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
+    craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p:
+      p.rust-bin.stable.latest.default.override {
+        extensions = ["llvm-tools-preview"];
+      });
     src = craneLib.cleanCargoSource ../.;
 
     commonArgs = {
