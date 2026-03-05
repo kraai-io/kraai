@@ -4,9 +4,9 @@ import { AgentRuntime, type Event } from "agent-ts-bindings";
 import {
 	app,
 	BrowserWindow,
-	type OpenDialogOptions,
 	dialog,
 	ipcMain,
+	type OpenDialogOptions,
 	shell,
 } from "electron";
 import icon from "../../resources/icon.png?asset";
@@ -122,13 +122,17 @@ function setupIpcHandlers() {
 		return await runtime.getCurrentWorkspaceState();
 	});
 
-	ipcMain.handle("agent:setCurrentWorkspaceDir", async (_, workspaceDir: string) => {
-		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.setCurrentWorkspaceDir(workspaceDir);
-	});
+	ipcMain.handle(
+		"agent:setCurrentWorkspaceDir",
+		async (_, workspaceDir: string) => {
+			if (!runtime) throw new Error("Runtime not initialized");
+			await runtime.setCurrentWorkspaceDir(workspaceDir);
+		},
+	);
 
 	ipcMain.handle("agent:pickWorkspaceDir", async (_, defaultPath?: string) => {
-		const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+		const owner =
+			mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
 		const options: OpenDialogOptions = {
 			properties: ["openDirectory"],
 			defaultPath,

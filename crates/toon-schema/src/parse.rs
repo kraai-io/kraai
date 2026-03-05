@@ -31,9 +31,9 @@
 
 use crate::ir::{Field, PrimitiveType, Range, Schema, Type};
 use syn::{
-    Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, Fields, GenericArgument,
-    Lit, Meta, PathArguments, Type as SynType, TypePath, punctuated::Punctuated,
-    spanned::Spanned, token::Comma,
+    Data, DataStruct, DeriveInput, Expr, ExprLit, Field as SynField, Fields, GenericArgument, Lit,
+    Meta, PathArguments, Type as SynType, TypePath, punctuated::Punctuated, spanned::Spanned,
+    token::Comma,
 };
 
 pub fn parse_toon_schema(input: &DeriveInput) -> syn::Result<Schema> {

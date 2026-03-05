@@ -1994,24 +1994,20 @@ mod tests {
 
     fn sample_settings() -> SettingsDocument {
         SettingsDocument {
-            providers: vec![
-                ProviderSettings {
-                    id: String::from("openai"),
-                    provider_type: ProviderType::OpenAi,
-                    base_url: Some(String::from("https://api.openai.com/v1")),
-                    api_key: None,
-                    env_var_api_key: Some(String::from("OPENAI_API_KEY")),
-                    only_listed_models: true,
-                },
-            ],
-            models: vec![
-                ModelSettings {
-                    id: String::from("gpt-4o-mini"),
-                    provider_id: String::from("openai"),
-                    name: Some(String::from("GPT-4o Mini")),
-                    max_context: Some(128_000),
-                },
-            ],
+            providers: vec![ProviderSettings {
+                id: String::from("openai"),
+                provider_type: ProviderType::OpenAi,
+                base_url: Some(String::from("https://api.openai.com/v1")),
+                api_key: None,
+                env_var_api_key: Some(String::from("OPENAI_API_KEY")),
+                only_listed_models: true,
+            }],
+            models: vec![ModelSettings {
+                id: String::from("gpt-4o-mini"),
+                provider_id: String::from("openai"),
+                name: Some(String::from("GPT-4o Mini")),
+                max_context: Some(128_000),
+            }],
         }
     }
 

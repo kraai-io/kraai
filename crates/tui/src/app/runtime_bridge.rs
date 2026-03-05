@@ -126,8 +126,12 @@ fn respond_with_runtime_error(
     let response = match req {
         RuntimeRequest::ListModels => RuntimeResponse::Models(Err(message.to_string())),
         RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(message.to_string())),
-        RuntimeRequest::SendMessage { .. } => RuntimeResponse::SendMessage(Err(message.to_string())),
-        RuntimeRequest::SaveSettings { .. } => RuntimeResponse::SaveSettings(Err(message.to_string())),
+        RuntimeRequest::SendMessage { .. } => {
+            RuntimeResponse::SendMessage(Err(message.to_string()))
+        }
+        RuntimeRequest::SaveSettings { .. } => {
+            RuntimeResponse::SaveSettings(Err(message.to_string()))
+        }
         RuntimeRequest::GetChatHistory => RuntimeResponse::ChatHistory(Err(message.to_string())),
         RuntimeRequest::GetCurrentTip => RuntimeResponse::CurrentTip(Err(message.to_string())),
         RuntimeRequest::ClearCurrentSession => {

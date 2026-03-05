@@ -122,7 +122,8 @@ function App(): React.JSX.Element {
 	const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
-	const [workspaceAppliesNextChat, setWorkspaceAppliesNextChat] = useState(false);
+	const [workspaceAppliesNextChat, setWorkspaceAppliesNextChat] =
+		useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isInitializedRef = useRef(false);
@@ -460,7 +461,9 @@ function App(): React.JSX.Element {
 
 	const handlePickWorkspace = async () => {
 		try {
-			const selected = await window.api?.pickWorkspaceDir(workspaceDir ?? undefined);
+			const selected = await window.api?.pickWorkspaceDir(
+				workspaceDir ?? undefined,
+			);
 			if (!selected) return;
 			await window.api?.setCurrentWorkspaceDir(selected);
 			await loadWorkspaceState();

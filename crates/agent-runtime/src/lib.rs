@@ -425,9 +425,11 @@ impl RuntimeBuilder {
                 }
             };
 
-            if let Err(error) =
-                rt.block_on(Self::run_background(callback.clone(), command_tx_for_runtime, command_rx))
-            {
+            if let Err(error) = rt.block_on(Self::run_background(
+                callback.clone(),
+                command_tx_for_runtime,
+                command_rx,
+            )) {
                 callback.on_event(Event::Error(error.to_string()));
             }
         });
@@ -484,8 +486,9 @@ impl RuntimeBuilder {
                     .home_dir()
                     .join(".agent-desktop/logs");
 
-                std::fs::create_dir_all(&log_dir)
-                    .wrap_err_with(|| format!("Failed to create log directory {}", log_dir.display()))?;
+                std::fs::create_dir_all(&log_dir).wrap_err_with(|| {
+                    format!("Failed to create log directory {}", log_dir.display())
+                })?;
 
                 let file_appender = tracing_appender::rolling::daily(&log_dir, "agent.log");
 
@@ -686,7 +689,9 @@ impl RuntimeInner {
                     .await
                     .set_current_workspace_dir(workspace_dir)
                     .await?;
-                response.send(()).map_err(|_| eyre!("Failed to send response"))?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
 
             Command::GetCurrentTip { response } => {
@@ -1101,10 +1106,16 @@ impl RuntimeInner {
 fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     let raw = PathBuf::from(path);
     if !raw.exists() {
-        return Err(eyre!("Workspace directory does not exist: {}", raw.display()));
+        return Err(eyre!(
+            "Workspace directory does not exist: {}",
+            raw.display()
+        ));
     }
     if !raw.is_dir() {
-        return Err(eyre!("Workspace path is not a directory: {}", raw.display()));
+        return Err(eyre!(
+            "Workspace path is not a directory: {}",
+            raw.display()
+        ));
     }
 
     Ok(raw.canonicalize().unwrap_or(raw))

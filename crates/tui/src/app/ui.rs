@@ -16,7 +16,7 @@ use ratatui::{
 use crate::components::{ChatHistory, TextInput, VisibleChatView};
 
 use super::{
-    ActiveSettingsEditor, AppState, ChatCellPosition, ChatSelection, CachedMessageRender,
+    ActiveSettingsEditor, AppState, CachedMessageRender, ChatCellPosition, ChatSelection,
     SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, flatten_models_map,
     message_fingerprint,
 };
@@ -274,7 +274,11 @@ pub(super) fn is_known_slash_command(command_line: &str) -> bool {
     command_line
         .split_whitespace()
         .next()
-        .is_some_and(|command| super::SLASH_COMMANDS.iter().any(|(known, _)| *known == command))
+        .is_some_and(|command| {
+            super::SLASH_COMMANDS
+                .iter()
+                .any(|(known, _)| *known == command)
+        })
 }
 
 pub(super) fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
@@ -575,7 +579,12 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     };
     Paragraph::new(Text::from(header)).render(header_area, buf);
 
-    let [providers_area, provider_form_area, models_area, model_form_area] = Layout::horizontal([
+    let [
+        providers_area,
+        provider_form_area,
+        models_area,
+        model_form_area,
+    ] = Layout::horizontal([
         Constraint::Percentage(24),
         Constraint::Percentage(26),
         Constraint::Percentage(24),
