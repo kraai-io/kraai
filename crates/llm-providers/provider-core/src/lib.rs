@@ -601,7 +601,7 @@ mod tests {
         };
 
         let result = manager.load_config(config, helper).await;
-        assert!(matches!(result, Err(_)));
+        assert!(result.is_err());
     }
 
     #[tokio::test]

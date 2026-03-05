@@ -1,26 +1,17 @@
 {
   "nodes": {
-    "drowse": {
-      "inputs": {
-        "flake-parts": [
-          "flake-parts"
-        ],
-        "haumea": "haumea",
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
+    "crane": {
       "locked": {
-        "lastModified": 1771865318,
-        "narHash": "sha256-fmKvtGMG2ho/pFbQfKY9UksTqpm5Ew8ILDwLVuVczHE=",
-        "owner": "figsoda",
-        "repo": "drowse",
-        "rev": "17ab5e143e0d3383f2f5931a93c44a4ec8fbfb1d",
+        "lastModified": 1772560058,
+        "narHash": "sha256-NuVKdMBJldwUXgghYpzIWJdfeB7ccsu1CC7B+NfSoZ8=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "db590d9286ed5ce22017541e36132eab4e8b3045",
         "type": "github"
       },
       "original": {
-        "owner": "figsoda",
-        "repo": "drowse",
+        "owner": "ipetkov",
+        "repo": "crane",
         "type": "github"
       }
     },
@@ -44,27 +35,6 @@
         "type": "github"
       }
     },
-    "haumea": {
-      "inputs": {
-        "nixpkgs": [
-          "drowse",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1708375098,
-        "narHash": "sha256-DaFJp3wDHgOqx98U0SF57bXaH2Orp106c+jSdPCVu1E=",
-        "owner": "nix-community",
-        "repo": "haumea",
-        "rev": "ec6350fd9353e7f27ce0e85d31f82e3ed73e4d70",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "haumea",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1772198003,
@@ -83,7 +53,7 @@
     },
     "root": {
       "inputs": {
-        "drowse": "drowse",
+        "crane": "crane",
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",

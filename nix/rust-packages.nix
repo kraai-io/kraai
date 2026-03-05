@@ -13,6 +13,7 @@
         in {
           inherit memberPath;
           name = manifest.package.name;
+          version = manifest.package.version;
         }
       )
       workspaceManifest.workspace.members;
@@ -38,29 +39,47 @@
       ];
     };
 
-    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+    workspaceVersion = (builtins.head workspaceMembers).version;
+
+    cargoArtifacts = craneLib.buildDepsOnly (commonArgs
+      // {
+        pname = "workspace-deps";
+        version = workspaceVersion;
+      });
+
+    tuiMember = lib.findFirst (member: member.name == "tui") null workspaceMembers;
+    tuiVersion =
+      if tuiMember == null
+      then throw "workspace member 'tui' not found"
+      else tuiMember.version;
 
     tuiPackage = craneLib.buildPackage (commonArgs
       // {
         inherit cargoArtifacts;
+        pname = "tui";
+        version = tuiVersion;
         cargoExtraArgs = "-p tui";
         doCheck = true;
       });
 
     cargoTestChecks = builtins.listToAttrs (map (member: {
-        name = "cargo-test-${member.name}";
+        name = "${member.name}";
         value = craneLib.cargoTest (commonArgs
           // {
             inherit cargoArtifacts;
+            pname = "${member.name}";
+            inherit (member) version;
             cargoExtraArgs = "-p ${member.name}";
           });
       })
       workspaceMembers);
     cargoClippyChecks = builtins.listToAttrs (map (member: {
-        name = "cargo-clippy-${member.name}";
+        name = "${member.name}";
         value = craneLib.cargoClippy (commonArgs
           // {
             inherit cargoArtifacts;
+            pname = "${member.name}";
+            inherit (member) version;
             cargoClippyExtraArgs = "-p ${member.name} --all-targets -- --deny warnings";
           });
       })
