@@ -203,6 +203,7 @@ pub struct AppState {
     optimistic_seq: u64,
     chat_epoch: u64,
     chat_render_cache: RefCell<ChatRenderCache>,
+    chat_viewport_height: u16,
     scroll: u16,
     auto_scroll: bool,
     selection: Option<ChatSelection>,
@@ -247,6 +248,7 @@ impl Default for AppState {
             optimistic_seq: 0,
             chat_epoch: 0,
             chat_render_cache: RefCell::new(ChatRenderCache::default()),
+            chat_viewport_height: 0,
             scroll: 0,
             auto_scroll: true,
             selection: None,
@@ -297,6 +299,40 @@ struct CachedMessageRender {
 }
 
 impl App {
+    fn update_chat_viewport(&mut self, height: u16) {
+        self.state.chat_viewport_height = height;
+        self.clamp_chat_scroll();
+    }
+
+    fn clamp_chat_scroll(&mut self) {
+        if self.state.auto_scroll {
+            return;
+        }
+
+        self.state.scroll = self.state.scroll.min(self.state.chat_max_scroll());
+    }
+
+    fn scroll_chat_by(&mut self, delta: i16) {
+        self.state.auto_scroll = false;
+        self.state.scroll = self
+            .state
+            .scroll
+            .saturating_add_signed(delta)
+            .min(self.state.chat_max_scroll());
+        self.clear_chat_selection();
+    }
+
+    fn scroll_chat_to_top(&mut self) {
+        self.state.auto_scroll = false;
+        self.state.scroll = 0;
+        self.clear_chat_selection();
+    }
+
+    fn scroll_chat_to_bottom(&mut self) {
+        self.state.auto_scroll = true;
+        self.clear_chat_selection();
+    }
+
     pub fn new(runtime: RuntimeHandle, event_rx: Receiver<Event>) -> Self {
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
 
@@ -338,6 +374,7 @@ impl App {
                     .flex(Flex::End);
                     let [chat_area, _, _] = layout.areas(area);
                     self.state.refresh_chat_render_cache(chat_area.width);
+                    self.update_chat_viewport(chat_area.height);
                     let view = {
                         let cache = self.state.chat_render_cache.borrow();
                         ChatHistory::visible_view_from_sections(
@@ -431,6 +468,7 @@ impl App {
                 self.state.status = format!("Stream error: {error}");
             }
             Event::HistoryUpdated => {
+                self.clamp_chat_scroll();
                 self.request_sync();
             }
             Event::MessageComplete(_) => {}
@@ -533,6 +571,7 @@ impl App {
                 self.state.chat_history = history;
                 self.invalidate_chat_cache();
                 self.reconcile_optimistic_messages();
+                self.clamp_chat_scroll();
             }
             RuntimeResponse::ChatHistory(Err(err)) => {
                 self.state.status = format!("Failed loading history: {err}");
@@ -542,6 +581,7 @@ impl App {
                     self.state.current_tip_id = tip;
                     self.invalidate_chat_cache();
                     self.reconcile_optimistic_messages();
+                    self.clamp_chat_scroll();
                 }
             }
             RuntimeResponse::CurrentTip(Err(err)) => {
@@ -552,6 +592,7 @@ impl App {
                 self.state.chat_history.clear();
                 self.state.optimistic_messages.clear();
                 self.invalidate_chat_cache();
+                self.clamp_chat_scroll();
                 self.request_sync();
             }
             RuntimeResponse::ClearCurrentSession(Err(err)) => {
@@ -571,6 +612,7 @@ impl App {
                 self.state.scroll = 0;
                 self.state.status = String::from("Session loaded");
                 self.invalidate_chat_cache();
+                self.clamp_chat_scroll();
                 self.request_sync();
             }
             RuntimeResponse::LoadSession {
@@ -602,6 +644,7 @@ impl App {
                     self.state.current_session_id = None;
                     self.state.chat_history.clear();
                     self.invalidate_chat_cache();
+                    self.clamp_chat_scroll();
                 }
             }
             RuntimeResponse::DeleteSession {
@@ -710,14 +753,10 @@ impl App {
                 }
             }
             MouseEventKind::ScrollUp => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_sub(3);
-                self.clear_chat_selection();
+                self.scroll_chat_by(-1);
             }
             MouseEventKind::ScrollDown => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_add(3);
-                self.clear_chat_selection();
+                self.scroll_chat_by(1);
             }
             _ => {}
         }
@@ -817,23 +856,16 @@ impl App {
                 self.move_input_cursor_right();
             }
             KeyCode::PageUp => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_sub(10);
-                self.clear_chat_selection();
+                self.scroll_chat_by(-10);
             }
             KeyCode::PageDown => {
-                self.state.auto_scroll = false;
-                self.state.scroll = self.state.scroll.saturating_add(10);
-                self.clear_chat_selection();
+                self.scroll_chat_by(10);
             }
             KeyCode::Home => {
-                self.state.auto_scroll = false;
-                self.state.scroll = 0;
-                self.clear_chat_selection();
+                self.scroll_chat_to_top();
             }
             KeyCode::End => {
-                self.state.auto_scroll = true;
-                self.clear_chat_selection();
+                self.scroll_chat_to_bottom();
             }
             _ => {}
         }
@@ -1873,6 +1905,11 @@ fn message_fingerprint(msg: &Message) -> u64 {
 }
 
 impl AppState {
+    fn chat_max_scroll(&self) -> u16 {
+        let cache = self.chat_render_cache.borrow();
+        cache.total_lines.saturating_sub(self.chat_viewport_height)
+    }
+
     fn rendered_messages(&self) -> Vec<Message> {
         let mut rendered_messages: Vec<Message> =
             build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
@@ -1951,6 +1988,13 @@ mod tests {
                 requests.push(request);
             }
             requests
+        }
+
+        fn set_chat_metrics(&mut self, total_lines: u16, viewport_height: u16) {
+            let mut cache = self.app.state.chat_render_cache.borrow_mut();
+            cache.total_lines = total_lines;
+            drop(cache);
+            self.app.state.chat_viewport_height = viewport_height;
         }
     }
 
@@ -2144,6 +2188,74 @@ mod tests {
     #[test]
     fn menu_scroll_when_content_fits_stays_at_top() {
         assert_eq!(menu_scroll_offset(4, 5, 8), 0);
+    }
+
+    #[test]
+    fn page_down_clamps_stored_scroll_to_chat_bottom() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 11;
+
+        harness.app.handle_chat_key_event(key(KeyCode::PageDown));
+
+        assert_eq!(harness.app.state.scroll, 12);
+        assert!(!harness.app.state.auto_scroll);
+    }
+
+    #[test]
+    fn mouse_scroll_down_does_not_accumulate_hidden_overscroll() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 12;
+
+        harness.app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(harness.app.state.scroll, 12);
+    }
+
+    #[test]
+    fn page_up_saturates_at_zero() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 4;
+
+        harness.app.handle_chat_key_event(key(KeyCode::PageUp));
+
+        assert_eq!(harness.app.state.scroll, 0);
+        assert!(!harness.app.state.auto_scroll);
+    }
+
+    #[test]
+    fn clamp_chat_scroll_reduces_offset_when_viewport_grows() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 12;
+
+        harness.app.update_chat_viewport(12);
+
+        assert_eq!(harness.app.state.scroll, 8);
+    }
+
+    #[test]
+    fn end_reenables_auto_scroll() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 5;
+
+        harness.app.handle_chat_key_event(key(KeyCode::End));
+
+        assert!(harness.app.state.auto_scroll);
+        assert_eq!(harness.app.state.scroll, 5);
     }
 
     #[test]
