@@ -70,13 +70,13 @@
     checks = {
       inherit tui;
 
-      # clippy = craneLib.cargoClippy (
-      #   commonArgs
-      #   // {
-      #     inherit cargoArtifacts;
-      #     cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-      #   }
-      # );
+      clippy = craneLib.cargoClippy (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
+          cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+        }
+      );
 
       doc = craneLib.cargoDoc (
         commonArgs

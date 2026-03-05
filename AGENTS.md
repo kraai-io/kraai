@@ -41,7 +41,7 @@ apps/
 ## Code Conventions
 
 **Rust:**
-- Strict clippy (`-D warnings`)
+- Strict clippy (`--all-targets -D warnings`)
 - Workspace dependencies defined in root Cargo.toml
 
 **TypeScript:**

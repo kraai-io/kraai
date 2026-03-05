@@ -85,7 +85,7 @@ fn test_basic_types_match_toon_format() {
     });
 
     let schema = BasicTypes::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -138,7 +138,7 @@ fn test_keyword_edge_cases() {
     });
 
     let schema = KeywordEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -191,7 +191,7 @@ fn test_number_like_strings() {
     });
 
     let schema = NumberLikeStrings::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -236,7 +236,7 @@ fn test_whitespace_edge_cases() {
     });
 
     let schema = WhitespaceEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -296,7 +296,7 @@ fn test_structural_char_edge_cases() {
     });
 
     let schema = StructuralCharEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -337,7 +337,7 @@ fn test_escape_sequence_edge_cases() {
     });
 
     let schema = EscapeSequenceEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -380,7 +380,7 @@ fn test_unicode_edge_cases() {
     });
 
     let schema = UnicodeEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -421,7 +421,7 @@ fn test_empty_single_values() {
     });
 
     let schema = EmptySingleValues::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -457,6 +457,7 @@ struct NumberEdgeCases {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_number_edge_cases() {
     let json = json!({
         "zero": 0,
@@ -470,7 +471,7 @@ fn test_number_edge_cases() {
     });
 
     let schema = NumberEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -514,7 +515,7 @@ fn test_array_edge_cases() {
     });
 
     let schema = ArrayEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -539,7 +540,7 @@ fn test_bool_edge_cases() {
     });
 
     let schema = BoolEdgeCases::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -640,7 +641,7 @@ fn test_safe_unquoted_strings() {
     });
 
     let schema = SafeUnquotedStrings::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -672,7 +673,7 @@ fn test_read_files_match_toon_format() {
     });
 
     let schema = ReadFilesArgs::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 #[derive(ToonSchema, Serialize, Deserialize)]
@@ -715,7 +716,7 @@ fn test_api_request_match_toon_format() {
     });
 
     let schema = ApiRequest::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
 
 // ============================================================================
@@ -761,5 +762,5 @@ fn test_complex_mixed_types() {
     });
 
     let schema = ComplexMixedTypes::toon_schema();
-    compare_toon_output(&json, &schema);
+    compare_toon_output(&json, schema);
 }
