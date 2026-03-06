@@ -9,6 +9,7 @@ members = [
   "crates/tools/tool-core",
   "crates/tools/tool-list-files",
   "crates/tools/tool-read-file",
+  "crates/tools/tool-search-files",
   "crates/toon-schema",
   "crates/tui",
   "crates/types",
@@ -35,6 +36,7 @@ provider-openai = { path = "crates/llm-providers/provider-openai" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-list-files = { path = "crates/tools/tool-list-files" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
+tool-search-files = { path = "crates/tools/tool-search-files" }
 toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
 
@@ -48,6 +50,10 @@ chrono = { version = "0.4.44", features = ["serde"] }
 color-eyre = "0.6.5"
 directories = "6.0.0"
 futures = "0.3.32"
+grep-matcher = "0.1.8"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.16"
+ignore = "0.4.24"
 llm-toolkit = "0.62.1"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"

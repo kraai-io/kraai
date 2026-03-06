@@ -13,6 +13,7 @@ provider-openai.workspace = true
 tool-core.workspace = true
 tool-list-files.workspace = true
 tool-read-file.workspace = true
+tool-search-files.workspace = true
 types.workspace = true
 
 color-eyre.workspace = true

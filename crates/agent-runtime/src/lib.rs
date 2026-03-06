@@ -13,6 +13,7 @@ use provider_core::{
 use tool_core::ToolManager;
 use tool_list_files::ListFilesTool;
 use tool_read_file::ReadFileTool;
+use tool_search_files::SearchFilesTool;
 use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
@@ -457,6 +458,7 @@ impl RuntimeBuilder {
         let mut tools = ToolManager::new();
         tools.register_tool(ReadFileTool {});
         tools.register_tool(ListFilesTool::new(default_workspace_dir.clone()));
+        tools.register_tool(SearchFilesTool::new(default_workspace_dir.clone()));
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,

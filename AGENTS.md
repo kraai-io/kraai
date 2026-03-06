@@ -28,7 +28,7 @@ crates/
     provider-openai/ - OpenAI LLM implementation
   tools/
     tool-core/       - Tool trait definitions
-    tool-read-file/  - File reading tool
+    tool-*/          - Tool definitions
   toon-schema/       - Schema definitions
   toon-schema-core/  - Core schema types
   tui/               - Terminal UI
