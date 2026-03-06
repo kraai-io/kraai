@@ -54,6 +54,7 @@ dependencies = [
  "tokio",
  "toml",
  "tool-core",
+ "tool-list-files",
  "tool-read-file",
  "tracing",
  "tracing-appender",
@@ -3698,6 +3699,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "toon-format",
+ "toon-schema",
+ "types",
+ "workspace-hack",
+]
+
+[[package]]
+name = "tool-list-files"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tool-core",
  "toon-format",
  "toon-schema",
  "types",

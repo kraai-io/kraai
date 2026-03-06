@@ -11,6 +11,7 @@ persistence.workspace = true
 provider-core.workspace = true
 provider-openai.workspace = true
 tool-core.workspace = true
+tool-list-files.workspace = true
 tool-read-file.workspace = true
 types.workspace = true
 

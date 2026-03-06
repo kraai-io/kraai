@@ -11,6 +11,7 @@ use provider_core::{
     ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
 use tool_core::ToolManager;
+use tool_list_files::ListFilesTool;
 use tool_read_file::ReadFileTool;
 use types::{MessageId, ModelId, ProviderId};
 
@@ -449,12 +450,13 @@ impl RuntimeBuilder {
             .wrap_err("Failed to initialize persistence layer")?;
 
         let providers = ProviderManager::new();
-        let mut tools = ToolManager::new();
-        tools.register_tool(ReadFileTool {});
         let default_workspace_dir = std::env::current_dir()
             .and_then(|path| path.canonicalize())
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
+        let mut tools = ToolManager::new();
+        tools.register_tool(ReadFileTool {});
+        tools.register_tool(ListFilesTool::new(default_workspace_dir.clone()));
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,

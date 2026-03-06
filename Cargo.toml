@@ -7,6 +7,7 @@ members = [
   "crates/llm-providers/provider-openai",
   "crates/persistence",
   "crates/tools/tool-core",
+  "crates/tools/tool-list-files",
   "crates/tools/tool-read-file",
   "crates/toon-schema",
   "crates/tui",
@@ -32,6 +33,7 @@ persistence = { path = "crates/persistence" }
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-openai = { path = "crates/llm-providers/provider-openai" }
 tool-core = { path = "crates/tools/tool-core" }
+tool-list-files = { path = "crates/tools/tool-list-files" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
 toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
