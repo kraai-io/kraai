@@ -198,6 +198,7 @@ pub struct AppState {
     exit: bool,
     input: String,
     input_cursor: usize,
+    ctrl_c_exit_armed: bool,
     chat_history: BTreeMap<MessageId, Message>,
     optimistic_messages: Vec<OptimisticMessage>,
     optimistic_seq: u64,
@@ -243,6 +244,7 @@ impl Default for AppState {
             exit: false,
             input: String::new(),
             input_cursor: 0,
+            ctrl_c_exit_armed: false,
             chat_history: BTreeMap::new(),
             optimistic_messages: Vec::new(),
             optimistic_seq: 0,
@@ -810,6 +812,13 @@ impl App {
     }
 
     fn handle_chat_key_event(&mut self, key_event: KeyEvent) {
+        if is_ctrl_c(key_event) {
+            self.handle_ctrl_c();
+            return;
+        }
+
+        self.state.ctrl_c_exit_armed = false;
+
         if is_copy_shortcut(key_event) {
             self.copy_selection_to_clipboard();
             return;
@@ -890,6 +899,26 @@ impl App {
         if active_command_prefix(&self.state.input).is_none() {
             self.state.command_popup_dismissed = false;
         }
+        self.reset_completion_cycle();
+    }
+
+    fn handle_ctrl_c(&mut self) {
+        if self.state.ctrl_c_exit_armed {
+            self.state.exit = true;
+            return;
+        }
+
+        self.clear_chat_transient_state();
+        self.state.ctrl_c_exit_armed = true;
+        self.state.status = String::from("Cleared input. Press Ctrl+C again to exit");
+    }
+
+    fn clear_chat_transient_state(&mut self) {
+        self.state.input.clear();
+        self.state.input_cursor = 0;
+        self.clear_chat_selection();
+        self.state.visible_chat_view = None;
+        self.state.command_popup_dismissed = false;
         self.reset_completion_cycle();
     }
 
@@ -1961,6 +1990,10 @@ impl AppState {
     }
 }
 
+fn is_ctrl_c(key_event: KeyEvent) -> bool {
+    key_event.code == KeyCode::Char('c') && key_event.modifiers == KeyModifiers::CONTROL
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
@@ -2039,6 +2072,10 @@ mod tests {
 
     fn ctrl_shift_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+    }
+
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
     fn message(id: &str, parent_id: Option<&str>, role: ChatRole, content: &str) -> Message {
@@ -2538,6 +2575,81 @@ mod tests {
 
         assert_eq!(result, Ok(true));
         assert_eq!(copied, Some(String::from("beta\ngam")));
+    }
+
+    #[test]
+    fn first_ctrl_c_clears_chat_input_without_exiting() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+        harness.app.state.command_popup_dismissed = true;
+        harness.app.state.command_completion_prefix = Some(String::from("s"));
+        harness.app.state.command_completion_index = 1;
+        harness.app.state.selection = Some(ChatSelection {
+            anchor: ChatCellPosition { line: 0, column: 0 },
+            focus: ChatCellPosition { line: 0, column: 1 },
+        });
+        harness.app.state.visible_chat_view =
+            Some(visible_chat_view(&["alpha"], Rect::new(0, 0, 10, 1)));
+
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+
+        assert!(!harness.app.state.exit);
+        assert!(harness.app.state.ctrl_c_exit_armed);
+        assert!(harness.app.state.input.is_empty());
+        assert_eq!(harness.app.state.input_cursor, 0);
+        assert_eq!(harness.app.state.selection, None);
+        assert_eq!(harness.app.state.visible_chat_view, None);
+        assert!(!harness.app.state.command_popup_dismissed);
+        assert_eq!(harness.app.state.command_completion_prefix, None);
+        assert_eq!(harness.app.state.command_completion_index, 0);
+        assert_eq!(
+            harness.app.state.status,
+            "Cleared input. Press Ctrl+C again to exit"
+        );
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn second_consecutive_ctrl_c_exits_chat() {
+        let mut harness = test_harness();
+
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+
+        assert!(harness.app.state.exit);
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn non_ctrl_c_key_disarms_ctrl_c_exit_confirmation() {
+        let mut harness = test_harness();
+        harness.app.state.input = String::from("hello");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+        assert!(harness.app.state.ctrl_c_exit_armed);
+
+        harness.app.handle_key_event(key(KeyCode::Char('x')));
+        assert!(!harness.app.state.ctrl_c_exit_armed);
+        assert_eq!(harness.app.state.input, "x");
+
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+        assert!(!harness.app.state.exit);
+        assert!(harness.app.state.ctrl_c_exit_armed);
+        assert!(harness.app.state.input.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_in_non_chat_mode_preserves_existing_behavior() {
+        let mut harness = test_harness();
+        harness.app.state.mode = UiMode::Help;
+
+        harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
+
+        assert_eq!(harness.app.state.mode, UiMode::Help);
+        assert!(!harness.app.state.exit);
+        assert!(!harness.app.state.ctrl_c_exit_armed);
     }
 
     #[test]
