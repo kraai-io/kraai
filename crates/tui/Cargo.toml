@@ -7,10 +7,10 @@ version = "0.1.0"
 
 [dependencies]
 agent-runtime = { workspace = true }
-arboard = "3.6.1"
-base64 = "0.22.1"
+arboard = { workspace = true }
+base64 = { workspace = true }
 color-eyre = { workspace = true }
-crossbeam-channel = "0.5"
+crossbeam-channel = { workspace = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
