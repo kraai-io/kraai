@@ -50,6 +50,7 @@ interface UIMessage {
 }
 
 interface PendingTool {
+	sessionId: string;
 	callId: string;
 	toolId: string;
 	args: string;
@@ -82,22 +83,22 @@ interface WindowAPI {
 	listModels: () => Promise<Record<string, BindingModel[]>>;
 	getSettings: () => Promise<SettingsDocument>;
 	saveSettings: (settings: SettingsDocument) => Promise<void>;
+	createSession: () => Promise<string>;
 	sendMessage: (
+		sessionId: string,
 		message: string,
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
-	clearCurrentSession: () => void;
-	getChatHistoryTree: () => Promise<Record<string, Message>>;
-	approveTool: (callId: string) => Promise<void>;
-	denyTool: (callId: string) => Promise<void>;
-	executeApprovedTools: () => Promise<void>;
+	getChatHistoryTree: (sessionId: string) => Promise<Record<string, Message>>;
+	approveTool: (sessionId: string, callId: string) => Promise<void>;
+	denyTool: (sessionId: string, callId: string) => Promise<void>;
+	executeApprovedTools: (sessionId: string) => Promise<void>;
 	listSessions: () => Promise<Session[]>;
 	loadSession: (sessionId: string) => Promise<boolean>;
 	deleteSession: (sessionId: string) => Promise<void>;
-	getCurrentSessionId: () => Promise<string | null>;
-	getCurrentWorkspaceState: () => Promise<WorkspaceState | null>;
-	setCurrentWorkspaceDir: (workspaceDir: string) => Promise<void>;
+	getWorkspaceState: (sessionId: string) => Promise<WorkspaceState | null>;
+	setWorkspaceDir: (sessionId: string, workspaceDir: string) => Promise<void>;
 	pickWorkspaceDir: (defaultPath?: string) => Promise<string | null>;
 }
 
@@ -178,23 +179,33 @@ function App(): React.JSX.Element {
 		if (!api) return;
 
 		try {
-			const [sessionsList, currentId] = await Promise.all([
-				api.listSessions(),
-				api.getCurrentSessionId(),
-			]);
+			const sessionsList = await api.listSessions();
 			setSessions(sessionsList);
-			setCurrentSessionId(currentId);
+			if (
+				currentSessionId &&
+				!sessionsList.some((session) => session.id === currentSessionId)
+			) {
+				setCurrentSessionId(null);
+				setMessages([]);
+				setWorkspaceDir(null);
+				setWorkspaceAppliesNextChat(false);
+			}
 		} catch (err) {
 			console.error("[UI] Failed to load sessions:", err);
 		}
-	}, []);
+	}, [currentSessionId]);
 
-	const loadWorkspaceState = useCallback(async () => {
+	const loadWorkspaceState = useCallback(async (sessionId: string | null) => {
 		const api = window.api;
 		if (!api) return;
+		if (!sessionId) {
+			setWorkspaceDir(null);
+			setWorkspaceAppliesNextChat(false);
+			return;
+		}
 
 		try {
-			const state = await api.getCurrentWorkspaceState();
+			const state = await api.getWorkspaceState(sessionId);
 			setWorkspaceDir(state?.workspaceDir ?? null);
 			setWorkspaceAppliesNextChat(state?.appliesNextChat ?? false);
 		} catch (err) {
@@ -202,66 +213,76 @@ function App(): React.JSX.Element {
 		}
 	}, []);
 
-	const loadChatHistory = useCallback(async () => {
-		const api = window.api;
-		if (!api) return;
+	const loadChatHistory = useCallback(
+		async (sessionId: string | null) => {
+			const api = window.api;
+			if (!api) return;
+			if (!sessionId) {
+				setMessages([]);
+				return;
+			}
 
-		try {
-			const historyMap = await api.getChatHistoryTree();
-			const entries = Object.entries(historyMap);
-			console.log("[UI] Chat history loaded:", entries.length, "messages");
+			try {
+				const historyMap = await api.getChatHistoryTree(sessionId);
+				const entries = Object.entries(historyMap);
+				console.log("[UI] Chat history loaded:", entries.length, "messages");
 
-			const messageMap = new Map<string, Message>();
-			const childMap = new Map<string, string>();
+				const messageMap = new Map<string, Message>();
+				const childMap = new Map<string, string>();
 
-			for (const [id, msg] of entries) {
-				console.log(
-					"[UI] Message:",
-					id,
-					"role:",
-					msg.role,
-					"parent:",
-					msg.parentId,
-				);
-				messageMap.set(id, msg);
-				if (msg.parentId) {
-					childMap.set(msg.parentId, id);
+				for (const [id, msg] of entries) {
+					console.log(
+						"[UI] Message:",
+						id,
+						"role:",
+						msg.role,
+						"parent:",
+						msg.parentId,
+					);
+					messageMap.set(id, msg);
+					if (msg.parentId) {
+						childMap.set(msg.parentId, id);
+					}
 				}
-			}
 
-			let tipId: string | null = null;
-			for (const [id] of entries) {
-				if (!childMap.has(id)) {
-					tipId = id;
-					break;
+				let tipId: string | null = null;
+				for (const [id] of entries) {
+					if (!childMap.has(id)) {
+						tipId = id;
+						break;
+					}
 				}
+
+				const ordered: { id: string; msg: Message }[] = [];
+				let currentId = tipId;
+				while (currentId) {
+					const msg = messageMap.get(currentId);
+					if (msg) {
+						ordered.unshift({ id: currentId, msg });
+						currentId = msg.parentId || null;
+					} else break;
+				}
+
+				const mappedMessages: UIMessage[] = ordered
+					.filter(
+						({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3,
+					)
+					.map(({ id, msg }) => ({
+						id,
+						content: msg.content,
+						role:
+							msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
+						isStreaming: msg.status.type === "Streaming",
+					}));
+
+				setMessages(mappedMessages);
+				forceScrollToBottom();
+			} catch (err) {
+				console.error("[UI] Failed to load chat history:", err);
 			}
-
-			const ordered: { id: string; msg: Message }[] = [];
-			let currentId = tipId;
-			while (currentId) {
-				const msg = messageMap.get(currentId);
-				if (msg) {
-					ordered.unshift({ id: currentId, msg });
-					currentId = msg.parentId || null;
-				} else break;
-			}
-
-			const mappedMessages: UIMessage[] = ordered
-				.filter(({ msg }) => msg.role === 1 || msg.role === 2 || msg.role === 3)
-				.map(({ id, msg }) => ({
-					id,
-					content: msg.content,
-					role: msg.role === 1 ? "user" : msg.role === 2 ? "assistant" : "tool",
-					isStreaming: msg.status.type === "Streaming",
-				}));
-
-			setMessages(mappedMessages);
-			forceScrollToBottom();
-		} catch (err) {
-			console.error("[UI] Failed to load chat history:", err);
-		}
-	}, [forceScrollToBottom]);
+		},
+		[forceScrollToBottom],
+	);
 
 	useEffect(() => {
 		const api = window.api;
@@ -275,15 +296,14 @@ function App(): React.JSX.Element {
 				case "ConfigLoaded":
 					loadModels();
 					loadSessions();
-					loadChatHistory();
-					loadWorkspaceState();
 					break;
 				case "Error":
 					console.error("[UI] Error:", event.field0);
 					setIsLoading(false);
 					break;
 				case "StreamStart":
-					loadWorkspaceState();
+					if (event.sessionId !== currentSessionId) break;
+					loadWorkspaceState(event.sessionId);
 					setMessages((prev) => [
 						...prev,
 						{
@@ -296,6 +316,7 @@ function App(): React.JSX.Element {
 					forceScrollToBottom();
 					break;
 				case "StreamChunk":
+					if (event.sessionId !== currentSessionId) break;
 					setMessages((prev) =>
 						prev.map((msg) =>
 							msg.id === event.messageId
@@ -306,10 +327,16 @@ function App(): React.JSX.Element {
 					scrollToBottom();
 					break;
 				case "StreamComplete":
+					if (event.sessionId !== currentSessionId) {
+						loadSessions();
+						break;
+					}
 					setIsLoading(false);
-					loadChatHistory();
+					loadChatHistory(event.sessionId);
+					loadSessions();
 					break;
 				case "StreamError":
+					if (event.sessionId !== currentSessionId) break;
 					console.error("[UI] Stream error:", event.error);
 					setIsLoading(false);
 					setMessages((prev) =>
@@ -317,6 +344,7 @@ function App(): React.JSX.Element {
 					);
 					break;
 				case "ToolCallDetected":
+					loadSessions();
 					console.log(
 						"[UI] Tool call detected:",
 						event.toolId,
@@ -325,6 +353,7 @@ function App(): React.JSX.Element {
 					setPendingTools((prev) => [
 						...prev,
 						{
+							sessionId: event.sessionId,
 							callId: event.callId,
 							toolId: event.toolId,
 							args: event.args,
@@ -336,6 +365,7 @@ function App(): React.JSX.Element {
 					]);
 					break;
 				case "ToolResultReady":
+					loadSessions();
 					console.log(
 						"[UI] Tool result ready:",
 						event.toolId,
@@ -343,14 +373,19 @@ function App(): React.JSX.Element {
 						event.denied,
 					);
 					setPendingTools((prev) =>
-						prev.filter((t) => t.callId !== event.callId),
+						prev.filter(
+							(t) =>
+								!(t.sessionId === event.sessionId && t.callId === event.callId),
+						),
 					);
 					break;
 				case "HistoryUpdated":
 					console.log("[UI] HistoryUpdated event received");
-					loadChatHistory();
 					loadSessions();
-					loadWorkspaceState();
+					if (event.sessionId === currentSessionId) {
+						loadChatHistory(event.sessionId);
+						loadWorkspaceState(event.sessionId);
+					}
 					break;
 			}
 		});
@@ -358,11 +393,12 @@ function App(): React.JSX.Element {
 		loadModels();
 	}, [
 		loadModels,
-		loadChatHistory,
 		forceScrollToBottom,
 		scrollToBottom,
 		loadSessions,
 		loadWorkspaceState,
+		currentSessionId,
+		loadChatHistory,
 	]);
 
 	useEffect(() => {
@@ -385,6 +421,17 @@ function App(): React.JSX.Element {
 
 		const [providerId, modelId] = selectedModel;
 		const content = inputValue.trim();
+		const api = window.api;
+		if (!api) return;
+
+		let sessionId = currentSessionId;
+		if (!sessionId) {
+			sessionId = await api.createSession();
+			setCurrentSessionId(sessionId);
+			await loadSessions();
+			await loadWorkspaceState(sessionId);
+		}
+
 		setInputValue("");
 		setIsLoading(true);
 
@@ -397,7 +444,7 @@ function App(): React.JSX.Element {
 		setMessages((prev) => [...prev, optimisticMessage]);
 		forceScrollToBottom();
 
-		window.api?.sendMessage(content, modelId, providerId).catch((err) => {
+		api.sendMessage(sessionId, content, modelId, providerId).catch((err) => {
 			console.error("[UI] Send failed:", err);
 			setIsLoading(false);
 		});
@@ -411,12 +458,10 @@ function App(): React.JSX.Element {
 	};
 
 	const handleNewChat = () => {
-		setMessages([]);
-		setPendingTools([]);
 		setCurrentSessionId(null);
+		setMessages([]);
 		setWorkspaceDir(null);
 		setWorkspaceAppliesNextChat(false);
-		window.api?.clearCurrentSession();
 	};
 
 	const handleLoadSession = async (sessionId: string) => {
@@ -424,14 +469,17 @@ function App(): React.JSX.Element {
 		if (success) {
 			setCurrentSessionId(sessionId);
 			setIsSidebarOpen(false);
-			await loadChatHistory();
-			await loadWorkspaceState();
+			await loadChatHistory(sessionId);
+			await loadWorkspaceState(sessionId);
 		}
 	};
 
 	const handleDeleteSession = async (sessionId: string) => {
 		await window.api?.deleteSession(sessionId);
 		setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+		setPendingTools((prev) =>
+			prev.filter((tool) => tool.sessionId !== sessionId),
+		);
 		if (sessionId === currentSessionId) {
 			setMessages([]);
 			setCurrentSessionId(null);
@@ -442,39 +490,54 @@ function App(): React.JSX.Element {
 	};
 
 	const handleApproveTool = async (callId: string) => {
-		await window.api?.approveTool(callId);
+		if (!currentSessionId) return;
+		await window.api?.approveTool(currentSessionId, callId);
 		setPendingTools((prev) =>
-			prev.map((t) => (t.callId === callId ? { ...t, approved: true } : t)),
+			prev.map((t) =>
+				t.sessionId === currentSessionId && t.callId === callId
+					? { ...t, approved: true }
+					: t,
+			),
 		);
 	};
 
 	const handleDenyTool = async (callId: string) => {
-		await window.api?.denyTool(callId);
+		if (!currentSessionId) return;
+		await window.api?.denyTool(currentSessionId, callId);
 		setPendingTools((prev) =>
-			prev.map((t) => (t.callId === callId ? { ...t, approved: false } : t)),
+			prev.map((t) =>
+				t.sessionId === currentSessionId && t.callId === callId
+					? { ...t, approved: false }
+					: t,
+			),
 		);
 	};
 
 	const handleExecuteTools = async () => {
-		await window.api?.executeApprovedTools();
+		if (!currentSessionId) return;
+		await window.api?.executeApprovedTools(currentSessionId);
 	};
 
 	const handlePickWorkspace = async () => {
+		if (!currentSessionId) return;
 		try {
 			const selected = await window.api?.pickWorkspaceDir(
 				workspaceDir ?? undefined,
 			);
 			if (!selected) return;
-			await window.api?.setCurrentWorkspaceDir(selected);
-			await loadWorkspaceState();
+			await window.api?.setWorkspaceDir(currentSessionId, selected);
+			await loadWorkspaceState(currentSessionId);
 			await loadSessions();
 		} catch (err) {
 			console.error("[UI] Failed to set workspace directory:", err);
 		}
 	};
 
-	const unhandledTools = pendingTools.filter((t) => t.approved === null);
-	const hasApprovedTools = pendingTools.some((t) => t.approved === true);
+	const currentPendingTools = pendingTools.filter(
+		(tool) => tool.sessionId === currentSessionId,
+	);
+	const unhandledTools = currentPendingTools.filter((t) => t.approved === null);
+	const hasApprovedTools = currentPendingTools.some((t) => t.approved === true);
 	const workspaceLabel = workspaceDir
 		? workspaceDir.length > 40
 			? `...${workspaceDir.slice(-37)}`

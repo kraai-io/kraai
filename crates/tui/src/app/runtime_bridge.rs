@@ -35,13 +35,20 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::Settings(result));
                 }
+                RuntimeRequest::CreateSession => {
+                    let result = rt
+                        .block_on(runtime.create_session())
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::CreateSession(result));
+                }
                 RuntimeRequest::SendMessage {
+                    session_id,
                     message,
                     model_id,
                     provider_id,
                 } => {
                     let result = rt
-                        .block_on(runtime.send_message(message, model_id, provider_id))
+                        .block_on(runtime.send_message(session_id, message, model_id, provider_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::SendMessage(result));
                 }
@@ -51,23 +58,17 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::SaveSettings(result));
                 }
-                RuntimeRequest::GetChatHistory => {
+                RuntimeRequest::GetChatHistory { session_id } => {
                     let result = rt
-                        .block_on(runtime.get_chat_history())
+                        .block_on(runtime.get_chat_history(session_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::ChatHistory(result));
                 }
-                RuntimeRequest::GetCurrentTip => {
+                RuntimeRequest::GetCurrentTip { session_id } => {
                     let result = rt
-                        .block_on(runtime.get_current_tip())
+                        .block_on(runtime.get_tip(session_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::CurrentTip(result));
-                }
-                RuntimeRequest::ClearCurrentSession => {
-                    let result = rt
-                        .block_on(runtime.clear_current_session())
-                        .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::ClearCurrentSession(result));
                 }
                 RuntimeRequest::LoadSession { session_id } => {
                     let result = rt
@@ -87,27 +88,27 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::DeleteSession { session_id, result });
                 }
-                RuntimeRequest::GetCurrentSessionId => {
+                RuntimeRequest::ApproveTool {
+                    session_id,
+                    call_id,
+                } => {
                     let result = rt
-                        .block_on(runtime.get_current_session_id())
-                        .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::CurrentSessionId(result));
-                }
-                RuntimeRequest::ApproveTool { call_id } => {
-                    let result = rt
-                        .block_on(runtime.approve_tool(call_id.clone()))
+                        .block_on(runtime.approve_tool(session_id, call_id.clone()))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::ApproveTool { call_id, result });
                 }
-                RuntimeRequest::DenyTool { call_id } => {
+                RuntimeRequest::DenyTool {
+                    session_id,
+                    call_id,
+                } => {
                     let result = rt
-                        .block_on(runtime.deny_tool(call_id.clone()))
+                        .block_on(runtime.deny_tool(session_id, call_id.clone()))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::DenyTool { call_id, result });
                 }
-                RuntimeRequest::ExecuteApprovedTools => {
+                RuntimeRequest::ExecuteApprovedTools { session_id } => {
                     let result = rt
-                        .block_on(runtime.execute_approved_tools())
+                        .block_on(runtime.execute_approved_tools(session_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::ExecuteApprovedTools(result));
                 }
@@ -126,16 +127,18 @@ fn respond_with_runtime_error(
     let response = match req {
         RuntimeRequest::ListModels => RuntimeResponse::Models(Err(message.to_string())),
         RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(message.to_string())),
+        RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
         RuntimeRequest::SendMessage { .. } => {
             RuntimeResponse::SendMessage(Err(message.to_string()))
         }
         RuntimeRequest::SaveSettings { .. } => {
             RuntimeResponse::SaveSettings(Err(message.to_string()))
         }
-        RuntimeRequest::GetChatHistory => RuntimeResponse::ChatHistory(Err(message.to_string())),
-        RuntimeRequest::GetCurrentTip => RuntimeResponse::CurrentTip(Err(message.to_string())),
-        RuntimeRequest::ClearCurrentSession => {
-            RuntimeResponse::ClearCurrentSession(Err(message.to_string()))
+        RuntimeRequest::GetChatHistory { .. } => {
+            RuntimeResponse::ChatHistory(Err(message.to_string()))
+        }
+        RuntimeRequest::GetCurrentTip { .. } => {
+            RuntimeResponse::CurrentTip(Err(message.to_string()))
         }
         RuntimeRequest::LoadSession { session_id } => RuntimeResponse::LoadSession {
             session_id,
@@ -146,18 +149,15 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::GetCurrentSessionId => {
-            RuntimeResponse::CurrentSessionId(Err(message.to_string()))
-        }
-        RuntimeRequest::ApproveTool { call_id } => RuntimeResponse::ApproveTool {
+        RuntimeRequest::ApproveTool { call_id, .. } => RuntimeResponse::ApproveTool {
             call_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::DenyTool { call_id } => RuntimeResponse::DenyTool {
+        RuntimeRequest::DenyTool { call_id, .. } => RuntimeResponse::DenyTool {
             call_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::ExecuteApprovedTools => {
+        RuntimeRequest::ExecuteApprovedTools { .. } => {
             RuntimeResponse::ExecuteApprovedTools(Err(message.to_string()))
         }
     };

@@ -1,5 +1,11 @@
 import { electronAPI } from "@electron-toolkit/preload";
-import type { Model, SettingsDocument } from "agent-ts-bindings";
+import type {
+	Message,
+	Model,
+	Session,
+	SettingsDocument,
+	WorkspaceState,
+} from "agent-ts-bindings";
 import { contextBridge, ipcRenderer } from "electron";
 
 // Type definitions matching NAPI-RS Event enum
@@ -7,12 +13,23 @@ type Event =
 	| { type: "ConfigLoaded" }
 	| { type: "Error"; field0: string }
 	| { type: "MessageComplete"; field0: string }
-	| { type: "StreamStart"; messageId: string }
-	| { type: "StreamChunk"; messageId: string; chunk: string }
-	| { type: "StreamComplete"; messageId: string }
-	| { type: "StreamError"; messageId: string; error: string }
+	| { type: "StreamStart"; sessionId: string; messageId: string }
+	| {
+			type: "StreamChunk";
+			sessionId: string;
+			messageId: string;
+			chunk: string;
+	  }
+	| { type: "StreamComplete"; sessionId: string; messageId: string }
+	| {
+			type: "StreamError";
+			sessionId: string;
+			messageId: string;
+			error: string;
+	  }
 	| {
 			type: "ToolCallDetected";
+			sessionId: string;
 			callId: string;
 			toolId: string;
 			args: string;
@@ -22,43 +39,16 @@ type Event =
 	  }
 	| {
 			type: "ToolResultReady";
+			sessionId: string;
 			callId: string;
 			toolId: string;
 			success: boolean;
 			output: string;
 			denied: boolean;
 	  }
-	| { type: "HistoryUpdated" };
+	| { type: "HistoryUpdated"; sessionId: string };
 
 type EventHandler = (event: Event) => void;
-
-// Session type matching NAPI-RS
-interface Session {
-	id: string;
-	tipId?: string;
-	workspaceDir: string;
-	createdAt: number;
-	updatedAt: number;
-	title?: string;
-}
-
-interface WorkspaceState {
-	workspaceDir: string;
-	appliesNextChat: boolean;
-}
-
-// Matching NAPI-RS generated types (from index.d.ts)
-interface Message {
-	id: string;
-	parentId?: string;
-	role: number; // ChatRole const enum: System=0, User=1, Assistant=2, Tool=3
-	content: string;
-	status:
-		| { type: "Complete" }
-		| { type: "Streaming"; callId: string }
-		| { type: "ProcessingTools" }
-		| { type: "Cancelled" };
-}
 
 // API exposed to renderer
 const api = {
@@ -84,32 +74,41 @@ const api = {
 		await ipcRenderer.invoke("agent:saveSettings", settings);
 	},
 
+	async createSession(): Promise<string> {
+		return await ipcRenderer.invoke("agent:createSession");
+	},
+
 	async sendMessage(
+		sessionId: string,
 		message: string,
 		modelId: string,
 		providerId: string,
 	): Promise<void> {
-		await ipcRenderer.invoke("agent:sendMessage", message, modelId, providerId);
+		await ipcRenderer.invoke(
+			"agent:sendMessage",
+			sessionId,
+			message,
+			modelId,
+			providerId,
+		);
 	},
 
-	clearCurrentSession(): void {
-		ipcRenderer.invoke("agent:clearCurrentSession");
+	async getChatHistoryTree(
+		sessionId: string,
+	): Promise<Record<string, Message>> {
+		return await ipcRenderer.invoke("agent:getChatHistoryTree", sessionId);
 	},
 
-	async getChatHistoryTree(): Promise<Record<string, Message>> {
-		return await ipcRenderer.invoke("agent:getChatHistoryTree");
+	async approveTool(sessionId: string, callId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:approveTool", sessionId, callId);
 	},
 
-	async approveTool(callId: string): Promise<void> {
-		await ipcRenderer.invoke("agent:approveTool", callId);
+	async denyTool(sessionId: string, callId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:denyTool", sessionId, callId);
 	},
 
-	async denyTool(callId: string): Promise<void> {
-		await ipcRenderer.invoke("agent:denyTool", callId);
-	},
-
-	async executeApprovedTools(): Promise<void> {
-		await ipcRenderer.invoke("agent:executeApprovedTools");
+	async executeApprovedTools(sessionId: string): Promise<void> {
+		await ipcRenderer.invoke("agent:executeApprovedTools", sessionId);
 	},
 
 	async listSessions(): Promise<Session[]> {
@@ -124,16 +123,15 @@ const api = {
 		await ipcRenderer.invoke("agent:deleteSession", sessionId);
 	},
 
-	async getCurrentSessionId(): Promise<string | null> {
-		return await ipcRenderer.invoke("agent:getCurrentSessionId");
+	async getWorkspaceState(sessionId: string): Promise<WorkspaceState | null> {
+		return await ipcRenderer.invoke("agent:getWorkspaceState", sessionId);
 	},
 
-	async getCurrentWorkspaceState(): Promise<WorkspaceState | null> {
-		return await ipcRenderer.invoke("agent:getCurrentWorkspaceState");
-	},
-
-	async setCurrentWorkspaceDir(workspaceDir: string): Promise<void> {
-		await ipcRenderer.invoke("agent:setCurrentWorkspaceDir", workspaceDir);
+	async setWorkspaceDir(
+		sessionId: string,
+		workspaceDir: string,
+	): Promise<void> {
+		await ipcRenderer.invoke("agent:setWorkspaceDir", sessionId, workspaceDir);
 	},
 
 	async pickWorkspaceDir(defaultPath?: string): Promise<string | null> {

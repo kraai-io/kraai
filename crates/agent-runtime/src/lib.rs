@@ -113,17 +113,32 @@ pub enum Event {
 
     // Streaming events
     /// Stream started for a message
-    StreamStart { message_id: String },
+    StreamStart {
+        session_id: String,
+        message_id: String,
+    },
     /// Chunk received for a streaming message
-    StreamChunk { message_id: String, chunk: String },
+    StreamChunk {
+        session_id: String,
+        message_id: String,
+        chunk: String,
+    },
     /// Stream completed for a message
-    StreamComplete { message_id: String },
+    StreamComplete {
+        session_id: String,
+        message_id: String,
+    },
     /// Stream error for a message
-    StreamError { message_id: String, error: String },
+    StreamError {
+        session_id: String,
+        message_id: String,
+        error: String,
+    },
 
     // Tool events
     /// Tool call detected, awaiting permission
     ToolCallDetected {
+        session_id: String,
         call_id: String,
         tool_id: String,
         args: String,
@@ -133,6 +148,7 @@ pub enum Event {
     },
     /// Tool execution result ready
     ToolResultReady {
+        session_id: String,
         call_id: String,
         tool_id: String,
         success: bool,
@@ -142,7 +158,7 @@ pub enum Event {
 
     // History events
     /// Chat history was updated
-    HistoryUpdated,
+    HistoryUpdated { session_id: String },
 }
 
 // ============================================================================
@@ -183,13 +199,16 @@ enum Command {
         settings: SettingsDocument,
         response: oneshot::Sender<()>,
     },
+    CreateSession {
+        response: oneshot::Sender<String>,
+    },
     SendMessage {
+        session_id: String,
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
     },
     LoadConfig,
-    ClearCurrentSession,
     LoadSession {
         session_id: String,
         response: oneshot::Sender<bool>,
@@ -200,29 +219,34 @@ enum Command {
     DeleteSession {
         session_id: String,
     },
-    GetCurrentSessionId {
-        response: oneshot::Sender<Option<String>>,
-    },
-    GetCurrentWorkspaceState {
+    GetWorkspaceState {
+        session_id: String,
         response: oneshot::Sender<Option<WorkspaceState>>,
     },
-    SetCurrentWorkspaceDir {
+    SetWorkspaceDir {
+        session_id: String,
         workspace_dir: String,
         response: oneshot::Sender<()>,
     },
-    GetCurrentTip {
+    GetTip {
+        session_id: String,
         response: oneshot::Sender<Option<String>>,
     },
     GetChatHistory {
+        session_id: String,
         response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
     },
     ApproveTool {
+        session_id: String,
         call_id: String,
     },
     DenyTool {
+        session_id: String,
         call_id: String,
     },
-    ExecuteApprovedTools,
+    ExecuteApprovedTools {
+        session_id: String,
+    },
 }
 
 // ============================================================================
@@ -269,15 +293,25 @@ impl RuntimeHandle {
         Ok(rx.await?)
     }
 
+    pub async fn create_session(&self) -> Result<String> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::CreateSession { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
     /// Send a message to the agent
     pub async fn send_message(
         &self,
+        session_id: String,
         message: String,
         model_id: String,
         provider_id: String,
     ) -> Result<()> {
         self.command_tx
             .send(Command::SendMessage {
+                session_id,
                 message,
                 model_id: ModelId::new(model_id),
                 provider_id: ProviderId::new(provider_id),
@@ -287,18 +321,18 @@ impl RuntimeHandle {
     }
 
     /// Get the chat history as a tree
-    pub async fn get_chat_history(&self) -> Result<BTreeMap<MessageId, types::Message>> {
+    pub async fn get_chat_history(
+        &self,
+        session_id: String,
+    ) -> Result<BTreeMap<MessageId, types::Message>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::GetChatHistory { response: tx })
+            .send(Command::GetChatHistory {
+                session_id,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
-    }
-
-    /// Clear the current session
-    pub async fn clear_current_session(&self) -> Result<()> {
-        self.command_tx.send(Command::ClearCurrentSession).await?;
-        Ok(())
     }
 
     /// Load a session by ID
@@ -330,27 +364,22 @@ impl RuntimeHandle {
         Ok(())
     }
 
-    /// Get the current session ID
-    pub async fn get_current_session_id(&self) -> Result<Option<String>> {
+    pub async fn get_workspace_state(&self, session_id: String) -> Result<Option<WorkspaceState>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::GetCurrentSessionId { response: tx })
+            .send(Command::GetWorkspaceState {
+                session_id,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
     }
 
-    pub async fn get_current_workspace_state(&self) -> Result<Option<WorkspaceState>> {
+    pub async fn set_workspace_dir(&self, session_id: String, workspace_dir: String) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::GetCurrentWorkspaceState { response: tx })
-            .await?;
-        Ok(rx.await?)
-    }
-
-    pub async fn set_current_workspace_dir(&self, workspace_dir: String) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SetCurrentWorkspaceDir {
+            .send(Command::SetWorkspaceDir {
+                session_id,
                 workspace_dir,
                 response: tx,
             })
@@ -358,32 +387,45 @@ impl RuntimeHandle {
         Ok(rx.await?)
     }
 
-    /// Get the current tip message ID
-    pub async fn get_current_tip(&self) -> Result<Option<String>> {
+    /// Get the current tip message ID for a session.
+    pub async fn get_tip(&self, session_id: String) -> Result<Option<String>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::GetCurrentTip { response: tx })
+            .send(Command::GetTip {
+                session_id,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
     }
 
     /// Approve a tool call
-    pub async fn approve_tool(&self, call_id: String) -> Result<()> {
+    pub async fn approve_tool(&self, session_id: String, call_id: String) -> Result<()> {
         self.command_tx
-            .send(Command::ApproveTool { call_id })
+            .send(Command::ApproveTool {
+                session_id,
+                call_id,
+            })
             .await?;
         Ok(())
     }
 
     /// Deny a tool call
-    pub async fn deny_tool(&self, call_id: String) -> Result<()> {
-        self.command_tx.send(Command::DenyTool { call_id }).await?;
+    pub async fn deny_tool(&self, session_id: String, call_id: String) -> Result<()> {
+        self.command_tx
+            .send(Command::DenyTool {
+                session_id,
+                call_id,
+            })
+            .await?;
         Ok(())
     }
 
     /// Execute all approved tools
-    pub async fn execute_approved_tools(&self) -> Result<()> {
-        self.command_tx.send(Command::ExecuteApprovedTools).await?;
+    pub async fn execute_approved_tools(&self, session_id: String) -> Result<()> {
+        self.command_tx
+            .send(Command::ExecuteApprovedTools { session_id })
+            .await?;
         Ok(())
     }
 }
@@ -602,6 +644,13 @@ impl RuntimeInner {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
+            Command::CreateSession { response } => {
+                let session_id = self.agent_manager.lock().await.create_session().await?;
+                response
+                    .send(session_id)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
             Command::LoadConfig => {
                 self.load_providers_config().await?;
                 tracing::info!("Loaded config");
@@ -609,19 +658,12 @@ impl RuntimeInner {
             }
 
             Command::SendMessage {
+                session_id,
                 message,
                 model_id,
                 provider_id,
             } => {
-                self.handle_send_message(message, model_id, provider_id)
-                    .await;
-            }
-
-            Command::ClearCurrentSession => {
-                self.agent_manager
-                    .lock()
-                    .await
-                    .clear_current_session()
+                self.handle_send_message(session_id, message, model_id, provider_id)
                     .await;
             }
 
@@ -633,7 +675,7 @@ impl RuntimeInner {
                     .agent_manager
                     .lock()
                     .await
-                    .load_session(&session_id)
+                    .prepare_session(&session_id)
                     .await?;
                 response
                     .send(loaded)
@@ -656,24 +698,16 @@ impl RuntimeInner {
                     .await?;
             }
 
-            Command::GetCurrentSessionId { response } => {
-                let session_id = self
-                    .agent_manager
-                    .lock()
-                    .await
-                    .get_current_session_id()
-                    .map(|s| s.to_string());
-                response
-                    .send(session_id)
-                    .map_err(|_| eyre!("Failed to send response"))?;
-            }
-
-            Command::GetCurrentWorkspaceState { response } => {
+            Command::GetWorkspaceState {
+                session_id,
+                response,
+            } => {
                 let workspace_state = self
                     .agent_manager
                     .lock()
                     .await
-                    .get_current_workspace_dir_state()
+                    .get_workspace_dir_state(&session_id)
+                    .await?
                     .map(|(workspace_dir, applies_next_chat)| WorkspaceState {
                         workspace_dir: workspace_dir.display().to_string(),
                         applies_next_chat,
@@ -683,7 +717,8 @@ impl RuntimeInner {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
-            Command::SetCurrentWorkspaceDir {
+            Command::SetWorkspaceDir {
+                session_id,
                 workspace_dir,
                 response,
             } => {
@@ -691,19 +726,22 @@ impl RuntimeInner {
                 self.agent_manager
                     .lock()
                     .await
-                    .set_current_workspace_dir(workspace_dir)
+                    .set_workspace_dir(&session_id, workspace_dir)
                     .await?;
                 response
                     .send(())
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
-            Command::GetCurrentTip { response } => {
+            Command::GetTip {
+                session_id,
+                response,
+            } => {
                 let tip_id = self
                     .agent_manager
                     .lock()
                     .await
-                    .get_current_tip()
+                    .get_tip(&session_id)
                     .await?
                     .map(|id| id.to_string());
                 response
@@ -711,25 +749,45 @@ impl RuntimeInner {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
-            Command::GetChatHistory { response } => {
-                let history = self.agent_manager.lock().await.get_chat_history().await?;
+            Command::GetChatHistory {
+                session_id,
+                response,
+            } => {
+                let history = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .get_chat_history(&session_id)
+                    .await?;
                 response
                     .send(history)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
-            Command::ApproveTool { call_id } => {
+            Command::ApproveTool {
+                session_id,
+                call_id,
+            } => {
                 let call_id = types::CallId::new(call_id);
-                self.agent_manager.lock().await.approve_tool(call_id);
+                self.agent_manager
+                    .lock()
+                    .await
+                    .approve_tool(&session_id, call_id);
             }
 
-            Command::DenyTool { call_id } => {
+            Command::DenyTool {
+                session_id,
+                call_id,
+            } => {
                 let call_id = types::CallId::new(call_id);
-                self.agent_manager.lock().await.deny_tool(call_id);
+                self.agent_manager
+                    .lock()
+                    .await
+                    .deny_tool(&session_id, call_id);
             }
 
-            Command::ExecuteApprovedTools => {
-                self.handle_execute_tools().await;
+            Command::ExecuteApprovedTools { session_id } => {
+                self.handle_execute_tools(session_id).await;
             }
         }
 
@@ -738,6 +796,7 @@ impl RuntimeInner {
 
     async fn handle_send_message(
         &self,
+        session_id: String,
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -749,7 +808,10 @@ impl RuntimeInner {
         tokio::spawn(async move {
             let (msg_id, mut stream) = {
                 let mut agent = agent_manager.lock().await;
-                match agent.start_stream(message, model_id, provider_id).await {
+                match agent
+                    .start_stream(&session_id, message, model_id, provider_id)
+                    .await
+                {
                     Ok(result) => result,
                     Err(e) => {
                         event_callback.on_event(Event::Error(e.to_string()));
@@ -760,6 +822,7 @@ impl RuntimeInner {
 
             // Send stream start event
             event_callback.on_event(Event::StreamStart {
+                session_id: session_id.clone(),
                 message_id: msg_id.to_string(),
             });
 
@@ -774,17 +837,25 @@ impl RuntimeInner {
                         // Append to message in session
                         {
                             let agent = agent_manager.lock().await;
-                            agent.append_chunk(&msg_id, &chunk).await;
+                            if !agent.append_chunk(&msg_id, &chunk).await {
+                                return;
+                            }
                         }
 
                         // Send chunk event
                         event_callback.on_event(Event::StreamChunk {
+                            session_id: session_id.clone(),
                             message_id: msg_id.to_string(),
                             chunk,
                         });
                     }
                     Err(e) => {
+                        {
+                            let agent = agent_manager.lock().await;
+                            let _ = agent.abort_streaming_message(&msg_id).await;
+                        }
                         event_callback.on_event(Event::StreamError {
+                            session_id: session_id.clone(),
                             message_id: msg_id.to_string(),
                             error: e.to_string(),
                         });
@@ -796,23 +867,38 @@ impl RuntimeInner {
             tracing::debug!("Full content length: {}", full_content.len());
 
             // Complete the message
-            {
+            let completed_session = {
                 let agent = agent_manager.lock().await;
-                let _ = agent.complete_message(&msg_id).await;
-            }
+                agent.complete_message(&msg_id).await
+            };
+            let Ok(Some(completed_session)) = completed_session else {
+                return;
+            };
 
             // Send completion event
             event_callback.on_event(Event::StreamComplete {
+                session_id: completed_session.clone(),
                 message_id: msg_id.to_string(),
             });
 
             // Notify UI that history was updated
-            event_callback.on_event(Event::HistoryUpdated);
+            event_callback.on_event(Event::HistoryUpdated {
+                session_id: completed_session.clone(),
+            });
 
             // Check for tool calls
             let (tool_calls, failed) = {
                 let mut agent = agent_manager.lock().await;
-                agent.parse_tool_calls_from_content(&full_content).await
+                match agent
+                    .parse_tool_calls_from_content(&completed_session, &full_content)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        event_callback.on_event(Event::Error(error.to_string()));
+                        return;
+                    }
+                }
             };
 
             tracing::debug!(
@@ -824,12 +910,21 @@ impl RuntimeInner {
             if !failed.is_empty() {
                 tracing::warn!("Failed tool calls found, adding to history");
                 let mut agent = agent_manager.lock().await;
-                let _ = agent.add_failed_tool_calls_to_history(failed).await;
-                event_callback.on_event(Event::HistoryUpdated);
+                let _ = agent
+                    .add_failed_tool_calls_to_history(&completed_session, failed)
+                    .await;
+                event_callback.on_event(Event::HistoryUpdated {
+                    session_id: completed_session.clone(),
+                });
 
                 // Start continuation stream
-                Self::start_continuation(agent_manager.clone(), event_callback.clone(), command_tx)
-                    .await;
+                Self::start_continuation(
+                    completed_session,
+                    agent_manager.clone(),
+                    event_callback.clone(),
+                    command_tx,
+                )
+                .await;
                 return;
             }
 
@@ -840,7 +935,7 @@ impl RuntimeInner {
                 let args_json = {
                     let agent = agent_manager.lock().await;
                     agent
-                        .get_pending_tool_args(&tool_call.call_id)
+                        .get_pending_tool_args(&completed_session, &tool_call.call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
@@ -852,6 +947,7 @@ impl RuntimeInner {
                         tool_call.description
                     );
                     event_callback.on_event(Event::ToolCallDetected {
+                        session_id: completed_session.clone(),
                         call_id: tool_call.call_id.to_string(),
                         tool_id: tool_call.tool_id,
                         args: args_json,
@@ -865,12 +961,16 @@ impl RuntimeInner {
             }
 
             if has_auto_approved_tools {
-                let _ = command_tx.send(Command::ExecuteApprovedTools).await;
+                let _ = command_tx
+                    .send(Command::ExecuteApprovedTools {
+                        session_id: completed_session,
+                    })
+                    .await;
             }
         });
     }
 
-    async fn handle_execute_tools(&self) {
+    async fn handle_execute_tools(&self, session_id: String) {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
@@ -878,7 +978,7 @@ impl RuntimeInner {
         tokio::spawn(async move {
             let results = {
                 let mut agent = agent_manager.lock().await;
-                agent.execute_approved_tools().await
+                agent.execute_approved_tools(&session_id).await
             };
 
             for result in &results {
@@ -886,6 +986,7 @@ impl RuntimeInner {
                 let output = serde_json::to_string(&result.output).unwrap_or_default();
 
                 event_callback.on_event(Event::ToolResultReady {
+                    session_id: session_id.clone(),
                     call_id: result.call_id.to_string(),
                     tool_id: result.tool_id.to_string(),
                     success,
@@ -897,21 +998,27 @@ impl RuntimeInner {
             // Add results to history
             {
                 let mut agent = agent_manager.lock().await;
-                let _ = agent.add_tool_results_to_history(results).await;
+                let _ = agent
+                    .add_tool_results_to_history(&session_id, results)
+                    .await;
             }
 
             tracing::debug!("Emitting HistoryUpdated event after tool results");
-            event_callback.on_event(Event::HistoryUpdated);
+            event_callback.on_event(Event::HistoryUpdated {
+                session_id: session_id.clone(),
+            });
 
-            let has_pending_tools = { agent_manager.lock().await.has_pending_tools() };
+            let has_pending_tools = { agent_manager.lock().await.has_pending_tools(&session_id) };
             if !has_pending_tools {
                 // Start continuation stream
-                Self::start_continuation(agent_manager, event_callback, command_tx).await;
+                Self::start_continuation(session_id, agent_manager, event_callback, command_tx)
+                    .await;
             }
         });
     }
 
     fn start_continuation(
+        session_id: String,
         agent_manager: Arc<Mutex<AgentManager>>,
         event_callback: Arc<dyn EventCallback>,
         command_tx: mpsc::Sender<Command>,
@@ -919,7 +1026,7 @@ impl RuntimeInner {
         Box::pin(async move {
             let continuation = {
                 let mut agent = agent_manager.lock().await;
-                agent.start_continuation_stream().await
+                agent.start_continuation_stream(&session_id).await
             };
 
             let Ok(Some((msg_id, mut stream))) = continuation else {
@@ -927,6 +1034,7 @@ impl RuntimeInner {
             };
 
             event_callback.on_event(Event::StreamStart {
+                session_id: session_id.clone(),
                 message_id: msg_id.to_string(),
             });
 
@@ -938,16 +1046,24 @@ impl RuntimeInner {
                         content.push_str(&chunk);
                         {
                             let agent = agent_manager.lock().await;
-                            agent.append_chunk(&msg_id, &chunk).await;
+                            if !agent.append_chunk(&msg_id, &chunk).await {
+                                return;
+                            }
                         }
                         event_callback.on_event(Event::StreamChunk {
+                            session_id: session_id.clone(),
                             message_id: msg_id.to_string(),
                             chunk,
                         });
                     }
                     Err(e) => {
                         tracing::error!("Continuation stream error: {}", e);
+                        {
+                            let agent = agent_manager.lock().await;
+                            let _ = agent.abort_streaming_message(&msg_id).await;
+                        }
                         event_callback.on_event(Event::StreamError {
+                            session_id: session_id.clone(),
                             message_id: msg_id.to_string(),
                             error: e.to_string(),
                         });
@@ -956,30 +1072,56 @@ impl RuntimeInner {
                 }
             }
 
-            {
+            let completed_session = {
                 let agent = agent_manager.lock().await;
-                let _ = agent.complete_message(&msg_id).await;
-            }
+                agent.complete_message(&msg_id).await
+            };
+            let Ok(Some(completed_session)) = completed_session else {
+                return;
+            };
 
             event_callback.on_event(Event::StreamComplete {
+                session_id: completed_session.clone(),
                 message_id: msg_id.to_string(),
+            });
+            event_callback.on_event(Event::HistoryUpdated {
+                session_id: completed_session.clone(),
             });
 
             // Check for more tool calls
             let (tool_calls, failed) = {
                 let mut agent = agent_manager.lock().await;
-                agent.parse_tool_calls_from_content(&content).await
+                match agent
+                    .parse_tool_calls_from_content(&completed_session, &content)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        event_callback.on_event(Event::Error(error.to_string()));
+                        return;
+                    }
+                }
             };
 
             if !failed.is_empty() {
                 {
                     let mut agent = agent_manager.lock().await;
-                    let _ = agent.add_failed_tool_calls_to_history(failed).await;
+                    let _ = agent
+                        .add_failed_tool_calls_to_history(&completed_session, failed)
+                        .await;
                 }
-                event_callback.on_event(Event::HistoryUpdated);
+                event_callback.on_event(Event::HistoryUpdated {
+                    session_id: completed_session.clone(),
+                });
 
                 // Recurse for retry
-                Self::start_continuation(agent_manager, event_callback, command_tx).await;
+                Self::start_continuation(
+                    completed_session,
+                    agent_manager,
+                    event_callback,
+                    command_tx,
+                )
+                .await;
                 return;
             }
 
@@ -989,13 +1131,14 @@ impl RuntimeInner {
                 let args_json = {
                     let agent = agent_manager.lock().await;
                     agent
-                        .get_pending_tool_args(&tool_call.call_id)
+                        .get_pending_tool_args(&completed_session, &tool_call.call_id)
                         .map(|a| serde_json::to_string(&a).unwrap_or_default())
                         .unwrap_or_default()
                 };
 
                 if tool_call.requires_confirmation {
                     event_callback.on_event(Event::ToolCallDetected {
+                        session_id: completed_session.clone(),
                         call_id: tool_call.call_id.to_string(),
                         tool_id: tool_call.tool_id,
                         args: args_json,
@@ -1009,7 +1152,11 @@ impl RuntimeInner {
             }
 
             if has_auto_approved_tools {
-                let _ = command_tx.send(Command::ExecuteApprovedTools).await;
+                let _ = command_tx
+                    .send(Command::ExecuteApprovedTools {
+                        session_id: completed_session,
+                    })
+                    .await;
             }
         })
     }

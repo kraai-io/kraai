@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
@@ -31,20 +30,57 @@ pub enum PermissionStatus {
     Denied,
 }
 
+#[derive(Clone, Debug)]
+struct SessionRuntimeState {
+    active_tool_config: types::ToolCallGlobalConfig,
+    pending_tool_config: Option<types::ToolCallGlobalConfig>,
+    pending_tool_calls: HashMap<CallId, PendingToolCall>,
+    last_model: Option<ModelId>,
+    last_provider: Option<ProviderId>,
+}
+
+impl SessionRuntimeState {
+    fn new(workspace_dir: PathBuf) -> Self {
+        Self {
+            active_tool_config: types::ToolCallGlobalConfig { workspace_dir },
+            pending_tool_config: None,
+            pending_tool_calls: HashMap::new(),
+            last_model: None,
+            last_provider: None,
+        }
+    }
+
+    fn effective_workspace_dir(&self) -> PathBuf {
+        self.pending_tool_config
+            .as_ref()
+            .unwrap_or(&self.active_tool_config)
+            .workspace_dir
+            .clone()
+    }
+
+    fn promote_pending_tool_config(&mut self) {
+        if let Some(config) = self.pending_tool_config.take() {
+            self.active_tool_config = config;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StreamingMessageState {
+    session_id: String,
+    previous_tip: Option<MessageId>,
+    message: Message,
+}
+
 pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
     default_workspace_dir: PathBuf,
-    active_tool_config: types::ToolCallGlobalConfig,
-    pending_tool_config: Option<types::ToolCallGlobalConfig>,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
-    current_session_id: Option<String>,
-    /// Messages currently being streamed (not yet persisted)
-    streaming_messages: RwLock<HashMap<MessageId, Message>>,
-    pending_tool_calls: HashMap<CallId, PendingToolCall>,
-    last_model: Option<ModelId>,
-    last_provider: Option<ProviderId>,
+    session_states: HashMap<String, SessionRuntimeState>,
+    /// Messages currently being streamed (not yet persisted).
+    streaming_messages: RwLock<HashMap<MessageId, StreamingMessageState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -64,69 +100,52 @@ impl AgentManager {
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
     ) -> Self {
-        let active_tool_config = types::ToolCallGlobalConfig {
-            workspace_dir: default_workspace_dir.clone(),
-        };
         Self {
             providers,
             tools,
             default_workspace_dir,
-            active_tool_config,
-            pending_tool_config: None,
             message_store,
             session_store,
-            current_session_id: None,
+            session_states: HashMap::new(),
             streaming_messages: RwLock::new(HashMap::new()),
-            pending_tool_calls: HashMap::new(),
-            last_model: None,
-            last_provider: None,
         }
     }
 
-    /// Create a new session and set it as current
-    pub async fn new_session(&mut self) -> Result<String> {
-        self.ensure_session().await
-    }
+    pub async fn create_session(&mut self) -> Result<String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_secs();
 
-    /// Clear the current session (for starting fresh - session created on first message)
-    pub async fn clear_current_session(&mut self) {
-        self.current_session_id = None;
-        self.active_tool_config = types::ToolCallGlobalConfig {
+        let session_id = Ulid::new().to_string();
+        let session = SessionMeta {
+            id: session_id.clone(),
+            tip_id: None,
             workspace_dir: self.default_workspace_dir.clone(),
+            created_at: now,
+            updated_at: now,
+            title: None,
         };
-        self.pending_tool_config = None;
-        self.pending_tool_calls.clear();
-        self.last_model = None;
-        self.last_provider = None;
-        // Clear any orphaned streaming messages
-        self.streaming_messages.write().await.clear();
+
+        self.session_store.save(&session).await?;
+        self.ensure_runtime_state(&session_id, &session.workspace_dir);
+        Ok(session_id)
     }
 
-    /// Load an existing session as current
-    pub async fn load_session(&mut self, session_id: &str) -> Result<bool> {
+    pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
-                // Clean up streaming messages from previous session
-                self.streaming_messages.write().await.clear();
-
-                // Clean up hot cache for other sessions
+                self.ensure_runtime_state(session_id, &session.workspace_dir);
                 self.cleanup_hot_cache_for_session(&session).await?;
-
-                self.current_session_id = Some(session_id.to_string());
-                self.active_tool_config = types::ToolCallGlobalConfig {
-                    workspace_dir: session.workspace_dir,
-                };
-                self.pending_tool_config = None;
                 Ok(true)
             }
             None => Ok(false),
         }
     }
 
-    /// Clean up hot cache, keeping only messages from the given session's tree
+    /// Clean up hot cache, keeping only messages from the given session's tree.
     async fn cleanup_hot_cache_for_session(&self, session: &SessionMeta) -> Result<()> {
-        // Collect message IDs that should stay in hot cache
-        let mut keep_ids = std::collections::HashSet::new();
+        let mut keep_ids = HashSet::new();
 
         if let Some(tip_id) = &session.tip_id {
             let mut current = Some(tip_id.clone());
@@ -140,7 +159,6 @@ impl AgentManager {
             }
         }
 
-        // Unload messages not in the keep set
         let hot_ids = self.message_store.list_hot().await?;
         for id in hot_ids.difference(&keep_ids) {
             self.message_store.unload(id).await;
@@ -149,46 +167,45 @@ impl AgentManager {
         Ok(())
     }
 
-    /// List all sessions
     pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
         self.session_store.list().await
     }
 
-    /// Delete a session
-    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+    pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
+        self.abort_streaming_messages_for_session(session_id)
+            .await?;
+        self.session_states.remove(session_id);
         self.session_store.delete(session_id).await
     }
 
-    /// Get current session ID
-    pub fn get_current_session_id(&self) -> Option<&str> {
-        self.current_session_id.as_deref()
-    }
+    pub async fn set_workspace_dir(
+        &mut self,
+        session_id: &str,
+        workspace_dir: PathBuf,
+    ) -> Result<()> {
+        let mut session = self.require_session(session_id).await?;
+        session.workspace_dir = workspace_dir.clone();
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await?;
 
-    pub async fn set_current_workspace_dir(&mut self, workspace_dir: PathBuf) -> Result<()> {
-        let session_id = self.ensure_session().await?;
-        if let Some(mut session) = self.session_store.get(&session_id).await? {
-            session.workspace_dir = workspace_dir.clone();
-            session.updated_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_secs();
-            self.session_store.save(&session).await?;
-        }
-
-        self.pending_tool_config = Some(types::ToolCallGlobalConfig { workspace_dir });
+        self.ensure_runtime_state(session_id, &session.workspace_dir)
+            .pending_tool_config = Some(types::ToolCallGlobalConfig { workspace_dir });
         Ok(())
     }
 
-    pub fn get_current_workspace_dir_state(&self) -> Option<(PathBuf, bool)> {
-        self.current_session_id.as_ref()?;
-        let applies_next_chat = self.pending_tool_config.is_some();
-        let workspace_dir = self
-            .pending_tool_config
-            .as_ref()
-            .unwrap_or(&self.active_tool_config)
-            .workspace_dir
-            .clone();
-        Some((workspace_dir, applies_next_chat))
+    pub async fn get_workspace_dir_state(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<(PathBuf, bool)>> {
+        let Some(session) = self.session_store.get(session_id).await? else {
+            return Ok(None);
+        };
+
+        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+        Ok(Some((
+            state.effective_workspace_dir(),
+            state.pending_tool_config.is_some(),
+        )))
     }
 
     pub async fn set_providers(
@@ -203,30 +220,18 @@ impl AgentManager {
         self.providers.list_all_models().await
     }
 
-    pub async fn get_current_tip(&self) -> Result<Option<MessageId>> {
-        let session_id = match &self.current_session_id {
-            Some(id) => id,
-            None => return Ok(None),
-        };
-
-        match self.session_store.get(session_id).await? {
-            Some(session) => Ok(session.tip_id),
-            None => Ok(None),
-        }
+    pub async fn get_tip(&self, session_id: &str) -> Result<Option<MessageId>> {
+        Ok(self
+            .session_store
+            .get(session_id)
+            .await?
+            .and_then(|session| session.tip_id))
     }
 
-    async fn update_tip(&self, new_tip: MessageId) -> Result<()> {
-        let session_id = match &self.current_session_id {
-            Some(id) => id.clone(),
-            None => return Ok(()),
-        };
-
-        if let Some(mut session) = self.session_store.get(&session_id).await? {
-            session.tip_id = Some(new_tip);
-            session.updated_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_secs();
+    async fn set_tip(&self, session_id: &str, new_tip: Option<MessageId>) -> Result<()> {
+        if let Some(mut session) = self.session_store.get(session_id).await? {
+            session.tip_id = new_tip;
+            session.updated_at = current_unix_timestamp();
             self.session_store.save(&session).await?;
         }
 
@@ -235,16 +240,22 @@ impl AgentManager {
 
     pub async fn start_stream(
         &mut self,
+        session_id: &str,
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<(MessageId, BoxStream<'static, Result<String>>)> {
-        self.promote_pending_tool_config();
-        self.last_model = Some(model_id.clone());
-        self.last_provider = Some(provider_id.clone());
+        let session = self.require_session(session_id).await?;
+        {
+            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+            state.promote_pending_tool_config();
+            state.last_model = Some(model_id.clone());
+            state.last_provider = Some(provider_id.clone());
+        }
 
-        let user_msg_id = self.add_message(ChatRole::User, message).await?;
-
+        let user_msg_id = self
+            .add_message(session_id, ChatRole::User, message)
+            .await?;
         let context = self.get_history_context(&user_msg_id).await?;
 
         let mut provider_messages: Vec<ChatMessage> = context
@@ -265,30 +276,41 @@ impl AgentManager {
 
         let call_id = CallId::new(Ulid::new());
         let assistant_msg_id = self
-            .start_streaming_message(ChatRole::Assistant, call_id)
+            .start_streaming_message(session_id, ChatRole::Assistant, call_id)
             .await?;
 
-        let stream = self
+        let stream = match self
             .providers
             .generate_reply_stream(provider_id, &model_id, provider_messages)
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = self.abort_streaming_message(&assistant_msg_id).await;
+                return Err(error);
+            }
+        };
 
         Ok((assistant_msg_id, stream))
     }
 
     pub async fn start_continuation_stream(
         &mut self,
+        session_id: &str,
     ) -> Result<Option<(MessageId, BoxStream<'static, Result<String>>)>> {
-        let model_id = match &self.last_model {
-            Some(m) => m.clone(),
-            None => return Ok(None),
-        };
-        let provider_id = match &self.last_provider {
-            Some(p) => p.clone(),
-            None => return Ok(None),
+        let session = self.require_session(session_id).await?;
+        let (model_id, provider_id) = {
+            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+            let Some(model_id) = &state.last_model else {
+                return Ok(None);
+            };
+            let Some(provider_id) = &state.last_provider else {
+                return Ok(None);
+            };
+            (model_id.clone(), provider_id.clone())
         };
 
-        let tip_id = match self.get_current_tip().await? {
+        let tip_id = match self.get_tip(session_id).await? {
             Some(id) => id,
             None => return Ok(None),
         };
@@ -313,56 +335,55 @@ impl AgentManager {
 
         let call_id = CallId::new(Ulid::new());
         let assistant_msg_id = self
-            .start_streaming_message(ChatRole::Assistant, call_id)
+            .start_streaming_message(session_id, ChatRole::Assistant, call_id)
             .await?;
 
-        let stream = self
+        let stream = match self
             .providers
             .generate_reply_stream(provider_id, &model_id, provider_messages)
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = self.abort_streaming_message(&assistant_msg_id).await;
+                return Err(error);
+            }
+        };
 
         Ok(Some((assistant_msg_id, stream)))
     }
 
-    async fn ensure_session(&mut self) -> Result<String> {
-        if let Some(id) = &self.current_session_id {
-            return Ok(id.clone());
-        }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::ZERO)
-            .as_secs();
-
-        let session_id = Ulid::new().to_string();
-        let session = SessionMeta {
-            id: session_id.clone(),
-            tip_id: None,
-            workspace_dir: self.default_workspace_dir.clone(),
-            created_at: now,
-            updated_at: now,
-            title: None,
-        };
-
-        self.session_store.save(&session).await?;
-        self.current_session_id = Some(session_id.clone());
-        self.active_tool_config = types::ToolCallGlobalConfig {
-            workspace_dir: self.default_workspace_dir.clone(),
-        };
-        self.pending_tool_config = None;
-
-        Ok(session_id)
+    fn ensure_runtime_state(
+        &mut self,
+        session_id: &str,
+        workspace_dir: &Path,
+    ) -> &mut SessionRuntimeState {
+        self.session_states
+            .entry(session_id.to_string())
+            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()))
     }
 
-    async fn add_message(&mut self, role: ChatRole, content: String) -> Result<MessageId> {
-        // Ensure we have a session before adding messages
-        self.ensure_session().await?;
+    async fn require_session(&self, session_id: &str) -> Result<SessionMeta> {
+        self.session_store
+            .get(session_id)
+            .await?
+            .ok_or_else(|| eyre!("Session not found: {session_id}"))
+    }
+
+    async fn add_message(
+        &mut self,
+        session_id: &str,
+        role: ChatRole,
+        content: String,
+    ) -> Result<MessageId> {
+        self.require_session(session_id).await?;
 
         let message_id = MessageId::new(Ulid::new());
-        let parent_id = self.get_current_tip().await?;
+        let parent_id = self.get_tip(session_id).await?;
 
         tracing::debug!(
-            "Adding message: id={}, role={:?}, parent={:?}",
+            "Adding message: session={}, id={}, role={:?}, parent={:?}",
+            session_id,
             message_id,
             role,
             parent_id
@@ -377,53 +398,101 @@ impl AgentManager {
         };
 
         self.message_store.save(&message).await?;
-        self.update_tip(message_id.clone()).await?;
+        self.set_tip(session_id, Some(message_id.clone())).await?;
 
         Ok(message_id)
     }
 
     async fn start_streaming_message(
         &mut self,
+        session_id: &str,
         role: ChatRole,
         call_id: CallId,
     ) -> Result<MessageId> {
-        // Ensure we have a session before adding messages
-        self.ensure_session().await?;
+        self.require_session(session_id).await?;
+
+        let session_has_stream = {
+            let streaming = self.streaming_messages.read().await;
+            streaming
+                .values()
+                .any(|state| state.session_id == session_id)
+        };
+        if session_has_stream {
+            return Err(eyre!("Session already has an active stream: {session_id}"));
+        }
 
         let message_id = MessageId::new(Ulid::new());
-        let parent_id = self.get_current_tip().await?;
+        let previous_tip = self.get_tip(session_id).await?;
 
         let message = Message {
             id: message_id.clone(),
-            parent_id,
+            parent_id: previous_tip.clone(),
             role,
             content: String::new(),
             status: MessageStatus::Streaming { call_id },
         };
 
-        // Store in streaming buffer, not persisted yet
         let mut streaming = self.streaming_messages.write().await;
-        streaming.insert(message_id.clone(), message);
+        streaming.insert(
+            message_id.clone(),
+            StreamingMessageState {
+                session_id: session_id.to_string(),
+                previous_tip,
+                message,
+            },
+        );
+        drop(streaming);
 
-        // Update tip to point to this streaming message
-        self.update_tip(message_id.clone()).await?;
-
+        self.set_tip(session_id, Some(message_id.clone())).await?;
         Ok(message_id)
     }
 
-    pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) {
+    pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) -> bool {
         let mut streaming = self.streaming_messages.write().await;
-        if let Some(msg) = streaming.get_mut(message_id) {
-            msg.content.push_str(chunk);
+        if let Some(state) = streaming.get_mut(message_id) {
+            state.message.content.push_str(chunk);
+            true
+        } else {
+            false
         }
     }
 
-    pub async fn complete_message(&self, message_id: &MessageId) -> Result<()> {
-        let mut streaming = self.streaming_messages.write().await;
-        if let Some(mut msg) = streaming.remove(message_id) {
-            msg.status = MessageStatus::Complete;
-            self.message_store.save(&msg).await?;
+    pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let state = self.streaming_messages.write().await.remove(message_id);
+        let Some(mut state) = state else {
+            return Ok(None);
+        };
+
+        state.message.status = MessageStatus::Complete;
+        self.message_store.save(&state.message).await?;
+        Ok(Some(state.session_id))
+    }
+
+    pub async fn abort_streaming_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let state = self.streaming_messages.write().await.remove(message_id);
+        let Some(state) = state else {
+            return Ok(None);
+        };
+
+        self.set_tip(&state.session_id, state.previous_tip).await?;
+        Ok(Some(state.session_id))
+    }
+
+    async fn abort_streaming_messages_for_session(&self, session_id: &str) -> Result<()> {
+        let to_abort: Vec<MessageId> = {
+            let streaming = self.streaming_messages.read().await;
+            streaming
+                .iter()
+                .filter_map(|(message_id, state)| {
+                    (state.session_id == session_id).then_some(message_id.clone())
+                })
+                .collect()
+        };
+
+        for message_id in to_abort {
+            self.abort_streaming_message(&message_id).await?;
         }
+
         Ok(())
     }
 
@@ -432,17 +501,15 @@ impl AgentManager {
         let mut current = Some(from.clone());
 
         while let Some(id) = current {
-            // Check streaming buffer first
             {
                 let streaming = self.streaming_messages.read().await;
-                if let Some(msg) = streaming.get(&id) {
-                    context.push(msg.clone());
-                    current = msg.parent_id.clone();
+                if let Some(state) = streaming.get(&id) {
+                    context.push(state.message.clone());
+                    current = state.message.parent_id.clone();
                     continue;
                 }
             }
 
-            // Then check persistent store
             if let Some(msg) = self.message_store.get(&id).await? {
                 context.push(msg.clone());
                 current = msg.parent_id.clone();
@@ -455,11 +522,10 @@ impl AgentManager {
         Ok(context)
     }
 
-    pub async fn get_chat_history(&self) -> Result<BTreeMap<MessageId, Message>> {
+    pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
         let mut result = BTreeMap::new();
 
-        // Get all messages from the current session's tree
-        let tip_id = match self.get_current_tip().await? {
+        let tip_id = match self.get_tip(session_id).await? {
             Some(id) => id,
             None => return Ok(result),
         };
@@ -469,11 +535,10 @@ impl AgentManager {
             result.insert(msg.id.clone(), msg);
         }
 
-        // Also include streaming messages
-        {
-            let streaming = self.streaming_messages.read().await;
-            for (id, msg) in streaming.iter() {
-                result.insert(id.clone(), msg.clone());
+        let streaming = self.streaming_messages.read().await;
+        for (message_id, state) in streaming.iter() {
+            if state.session_id == session_id {
+                result.insert(message_id.clone(), state.message.clone());
             }
         }
 
@@ -482,11 +547,20 @@ impl AgentManager {
 
     pub async fn parse_tool_calls_from_content(
         &mut self,
+        session_id: &str,
         content: &str,
-    ) -> (Vec<DetectedToolCall>, Vec<(String, String)>) {
+    ) -> Result<(Vec<DetectedToolCall>, Vec<(String, String)>)> {
+        let session = self.require_session(session_id).await?;
+        let active_tool_config = self
+            .ensure_runtime_state(session_id, &session.workspace_dir)
+            .active_tool_config
+            .clone();
+
         let result = toon_parser::parse_tool_calls(content);
 
         let mut detected_calls = Vec::new();
+        let mut pending_tool_calls = Vec::new();
+
         for parsed in result.successful {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
@@ -496,7 +570,7 @@ impl AgentManager {
                     &tool_id,
                     &parsed.args,
                     &tool_core::ToolContext {
-                        global_config: &self.active_tool_config,
+                        global_config: &active_tool_config,
                     },
                 )
                 .unwrap_or_else(|_| ToolCallAssessment {
@@ -517,20 +591,20 @@ impl AgentManager {
                 args: parsed.args,
             };
 
-            self.pending_tool_calls.insert(
+            pending_tool_calls.push((
                 call_id.clone(),
                 PendingToolCall {
                     call,
                     description: description.clone(),
                     assessment: assessment.clone(),
-                    config: self.active_tool_config.clone(),
+                    config: active_tool_config.clone(),
                     status: if requires_confirmation {
                         PermissionStatus::Pending
                     } else {
                         PermissionStatus::Approved
                     },
                 },
-            );
+            ));
 
             detected_calls.push(DetectedToolCall {
                 call_id,
@@ -541,17 +615,22 @@ impl AgentManager {
             });
         }
 
+        self.ensure_runtime_state(session_id, &session.workspace_dir)
+            .pending_tool_calls
+            .extend(pending_tool_calls);
+
         let failed_calls: Vec<(String, String)> = result
             .failed
             .into_iter()
-            .map(|f| (f.raw_content, f.error))
+            .map(|failure| (failure.raw_content, failure.error))
             .collect();
 
-        (detected_calls, failed_calls)
+        Ok((detected_calls, failed_calls))
     }
 
     pub async fn add_failed_tool_calls_to_history(
         &mut self,
+        session_id: &str,
         failed: Vec<(String, String)>,
     ) -> Result<()> {
         for (raw_content, error) in failed {
@@ -559,67 +638,78 @@ impl AgentManager {
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",
                 raw_content, error
             );
-            self.add_message(ChatRole::Tool, content).await?;
+            self.add_message(session_id, ChatRole::Tool, content)
+                .await?;
         }
         Ok(())
     }
 
     pub async fn process_message_for_tools(
         &mut self,
+        session_id: &str,
         message_id: &MessageId,
     ) -> Result<Vec<DetectedToolCall>> {
-        let history = self.get_chat_history().await?;
+        let history = self.get_chat_history(session_id).await?;
         let message = match history.get(message_id) {
-            Some(m) => m,
+            Some(message) => message,
             None => return Ok(vec![]),
         };
 
-        let (detected, failed) = self.parse_tool_calls_from_content(&message.content).await;
+        let (detected, failed) = self
+            .parse_tool_calls_from_content(session_id, &message.content)
+            .await?;
 
         if !failed.is_empty() {
-            self.add_failed_tool_calls_to_history(failed).await?;
+            self.add_failed_tool_calls_to_history(session_id, failed)
+                .await?;
         }
 
         Ok(detected)
     }
 
-    pub fn approve_tool(&mut self, call_id: CallId) -> bool {
-        if let Some(pending) = self.pending_tool_calls.get_mut(&call_id) {
-            pending.status = PermissionStatus::Approved;
-            true
-        } else {
-            false
-        }
+    pub fn approve_tool(&mut self, session_id: &str, call_id: CallId) -> bool {
+        self.session_states
+            .get_mut(session_id)
+            .and_then(|state| state.pending_tool_calls.get_mut(&call_id))
+            .map(|pending| {
+                pending.status = PermissionStatus::Approved;
+            })
+            .is_some()
     }
 
-    pub fn deny_tool(&mut self, call_id: CallId) -> bool {
-        if let Some(pending) = self.pending_tool_calls.get_mut(&call_id) {
-            pending.status = PermissionStatus::Denied;
-            true
-        } else {
-            false
-        }
+    pub fn deny_tool(&mut self, session_id: &str, call_id: CallId) -> bool {
+        self.session_states
+            .get_mut(session_id)
+            .and_then(|state| state.pending_tool_calls.get_mut(&call_id))
+            .map(|pending| {
+                pending.status = PermissionStatus::Denied;
+            })
+            .is_some()
     }
 
-    pub async fn execute_approved_tools(&mut self) -> Vec<ToolResult> {
-        let approved: Vec<_> = self
+    pub async fn execute_approved_tools(&mut self, session_id: &str) -> Vec<ToolResult> {
+        let Some(state) = self.session_states.get_mut(session_id) else {
+            return Vec::new();
+        };
+
+        let approved: Vec<_> = state
             .pending_tool_calls
             .iter()
-            .filter(|(_, p)| p.status == PermissionStatus::Approved)
-            .map(|(call_id, p)| {
+            .filter(|(_, pending)| pending.status == PermissionStatus::Approved)
+            .map(|(call_id, pending)| {
                 (
                     call_id.clone(),
-                    p.call.tool_id.clone(),
-                    p.call.args.clone(),
-                    p.config.clone(),
+                    pending.call.tool_id.clone(),
+                    pending.call.args.clone(),
+                    pending.config.clone(),
                 )
             })
             .collect();
-        let denied: Vec<_> = self
+        let denied: Vec<_> = state
             .pending_tool_calls
             .iter()
-            .filter(|(_, p)| p.status == PermissionStatus::Denied)
-            .map(|(call_id, p)| (call_id.clone(), p.call.tool_id.clone()))
+            .filter(|(_, pending)| pending.status == PermissionStatus::Denied)
+            .map(|(call_id, pending)| (call_id.clone(), pending.call.tool_id.clone()))
             .collect();
 
         let mut results = Vec::new();
@@ -636,10 +726,8 @@ impl AgentManager {
                 .await;
             let output = match result {
                 Ok(ToolOutput::Success { data }) => data,
-                Ok(ToolOutput::Error { message }) => {
-                    serde_json::json!({ "error": message })
-                }
-                Err(e) => serde_json::json!({ "error": e.to_string() }),
+                Ok(ToolOutput::Error { message }) => serde_json::json!({ "error": message }),
+                Err(error) => serde_json::json!({ "error": error.to_string() }),
             };
             results.push(ToolResult {
                 call_id,
@@ -659,13 +747,17 @@ impl AgentManager {
         }
 
         for result in &results {
-            self.pending_tool_calls.remove(&result.call_id);
+            state.pending_tool_calls.remove(&result.call_id);
         }
 
         results
     }
 
-    pub async fn add_tool_results_to_history(&mut self, results: Vec<ToolResult>) -> Result<()> {
+    pub async fn add_tool_results_to_history(
+        &mut self,
+        session_id: &str,
+        results: Vec<ToolResult>,
+    ) -> Result<()> {
         for result in results {
             let content = if result.permission_denied {
                 format!("Tool '{}' was denied by user", result.tool_id)
@@ -676,39 +768,337 @@ impl AgentManager {
             };
 
             tracing::debug!(
-                "Adding tool result to history: tool_id={}, denied={}",
+                "Adding tool result to history: session={}, tool_id={}, denied={}",
+                session_id,
                 result.tool_id,
                 result.permission_denied
             );
 
-            self.add_message(ChatRole::Tool, content).await?;
+            self.add_message(session_id, ChatRole::Tool, content)
+                .await?;
         }
         Ok(())
     }
 
-    pub fn has_pending_tools(&self) -> bool {
-        !self.pending_tool_calls.is_empty()
+    pub fn has_pending_tools(&self, session_id: &str) -> bool {
+        self.session_states
+            .get(session_id)
+            .is_some_and(|state| !state.pending_tool_calls.is_empty())
     }
 
-    pub fn get_pending_tool_args(&self, call_id: &CallId) -> Option<serde_json::Value> {
-        self.pending_tool_calls
-            .get(call_id)
-            .map(|p| p.call.args.clone())
+    pub fn get_pending_tool_args(
+        &self,
+        session_id: &str,
+        call_id: &CallId,
+    ) -> Option<serde_json::Value> {
+        self.session_states
+            .get(session_id)
+            .and_then(|state| state.pending_tool_calls.get(call_id))
+            .map(|pending| pending.call.args.clone())
     }
 
-    pub fn get_pending_tool_assessment(&self, call_id: &CallId) -> Option<ToolCallAssessment> {
-        self.pending_tool_calls
-            .get(call_id)
-            .map(|p| p.assessment.clone())
+    pub fn get_pending_tool_assessment(
+        &self,
+        session_id: &str,
+        call_id: &CallId,
+    ) -> Option<ToolCallAssessment> {
+        self.session_states
+            .get(session_id)
+            .and_then(|state| state.pending_tool_calls.get(call_id))
+            .map(|pending| pending.assessment.clone())
     }
+}
 
-    fn promote_pending_tool_config(&mut self) {
-        if let Some(config) = self.pending_tool_config.take() {
-            self.active_tool_config = config;
-        }
-    }
+fn current_unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::ZERO)
+        .as_secs()
 }
 
 fn default_autonomy_threshold() -> RiskLevel {
     RiskLevel::ReadOnlyWorkspace
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use color_eyre::eyre::Result;
+    use provider_core::Provider;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use types::{ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus};
+
+    struct MockProvider {
+        id: ProviderId,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for MockProvider {
+        fn get_provider_id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        async fn list_models(&self) -> Vec<Model> {
+            vec![Model {
+                id: ModelId::new("mock-model"),
+                name: String::from("Mock Model"),
+                max_context: None,
+            }]
+        }
+
+        async fn cache_models(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_model(&mut self, _model: provider_core::ModelConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn generate_reply(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ProviderChatMessage>,
+        ) -> Result<ProviderChatMessage> {
+            Ok(ProviderChatMessage {
+                role: ChatRole::Assistant,
+                content: String::from("reply"),
+            })
+        }
+
+        async fn generate_reply_stream(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ProviderChatMessage>,
+        ) -> Result<BoxStream<'static, Result<String>>> {
+            Ok(Box::pin(futures::stream::iter(vec![Ok(String::from(
+                "reply",
+            ))])))
+        }
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("agent-core-{name}-{nanos}-{}", Ulid::new()))
+    }
+
+    async fn test_manager() -> (AgentManager, PathBuf) {
+        let data_dir = test_dir("manager");
+        tokio::fs::create_dir_all(&data_dir).await.unwrap();
+
+        let message_store = Arc::new(persistence::FileMessageStore::new(&data_dir));
+        let session_store = Arc::new(persistence::FileSessionStore::new(
+            &data_dir,
+            message_store.clone(),
+        ));
+
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("mock"),
+            Box::new(MockProvider {
+                id: ProviderId::new("mock"),
+            }),
+        );
+
+        let manager = AgentManager::new(
+            providers,
+            ToolManager::new(),
+            PathBuf::from("/tmp/default-workspace"),
+            message_store,
+            session_store,
+        );
+        (manager, data_dir)
+    }
+
+    async fn cleanup_dir(data_dir: PathBuf) {
+        let _ = tokio::fs::remove_dir_all(data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_usable_session_id() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        let sessions = manager.list_sessions().await?;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(manager.get_tip(&session_id).await?, None);
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_a = manager.create_session().await?;
+        let session_b = manager.create_session().await?;
+
+        let a_message = manager
+            .add_message(&session_a, ChatRole::User, String::from("hello a"))
+            .await?;
+        let b_message = manager
+            .add_message(&session_b, ChatRole::User, String::from("hello b"))
+            .await?;
+
+        assert_eq!(manager.get_tip(&session_a).await?, Some(a_message.clone()));
+        assert_eq!(manager.get_tip(&session_b).await?, Some(b_message.clone()));
+
+        let history_a = manager.get_chat_history(&session_a).await?;
+        let history_b = manager.get_chat_history(&session_b).await?;
+
+        assert_eq!(history_a.len(), 1);
+        assert_eq!(history_b.len(), 1);
+        assert_eq!(history_a.get(&a_message).unwrap().content, "hello a");
+        assert_eq!(history_b.get(&b_message).unwrap().content, "hello b");
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result<()> {
+        let data_dir = test_dir("stream-failure");
+        tokio::fs::create_dir_all(&data_dir).await.unwrap();
+
+        let message_store = Arc::new(persistence::FileMessageStore::new(&data_dir));
+        let session_store = Arc::new(persistence::FileSessionStore::new(
+            &data_dir,
+            message_store.clone(),
+        ));
+        let manager_providers = ProviderManager::new();
+        let mut manager = AgentManager::new(
+            manager_providers,
+            ToolManager::new(),
+            PathBuf::from("/tmp/default-workspace"),
+            message_store,
+            session_store,
+        );
+
+        let session_id = manager.create_session().await?;
+        manager
+            .add_message(&session_id, ChatRole::User, String::from("hello"))
+            .await?;
+
+        let result = manager
+            .start_stream(
+                &session_id,
+                String::from("trigger failure"),
+                ModelId::new("mock-model"),
+                ProviderId::new("missing-provider"),
+            )
+            .await;
+        assert!(result.is_err());
+
+        let tip = manager.get_tip(&session_id).await?;
+        let history = manager.get_chat_history(&session_id).await?;
+        let latest_user_message = history
+            .values()
+            .filter(|message| message.role == ChatRole::User)
+            .max_by_key(|message| message.id.to_string())
+            .unwrap();
+
+        assert_eq!(tip, Some(latest_user_message.id.clone()));
+        assert_eq!(history.len(), 2);
+        assert!(
+            history
+                .values()
+                .all(|message| message.status == MessageStatus::Complete)
+        );
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        let stable_tip = manager
+            .add_message(&session_id, ChatRole::User, String::from("before stream"))
+            .await?;
+        let streaming_id = manager
+            .start_streaming_message(&session_id, ChatRole::Assistant, CallId::new("call-1"))
+            .await?;
+
+        assert_eq!(
+            manager.get_tip(&session_id).await?,
+            Some(streaming_id.clone())
+        );
+
+        manager.delete_session(&session_id).await?;
+
+        assert!(manager.get_tip(&session_id).await?.is_none());
+        assert!(manager.get_chat_history(&session_id).await?.is_empty());
+        assert!(
+            manager
+                .streaming_messages
+                .read()
+                .await
+                .get(&streaming_id)
+                .is_none()
+        );
+        assert!(!manager.message_store.exists(&stable_tip).await?);
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_a = manager.create_session().await?;
+        let session_b = manager.create_session().await?;
+
+        manager
+            .set_workspace_dir(&session_a, PathBuf::from("/tmp/workspace-a"))
+            .await?;
+
+        let call_id = CallId::new("call-a");
+        manager
+            .session_states
+            .get_mut(&session_a)
+            .unwrap()
+            .pending_tool_calls
+            .insert(
+                call_id.clone(),
+                PendingToolCall {
+                    call: ToolCall {
+                        call_id: call_id.clone(),
+                        tool_id: ToolId::new("mock_tool"),
+                        args: serde_json::json!({}),
+                    },
+                    description: String::from("test"),
+                    assessment: ToolCallAssessment {
+                        risk: RiskLevel::ReadOnlyWorkspace,
+                        policy: ExecutionPolicy::AlwaysAsk,
+                        reasons: Vec::new(),
+                    },
+                    config: types::ToolCallGlobalConfig {
+                        workspace_dir: PathBuf::from("/tmp/workspace-a"),
+                    },
+                    status: PermissionStatus::Pending,
+                },
+            );
+
+        let workspace_a = manager.get_workspace_dir_state(&session_a).await?.unwrap();
+        let workspace_b = manager.get_workspace_dir_state(&session_b).await?.unwrap();
+
+        assert_eq!(workspace_a.0, PathBuf::from("/tmp/workspace-a"));
+        assert!(workspace_a.1);
+        assert_eq!(workspace_b.0, PathBuf::from("/tmp/default-workspace"));
+        assert!(!workspace_b.1);
+        assert!(manager.has_pending_tools(&session_a));
+        assert!(!manager.has_pending_tools(&session_b));
+        assert!(!manager.approve_tool(&session_b, call_id.clone()));
+        assert!(manager.approve_tool(&session_a, call_id));
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
 }

@@ -66,7 +66,11 @@ impl Widget for &AppState {
         } else {
             "idle"
         };
-        let pending_tools = self.pending_tools.len();
+        let pending_tools = self
+            .pending_tools
+            .iter()
+            .filter(|tool| self.current_session_id.as_deref() == Some(tool.session_id.as_str()))
+            .count();
         let status_line = format!(
             "{} | model={} | tools={} | {}",
             self.status, selected_model, pending_tools, stream_state
@@ -884,10 +888,16 @@ fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
-    if state.pending_tools.is_empty() {
+    let current_tools: Vec<_> = state
+        .pending_tools
+        .iter()
+        .filter(|tool| state.current_session_id.as_deref() == Some(tool.session_id.as_str()))
+        .collect();
+
+    if current_tools.is_empty() {
         lines.push(Line::raw("No pending tool calls"));
     } else {
-        for (idx, tool) in state.pending_tools.iter().enumerate() {
+        for (idx, tool) in current_tools.iter().enumerate() {
             let selected = idx == state.tools_menu_index;
             let marker = if selected { ">" } else { " " };
             let status = match tool.approved {

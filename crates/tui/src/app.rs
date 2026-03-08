@@ -86,6 +86,7 @@ enum ActiveSettingsEditor {
 
 #[derive(Clone, Debug)]
 struct PendingTool {
+    session_id: String,
     call_id: String,
     tool_id: String,
     args: String,
@@ -99,6 +100,13 @@ struct PendingTool {
 struct OptimisticMessage {
     local_id: String,
     content: String,
+}
+
+#[derive(Clone, Debug)]
+struct PendingSubmit {
+    message: String,
+    model_id: String,
+    provider_id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +136,9 @@ impl ChatSelection {
 enum RuntimeRequest {
     ListModels,
     GetSettings,
+    CreateSession,
     SendMessage {
+        session_id: String,
         message: String,
         model_id: String,
         provider_id: String,
@@ -136,9 +146,12 @@ enum RuntimeRequest {
     SaveSettings {
         settings: SettingsDocument,
     },
-    GetChatHistory,
-    GetCurrentTip,
-    ClearCurrentSession,
+    GetChatHistory {
+        session_id: String,
+    },
+    GetCurrentTip {
+        session_id: String,
+    },
     LoadSession {
         session_id: String,
     },
@@ -146,24 +159,27 @@ enum RuntimeRequest {
     DeleteSession {
         session_id: String,
     },
-    GetCurrentSessionId,
     ApproveTool {
+        session_id: String,
         call_id: String,
     },
     DenyTool {
+        session_id: String,
         call_id: String,
     },
-    ExecuteApprovedTools,
+    ExecuteApprovedTools {
+        session_id: String,
+    },
 }
 
 enum RuntimeResponse {
     Models(Result<HashMap<String, Vec<Model>>, String>),
     Settings(Result<SettingsDocument, String>),
+    CreateSession(Result<String, String>),
     SendMessage(Result<(), String>),
     SaveSettings(Result<(), String>),
     ChatHistory(Result<BTreeMap<MessageId, Message>, String>),
     CurrentTip(Result<Option<String>, String>),
-    ClearCurrentSession(Result<(), String>),
     LoadSession {
         session_id: String,
         result: Result<bool, String>,
@@ -173,7 +189,6 @@ enum RuntimeResponse {
         session_id: String,
         result: Result<(), String>,
     },
-    CurrentSessionId(Result<Option<String>, String>),
     ApproveTool {
         call_id: String,
         result: Result<(), String>,
@@ -236,6 +251,7 @@ pub struct AppState {
     settings_editor: Option<ActiveSettingsEditor>,
     settings_editor_input: String,
     settings_delete_armed: bool,
+    pending_submit: Option<PendingSubmit>,
 }
 
 impl Default for AppState {
@@ -282,6 +298,7 @@ impl Default for AppState {
             settings_editor: None,
             settings_editor_input: String::new(),
             settings_delete_armed: false,
+            pending_submit: None,
         }
     }
 }
@@ -443,38 +460,60 @@ impl App {
                 self.state.is_streaming = false;
                 self.state.status = format!("Runtime error: {msg}");
             }
-            Event::StreamStart { .. } => {
+            Event::StreamStart { session_id, .. } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
                 self.state.is_streaming = true;
                 self.last_stream_refresh = None;
-                self.request(RuntimeRequest::GetCurrentTip);
+                self.request(RuntimeRequest::GetCurrentTip { session_id });
             }
-            Event::StreamChunk { .. } => {
+            Event::StreamChunk { session_id, .. } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
                 let now = Instant::now();
                 let should_refresh = self
                     .last_stream_refresh
                     .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(50));
                 if should_refresh {
                     self.last_stream_refresh = Some(now);
-                    self.request(RuntimeRequest::GetCurrentTip);
-                    self.request(RuntimeRequest::GetChatHistory);
+                    self.request(RuntimeRequest::GetCurrentTip {
+                        session_id: session_id.clone(),
+                    });
+                    self.request(RuntimeRequest::GetChatHistory { session_id });
                 }
             }
-            Event::StreamComplete { .. } => {
-                self.state.is_streaming = false;
-                self.last_stream_refresh = None;
-                self.request_sync();
+            Event::StreamComplete { session_id, .. } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.is_streaming = false;
+                    self.last_stream_refresh = None;
+                    self.request_sync_for_session(&session_id);
+                } else {
+                    self.request(RuntimeRequest::ListSessions);
+                }
             }
-            Event::StreamError { error, .. } => {
+            Event::StreamError {
+                session_id, error, ..
+            } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
                 self.state.is_streaming = false;
                 self.last_stream_refresh = None;
                 self.state.status = format!("Stream error: {error}");
             }
-            Event::HistoryUpdated => {
-                self.clamp_chat_scroll();
-                self.request_sync();
+            Event::HistoryUpdated { session_id } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.clamp_chat_scroll();
+                    self.request_sync_for_session(&session_id);
+                } else {
+                    self.request(RuntimeRequest::ListSessions);
+                }
             }
             Event::MessageComplete(_) => {}
             Event::ToolCallDetected {
+                session_id,
                 call_id,
                 tool_id,
                 args,
@@ -489,6 +528,7 @@ impl App {
                     .any(|tool| tool.call_id == call_id);
                 if !exists {
                     self.state.pending_tools.push(PendingTool {
+                        session_id,
                         call_id,
                         tool_id,
                         args,
@@ -499,11 +539,12 @@ impl App {
                     });
                     self.state.status = format!(
                         "{} tool call(s) pending. Use /tools",
-                        self.state.pending_tools.len()
+                        self.current_session_pending_tools().len()
                     );
                 }
             }
             Event::ToolResultReady {
+                session_id,
                 call_id,
                 tool_id,
                 success,
@@ -512,7 +553,7 @@ impl App {
             } => {
                 self.state
                     .pending_tools
-                    .retain(|tool| tool.call_id != call_id);
+                    .retain(|tool| !(tool.session_id == session_id && tool.call_id == call_id));
                 self.state.status = if denied {
                     format!("Tool denied: {tool_id}")
                 } else if success {
@@ -552,6 +593,23 @@ impl App {
             RuntimeResponse::Settings(Err(err)) => {
                 self.state.status = format!("Failed loading settings: {err}");
             }
+            RuntimeResponse::CreateSession(Ok(session_id)) => {
+                self.reset_chat_session(Some(session_id.clone()), "Session ready");
+                self.request_sync_for_session(&session_id);
+
+                if let Some(pending_submit) = self.state.pending_submit.take() {
+                    self.dispatch_send_message(
+                        session_id,
+                        pending_submit.message,
+                        pending_submit.model_id,
+                        pending_submit.provider_id,
+                    );
+                }
+            }
+            RuntimeResponse::CreateSession(Err(err)) => {
+                self.state.pending_submit = None;
+                self.state.status = format!("Failed creating session: {err}");
+            }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
                 self.state.is_streaming = false;
@@ -589,32 +647,11 @@ impl App {
             RuntimeResponse::CurrentTip(Err(err)) => {
                 self.state.status = format!("Failed loading tip: {err}");
             }
-            RuntimeResponse::ClearCurrentSession(Ok(())) => {
-                self.state.status = String::from("Started new session");
-                self.state.chat_history.clear();
-                self.state.optimistic_messages.clear();
-                self.invalidate_chat_cache();
-                self.clamp_chat_scroll();
-                self.request_sync();
-            }
-            RuntimeResponse::ClearCurrentSession(Err(err)) => {
-                self.state.status = format!("Failed to clear session: {err}");
-            }
             RuntimeResponse::LoadSession {
                 session_id,
                 result: Ok(true),
             } => {
-                self.state.mode = UiMode::Chat;
-                self.state.current_session_id = Some(session_id);
-                self.state.current_tip_id = None;
-                self.state.chat_history.clear();
-                self.state.optimistic_messages.clear();
-                self.state.is_streaming = false;
-                self.state.auto_scroll = true;
-                self.state.scroll = 0;
-                self.state.status = String::from("Session loaded");
-                self.invalidate_chat_cache();
-                self.clamp_chat_scroll();
+                self.reset_chat_session(Some(session_id), "Session loaded");
                 self.request_sync();
             }
             RuntimeResponse::LoadSession {
@@ -643,22 +680,13 @@ impl App {
                 self.state.status = String::from("Session deleted");
                 self.state.sessions.retain(|s| s.id != session_id);
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.current_session_id = None;
-                    self.state.chat_history.clear();
-                    self.invalidate_chat_cache();
-                    self.clamp_chat_scroll();
+                    self.reset_chat_session(None, "Session deleted");
                 }
             }
             RuntimeResponse::DeleteSession {
                 result: Err(err), ..
             } => {
                 self.state.status = format!("Failed deleting session: {err}");
-            }
-            RuntimeResponse::CurrentSessionId(Ok(current)) => {
-                self.state.current_session_id = current;
-            }
-            RuntimeResponse::CurrentSessionId(Err(err)) => {
-                self.state.status = format!("Failed loading current session: {err}");
             }
             RuntimeResponse::ApproveTool {
                 call_id,
@@ -1041,8 +1069,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.state.sessions_menu_index == 0 {
-                    self.request(RuntimeRequest::ClearCurrentSession);
-                    self.state.mode = UiMode::Chat;
+                    self.start_new_chat_draft();
                 } else if let Some(session) = self
                     .state
                     .sessions
@@ -1070,7 +1097,8 @@ impl App {
     }
 
     fn handle_tools_menu_key_event(&mut self, key_event: KeyEvent) {
-        let len = self.state.pending_tools.len();
+        let current_pending_tools = self.current_session_pending_tools();
+        let len = current_pending_tools.len();
 
         match key_event.code {
             KeyCode::Up => {
@@ -1082,27 +1110,34 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                if let Some(tool) = self.state.pending_tools.get(self.state.tools_menu_index) {
+                if let Some(tool) = current_pending_tools.get(self.state.tools_menu_index)
+                    && let Some(session_id) = &self.state.current_session_id
+                {
                     self.request(RuntimeRequest::ApproveTool {
+                        session_id: session_id.clone(),
                         call_id: tool.call_id.clone(),
                     });
                 }
             }
             KeyCode::Char('d') => {
-                if let Some(tool) = self.state.pending_tools.get(self.state.tools_menu_index) {
+                if let Some(tool) = current_pending_tools.get(self.state.tools_menu_index)
+                    && let Some(session_id) = &self.state.current_session_id
+                {
                     self.request(RuntimeRequest::DenyTool {
+                        session_id: session_id.clone(),
                         call_id: tool.call_id.clone(),
                     });
                 }
             }
             KeyCode::Char('e') => {
-                if self
-                    .state
-                    .pending_tools
+                if current_pending_tools
                     .iter()
                     .any(|tool| tool.approved == Some(true))
+                    && let Some(session_id) = &self.state.current_session_id
                 {
-                    self.request(RuntimeRequest::ExecuteApprovedTools);
+                    self.request(RuntimeRequest::ExecuteApprovedTools {
+                        session_id: session_id.clone(),
+                    });
                     self.state.mode = UiMode::Chat;
                 }
             }
@@ -1548,23 +1583,18 @@ impl App {
             return;
         };
 
-        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
-        self.state.optimistic_messages.push(OptimisticMessage {
-            local_id: format!("local-user-{}", self.state.optimistic_seq),
-            content: raw_input.clone(),
-        });
+        if let Some(session_id) = self.state.current_session_id.clone() {
+            self.dispatch_send_message(session_id, raw_input, model_id, provider_id);
+            return;
+        }
 
-        self.state.is_streaming = true;
-        self.state.status = format!("Sending with {provider_id}/{model_id}");
-        self.state.auto_scroll = true;
-        self.state.current_tip_id = None;
-        self.invalidate_chat_cache();
-
-        self.request(RuntimeRequest::SendMessage {
+        self.state.pending_submit = Some(PendingSubmit {
             message: raw_input,
             model_id,
             provider_id,
         });
+        self.state.status = String::from("Creating session");
+        self.request(RuntimeRequest::CreateSession);
     }
 
     fn handle_command(&mut self, command_line: &str) {
@@ -1592,7 +1622,6 @@ impl App {
                 self.state.visible_chat_view = None;
                 self.state.mode = UiMode::SessionsMenu;
                 self.request(RuntimeRequest::ListSessions);
-                self.request(RuntimeRequest::GetCurrentSessionId);
             }
             "tools" => {
                 self.clear_chat_selection();
@@ -1600,7 +1629,7 @@ impl App {
                 self.state.mode = UiMode::ToolsMenu;
             }
             "new" => {
-                self.request(RuntimeRequest::ClearCurrentSession);
+                self.start_new_chat_draft();
             }
             "help" => {
                 self.clear_chat_selection();
@@ -1809,22 +1838,85 @@ impl App {
     }
 
     fn set_tool_approval(&mut self, call_id: &str, approved: Option<bool>) {
-        if let Some(tool) = self
-            .state
-            .pending_tools
-            .iter_mut()
-            .find(|tool| tool.call_id == call_id)
-        {
+        if let Some(tool) = self.state.pending_tools.iter_mut().find(|tool| {
+            tool.call_id == call_id
+                && self.state.current_session_id.as_deref() == Some(tool.session_id.as_str())
+        }) {
             tool.approved = approved;
         }
+    }
+
+    fn current_session_pending_tools(&self) -> Vec<&PendingTool> {
+        self.state
+            .pending_tools
+            .iter()
+            .filter(|tool| {
+                self.state.current_session_id.as_deref() == Some(tool.session_id.as_str())
+            })
+            .collect()
     }
 
     fn request_sync(&self) {
         self.request(RuntimeRequest::ListModels);
         self.request(RuntimeRequest::ListSessions);
-        self.request(RuntimeRequest::GetCurrentSessionId);
-        self.request(RuntimeRequest::GetCurrentTip);
-        self.request(RuntimeRequest::GetChatHistory);
+        if let Some(session_id) = &self.state.current_session_id {
+            self.request_sync_for_session(session_id);
+        }
+    }
+
+    fn request_sync_for_session(&self, session_id: &str) {
+        self.request(RuntimeRequest::GetCurrentTip {
+            session_id: session_id.to_string(),
+        });
+        self.request(RuntimeRequest::GetChatHistory {
+            session_id: session_id.to_string(),
+        });
+    }
+
+    fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
+        self.state.mode = UiMode::Chat;
+        self.state.current_session_id = session_id;
+        self.state.current_tip_id = None;
+        self.state.chat_history.clear();
+        self.state.optimistic_messages.clear();
+        self.state.is_streaming = false;
+        self.state.auto_scroll = true;
+        self.state.scroll = 0;
+        self.state.status = status.to_string();
+        self.invalidate_chat_cache();
+        self.clamp_chat_scroll();
+    }
+
+    fn start_new_chat_draft(&mut self) {
+        self.state.pending_submit = None;
+        self.reset_chat_session(None, "Started new chat");
+    }
+
+    fn dispatch_send_message(
+        &mut self,
+        session_id: String,
+        message: String,
+        model_id: String,
+        provider_id: String,
+    ) {
+        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
+        self.state.optimistic_messages.push(OptimisticMessage {
+            local_id: format!("local-user-{}", self.state.optimistic_seq),
+            content: message.clone(),
+        });
+
+        self.state.is_streaming = true;
+        self.state.status = format!("Sending with {provider_id}/{model_id}");
+        self.state.auto_scroll = true;
+        self.state.current_tip_id = None;
+        self.invalidate_chat_cache();
+
+        self.request(RuntimeRequest::SendMessage {
+            session_id,
+            message,
+            model_id,
+            provider_id,
+        });
     }
 
     fn request(&self, req: RuntimeRequest) {
@@ -2016,9 +2108,10 @@ mod tests {
 
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
-        PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus, SettingsModelField,
-        SettingsProviderField, UiMode, is_copy_shortcut, menu_scroll_offset, model_menu_next_index,
-        model_menu_previous_index, render_chat_selection_overlay, selection_text,
+        PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus,
+        SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut, menu_scroll_offset,
+        model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
+        selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -2147,6 +2240,7 @@ mod tests {
     fn sample_pending_tools() -> Vec<PendingTool> {
         vec![
             PendingTool {
+                session_id: String::from("sess-2"),
                 call_id: String::from("call-1"),
                 tool_id: String::from("read_file"),
                 args: String::from("{\"path\":\"src/app.rs\"}"),
@@ -2159,6 +2253,7 @@ mod tests {
                 approved: Some(true),
             },
             PendingTool {
+                session_id: String::from("sess-2"),
                 call_id: String::from("call-2"),
                 tool_id: String::from("write_file"),
                 args: String::from("{\"path\":\"src/app.rs\",\"content\":\"...\"}"),
@@ -2722,15 +2817,83 @@ mod tests {
         assert!(harness.app.state.input.is_empty());
 
         let requests = harness.drain_requests();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 1);
         assert!(matches!(requests[0], RuntimeRequest::ListSessions));
-        assert!(matches!(requests[1], RuntimeRequest::GetCurrentSessionId));
+    }
+
+    #[test]
+    fn new_command_starts_local_draft_without_creating_session() {
+        let mut harness = test_harness();
+        harness.app.state = populated_state();
+        harness.app.state.pending_submit = Some(PendingSubmit {
+            message: String::from("stale"),
+            model_id: String::from("gpt-4o-mini"),
+            provider_id: String::from("openai"),
+        });
+
+        harness.app.handle_command("new");
+
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert_eq!(harness.app.state.current_session_id, None);
+        assert_eq!(harness.app.state.current_tip_id, None);
+        assert!(harness.app.state.chat_history.is_empty());
+        assert!(harness.app.state.optimistic_messages.is_empty());
+        assert!(harness.app.state.pending_submit.is_none());
+        assert_eq!(harness.app.state.status, "Started new chat");
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn first_submit_after_new_command_creates_session_lazily() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+
+        harness.app.handle_command("new");
+        harness.app.state.input = String::from("hello world");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert_eq!(
+            harness
+                .app
+                .state
+                .pending_submit
+                .as_ref()
+                .map(|submit| submit.message.as_str()),
+            Some("hello world")
+        );
+        assert_eq!(harness.app.state.status, "Creating session");
+
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0], RuntimeRequest::CreateSession));
+    }
+
+    #[test]
+    fn sessions_menu_new_chat_starts_local_draft_without_creating_session() {
+        let mut harness = test_harness();
+        harness.app.state = populated_state();
+        harness.app.state.mode = UiMode::SessionsMenu;
+        harness.app.state.sessions_menu_index = 0;
+
+        harness
+            .app
+            .handle_sessions_menu_key_event(key(KeyCode::Enter));
+
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert_eq!(harness.app.state.current_session_id, None);
+        assert!(harness.app.state.chat_history.is_empty());
+        assert_eq!(harness.app.state.status, "Started new chat");
+        assert!(harness.drain_requests().is_empty());
     }
 
     #[test]
     fn submit_sends_message_request_and_tracks_optimistic_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("hello world");
@@ -2750,10 +2913,12 @@ mod tests {
         assert_eq!(requests.len(), 1);
         match &requests[0] {
             RuntimeRequest::SendMessage {
+                session_id,
                 message,
                 model_id,
                 provider_id,
             } => {
+                assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "hello world");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai");
@@ -2766,6 +2931,7 @@ mod tests {
     fn submit_unknown_slash_command_sends_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/not-a-command");
@@ -2785,10 +2951,12 @@ mod tests {
         assert_eq!(requests.len(), 1);
         match &requests[0] {
             RuntimeRequest::SendMessage {
+                session_id,
                 message,
                 model_id,
                 provider_id,
             } => {
+                assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/not-a-command");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai");
@@ -2883,6 +3051,7 @@ mod tests {
     fn escape_then_typing_partial_command_submits_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/s");
@@ -2901,10 +3070,12 @@ mod tests {
         assert_eq!(requests.len(), 1);
         match &requests[0] {
             RuntimeRequest::SendMessage {
+                session_id,
                 message,
                 model_id,
                 provider_id,
             } => {
+                assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/se");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai");
@@ -2917,6 +3088,7 @@ mod tests {
     fn escape_then_typing_full_command_submits_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/s");
@@ -2940,10 +3112,12 @@ mod tests {
         assert_eq!(requests.len(), 1);
         match &requests[0] {
             RuntimeRequest::SendMessage {
+                session_id,
                 message,
                 model_id,
                 provider_id,
             } => {
+                assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/settings");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai");
@@ -2956,6 +3130,7 @@ mod tests {
     fn tool_menu_execute_approved_returns_to_chat_and_requests_execution() {
         let mut harness = test_harness();
         harness.app.state.mode = UiMode::ToolsMenu;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.pending_tools = sample_pending_tools();
 
         harness.app.handle_key_event(key(KeyCode::Char('e')));
@@ -2963,7 +3138,10 @@ mod tests {
         assert_eq!(harness.app.state.mode, UiMode::Chat);
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 1);
-        assert!(matches!(requests[0], RuntimeRequest::ExecuteApprovedTools));
+        assert!(matches!(
+            &requests[0],
+            RuntimeRequest::ExecuteApprovedTools { session_id } if session_id == "sess-2"
+        ));
     }
 
     #[test]
@@ -3045,6 +3223,7 @@ mod tests {
     #[test]
     fn approve_tool_response_marks_pending_tool_as_approved() {
         let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.pending_tools = sample_pending_tools();
 
         harness
@@ -3060,8 +3239,10 @@ mod tests {
     #[test]
     fn tool_call_event_adds_pending_tool_and_status() {
         let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
 
         harness.app.handle_runtime_event(Event::ToolCallDetected {
+            session_id: String::from("sess-2"),
             call_id: String::from("call-3"),
             tool_id: String::from("read_file"),
             args: String::from("{\"path\":\"Cargo.toml\"}"),
@@ -3081,18 +3262,17 @@ mod tests {
         match request {
             RuntimeRequest::ListModels => "ListModels",
             RuntimeRequest::GetSettings => "GetSettings",
+            RuntimeRequest::CreateSession => "CreateSession",
             RuntimeRequest::SendMessage { .. } => "SendMessage",
             RuntimeRequest::SaveSettings { .. } => "SaveSettings",
-            RuntimeRequest::GetChatHistory => "GetChatHistory",
-            RuntimeRequest::GetCurrentTip => "GetCurrentTip",
-            RuntimeRequest::ClearCurrentSession => "ClearCurrentSession",
+            RuntimeRequest::GetChatHistory { .. } => "GetChatHistory",
+            RuntimeRequest::GetCurrentTip { .. } => "GetCurrentTip",
             RuntimeRequest::LoadSession { .. } => "LoadSession",
             RuntimeRequest::ListSessions => "ListSessions",
             RuntimeRequest::DeleteSession { .. } => "DeleteSession",
-            RuntimeRequest::GetCurrentSessionId => "GetCurrentSessionId",
             RuntimeRequest::ApproveTool { .. } => "ApproveTool",
             RuntimeRequest::DenyTool { .. } => "DenyTool",
-            RuntimeRequest::ExecuteApprovedTools => "ExecuteApprovedTools",
+            RuntimeRequest::ExecuteApprovedTools { .. } => "ExecuteApprovedTools",
         }
     }
 }

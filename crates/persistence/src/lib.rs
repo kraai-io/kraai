@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use types::{Message, MessageId};
 
 /// Metadata for a session, persisted to disk
@@ -205,6 +205,8 @@ impl MessageStore for FileMessageStore {
 pub struct FileSessionStore {
     /// Sessions metadata
     sessions: RwLock<HashMap<String, SessionMeta>>,
+    /// Serializes mutating session-store operations.
+    write_guard: Mutex<()>,
     /// Path to sessions file
     sessions_path: PathBuf,
     /// Reference to message store for GC
@@ -216,6 +218,7 @@ impl FileSessionStore {
         let sessions_path = data_dir.join("sessions.json");
         Self {
             sessions: RwLock::new(HashMap::new()),
+            write_guard: Mutex::new(()),
             sessions_path,
             message_store,
         }
@@ -284,10 +287,10 @@ impl FileSessionStore {
 
     /// Collect all message IDs referenced by all sessions
     async fn collect_all_referenced_messages(&self) -> Result<HashSet<MessageId>> {
-        let sessions = self.sessions.read().await;
+        let sessions: Vec<SessionMeta> = self.sessions.read().await.values().cloned().collect();
         let mut all_messages = HashSet::new();
 
-        for session in sessions.values() {
+        for session in sessions {
             if let Some(tip_id) = &session.tip_id {
                 let tree = self.collect_tree_messages(tip_id).await?;
                 all_messages.extend(tree);
@@ -335,23 +338,25 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn save(&self, session: &SessionMeta) -> Result<()> {
+        let _write_guard = self.write_guard.lock().await;
+
+        let mut next_sessions = self.sessions.read().await.clone();
+        next_sessions.insert(session.id.clone(), session.clone());
+
+        Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
+
         let mut sessions = self.sessions.write().await;
-        sessions.insert(session.id.clone(), session.clone());
-        Self::persist_sessions(&sessions, &self.sessions_path).await
+        *sessions = next_sessions;
+        Ok(())
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        // Get tip_id and clone sessions map under lock
-        let (tip_id_to_delete, sessions_without_deleted) = {
-            let sessions = self.sessions.read().await;
-            let tip_id = sessions.get(id).and_then(|s| s.tip_id.clone());
+        let _write_guard = self.write_guard.lock().await;
 
-            // Clone the map without the deleted session
-            let mut new_sessions = sessions.clone();
-            new_sessions.remove(id);
-
-            (tip_id, new_sessions)
-        };
+        let current_sessions = self.sessions.read().await.clone();
+        let tip_id_to_delete = current_sessions.get(id).and_then(|s| s.tip_id.clone());
+        let mut sessions_without_deleted = current_sessions;
+        sessions_without_deleted.remove(id);
 
         // Collect tree messages outside of lock (does I/O)
         let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
@@ -424,4 +429,188 @@ pub async fn init() -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
     session_store.cleanup_orphans().await?;
 
     Ok((message_store, session_store))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::Future;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use types::{ChatRole, MessageStatus};
+    use ulid::Ulid;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("agent-persistence-{name}-{nanos}-{}", Ulid::new()))
+    }
+
+    async fn with_test_store<T, F, Fut>(name: &str, f: F) -> T
+    where
+        F: FnOnce(Arc<FileMessageStore>, Arc<FileSessionStore>, PathBuf) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let data_dir = test_dir(name);
+        fs::create_dir_all(&data_dir).await.unwrap();
+        let message_store = Arc::new(FileMessageStore::new(&data_dir));
+        let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+        let result = f(message_store, session_store, data_dir.clone()).await;
+        let _ = fs::remove_dir_all(&data_dir).await;
+        result
+    }
+
+    fn session(id: &str, tip_id: Option<&MessageId>, updated_at: u64) -> SessionMeta {
+        SessionMeta {
+            id: id.to_string(),
+            tip_id: tip_id.cloned(),
+            workspace_dir: PathBuf::from("/tmp/workspace"),
+            created_at: updated_at.saturating_sub(1),
+            updated_at,
+            title: Some(format!("session-{id}")),
+        }
+    }
+
+    fn message(id: &str, parent_id: Option<&MessageId>, content: &str) -> Message {
+        Message {
+            id: MessageId::new(id),
+            parent_id: parent_id.cloned(),
+            role: ChatRole::Assistant,
+            content: content.to_string(),
+            status: MessageStatus::Complete,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_failure_does_not_mutate_in_memory_sessions() {
+        let data_dir = test_dir("save-failure");
+        fs::create_dir_all(&data_dir).await.unwrap();
+
+        let blocking_file = data_dir.join("not-a-directory");
+        fs::write(&blocking_file, "x").await.unwrap();
+
+        let message_store = Arc::new(FileMessageStore::new(&data_dir));
+        let session_store = FileSessionStore::new(&blocking_file, message_store);
+
+        let err = session_store
+            .save(&session("broken", None, 1))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to create directory"));
+        assert!(session_store.list().await.unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_save_and_delete_preserve_unrelated_sessions() {
+        with_test_store(
+            "concurrent-save-delete",
+            |message_store, session_store, _| async move {
+                let base_message = message("shared-root", None, "root");
+                message_store.save(&base_message).await.unwrap();
+
+                session_store
+                    .save(&session("keep", Some(&base_message.id), 2))
+                    .await
+                    .unwrap();
+                session_store
+                    .save(&session("drop", Some(&base_message.id), 1))
+                    .await
+                    .unwrap();
+
+                let save_task = {
+                    let session_store = session_store.clone();
+                    tokio::spawn(async move {
+                        session_store
+                            .save(&session("new", Some(&MessageId::new("shared-root")), 3))
+                            .await
+                            .unwrap();
+                    })
+                };
+
+                let delete_task = {
+                    let session_store = session_store.clone();
+                    tokio::spawn(async move {
+                        session_store.delete("drop").await.unwrap();
+                    })
+                };
+
+                save_task.await.unwrap();
+                delete_task.await.unwrap();
+
+                let ids: HashSet<_> = session_store
+                    .list()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|session| session.id)
+                    .collect();
+
+                assert_eq!(
+                    ids,
+                    HashSet::from([String::from("keep"), String::from("new")])
+                );
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn deleting_session_removes_only_unique_messages() {
+        with_test_store(
+            "delete-unique-messages",
+            |message_store, session_store, _| async move {
+                let root = message("root", None, "root");
+                let shared = message("shared", Some(&root.id), "shared");
+                let a_tip = message("a-tip", Some(&shared.id), "a");
+                let b_tip = message("b-tip", Some(&shared.id), "b");
+
+                for msg in [&root, &shared, &a_tip, &b_tip] {
+                    message_store.save(msg).await.unwrap();
+                }
+
+                session_store
+                    .save(&session("a", Some(&a_tip.id), 2))
+                    .await
+                    .unwrap();
+                session_store
+                    .save(&session("b", Some(&b_tip.id), 1))
+                    .await
+                    .unwrap();
+
+                session_store.delete("a").await.unwrap();
+
+                assert!(!message_store.exists(&a_tip.id).await.unwrap());
+                assert!(message_store.exists(&b_tip.id).await.unwrap());
+                assert!(message_store.exists(&shared.id).await.unwrap());
+                assert!(message_store.exists(&root.id).await.unwrap());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_sorts_sessions_by_updated_at_descending() {
+        with_test_store(
+            "list-order",
+            |_message_store, session_store, _| async move {
+                session_store.save(&session("old", None, 1)).await.unwrap();
+                session_store.save(&session("new", None, 10)).await.unwrap();
+                session_store.save(&session("mid", None, 5)).await.unwrap();
+
+                let ordered_ids: Vec<_> = session_store
+                    .list()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|session| session.id)
+                    .collect();
+
+                assert_eq!(ordered_ids, vec!["new", "mid", "old"]);
+            },
+        )
+        .await;
+    }
 }

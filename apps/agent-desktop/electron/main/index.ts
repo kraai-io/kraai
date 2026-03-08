@@ -54,43 +54,54 @@ function setupIpcHandlers() {
 		await runtime.saveSettings(settings);
 	});
 
+	ipcMain.handle("agent:createSession", async () => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.createSession();
+	});
+
 	// sendMessage - async
 	ipcMain.handle(
 		"agent:sendMessage",
-		async (_, message: string, modelId: string, providerId: string) => {
+		async (
+			_,
+			sessionId: string,
+			message: string,
+			modelId: string,
+			providerId: string,
+		) => {
 			if (!runtime) throw new Error("Runtime not initialized");
-			await runtime.sendMessage(message, modelId, providerId);
+			await runtime.sendMessage(sessionId, message, modelId, providerId);
 		},
 	);
 
-	// clearCurrentSession - async
-	ipcMain.handle("agent:clearCurrentSession", async () => {
-		if (!runtime) return;
-		runtime.clearCurrentSession();
-	});
-
 	// getChatHistoryTree - async
-	ipcMain.handle("agent:getChatHistoryTree", async () => {
+	ipcMain.handle("agent:getChatHistoryTree", async (_, sessionId: string) => {
 		if (!runtime) throw new Error("Runtime not initialized");
-		return await runtime.getChatHistoryTree();
+		return await runtime.getChatHistoryTree(sessionId);
 	});
 
 	// approveTool - async
-	ipcMain.handle("agent:approveTool", async (_, callId: string) => {
-		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.approveTool(callId);
-	});
+	ipcMain.handle(
+		"agent:approveTool",
+		async (_, sessionId: string, callId: string) => {
+			if (!runtime) throw new Error("Runtime not initialized");
+			await runtime.approveTool(sessionId, callId);
+		},
+	);
 
 	// denyTool - async
-	ipcMain.handle("agent:denyTool", async (_, callId: string) => {
-		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.denyTool(callId);
-	});
+	ipcMain.handle(
+		"agent:denyTool",
+		async (_, sessionId: string, callId: string) => {
+			if (!runtime) throw new Error("Runtime not initialized");
+			await runtime.denyTool(sessionId, callId);
+		},
+	);
 
 	// executeApprovedTools - async
-	ipcMain.handle("agent:executeApprovedTools", async () => {
+	ipcMain.handle("agent:executeApprovedTools", async (_, sessionId: string) => {
 		if (!runtime) throw new Error("Runtime not initialized");
-		await runtime.executeApprovedTools();
+		await runtime.executeApprovedTools(sessionId);
 	});
 
 	// listSessions - async
@@ -111,22 +122,16 @@ function setupIpcHandlers() {
 		await runtime.deleteSession(sessionId);
 	});
 
-	// getCurrentSessionId - async
-	ipcMain.handle("agent:getCurrentSessionId", async () => {
+	ipcMain.handle("agent:getWorkspaceState", async (_, sessionId: string) => {
 		if (!runtime) throw new Error("Runtime not initialized");
-		return await runtime.getCurrentSessionId();
-	});
-
-	ipcMain.handle("agent:getCurrentWorkspaceState", async () => {
-		if (!runtime) throw new Error("Runtime not initialized");
-		return await runtime.getCurrentWorkspaceState();
+		return await runtime.getWorkspaceState(sessionId);
 	});
 
 	ipcMain.handle(
-		"agent:setCurrentWorkspaceDir",
-		async (_, workspaceDir: string) => {
+		"agent:setWorkspaceDir",
+		async (_, sessionId: string, workspaceDir: string) => {
 			if (!runtime) throw new Error("Runtime not initialized");
-			await runtime.setCurrentWorkspaceDir(workspaceDir);
+			await runtime.setWorkspaceDir(sessionId, workspaceDir);
 		},
 	);
 

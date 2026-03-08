@@ -275,20 +275,25 @@ pub enum Event {
   Error(String),
   MessageComplete(String),
   StreamStart {
+    session_id: String,
     message_id: String,
   },
   StreamChunk {
+    session_id: String,
     message_id: String,
     chunk: String,
   },
   StreamComplete {
+    session_id: String,
     message_id: String,
   },
   StreamError {
+    session_id: String,
     message_id: String,
     error: String,
   },
   ToolCallDetected {
+    session_id: String,
     call_id: String,
     tool_id: String,
     args: String,
@@ -297,13 +302,16 @@ pub enum Event {
     reasons: Vec<String>,
   },
   ToolResultReady {
+    session_id: String,
     call_id: String,
     tool_id: String,
     success: bool,
     output: String,
     denied: bool,
   },
-  HistoryUpdated,
+  HistoryUpdated {
+    session_id: String,
+  },
 }
 
 impl From<agent_runtime::Event> for Event {
@@ -312,15 +320,40 @@ impl From<agent_runtime::Event> for Event {
       agent_runtime::Event::ConfigLoaded => Event::ConfigLoaded,
       agent_runtime::Event::Error(e) => Event::Error(e),
       agent_runtime::Event::MessageComplete(id) => Event::MessageComplete(id),
-      agent_runtime::Event::StreamStart { message_id } => Event::StreamStart { message_id },
-      agent_runtime::Event::StreamChunk { message_id, chunk } => {
-        Event::StreamChunk { message_id, chunk }
-      }
-      agent_runtime::Event::StreamComplete { message_id } => Event::StreamComplete { message_id },
-      agent_runtime::Event::StreamError { message_id, error } => {
-        Event::StreamError { message_id, error }
-      }
+      agent_runtime::Event::StreamStart {
+        session_id,
+        message_id,
+      } => Event::StreamStart {
+        session_id,
+        message_id,
+      },
+      agent_runtime::Event::StreamChunk {
+        session_id,
+        message_id,
+        chunk,
+      } => Event::StreamChunk {
+        session_id,
+        message_id,
+        chunk,
+      },
+      agent_runtime::Event::StreamComplete {
+        session_id,
+        message_id,
+      } => Event::StreamComplete {
+        session_id,
+        message_id,
+      },
+      agent_runtime::Event::StreamError {
+        session_id,
+        message_id,
+        error,
+      } => Event::StreamError {
+        session_id,
+        message_id,
+        error,
+      },
       agent_runtime::Event::ToolCallDetected {
+        session_id,
         call_id,
         tool_id,
         args,
@@ -328,6 +361,7 @@ impl From<agent_runtime::Event> for Event {
         risk_level,
         reasons,
       } => Event::ToolCallDetected {
+        session_id,
         call_id,
         tool_id,
         args,
@@ -336,19 +370,21 @@ impl From<agent_runtime::Event> for Event {
         reasons,
       },
       agent_runtime::Event::ToolResultReady {
+        session_id,
         call_id,
         tool_id,
         success,
         output,
         denied,
       } => Event::ToolResultReady {
+        session_id,
         call_id,
         tool_id,
         success,
         output,
         denied,
       },
-      agent_runtime::Event::HistoryUpdated => Event::HistoryUpdated,
+      agent_runtime::Event::HistoryUpdated { session_id } => Event::HistoryUpdated { session_id },
     }
   }
 }
@@ -411,15 +447,21 @@ impl AgentRuntime {
   }
 
   #[napi]
+  pub async fn create_session(&self) -> napi::Result<String> {
+    self.handle.create_session().await.map_err(to_napi_error)
+  }
+
+  #[napi]
   pub async fn send_message(
     &self,
+    session_id: String,
     message: String,
     model_id: String,
     provider_id: String,
   ) -> napi::Result<()> {
     self
       .handle
-      .send_message(message, model_id, provider_id)
+      .send_message(session_id, message, model_id, provider_id)
       .await
       .map_err(to_napi_error)
   }
@@ -446,10 +488,11 @@ impl AgentRuntime {
   #[napi]
   pub async fn get_chat_history_tree(
     &self,
+    session_id: String,
   ) -> napi::Result<std::collections::BTreeMap<String, Message>> {
     self
       .handle
-      .get_chat_history()
+      .get_chat_history(session_id)
       .await
       .map(|history| {
         history
@@ -457,15 +500,6 @@ impl AgentRuntime {
           .map(|(id, m)| (id.to_string(), m.into()))
           .collect()
       })
-      .map_err(to_napi_error)
-  }
-
-  #[napi]
-  pub async fn clear_current_session(&self) -> napi::Result<()> {
-    self
-      .handle
-      .clear_current_session()
-      .await
       .map_err(to_napi_error)
   }
 
@@ -498,52 +532,54 @@ impl AgentRuntime {
   }
 
   #[napi]
-  pub async fn get_current_session_id(&self) -> napi::Result<Option<String>> {
+  pub async fn get_workspace_state(
+    &self,
+    session_id: String,
+  ) -> napi::Result<Option<WorkspaceState>> {
     self
       .handle
-      .get_current_session_id()
-      .await
-      .map_err(to_napi_error)
-  }
-
-  #[napi]
-  pub async fn get_current_workspace_state(&self) -> napi::Result<Option<WorkspaceState>> {
-    self
-      .handle
-      .get_current_workspace_state()
+      .get_workspace_state(session_id)
       .await
       .map(|value| value.map(Into::into))
       .map_err(to_napi_error)
   }
 
   #[napi]
-  pub async fn set_current_workspace_dir(&self, workspace_dir: String) -> napi::Result<()> {
+  pub async fn set_workspace_dir(
+    &self,
+    session_id: String,
+    workspace_dir: String,
+  ) -> napi::Result<()> {
     self
       .handle
-      .set_current_workspace_dir(workspace_dir)
+      .set_workspace_dir(session_id, workspace_dir)
       .await
       .map_err(to_napi_error)
   }
 
   #[napi]
-  pub async fn approve_tool(&self, call_id: String) -> napi::Result<()> {
+  pub async fn approve_tool(&self, session_id: String, call_id: String) -> napi::Result<()> {
     self
       .handle
-      .approve_tool(call_id)
+      .approve_tool(session_id, call_id)
       .await
       .map_err(to_napi_error)
   }
 
   #[napi]
-  pub async fn deny_tool(&self, call_id: String) -> napi::Result<()> {
-    self.handle.deny_tool(call_id).await.map_err(to_napi_error)
+  pub async fn deny_tool(&self, session_id: String, call_id: String) -> napi::Result<()> {
+    self
+      .handle
+      .deny_tool(session_id, call_id)
+      .await
+      .map_err(to_napi_error)
   }
 
   #[napi]
-  pub async fn execute_approved_tools(&self) -> napi::Result<()> {
+  pub async fn execute_approved_tools(&self, session_id: String) -> napi::Result<()> {
     self
       .handle
-      .execute_approved_tools()
+      .execute_approved_tools(session_id)
       .await
       .map_err(to_napi_error)
   }

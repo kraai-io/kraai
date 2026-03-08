@@ -14,25 +14,25 @@ interface API {
 	listModels: () => Promise<Record<string, Model[]>>;
 	getSettings: () => Promise<SettingsDocument>;
 	saveSettings: (settings: SettingsDocument) => Promise<void>;
+	createSession: () => Promise<string>;
 	sendMessage: (
+		sessionId: string,
 		message: string,
 		modelId: string,
 		providerId: string,
 	) => Promise<void>;
-	clearCurrentSession: () => void;
-	getChatHistoryTree: () => Promise<Record<string, Message>>;
-	approveTool: (callId: string) => Promise<void>;
-	denyTool: (callId: string) => Promise<void>;
-	executeApprovedTools: () => Promise<void>;
+	getChatHistoryTree: (sessionId: string) => Promise<Record<string, Message>>;
+	approveTool: (sessionId: string, callId: string) => Promise<void>;
+	denyTool: (sessionId: string, callId: string) => Promise<void>;
+	executeApprovedTools: (sessionId: string) => Promise<void>;
 	listSessions: () => Promise<Session[]>;
 	loadSession: (sessionId: string) => Promise<boolean>;
 	deleteSession: (sessionId: string) => Promise<void>;
-	getCurrentSessionId: () => Promise<string | null>;
-	getCurrentWorkspaceState: () => Promise<{
+	getWorkspaceState: (sessionId: string) => Promise<{
 		workspaceDir: string;
 		appliesNextChat: boolean;
 	} | null>;
-	setCurrentWorkspaceDir: (workspaceDir: string) => Promise<void>;
+	setWorkspaceDir: (sessionId: string, workspaceDir: string) => Promise<void>;
 	pickWorkspaceDir: (defaultPath?: string) => Promise<string | null>;
 }
 
