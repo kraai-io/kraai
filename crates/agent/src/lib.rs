@@ -20,6 +20,7 @@ pub struct PendingToolCall {
     pub call: ToolCall,
     pub description: String,
     pub assessment: ToolCallAssessment,
+    pub config: types::ToolCallGlobalConfig,
     pub status: PermissionStatus,
 }
 
@@ -522,6 +523,7 @@ impl AgentManager {
                     call,
                     description: description.clone(),
                     assessment: assessment.clone(),
+                    config: self.active_tool_config.clone(),
                     status: if requires_confirmation {
                         PermissionStatus::Pending
                     } else {
@@ -604,7 +606,14 @@ impl AgentManager {
             .pending_tool_calls
             .iter()
             .filter(|(_, p)| p.status == PermissionStatus::Approved)
-            .map(|(call_id, p)| (call_id.clone(), p.call.tool_id.clone(), p.call.args.clone()))
+            .map(|(call_id, p)| {
+                (
+                    call_id.clone(),
+                    p.call.tool_id.clone(),
+                    p.call.args.clone(),
+                    p.config.clone(),
+                )
+            })
             .collect();
         let denied: Vec<_> = self
             .pending_tool_calls
@@ -614,8 +623,17 @@ impl AgentManager {
             .collect();
 
         let mut results = Vec::new();
-        for (call_id, tool_id, args) in approved {
-            let result = self.tools.call_tool(&tool_id, args).await;
+        for (call_id, tool_id, args, config) in approved {
+            let result = self
+                .tools
+                .call_tool(
+                    &tool_id,
+                    args,
+                    &tool_core::ToolContext {
+                        global_config: &config,
+                    },
+                )
+                .await;
             let output = match result {
                 Ok(ToolOutput::Success { data }) => data,
                 Ok(ToolOutput::Error { message }) => {

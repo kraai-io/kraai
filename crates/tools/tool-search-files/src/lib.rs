@@ -1,8 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::path::Path;
 
 use async_trait::async_trait;
 use grep_matcher::Matcher;
@@ -10,21 +6,13 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
-use tool_core::{Tool, ToolContext, ToolOutput, normalize_tool_path};
+use tool_core::{Tool, ToolContext, ToolOutput, assess_read_only_path, resolve_tool_path};
 use toon_schema::ToonSchema;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 const MAX_MATCHES: usize = 100;
 
-pub struct SearchFilesTool {
-    workspace_dir: PathBuf,
-}
-
-impl SearchFilesTool {
-    pub fn new(workspace_dir: PathBuf) -> Self {
-        Self { workspace_dir }
-    }
-}
+pub struct SearchFilesTool;
 
 #[derive(Deserialize, ToonSchema, Serialize)]
 #[toon_schema(
@@ -61,6 +49,12 @@ struct SearchMatch {
     line_text: String,
 }
 
+#[derive(Default)]
+struct SearchState {
+    matches: Vec<SearchMatch>,
+    truncated: bool,
+}
+
 #[async_trait]
 impl Tool for SearchFilesTool {
     fn name(&self) -> &'static str {
@@ -86,40 +80,28 @@ impl Tool for SearchFilesTool {
         };
 
         let raw_path = parsed.path.unwrap_or_else(|| String::from("."));
-        let normalized = normalize_tool_path(&ctx.global_config.workspace_dir, &raw_path);
-        let (risk, reason) = if normalized.starts_with(&ctx.global_config.workspace_dir) {
-            (
-                RiskLevel::ReadOnlyWorkspace,
-                format!("Searches workspace path {}", normalized.display()),
-            )
-        } else {
-            (
-                RiskLevel::OutsideWorkspace,
-                format!("Searches path outside workspace {}", normalized.display()),
-            )
-        };
-
-        ToolCallAssessment {
-            risk,
-            policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
-            reasons: vec![reason],
-        }
+        assess_read_only_path(
+            &ctx.global_config.workspace_dir,
+            &raw_path,
+            "Searches workspace path",
+            "Searches path outside workspace",
+        )
     }
 
-    async fn call(&self, args: serde_json::Value) -> ToolOutput {
+    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
         let args: SearchFilesToolArgs = match serde_json::from_value(args) {
             Ok(args) => args,
             Err(error) => return ToolOutput::error(format!("args error: {error}")),
         };
 
         let raw_path = args.path.unwrap_or_else(|| String::from("."));
-        let search_path = normalize_tool_path(&self.workspace_dir, &raw_path);
-        let metadata = match std::fs::metadata(&search_path) {
+        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &raw_path);
+        let metadata = match std::fs::metadata(resolved.path()) {
             Ok(metadata) => metadata,
             Err(error) => {
                 return ToolOutput::error(format!(
                     "unable to access search path {}: {}",
-                    search_path.display(),
+                    resolved.path().display(),
                     error
                 ));
             }
@@ -130,34 +112,33 @@ impl Tool for SearchFilesTool {
             Err(error) => return ToolOutput::error(format!("invalid regex: {error}")),
         };
 
-        let truncated = Arc::new(AtomicBool::new(false));
-        let mut matches = Vec::new();
+        let mut state = SearchState::default();
 
         let search_result = if metadata.is_file() {
-            search_file(&search_path, &matcher, &mut matches, truncated.clone())
+            search_file(resolved.path(), &matcher, &mut state)
         } else if metadata.is_dir() {
-            search_directory(&search_path, &matcher, &mut matches, truncated.clone())
+            search_directory(resolved.path(), &matcher, &mut state)
         } else {
             return ToolOutput::error(format!(
                 "path is neither a file nor a directory: {}",
-                search_path.display()
+                resolved.path().display()
             ));
         };
 
         if let Err(error) = search_result {
             return ToolOutput::error(format!(
                 "unable to search path {}: {}",
-                search_path.display(),
+                resolved.path().display(),
                 error
             ));
         }
 
         let output = SearchFilesToolOutput {
             query: args.query,
-            path: search_path.display().to_string(),
-            match_count: matches.len(),
-            matches,
-            truncated: truncated.load(Ordering::Relaxed),
+            path: resolved.path().display().to_string(),
+            match_count: state.matches.len(),
+            matches: state.matches,
+            truncated: state.truncated,
         };
 
         ToolOutput::success(output)
@@ -178,8 +159,7 @@ impl Tool for SearchFilesTool {
 fn search_directory(
     dir: &Path,
     matcher: &RegexMatcher,
-    matches: &mut Vec<SearchMatch>,
-    truncated: Arc<AtomicBool>,
+    state: &mut SearchState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut builder = WalkBuilder::new(dir);
     builder.standard_filters(true);
@@ -196,8 +176,8 @@ fn search_directory(
             continue;
         }
 
-        search_file(entry.path(), matcher, matches, truncated.clone())?;
-        if truncated.load(Ordering::Relaxed) {
+        search_file(entry.path(), matcher, state)?;
+        if state.truncated {
             break;
         }
     }
@@ -208,8 +188,7 @@ fn search_directory(
 fn search_file(
     path: &Path,
     matcher: &RegexMatcher,
-    matches: &mut Vec<SearchMatch>,
-    truncated: Arc<AtomicBool>,
+    state: &mut SearchState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut searcher = SearcherBuilder::new()
         .binary_detection(BinaryDetection::quit(b'\x00'))
@@ -218,21 +197,21 @@ fn search_file(
 
     let path_string = path.display().to_string();
     let mut sink = UTF8(|line_number: u64, line: &str| {
-        if matches.len() >= MAX_MATCHES {
-            truncated.store(true, Ordering::Relaxed);
+        if state.matches.len() >= MAX_MATCHES {
+            state.truncated = true;
             return Ok(false);
         }
 
         if matcher.is_match(line.as_bytes())? {
-            matches.push(SearchMatch {
+            state.matches.push(SearchMatch {
                 path: path_string.clone(),
                 line_number,
                 line_text: line.trim_end_matches(['\r', '\n']).to_string(),
             });
         }
 
-        if matches.len() >= MAX_MATCHES {
-            truncated.store(true, Ordering::Relaxed);
+        if state.matches.len() >= MAX_MATCHES {
+            state.truncated = true;
             Ok(false)
         } else {
             Ok(true)
@@ -246,7 +225,7 @@ fn search_file(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
@@ -254,6 +233,12 @@ mod tests {
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
     use super::{MAX_MATCHES, SearchFilesTool};
+
+    fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
+        ToolCallGlobalConfig {
+            workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
 
     fn make_temp_dir(test_name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -277,8 +262,16 @@ mod tests {
         let workspace_dir = make_temp_dir("searches_workspace_root_when_path_is_omitted");
         fs::write(workspace_dir.join("root.txt"), "alpha\nneedle\n").expect("write root file");
 
-        let tool = SearchFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "query": "needle" })).await;
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "query": "needle" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Success { data } => {
@@ -304,9 +297,15 @@ mod tests {
         fs::create_dir_all(nested.join("deep")).expect("create nested dirs");
         fs::write(nested.join("deep").join("match.txt"), "fn hello()\n").expect("write file");
 
-        let tool = SearchFilesTool::new(workspace_dir.clone());
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
         let output = tool
-            .call(json!({ "query": "fn\\s+hello\\(", "path": "nested" }))
+            .call(
+                json!({ "query": "fn\\s+hello\\(", "path": "nested" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -331,9 +330,15 @@ mod tests {
         let workspace_dir = make_temp_dir("searches_single_file_path");
         fs::write(workspace_dir.join("single.txt"), "zero\none\ntwo\n").expect("write file");
 
-        let tool = SearchFilesTool::new(workspace_dir.clone());
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
         let output = tool
-            .call(json!({ "query": "one", "path": "single.txt" }))
+            .call(
+                json!({ "query": "one", "path": "single.txt" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -358,8 +363,16 @@ mod tests {
         fs::write(workspace_dir.join("binary.bin"), [0, 159, 146, 150, b'n'])
             .expect("write binary");
 
-        let tool = SearchFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "query": "needle" })).await;
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "query": "needle" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Success { data } => {
@@ -381,9 +394,15 @@ mod tests {
     #[tokio::test]
     async fn returns_error_for_missing_path() {
         let workspace_dir = make_temp_dir("returns_error_for_missing_path");
-        let tool = SearchFilesTool::new(workspace_dir.clone());
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
         let output = tool
-            .call(json!({ "query": "needle", "path": "missing" }))
+            .call(
+                json!({ "query": "needle", "path": "missing" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -405,8 +424,16 @@ mod tests {
             .join("\n");
         fs::write(workspace_dir.join("many.txt"), content).expect("write file");
 
-        let tool = SearchFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "query": "needle-" })).await;
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "query": "needle-" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Success { data } => {
@@ -424,13 +451,12 @@ mod tests {
     #[test]
     fn assess_marks_workspace_path_as_read_only() {
         let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
-        let tool = SearchFilesTool::new(workspace_dir.clone());
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
             &json!({ "query": "needle" }),
             &ToolContext {
-                global_config: &ToolCallGlobalConfig {
-                    workspace_dir: workspace_dir.clone(),
-                },
+                global_config: &config,
             },
         );
 
@@ -447,13 +473,62 @@ mod tests {
     fn assess_marks_outside_workspace_path_as_outside() {
         let workspace_dir = make_temp_dir("assess_marks_outside_workspace_path_as_outside");
         let outside_dir = make_temp_dir("assess_outside_target");
-        let tool = SearchFilesTool::new(workspace_dir.clone());
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
             &json!({ "query": "needle", "path": outside_dir.to_string_lossy() }),
             &ToolContext {
-                global_config: &ToolCallGlobalConfig {
-                    workspace_dir: workspace_dir.clone(),
+                global_config: &config,
+            },
+        );
+
+        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+
+        cleanup_temp_dir(&workspace_dir);
+        cleanup_temp_dir(&outside_dir);
+    }
+
+    #[tokio::test]
+    async fn returns_error_for_invalid_regex() {
+        let workspace_dir = make_temp_dir("returns_error_for_invalid_regex");
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "query": "(" }),
+                &ToolContext {
+                    global_config: &config,
                 },
+            )
+            .await;
+
+        match output {
+            ToolOutput::Error { message } => {
+                assert!(message.contains("invalid regex"));
+            }
+            ToolOutput::Success { .. } => panic!("expected error"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[test]
+    fn assess_marks_relative_parent_path_as_outside() {
+        let workspace_dir = make_temp_dir("assess_marks_relative_parent_path_as_outside");
+        let outside_dir = make_temp_dir("search_relative_outside_target");
+        let relative_path = format!(
+            "../{}",
+            outside_dir
+                .file_name()
+                .expect("outside dir name")
+                .to_string_lossy()
+        );
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let assessment = tool.assess(
+            &json!({ "query": "needle", "path": relative_path }),
+            &ToolContext {
+                global_config: &config,
             },
         );
 

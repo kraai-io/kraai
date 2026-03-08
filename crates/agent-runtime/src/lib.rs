@@ -456,9 +456,9 @@ impl RuntimeBuilder {
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
         let mut tools = ToolManager::new();
-        tools.register_tool(ReadFileTool {});
-        tools.register_tool(ListFilesTool::new(default_workspace_dir.clone()));
-        tools.register_tool(SearchFilesTool::new(default_workspace_dir.clone()));
+        tools.register_tool(ReadFileTool);
+        tools.register_tool(ListFilesTool);
+        tools.register_tool(SearchFilesTool);
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,

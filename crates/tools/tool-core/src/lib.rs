@@ -48,6 +48,30 @@ pub struct ToolContext<'a> {
     pub global_config: &'a ToolCallGlobalConfig,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedToolPath {
+    path: PathBuf,
+    within_workspace: bool,
+}
+
+impl ResolvedToolPath {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn is_within_workspace(&self) -> bool {
+        self.within_workspace
+    }
+
+    pub fn risk(&self) -> RiskLevel {
+        if self.within_workspace {
+            RiskLevel::ReadOnlyWorkspace
+        } else {
+            RiskLevel::OutsideWorkspace
+        }
+    }
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
@@ -64,7 +88,7 @@ pub trait Tool: Send + Sync {
         }
     }
 
-    async fn call(&self, args: serde_json::Value) -> ToolOutput;
+    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput;
 
     async fn describe(&self, args: serde_json::Value) -> String {
         format!(
@@ -114,12 +138,13 @@ impl ToolManager {
         &self,
         id: &ToolId,
         args: serde_json::Value,
+        ctx: &ToolContext<'_>,
     ) -> Result<ToolOutput, ToolError> {
         let tool = self
             .tools
             .get(id)
             .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
-        Ok(tool.call(args).await)
+        Ok(tool.call(args, ctx).await)
     }
 
     pub fn assess_tool(
@@ -177,11 +202,43 @@ pub fn normalize_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
     normalized
 }
 
+pub fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> ResolvedToolPath {
+    let path = normalize_tool_path(workspace_root, raw_path);
+    let within_workspace = path.starts_with(workspace_root);
+    ResolvedToolPath {
+        path,
+        within_workspace,
+    }
+}
+
+pub fn assess_read_only_path(
+    workspace_root: &Path,
+    raw_path: &str,
+    workspace_reason_prefix: &str,
+    outside_reason_prefix: &str,
+) -> ToolCallAssessment {
+    let resolved = resolve_tool_path(workspace_root, raw_path);
+    let reason = if resolved.is_within_workspace() {
+        format!("{} {}", workspace_reason_prefix, resolved.path().display())
+    } else {
+        format!("{} {}", outside_reason_prefix, resolved.path().display())
+    };
+
+    ToolCallAssessment {
+        risk: resolved.risk(),
+        policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+        reasons: vec![reason],
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use serde::ser::{Error as _, Serialize, Serializer};
+    use std::path::Path;
 
-    use super::ToolOutput;
+    use serde::ser::{Error as _, Serialize, Serializer};
+    use types::{ExecutionPolicy, RiskLevel};
+
+    use super::{ToolOutput, assess_read_only_path, resolve_tool_path};
 
     struct FailingSerialize;
 
@@ -205,5 +262,38 @@ mod tests {
             }
             ToolOutput::Success { .. } => panic!("expected tool serialization failure"),
         }
+    }
+
+    #[test]
+    fn resolve_tool_path_marks_parent_traversal_outside_workspace() {
+        let workspace_root = Path::new("/tmp/workspace");
+        let resolved = resolve_tool_path(workspace_root, "../elsewhere/file.txt");
+
+        assert_eq!(resolved.path(), Path::new("/tmp/elsewhere/file.txt"));
+        assert!(!resolved.is_within_workspace());
+        assert_eq!(resolved.risk(), RiskLevel::OutsideWorkspace);
+    }
+
+    #[test]
+    fn assess_read_only_path_uses_workspace_policy_for_inside_paths() {
+        let workspace_root = Path::new("/tmp/workspace");
+        let assessment = assess_read_only_path(
+            workspace_root,
+            "src/lib.rs",
+            "Reads workspace file",
+            "Reads file outside workspace",
+        );
+
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
+        assert_eq!(
+            assessment.policy,
+            ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace)
+        );
+        assert_eq!(
+            assessment.reasons,
+            vec![String::from(
+                "Reads workspace file /tmp/workspace/src/lib.rs"
+            )]
+        );
     }
 }

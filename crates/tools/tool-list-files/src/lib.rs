@@ -1,20 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tool_core::{Tool, ToolContext, ToolOutput, normalize_tool_path};
+use tool_core::{Tool, ToolContext, ToolOutput, assess_read_only_path, resolve_tool_path};
 use toon_schema::ToonSchema;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
-pub struct ListFilesTool {
-    workspace_dir: PathBuf,
-}
-
-impl ListFilesTool {
-    pub fn new(workspace_dir: PathBuf) -> Self {
-        Self { workspace_dir }
-    }
-}
+pub struct ListFilesTool;
 
 #[derive(Deserialize, ToonSchema, Serialize)]
 #[toon_schema(
@@ -64,61 +56,52 @@ impl Tool for ListFilesTool {
             }
         };
 
-        let normalized = normalize_tool_path(&ctx.global_config.workspace_dir, &parsed.path);
-        let (risk, reason) = if normalized.starts_with(&ctx.global_config.workspace_dir) {
-            (
-                RiskLevel::ReadOnlyWorkspace,
-                format!("Lists workspace directory {}", normalized.display()),
-            )
-        } else {
-            (
-                RiskLevel::OutsideWorkspace,
-                format!("Lists directory outside workspace {}", normalized.display()),
-            )
-        };
-
-        ToolCallAssessment {
-            risk,
-            policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
-            reasons: vec![reason],
-        }
+        assess_read_only_path(
+            &ctx.global_config.workspace_dir,
+            &parsed.path,
+            "Lists workspace directory",
+            "Lists directory outside workspace",
+        )
     }
 
-    async fn call(&self, args: serde_json::Value) -> ToolOutput {
+    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
         let args: ListFilesToolArgs = match serde_json::from_value(args) {
             Ok(args) => args,
             Err(error) => return ToolOutput::error(format!("args error: {error}")),
         };
 
-        let dir = normalize_tool_path(&self.workspace_dir, &args.path);
-        let metadata = match std::fs::metadata(&dir) {
+        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
+        let metadata = match std::fs::metadata(resolved.path()) {
             Ok(metadata) => metadata,
             Err(error) => {
                 return ToolOutput::error(format!(
                     "unable to access directory {}: {}",
-                    dir.display(),
+                    resolved.path().display(),
                     error
                 ));
             }
         };
 
         if !metadata.is_dir() {
-            return ToolOutput::error(format!("path is not a directory: {}", dir.display()));
+            return ToolOutput::error(format!(
+                "path is not a directory: {}",
+                resolved.path().display()
+            ));
         }
 
-        let entries = match read_entries(&dir) {
+        let entries = match read_entries(resolved.path()) {
             Ok(entries) => entries,
             Err(error) => {
                 return ToolOutput::error(format!(
                     "unable to list directory {}: {}",
-                    dir.display(),
+                    resolved.path().display(),
                     error
                 ));
             }
         };
 
         ToolOutput::success(ListFilesToolOutput {
-            path: dir.display().to_string(),
+            path: resolved.path().display().to_string(),
             entries,
         })
     }
@@ -152,7 +135,7 @@ fn read_entries(dir: &Path) -> std::io::Result<Vec<ListFilesEntry>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
@@ -160,6 +143,12 @@ mod tests {
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
     use super::ListFilesTool;
+
+    fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
+        ToolCallGlobalConfig {
+            workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
 
     fn make_temp_dir(test_name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -185,8 +174,16 @@ mod tests {
         fs::write(workspace_dir.join(".hidden"), "hidden").expect("write hidden file");
         fs::create_dir(workspace_dir.join("folder")).expect("create folder");
 
-        let tool = ListFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "path": "." })).await;
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "path": "." }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Success { data } => {
@@ -215,8 +212,16 @@ mod tests {
         fs::create_dir(&nested_dir).expect("create nested dir");
         fs::write(nested_dir.join("deep.txt"), "deep").expect("write deep file");
 
-        let tool = ListFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "path": "." })).await;
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "path": "." }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Success { data } => {
@@ -233,8 +238,16 @@ mod tests {
     #[tokio::test]
     async fn returns_error_for_missing_directory() {
         let workspace_dir = make_temp_dir("returns_error_for_missing_directory");
-        let tool = ListFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "path": "missing" })).await;
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "path": "missing" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Error { message } => {
@@ -250,8 +263,16 @@ mod tests {
     async fn returns_error_for_file_path() {
         let workspace_dir = make_temp_dir("returns_error_for_file_path");
         fs::write(workspace_dir.join("file.txt"), "file").expect("write file");
-        let tool = ListFilesTool::new(workspace_dir.clone());
-        let output = tool.call(json!({ "path": "file.txt" })).await;
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
+        let output = tool
+            .call(
+                json!({ "path": "file.txt" }),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
+            .await;
 
         match output {
             ToolOutput::Error { message } => {
@@ -266,13 +287,12 @@ mod tests {
     #[test]
     fn assess_marks_workspace_path_as_read_only() {
         let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
-        let tool = ListFilesTool::new(workspace_dir.clone());
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
             &json!({ "path": "." }),
             &ToolContext {
-                global_config: &ToolCallGlobalConfig {
-                    workspace_dir: workspace_dir.clone(),
-                },
+                global_config: &config,
             },
         );
 
@@ -289,13 +309,38 @@ mod tests {
     fn assess_marks_outside_workspace_path_as_outside() {
         let workspace_dir = make_temp_dir("assess_marks_outside_workspace_path_as_outside");
         let outside_dir = make_temp_dir("assess_outside_target");
-        let tool = ListFilesTool::new(workspace_dir.clone());
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
             &json!({ "path": outside_dir.to_string_lossy() }),
             &ToolContext {
-                global_config: &ToolCallGlobalConfig {
-                    workspace_dir: workspace_dir.clone(),
-                },
+                global_config: &config,
+            },
+        );
+
+        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+
+        cleanup_temp_dir(&workspace_dir);
+        cleanup_temp_dir(&outside_dir);
+    }
+
+    #[test]
+    fn assess_marks_relative_parent_path_as_outside() {
+        let workspace_dir = make_temp_dir("assess_marks_relative_parent_path_as_outside");
+        let outside_dir = make_temp_dir("assess_relative_outside_target");
+        let relative_path = format!(
+            "../{}",
+            outside_dir
+                .file_name()
+                .expect("outside dir name")
+                .to_string_lossy()
+        );
+        let tool = ListFilesTool;
+        let config = tool_config(&workspace_dir);
+        let assessment = tool.assess(
+            &json!({ "path": relative_path }),
+            &ToolContext {
+                global_config: &config,
             },
         );
 

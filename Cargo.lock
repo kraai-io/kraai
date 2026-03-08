@@ -3840,6 +3840,7 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
+ "tokio",
  "tool-core",
  "toon-format",
  "toon-schema",

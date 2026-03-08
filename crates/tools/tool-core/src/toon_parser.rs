@@ -28,6 +28,8 @@ pub struct ParseResult {
 pub enum ParseError {
     #[error("Failed to decode Toon: {0}")]
     ToonDecode(#[from] ToonError),
+    #[error("Tool call body must decode to an object")]
+    InvalidToolCallObject,
     #[error("Missing 'tool' field in tool call")]
     MissingToolField,
     #[error("Tool field must be a string")]
@@ -59,17 +61,15 @@ fn extract_tool_call_blocks(text: &str) -> Vec<String> {
 }
 
 fn parse_single_tool_call(toon_content: &str) -> Result<ParsedToolCall, ParseError> {
-    let value = decode_default(toon_content)?;
+    let value: Value = decode_default(toon_content)?;
 
-    let obj = match value {
-        Value::Object(ref obj) => obj,
-        _ => return Err(ParseError::MissingToolField),
-    };
+    let obj = value.as_object().ok_or(ParseError::InvalidToolCallObject)?;
 
-    let tool_id = obj
-        .get("tool")
-        .and_then(|v| v.as_str())
-        .ok_or(ParseError::MissingToolField)?
+    let tool_value = obj.get("tool").ok_or(ParseError::MissingToolField)?;
+
+    let tool_id = tool_value
+        .as_str()
+        .ok_or(ParseError::InvalidToolField)?
         .to_string();
 
     let mut args = serde_json::Map::new();
@@ -200,5 +200,74 @@ x: 1
         let result = parse_tool_calls(text);
         assert_eq!(result.successful.len(), 2);
         assert_eq!(result.failed.len(), 1);
+    }
+
+    #[test]
+    fn test_malformed_toon_is_reported() {
+        let text = r#"<tool_call>
+tool read_files
+files[1]: /etc/passwd
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(result.failed[0].error.contains("Failed to decode Toon"));
+    }
+
+    #[test]
+    fn test_non_object_tool_call_is_reported() {
+        let text = r#"<tool_call>
+[3]: one,two,three
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].raw_content, "[3]: one,two,three\n");
+        assert!(result.failed[0].error.contains("decode to an object"));
+    }
+
+    #[test]
+    fn test_numeric_tool_field_is_invalid() {
+        let text = r#"<tool_call>
+tool: 123
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(
+            result.failed[0]
+                .error
+                .contains("Tool field must be a string")
+        );
+    }
+
+    #[test]
+    fn test_object_tool_field_is_invalid() {
+        let text = r#"<tool_call>
+tool:
+  nested: value
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(
+            result.failed[0]
+                .error
+                .contains("Tool field must be a string")
+        );
+    }
+
+    #[test]
+    fn test_empty_tool_call_block_is_reported() {
+        let text = "<tool_call>\n</tool_call>";
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].raw_content, "");
     }
 }
