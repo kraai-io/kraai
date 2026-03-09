@@ -62,14 +62,6 @@ impl ResolvedToolPath {
     pub fn is_within_workspace(&self) -> bool {
         self.within_workspace
     }
-
-    pub fn risk(&self) -> RiskLevel {
-        if self.within_workspace {
-            RiskLevel::ReadOnlyWorkspace
-        } else {
-            RiskLevel::OutsideWorkspace
-        }
-    }
 }
 
 #[async_trait]
@@ -80,7 +72,7 @@ pub trait Tool: Send + Sync {
 
     fn assess(&self, _args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
         ToolCallAssessment {
-            risk: RiskLevel::OutsideWorkspace,
+            risk: RiskLevel::WriteOutsideWorkspace,
             policy: ExecutionPolicy::AlwaysAsk,
             reasons: vec![String::from(
                 "Tool does not define a custom autonomy policy",
@@ -211,7 +203,7 @@ pub fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> ResolvedToolP
     }
 }
 
-pub fn assess_read_only_path(
+pub fn assess_read_path(
     workspace_root: &Path,
     raw_path: &str,
     workspace_reason_prefix: &str,
@@ -225,8 +217,36 @@ pub fn assess_read_only_path(
     };
 
     ToolCallAssessment {
-        risk: resolved.risk(),
+        risk: if resolved.is_within_workspace() {
+            RiskLevel::ReadOnlyWorkspace
+        } else {
+            RiskLevel::ReadOnlyOutsideWorkspace
+        },
         policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+        reasons: vec![reason],
+    }
+}
+
+pub fn assess_write_path(
+    workspace_root: &Path,
+    raw_path: &str,
+    workspace_reason_prefix: &str,
+    outside_reason_prefix: &str,
+) -> ToolCallAssessment {
+    let resolved = resolve_tool_path(workspace_root, raw_path);
+    let reason = if resolved.is_within_workspace() {
+        format!("{} {}", workspace_reason_prefix, resolved.path().display())
+    } else {
+        format!("{} {}", outside_reason_prefix, resolved.path().display())
+    };
+
+    ToolCallAssessment {
+        risk: if resolved.is_within_workspace() {
+            RiskLevel::UndoableWorkspaceWrite
+        } else {
+            RiskLevel::WriteOutsideWorkspace
+        },
+        policy: ExecutionPolicy::AlwaysAsk,
         reasons: vec![reason],
     }
 }
@@ -238,7 +258,7 @@ mod tests {
     use serde::ser::{Error as _, Serialize, Serializer};
     use types::{ExecutionPolicy, RiskLevel};
 
-    use super::{ToolOutput, assess_read_only_path, resolve_tool_path};
+    use super::{ToolOutput, assess_read_path, assess_write_path, resolve_tool_path};
 
     struct FailingSerialize;
 
@@ -271,13 +291,12 @@ mod tests {
 
         assert_eq!(resolved.path(), Path::new("/tmp/elsewhere/file.txt"));
         assert!(!resolved.is_within_workspace());
-        assert_eq!(resolved.risk(), RiskLevel::OutsideWorkspace);
     }
 
     #[test]
-    fn assess_read_only_path_uses_workspace_policy_for_inside_paths() {
+    fn assess_read_path_uses_workspace_policy_for_inside_paths() {
         let workspace_root = Path::new("/tmp/workspace");
-        let assessment = assess_read_only_path(
+        let assessment = assess_read_path(
             workspace_root,
             "src/lib.rs",
             "Reads workspace file",
@@ -295,5 +314,28 @@ mod tests {
                 "Reads workspace file /tmp/workspace/src/lib.rs"
             )]
         );
+    }
+
+    #[test]
+    fn assess_write_path_uses_write_risk_levels() {
+        let workspace_root = Path::new("/tmp/workspace");
+
+        let inside = assess_write_path(
+            workspace_root,
+            "src/lib.rs",
+            "Edits workspace file",
+            "Edits file outside workspace",
+        );
+        assert_eq!(inside.risk, RiskLevel::UndoableWorkspaceWrite);
+        assert_eq!(inside.policy, ExecutionPolicy::AlwaysAsk);
+
+        let outside = assess_write_path(
+            workspace_root,
+            "../elsewhere/file.txt",
+            "Edits workspace file",
+            "Edits file outside workspace",
+        );
+        assert_eq!(outside.risk, RiskLevel::WriteOutsideWorkspace);
+        assert_eq!(outside.policy, ExecutionPolicy::AlwaysAsk);
     }
 }

@@ -6,7 +6,7 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
-use tool_core::{Tool, ToolContext, ToolOutput, assess_read_only_path, resolve_tool_path};
+use tool_core::{Tool, ToolContext, ToolOutput, assess_read_path, resolve_tool_path};
 use toon_schema::ToonSchema;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
@@ -70,7 +70,7 @@ impl Tool for SearchFilesTool {
             Ok(args) => args,
             Err(error) => {
                 return ToolCallAssessment {
-                    risk: RiskLevel::OutsideWorkspace,
+                    risk: RiskLevel::ReadOnlyOutsideWorkspace,
                     policy: ExecutionPolicy::AlwaysAsk,
                     reasons: vec![format!(
                         "Unable to validate search_files arguments: {error}"
@@ -80,7 +80,7 @@ impl Tool for SearchFilesTool {
         };
 
         let raw_path = parsed.path.unwrap_or_else(|| String::from("."));
-        assess_read_only_path(
+        assess_read_path(
             &ctx.global_config.workspace_dir,
             &raw_path,
             "Searches workspace path",
@@ -482,7 +482,7 @@ mod tests {
             },
         );
 
-        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);
@@ -532,7 +532,7 @@ mod tests {
             },
         );
 
-        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);

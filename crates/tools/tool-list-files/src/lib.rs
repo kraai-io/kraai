@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tool_core::{Tool, ToolContext, ToolOutput, assess_read_only_path, resolve_tool_path};
+use tool_core::{Tool, ToolContext, ToolOutput, assess_read_path, resolve_tool_path};
 use toon_schema::ToonSchema;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
@@ -49,14 +49,14 @@ impl Tool for ListFilesTool {
             Ok(args) => args,
             Err(error) => {
                 return ToolCallAssessment {
-                    risk: RiskLevel::OutsideWorkspace,
+                    risk: RiskLevel::ReadOnlyOutsideWorkspace,
                     policy: ExecutionPolicy::AlwaysAsk,
                     reasons: vec![format!("Unable to validate list_files arguments: {error}")],
                 };
             }
         };
 
-        assess_read_only_path(
+        assess_read_path(
             &ctx.global_config.workspace_dir,
             &parsed.path,
             "Lists workspace directory",
@@ -318,7 +318,7 @@ mod tests {
             },
         );
 
-        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);
@@ -344,7 +344,7 @@ mod tests {
             },
         );
 
-        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);

@@ -53,7 +53,8 @@ pub enum RiskLevel {
     ReadOnlyWorkspace = 0,
     UndoableWorkspaceWrite = 1,
     NonUndoableWorkspaceWrite = 2,
-    OutsideWorkspace = 3,
+    ReadOnlyOutsideWorkspace = 3,
+    WriteOutsideWorkspace = 4,
 }
 
 impl RiskLevel {
@@ -62,7 +63,8 @@ impl RiskLevel {
             Self::ReadOnlyWorkspace => "read_only_workspace",
             Self::UndoableWorkspaceWrite => "undoable_workspace_write",
             Self::NonUndoableWorkspaceWrite => "non_undoable_workspace_write",
-            Self::OutsideWorkspace => "outside_workspace",
+            Self::ReadOnlyOutsideWorkspace => "read_only_outside_workspace",
+            Self::WriteOutsideWorkspace => "write_outside_workspace",
         }
     }
 }

@@ -11,6 +11,7 @@ use provider_core::{
     ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
 use tool_core::ToolManager;
+use tool_edit_file::EditFileTool;
 use tool_list_files::ListFilesTool;
 use tool_read_file::ReadFileTool;
 use tool_search_files::SearchFilesTool;
@@ -497,10 +498,7 @@ impl RuntimeBuilder {
             .and_then(|path| path.canonicalize())
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
-        let mut tools = ToolManager::new();
-        tools.register_tool(ReadFileTool);
-        tools.register_tool(ListFilesTool);
-        tools.register_tool(SearchFilesTool);
+        let tools = build_default_tool_manager();
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
@@ -567,6 +565,15 @@ impl RuntimeBuilder {
             })
             .unwrap_or_else(|| Ok(()))
     }
+}
+
+fn build_default_tool_manager() -> ToolManager {
+    let mut tools = ToolManager::new();
+    tools.register_tool(ReadFileTool);
+    tools.register_tool(ListFilesTool);
+    tools.register_tool(SearchFilesTool);
+    tools.register_tool(EditFileTool);
+    tools
 }
 
 // ============================================================================
@@ -1542,17 +1549,16 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    use super::*;
     use agent::AgentManager;
     use async_trait::async_trait;
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
     use persistence::{FileMessageStore, FileSessionStore};
-    use tool_core::{Tool, ToolContext, ToolOutput, ToolManager};
+    use tool_core::{Tool, ToolContext, ToolManager, ToolOutput};
     use types::{
-        ChatMessage, ChatRole, ExecutionPolicy, ModelId, ProviderId, RiskLevel,
-        ToolCallAssessment,
+        ChatMessage, ChatRole, ExecutionPolicy, ModelId, ProviderId, RiskLevel, ToolCallAssessment,
     };
-    use super::*;
 
     #[derive(Clone, Debug)]
     struct ScriptedChunk {
@@ -1919,7 +1925,9 @@ mod tests {
             })
             .await;
 
-        assert!(stream_complete_for(&events, &session_b) < stream_complete_for(&events, &session_a));
+        assert!(
+            stream_complete_for(&events, &session_b) < stream_complete_for(&events, &session_a)
+        );
 
         let history_a = harness.handle.get_chat_history(session_a.clone()).await?;
         let history_b = harness.handle.get_chat_history(session_b.clone()).await?;

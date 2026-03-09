@@ -42,7 +42,7 @@ impl Tool for ReadFileTool {
             Ok(args) => args,
             Err(error) => {
                 return ToolCallAssessment {
-                    risk: RiskLevel::OutsideWorkspace,
+                    risk: RiskLevel::ReadOnlyOutsideWorkspace,
                     policy: ExecutionPolicy::AlwaysAsk,
                     reasons: vec![format!("Unable to validate read_files arguments: {error}")],
                 };
@@ -60,7 +60,7 @@ impl Tool for ReadFileTool {
                     resolved.path().display()
                 ));
             } else {
-                risk = RiskLevel::OutsideWorkspace;
+                risk = RiskLevel::ReadOnlyOutsideWorkspace;
                 reasons.push(format!(
                     "Reads file outside workspace {}",
                     resolved.path().display()
@@ -286,7 +286,7 @@ mod tests {
             &ToolContext { global_config: &config },
         );
 
-        assert_eq!(assessment.risk, RiskLevel::OutsideWorkspace);
+        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);

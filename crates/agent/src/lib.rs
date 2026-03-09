@@ -574,7 +574,7 @@ impl AgentManager {
                     },
                 )
                 .unwrap_or_else(|_| ToolCallAssessment {
-                    risk: RiskLevel::OutsideWorkspace,
+                    risk: RiskLevel::WriteOutsideWorkspace,
                     policy: types::ExecutionPolicy::AlwaysAsk,
                     reasons: vec![format!("Unknown tool: {}", parsed.tool_id)],
                 });
