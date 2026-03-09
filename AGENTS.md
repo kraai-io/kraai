@@ -78,4 +78,4 @@ This repo contains very heavy llm use, so some design decisions might not always
 ## Other Notes
 
 This project leans heavily into the Nix ecosystem. The CI builds and tests all nix outputs.
-Any suggestions about new features or improvements should be placed in ideas/llm-new/name-of-idea.md
+Any suggestions about new features or improvements should be placed in ideas/llm-unchecked/name-of-idea.md
