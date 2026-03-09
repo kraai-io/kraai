@@ -854,13 +854,15 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             .current_session_id
             .as_ref()
             .is_some_and(|sid| sid == &session.id);
+        let waiting_for_approval = state.session_waiting_for_approval(&session.id);
         let title = session
             .title
             .clone()
             .unwrap_or_else(|| format!("Session {}", &session.id[..8.min(session.id.len())]));
-        let suffix = if current { " (current)" } else { "" };
+        let current_suffix = if current { " (current)" } else { "" };
+        let approval_suffix = if waiting_for_approval { " [approval]" } else { "" };
         lines.push(Line::styled(
-            format!("{marker} {title}{suffix}"),
+            format!("{marker} {title}{current_suffix}{approval_suffix}"),
             if selected {
                 Style::default().fg(Color::Cyan)
             } else {

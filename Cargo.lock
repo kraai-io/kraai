@@ -43,6 +43,7 @@ name = "agent-runtime"
 version = "0.1.0"
 dependencies = [
  "agent",
+ "async-trait",
  "color-eyre",
  "directories",
  "futures",

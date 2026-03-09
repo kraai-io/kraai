@@ -1534,3 +1534,565 @@ fn trim_optional(value: &Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use agent::AgentManager;
+    use async_trait::async_trait;
+    use color_eyre::eyre::{Result, eyre};
+    use futures::stream::{self, BoxStream};
+    use persistence::{FileMessageStore, FileSessionStore};
+    use tool_core::{Tool, ToolContext, ToolOutput, ToolManager};
+    use types::{
+        ChatMessage, ChatRole, ExecutionPolicy, ModelId, ProviderId, RiskLevel,
+        ToolCallAssessment,
+    };
+    use super::*;
+
+    #[derive(Clone, Debug)]
+    struct ScriptedChunk {
+        text: String,
+        gate: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    impl ScriptedChunk {
+        fn plain(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                gate: None,
+            }
+        }
+
+        fn gated(text: impl Into<String>, gate: Arc<tokio::sync::Notify>) -> Self {
+            Self {
+                text: text.into(),
+                gate: Some(gate),
+            }
+        }
+    }
+
+    struct ScriptedProvider {
+        id: ProviderId,
+        scripts: StdMutex<VecDeque<Vec<ScriptedChunk>>>,
+    }
+
+    #[async_trait]
+    impl provider_core::Provider for ScriptedProvider {
+        fn get_provider_id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        async fn list_models(&self) -> Vec<provider_core::Model> {
+            vec![provider_core::Model {
+                id: ModelId::new("mock-model"),
+                name: String::from("Mock Model"),
+                max_context: None,
+            }]
+        }
+
+        async fn cache_models(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn generate_reply(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<ChatMessage> {
+            Ok(ChatMessage {
+                role: ChatRole::Assistant,
+                content: String::from("unused non-streaming reply"),
+            })
+        }
+
+        async fn generate_reply_stream(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<BoxStream<'static, Result<String>>> {
+            let script = self
+                .scripts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .ok_or_else(|| eyre!("No scripted stream remaining"))?;
+
+            Ok(Box::pin(stream::unfold(
+                (script, 0usize),
+                |(script, index)| async move {
+                    if index >= script.len() {
+                        return None;
+                    }
+
+                    let chunk = script[index].clone();
+                    if let Some(gate) = chunk.gate {
+                        gate.notified().await;
+                    }
+
+                    Some((Ok(chunk.text), (script, index + 1)))
+                },
+            )))
+        }
+    }
+
+    struct ApprovalTool;
+
+    #[async_trait]
+    impl Tool for ApprovalTool {
+        fn name(&self) -> &'static str {
+            "mock_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "mock_tool(value: string)"
+        }
+
+        fn assess(&self, args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            ToolCallAssessment {
+                risk: RiskLevel::UndoableWorkspaceWrite,
+                policy: ExecutionPolicy::AlwaysAsk,
+                reasons: vec![format!(
+                    "mock_tool requires approval for {:?}",
+                    args.get("value")
+                )],
+            }
+        }
+
+        async fn call(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+            ToolOutput::success(serde_json::json!({
+                "tool": "mock_tool",
+                "value": args.get("value").cloned().unwrap_or(serde_json::Value::Null),
+            }))
+        }
+
+        async fn describe(&self, args: serde_json::Value) -> String {
+            let value = args
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            format!("Mock tool for {value}")
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct EventCollector {
+        events: Arc<StdMutex<Vec<Event>>>,
+    }
+
+    impl EventCollector {
+        fn snapshot(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
+        async fn wait_for<F>(&self, description: &str, predicate: F) -> Vec<Event>
+        where
+            F: Fn(&[Event]) -> bool,
+        {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let snapshot = self.snapshot();
+                if predicate(&snapshot) {
+                    return snapshot;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "Timed out waiting for {description}. Events so far: {snapshot:#?}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    }
+
+    impl EventCallback for EventCollector {
+        fn on_event(&self, event: Event) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+        }
+    }
+
+    struct RuntimeTestHarness {
+        handle: RuntimeHandle,
+        events: EventCollector,
+        runtime_task: tokio::task::JoinHandle<()>,
+        data_dir: PathBuf,
+    }
+
+    impl RuntimeTestHarness {
+        async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let pid = std::process::id();
+            let data_dir = std::env::temp_dir().join(format!("agent-runtime-test-{pid}-{nanos}"));
+            tokio::fs::create_dir_all(&data_dir)
+                .await
+                .expect("create temp runtime dir");
+
+            let workspace_dir = data_dir.join("workspace");
+            tokio::fs::create_dir_all(&workspace_dir)
+                .await
+                .expect("create temp workspace dir");
+
+            let message_store = Arc::new(FileMessageStore::new(&data_dir));
+            let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+
+            let mut providers = ProviderManager::new();
+            providers.register_provider(
+                ProviderId::new("mock"),
+                Box::new(ScriptedProvider {
+                    id: ProviderId::new("mock"),
+                    scripts: StdMutex::new(scripts.into()),
+                }),
+            );
+
+            let mut tools = ToolManager::new();
+            tools.register_tool(ApprovalTool);
+
+            let agent_manager = Arc::new(Mutex::new(AgentManager::new(
+                providers,
+                tools,
+                workspace_dir,
+                message_store,
+                session_store,
+            )));
+
+            let events = EventCollector::default();
+            let (command_tx, mut command_rx) = mpsc::channel(32);
+            let handle = RuntimeHandle {
+                command_tx: command_tx.clone(),
+            };
+
+            let runtime = RuntimeInner {
+                event_callback: Arc::new(events.clone()),
+                command_tx,
+                agent_manager,
+            };
+
+            let runtime_task = tokio::spawn(async move {
+                while let Some(command) = command_rx.recv().await {
+                    runtime
+                        .handle_command(command)
+                        .await
+                        .expect("runtime command should succeed");
+                }
+            });
+
+            Self {
+                handle,
+                events,
+                runtime_task,
+                data_dir,
+            }
+        }
+
+        async fn shutdown(self) {
+            drop(self.handle);
+            self.runtime_task.abort();
+            let _ = self.runtime_task.await;
+            let _ = tokio::fs::remove_dir_all(self.data_dir).await;
+        }
+    }
+
+    fn stream_complete_for(events: &[Event], session_id: &str) -> usize {
+        events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::StreamComplete {
+                        session_id: event_session,
+                        ..
+                    } if event_session == session_id
+                )
+            })
+            .expect("stream complete event should exist")
+    }
+
+    #[tokio::test]
+    async fn background_session_stream_continues_after_switch() -> Result<()> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new(vec![
+            vec![
+                ScriptedChunk::plain("session-a chunk 1 "),
+                ScriptedChunk::gated("session-a chunk 2", gate.clone()),
+            ],
+            vec![ScriptedChunk::plain("session-b complete")],
+        ])
+        .await;
+
+        let session_a = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_a.clone(),
+                String::from("start session a"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("session A first chunk", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamChunk {
+                            session_id,
+                            chunk,
+                            ..
+                        } if session_id == &session_a && chunk == "session-a chunk 1 "
+                    )
+                })
+            })
+            .await;
+
+        let session_b = harness.handle.create_session().await?;
+        assert!(harness.handle.load_session(session_b.clone()).await?);
+        harness
+            .handle
+            .send_message(
+                session_b.clone(),
+                String::from("start session b"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("session B completion", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id,
+                            ..
+                        } if session_id == &session_b
+                    )
+                })
+            })
+            .await;
+
+        assert!(
+            !events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamComplete {
+                        session_id,
+                        ..
+                    } if session_id == &session_a
+                )
+            }),
+            "session A should still be streaming while session B completes"
+        );
+
+        gate.notify_one();
+
+        let events = harness
+            .events
+            .wait_for("session A completion", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id,
+                            ..
+                        } if session_id == &session_a
+                    )
+                })
+            })
+            .await;
+
+        assert!(stream_complete_for(&events, &session_b) < stream_complete_for(&events, &session_a));
+
+        let history_a = harness.handle.get_chat_history(session_a.clone()).await?;
+        let history_b = harness.handle.get_chat_history(session_b.clone()).await?;
+        assert_eq!(history_a.len(), 2);
+        assert_eq!(history_b.len(), 2);
+        assert!(
+            history_a
+                .values()
+                .any(|message| message.content == "session-a chunk 1 session-a chunk 2")
+        );
+        assert!(
+            history_b
+                .values()
+                .any(|message| message.content == "session-b complete")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn background_session_tool_approval_and_continuation_work_after_switch() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![
+                ScriptedChunk::plain("before tool\n"),
+                ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>",
+                ),
+            ],
+            vec![ScriptedChunk::plain("session-b reply")],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ])
+        .await;
+
+        let session_a = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_a.clone(),
+                String::from("start session a"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("session A tool detection", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id,
+                            tool_id,
+                            ..
+                        } if session_id == &session_a && tool_id == "mock_tool"
+                    )
+                })
+            })
+            .await;
+
+        let call_id = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallDetected {
+                    session_id,
+                    call_id,
+                    tool_id,
+                    ..
+                } if session_id == &session_a && tool_id == "mock_tool" => Some(call_id.clone()),
+                _ => None,
+            })
+            .expect("tool call id should exist");
+
+        let session_b = harness.handle.create_session().await?;
+        assert!(harness.handle.load_session(session_b.clone()).await?);
+        harness
+            .handle
+            .send_message(
+                session_b.clone(),
+                String::from("start session b"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("session B completion", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id,
+                            ..
+                        } if session_id == &session_b
+                    )
+                })
+            })
+            .await;
+
+        let session_b_tip_before = harness.handle.get_tip(session_b.clone()).await?;
+
+        harness
+            .handle
+            .approve_tool(session_a.clone(), call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_a.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("session A tool result and continuation", |events| {
+                let tool_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id,
+                            call_id: event_call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if session_id == &session_a
+                            && event_call_id == &call_id
+                            && tool_id == "mock_tool"
+                            && !denied
+                    )
+                });
+                let continuation_completed = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete {
+                                session_id,
+                                ..
+                            } if session_id == &session_a
+                        )
+                    })
+                    .count()
+                    >= 2;
+                tool_result_ready && continuation_completed
+            })
+            .await;
+
+        let history_a = harness.handle.get_chat_history(session_a.clone()).await?;
+        let history_b = harness.handle.get_chat_history(session_b.clone()).await?;
+        let session_b_tip_after = harness.handle.get_tip(session_b.clone()).await?;
+
+        assert_eq!(session_b_tip_before, session_b_tip_after);
+        assert_eq!(history_b.len(), 2);
+        assert!(
+            history_b
+                .values()
+                .any(|message| message.content == "session-b reply")
+        );
+        assert!(
+            history_a
+                .values()
+                .any(|message| message.content.contains("Tool 'mock_tool' result"))
+        );
+        assert!(
+            history_a
+                .values()
+                .any(|message| message.content == "continuation complete")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+}

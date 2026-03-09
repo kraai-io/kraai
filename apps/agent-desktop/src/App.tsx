@@ -610,33 +610,46 @@ function App(): React.JSX.Element {
 							</Button>
 						</div>
 						<div className="p-2 pt-0">
-							{sessions.map((session) => (
-								<button
-									type="button"
-									key={session.id}
-									className={`group flex w-full items-center gap-2 rounded-md p-2 text-left ${
-										session.id === currentSessionId
-											? "bg-accent"
-											: "hover:bg-muted"
-									}`}
-									onClick={() => handleLoadSession(session.id)}
-								>
-									<div className="flex-1 truncate text-sm">
-										{session.title || `Session ${session.id.slice(0, 8)}`}
-									</div>
-									<Button
-										variant="ghost"
-										size="icon"
-										className="h-6 w-6 opacity-0 group-hover:opacity-100"
-										onClick={(e) => {
-											e.stopPropagation();
-											setSessionToDelete(session.id);
-										}}
+							{sessions.map((session) => {
+								const waitingForApproval = pendingTools.some(
+									(tool) =>
+										tool.sessionId === session.id && tool.approved === null,
+								);
+								return (
+									<button
+										type="button"
+										key={session.id}
+										className={`group flex w-full items-center gap-2 rounded-md p-2 text-left ${
+											session.id === currentSessionId
+												? "bg-accent"
+												: "hover:bg-muted"
+										}`}
+										onClick={() => handleLoadSession(session.id)}
 									>
-										<Trash2 className="h-3 w-3" />
-									</Button>
-								</button>
-							))}
+										<div className="flex min-w-0 flex-1 items-center gap-2">
+											<div className="flex-1 truncate text-sm">
+												{session.title || `Session ${session.id.slice(0, 8)}`}
+											</div>
+											{waitingForApproval && (
+												<span className="shrink-0 rounded-full border border-amber-300/60 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900">
+													Approval
+												</span>
+											)}
+										</div>
+										<Button
+											variant="ghost"
+											size="icon"
+											className="h-6 w-6 opacity-0 group-hover:opacity-100"
+											onClick={(e) => {
+												e.stopPropagation();
+												setSessionToDelete(session.id);
+											}}
+										>
+											<Trash2 className="h-3 w-3" />
+										</Button>
+									</button>
+								);
+							})}
 							{sessions.length === 0 && (
 								<p className="p-2 text-sm text-muted-foreground">
 									No sessions yet

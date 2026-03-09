@@ -2061,6 +2061,12 @@ impl AppState {
         cache.total_lines.saturating_sub(self.chat_viewport_height)
     }
 
+    fn session_waiting_for_approval(&self, session_id: &str) -> bool {
+        self.pending_tools
+            .iter()
+            .any(|tool| tool.session_id == session_id && tool.approved.is_none())
+    }
+
     fn rendered_messages(&self) -> Vec<Message> {
         let mut rendered_messages: Vec<Message> =
             build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
@@ -2564,7 +2570,7 @@ mod tests {
 05: oke tes│Sessions (Enter=load/new, x=delete, Esc=close)         │
 06:        │  Start new chat                                       │
 07:        │  Refactor ideas                                       │
-08:        │> Testing plan (current)                               │
+08:        │> Testing plan (current) [approval]                    │
 09:        │                                                       │
 10:        │                                                       │
 11:        │                                                       │
@@ -3234,6 +3240,65 @@ mod tests {
             });
 
         assert_eq!(harness.app.state.pending_tools[1].approved, Some(true));
+    }
+
+    #[test]
+    fn background_session_pending_tool_survives_session_switch() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-1"));
+
+        harness.app.handle_runtime_event(Event::ToolCallDetected {
+            session_id: String::from("sess-1"),
+            call_id: String::from("call-bg"),
+            tool_id: String::from("read_file"),
+            args: String::from("{\"path\":\"Cargo.toml\"}"),
+            description: String::from("Read the workspace manifest"),
+            risk_level: String::from("read_only_workspace"),
+            reasons: vec![String::from("Reads local config")],
+        });
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::LoadSession {
+                session_id: String::from("sess-2"),
+                result: Ok(true),
+            });
+
+        assert_eq!(harness.app.state.current_session_id.as_deref(), Some("sess-2"));
+        assert_eq!(harness.app.state.pending_tools.len(), 1);
+        assert_eq!(harness.app.state.pending_tools[0].session_id, "sess-1");
+        assert!(harness.app.state.session_waiting_for_approval("sess-1"));
+        assert!(!harness.app.state.session_waiting_for_approval("sess-2"));
+    }
+
+    #[test]
+    fn session_waiting_for_approval_ignores_handled_tools() {
+        let state = AppState {
+            pending_tools: vec![
+                PendingTool {
+                    session_id: String::from("sess-1"),
+                    call_id: String::from("approved"),
+                    tool_id: String::from("read_file"),
+                    args: String::from("{}"),
+                    description: String::from("Approved tool"),
+                    risk_level: String::from("read_only_workspace"),
+                    reasons: Vec::new(),
+                    approved: Some(true),
+                },
+                PendingTool {
+                    session_id: String::from("sess-1"),
+                    call_id: String::from("denied"),
+                    tool_id: String::from("write_file"),
+                    args: String::from("{}"),
+                    description: String::from("Denied tool"),
+                    risk_level: String::from("undoable_workspace_write"),
+                    reasons: Vec::new(),
+                    approved: Some(false),
+                },
+            ],
+            ..AppState::default()
+        };
+
+        assert!(!state.session_waiting_for_approval("sess-1"));
     }
 
     #[test]
