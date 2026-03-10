@@ -63,7 +63,7 @@ format:
 
 lint:
     pnpm lint
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets -- -D warnings
 
 check: format lint test-all
 

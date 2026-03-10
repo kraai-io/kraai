@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Provider core crate for LLM provider abstraction.
 //!
 //! This crate provides the core traits and types for managing LLM providers

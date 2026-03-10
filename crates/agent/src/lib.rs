@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

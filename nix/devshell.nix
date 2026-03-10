@@ -20,6 +20,8 @@
           cargo-hakari
           cargo-nextest
           cargo-llvm-cov
+          cargo-geiger
+          cargo-crev
           (rust-bin.stable.latest.default.override {
             extensions = ["llvm-tools-preview"];
           })

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::io::Read;
 
 use async_trait::async_trait;

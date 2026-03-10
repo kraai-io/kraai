@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use color_eyre::eyre::{Context, ContextCompat, Result};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};

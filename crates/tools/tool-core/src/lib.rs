@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod toon_parser;
 
 use std::{

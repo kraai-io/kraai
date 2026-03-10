@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use agent_runtime::{Event, RuntimeBuilder};
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Sender, bounded};

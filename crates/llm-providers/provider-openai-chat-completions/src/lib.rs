@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! OpenAI-compatible provider implementation.
 //!
 //! This provider supports any OpenAI-compatible API by allowing a custom base URL.
