@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use futures::stream::BoxStream;
 use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use tokio::sync::RwLock;
@@ -48,6 +47,14 @@ pub struct ToolExecutionRequest {
     pub args: Option<serde_json::Value>,
     pub config: Option<types::ToolCallGlobalConfig>,
     pub permission_denied: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingStreamRequest {
+    pub message_id: MessageId,
+    pub provider_id: ProviderId,
+    pub model_id: ModelId,
+    pub provider_messages: Vec<ChatMessage>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,13 +265,13 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn start_stream(
+    pub async fn prepare_start_stream(
         &mut self,
         session_id: &str,
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
-    ) -> Result<(MessageId, BoxStream<'static, Result<String>>)> {
+    ) -> Result<PendingStreamRequest> {
         let session = self.require_session(session_id).await?;
         {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
@@ -299,25 +306,18 @@ impl AgentManager {
             .start_streaming_message(session_id, ChatRole::Assistant, call_id)
             .await?;
 
-        let stream = match self
-            .providers
-            .generate_reply_stream(provider_id, &model_id, provider_messages)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                let _ = self.abort_streaming_message(&assistant_msg_id).await;
-                return Err(error);
-            }
-        };
-
-        Ok((assistant_msg_id, stream))
+        Ok(PendingStreamRequest {
+            message_id: assistant_msg_id,
+            provider_id,
+            model_id,
+            provider_messages,
+        })
     }
 
-    pub async fn start_continuation_stream(
+    pub async fn prepare_continuation_stream(
         &mut self,
         session_id: &str,
-    ) -> Result<Option<(MessageId, BoxStream<'static, Result<String>>)>> {
+    ) -> Result<Option<PendingStreamRequest>> {
         let session = self.require_session(session_id).await?;
         let (model_id, provider_id) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
@@ -358,19 +358,12 @@ impl AgentManager {
             .start_streaming_message(session_id, ChatRole::Assistant, call_id)
             .await?;
 
-        let stream = match self
-            .providers
-            .generate_reply_stream(provider_id, &model_id, provider_messages)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                let _ = self.abort_streaming_message(&assistant_msg_id).await;
-                return Err(error);
-            }
-        };
-
-        Ok(Some((assistant_msg_id, stream)))
+        Ok(Some(PendingStreamRequest {
+            message_id: assistant_msg_id,
+            provider_id,
+            model_id,
+            provider_messages,
+        }))
     }
 
     fn ensure_runtime_state(
@@ -746,6 +739,10 @@ impl AgentManager {
         self.tools.clone()
     }
 
+    pub fn cloned_provider_manager(&self) -> ProviderManager {
+        self.providers.clone()
+    }
+
     pub fn take_ready_tool_executions(&mut self, session_id: &str) -> Vec<ToolExecutionRequest> {
         let Some(state) = self.session_states.get_mut(session_id) else {
             return Vec::new();
@@ -855,6 +852,7 @@ fn default_autonomy_threshold() -> RiskLevel {
 mod tests {
     use super::*;
     use color_eyre::eyre::Result;
+    use futures::stream::BoxStream;
     use provider_core::Provider;
     use std::time::{SystemTime, UNIX_EPOCH};
     use types::{ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus};
@@ -1014,15 +1012,24 @@ mod tests {
             .add_message(&session_id, ChatRole::User, String::from("hello"))
             .await?;
 
-        let result = manager
-            .start_stream(
+        let request = manager
+            .prepare_start_stream(
                 &session_id,
                 String::from("trigger failure"),
                 ModelId::new("mock-model"),
                 ProviderId::new("missing-provider"),
             )
+            .await?;
+        let result = manager
+            .cloned_provider_manager()
+            .generate_reply_stream(
+                request.provider_id,
+                &request.model_id,
+                request.provider_messages,
+            )
             .await;
         assert!(result.is_err());
+        manager.abort_streaming_message(&request.message_id).await?;
 
         let tip = manager.get_tip(&session_id).await?;
         let history = manager.get_chat_history(&session_id).await?;

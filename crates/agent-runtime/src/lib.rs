@@ -916,17 +916,35 @@ impl RuntimeInner {
         let command_tx = self.command_tx.clone();
 
         tokio::spawn(async move {
-            let (msg_id, mut stream) = {
+            let (providers, request) = {
                 let mut agent = agent_manager.lock().await;
                 match agent
-                    .start_stream(&session_id, message, model_id, provider_id)
+                    .prepare_start_stream(&session_id, message, model_id, provider_id)
                     .await
                 {
-                    Ok(result) => result,
+                    Ok(result) => (agent.cloned_provider_manager(), result),
                     Err(e) => {
                         event_callback.on_event(Event::Error(e.to_string()));
                         return;
                     }
+                }
+            };
+
+            let msg_id = request.message_id.clone();
+            let mut stream = match providers
+                .generate_reply_stream(
+                    request.provider_id,
+                    &request.model_id,
+                    request.provider_messages,
+                )
+                .await
+            {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let agent = agent_manager.lock().await;
+                    let _ = agent.abort_streaming_message(&msg_id).await;
+                    event_callback.on_event(Event::Error(error.to_string()));
+                    return;
                 }
             };
 
@@ -1141,13 +1159,42 @@ impl RuntimeInner {
         Box::pin(async move {
             let continuation = {
                 let mut agent = agent_manager.lock().await;
-                agent.start_continuation_stream(&session_id).await
+                match agent.prepare_continuation_stream(&session_id).await {
+                    Ok(result) => Ok(result.map(|request| (agent.cloned_provider_manager(), request))),
+                    Err(error) => Err(error),
+                }
             };
 
-            let (msg_id, mut stream) = match continuation {
-                Ok(Some(stream)) => stream,
+            let ((providers, request), msg_id) = match continuation {
+                Ok(Some((providers, request))) => {
+                    let msg_id = request.message_id.clone();
+                    ((providers, request), msg_id)
+                }
                 Ok(None) => return,
                 Err(error) => {
+                    event_callback.on_event(Event::HistoryUpdated {
+                        session_id: session_id.clone(),
+                    });
+                    event_callback.on_event(Event::ContinuationFailed {
+                        session_id,
+                        error: error.to_string(),
+                    });
+                    return;
+                }
+            };
+
+            let mut stream = match providers
+                .generate_reply_stream(
+                    request.provider_id,
+                    &request.model_id,
+                    request.provider_messages,
+                )
+                .await
+            {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let agent = agent_manager.lock().await;
+                    let _ = agent.abort_streaming_message(&msg_id).await;
                     event_callback.on_event(Event::HistoryUpdated {
                         session_id: session_id.clone(),
                     });
@@ -1858,6 +1905,58 @@ mod tests {
         }
     }
 
+    struct BlockingStartProvider {
+        id: ProviderId,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl provider_core::Provider for BlockingStartProvider {
+        fn get_provider_id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        async fn list_models(&self) -> Vec<provider_core::Model> {
+            vec![provider_core::Model {
+                id: ModelId::new("mock-model"),
+                name: String::from("Mock Model"),
+                max_context: None,
+            }]
+        }
+
+        async fn cache_models(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn generate_reply(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<ChatMessage> {
+            Ok(ChatMessage {
+                role: ChatRole::Assistant,
+                content: String::from("unused non-streaming reply"),
+            })
+        }
+
+        async fn generate_reply_stream(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<BoxStream<'static, Result<String>>> {
+            self.started.notify_waiters();
+            self.release.notified().await;
+            Ok(Box::pin(stream::once(async {
+                Ok(String::from("provider started"))
+            })))
+        }
+    }
+
     #[derive(Clone, Default)]
     struct EventCollector {
         events: Arc<StdMutex<Vec<Event>>>,
@@ -1915,6 +2014,23 @@ mod tests {
         where
             F: FnOnce(&mut ToolManager),
         {
+            let mut providers = ProviderManager::new();
+            providers.register_provider(
+                ProviderId::new("mock"),
+                Box::new(ScriptedProvider {
+                    id: ProviderId::new("mock"),
+                    scripts: StdMutex::new(scripts.into()),
+                }),
+            );
+
+            let mut tools = ToolManager::new();
+            tools.register_tool(ApprovalTool);
+            configure_tools(&mut tools);
+
+            Self::new_with_parts(providers, tools).await
+        }
+
+        async fn new_with_parts(providers: ProviderManager, tools: ToolManager) -> Self {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1932,19 +2048,6 @@ mod tests {
 
             let message_store = Arc::new(FileMessageStore::new(&data_dir));
             let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
-
-            let mut providers = ProviderManager::new();
-            providers.register_provider(
-                ProviderId::new("mock"),
-                Box::new(ScriptedProvider {
-                    id: ProviderId::new("mock"),
-                    scripts: StdMutex::new(scripts.into()),
-                }),
-            );
-
-            let mut tools = ToolManager::new();
-            tools.register_tool(ApprovalTool);
-            configure_tools(&mut tools);
 
             let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                 providers,
@@ -2517,6 +2620,70 @@ value: alpha\n\
                 .content
                 .contains("Tool 'blocking_tool' result:\n{\n  \"error\": \"tool exploded\"\n}")
         }));
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_operations_remain_responsive_while_provider_stream_starts() -> Result<()> {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("mock"),
+            Box::new(BlockingStartProvider {
+                id: ProviderId::new("mock"),
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        );
+
+        let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
+        let session_a = harness.handle.create_session().await?;
+        let session_b = harness.handle.create_session().await?;
+
+        harness
+            .handle
+            .send_message(
+                session_a.clone(),
+                String::from("start session a"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+        started.notified().await;
+
+        let load_result = tokio::time::timeout(
+            Duration::from_millis(200),
+            harness.handle.load_session(session_b.clone()),
+        )
+        .await;
+        assert!(matches!(load_result, Ok(Ok(true))));
+
+        let tip_result = tokio::time::timeout(
+            Duration::from_millis(200),
+            harness.handle.get_tip(session_b.clone()),
+        )
+        .await;
+        assert!(matches!(tip_result, Ok(Ok(None))));
+
+        release.notify_waiters();
+
+        harness
+            .events
+            .wait_for("provider stream start", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamStart {
+                            session_id,
+                            ..
+                        } if session_id == &session_a
+                    )
+                })
+            })
+            .await;
 
         harness.shutdown().await;
         Ok(())

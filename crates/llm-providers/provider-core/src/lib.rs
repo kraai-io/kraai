@@ -9,6 +9,7 @@
 //! - Model caching and discovery
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use color_eyre::Result;
 use futures::{future::join_all, stream::BoxStream};
@@ -54,9 +55,9 @@ pub enum ProviderError {
 /// manager.register_provider(ProviderId::new("my-provider"), my_provider);
 /// let models = manager.list_all_models().await;
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ProviderManager {
-    providers: BTreeMap<ProviderId, Box<dyn Provider>>,
+    providers: BTreeMap<ProviderId, Arc<dyn Provider>>,
 }
 
 /// Helper for registering provider factories before loading configuration.
@@ -184,7 +185,7 @@ impl ProviderManager {
     ///
     /// Use this for programmatic provider registration without configuration files.
     pub fn register_provider(&mut self, id: ProviderId, provider: Box<dyn Provider>) {
-        self.providers.insert(id, provider);
+        self.providers.insert(id, Arc::from(provider));
     }
 
     /// Check if a provider with the given ID exists.
@@ -193,8 +194,8 @@ impl ProviderManager {
     }
 
     /// Get a reference to a provider by ID.
-    pub fn get_provider(&self, id: &ProviderId) -> Option<&dyn Provider> {
-        self.providers.get(id).map(|p| p.as_ref())
+    pub fn get_provider(&self, id: &ProviderId) -> Option<Arc<dyn Provider>> {
+        self.providers.get(id).cloned()
     }
 
     /// List all registered provider IDs.
@@ -218,7 +219,7 @@ impl ProviderManager {
         config: ProviderManagerConfig,
         helper: ProviderManagerHelper,
     ) -> Result<()> {
-        let providers = config
+        let mut providers = config
             .providers
             .into_iter()
             .map(|x| {
@@ -229,18 +230,19 @@ impl ProviderManager {
                 let provider = factory(x.id.clone(), x.config)?;
                 Ok((x.id, provider))
             })
-            .collect::<Result<Vec<(ProviderId, Box<dyn Provider>)>, ProviderError>>()?;
-
-        self.providers.clear();
-        self.providers.extend(providers);
+            .collect::<Result<BTreeMap<ProviderId, Box<dyn Provider>>, ProviderError>>()?;
 
         for m in config.models {
-            let provider = self
-                .providers
+            let provider = providers
                 .get_mut(&m.provider_id)
                 .ok_or_else(|| ProviderError::ProviderNotRegistered(m.provider_id.clone()))?;
             provider.register_model(m).await?;
         }
+
+        self.providers = providers
+            .into_iter()
+            .map(|(id, provider)| (id, Arc::from(provider)))
+            .collect();
 
         self.update_models_list().await?;
 
@@ -266,7 +268,7 @@ impl ProviderManager {
     ///
     /// This queries each provider's API to refresh the list of available models.
     pub async fn update_models_list(&mut self) -> Result<()> {
-        for p in self.providers.values_mut() {
+        for p in self.providers.values() {
             p.cache_models().await?;
         }
         Ok(())
