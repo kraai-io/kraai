@@ -587,7 +587,9 @@ impl App {
                 output,
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.pending_tools.retain(|tool| tool.call_id != call_id);
+                    self.state
+                        .pending_tools
+                        .retain(|tool| tool.call_id != call_id);
                     if !success || denied {
                         self.push_optimistic_tool_message(&call_id, &tool_id, &output, denied);
                     }
@@ -2130,16 +2132,15 @@ impl App {
                 "raw_output": output,
             })
         });
-        let content = types::format_tool_result_message(
-            &types::ToolId::new(tool_id),
-            &output_json,
-            denied,
-        );
+        let content =
+            types::format_tool_result_message(&types::ToolId::new(tool_id), &output_json, denied);
 
-        self.state.optimistic_tool_messages.push(OptimisticToolMessage {
-            local_id: format!("local-tool-{call_id}"),
-            content,
-        });
+        self.state
+            .optimistic_tool_messages
+            .push(OptimisticToolMessage {
+                local_id: format!("local-tool-{call_id}"),
+                content,
+            });
         self.invalidate_chat_cache();
     }
 }
@@ -3410,8 +3411,20 @@ mod tests {
                 )])),
             });
 
-        assert!(harness.app.state.chat_history.contains_key(&MessageId::new("m-current")));
-        assert!(!harness.app.state.chat_history.contains_key(&MessageId::new("m-stale")));
+        assert!(
+            harness
+                .app
+                .state
+                .chat_history
+                .contains_key(&MessageId::new("m-current"))
+        );
+        assert!(
+            !harness
+                .app
+                .state
+                .chat_history
+                .contains_key(&MessageId::new("m-stale"))
+        );
     }
 
     #[test]
@@ -3427,7 +3440,10 @@ mod tests {
                 result: Ok(Some(String::from("tip-stale"))),
             });
 
-        assert_eq!(harness.app.state.current_tip_id.as_deref(), Some("tip-current"));
+        assert_eq!(
+            harness.app.state.current_tip_id.as_deref(),
+            Some("tip-current")
+        );
     }
 
     #[test]
@@ -3546,9 +3562,11 @@ mod tests {
 
         assert_eq!(harness.app.state.pending_tools.len(), 1);
         assert_eq!(harness.app.state.optimistic_tool_messages.len(), 1);
-        assert!(harness.app.state.optimistic_tool_messages[0]
-            .content
-            .contains("\"error\": \"boom\""));
+        assert!(
+            harness.app.state.optimistic_tool_messages[0]
+                .content
+                .contains("\"error\": \"boom\"")
+        );
     }
 
     #[test]
@@ -3568,19 +3586,25 @@ mod tests {
 
         assert!(harness.app.state.optimistic_tool_messages.is_empty());
         let requests = harness.drain_requests();
-        assert!(requests
-            .iter()
-            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+        assert!(
+            requests
+                .iter()
+                .any(|request| matches!(request, RuntimeRequest::ListSessions))
+        );
     }
 
     #[test]
     fn chat_history_response_reconciles_matching_optimistic_tool_messages() {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-1"));
-        harness.app.state.optimistic_tool_messages.push(OptimisticToolMessage {
-            local_id: String::from("local-tool-1"),
-            content: String::from("Tool 'write_file' result:\n{\n  \"error\": \"boom\"\n}"),
-        });
+        harness
+            .app
+            .state
+            .optimistic_tool_messages
+            .push(OptimisticToolMessage {
+                local_id: String::from("local-tool-1"),
+                content: String::from("Tool 'write_file' result:\n{\n  \"error\": \"boom\"\n}"),
+            });
 
         harness
             .app
@@ -3639,9 +3663,11 @@ mod tests {
 
         assert!(harness.app.state.pending_tools.is_empty());
         let requests = harness.drain_requests();
-        assert!(requests
-            .iter()
-            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+        assert!(
+            requests
+                .iter()
+                .any(|request| matches!(request, RuntimeRequest::ListSessions))
+        );
     }
 
     fn request_name(request: &RuntimeRequest) -> &'static str {

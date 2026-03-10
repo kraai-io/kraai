@@ -25,7 +25,9 @@ struct SearchFilesToolArgs {
     #[toon_schema(description = "Regex pattern to search for")]
     query: String,
 
-    #[toon_schema(description = "Optional file or directory path to search. Uses the workspace root when omitted")]
+    #[toon_schema(
+        description = "Optional file or directory path to search. Uses the workspace root when omitted"
+    )]
     path: Option<String>,
 }
 

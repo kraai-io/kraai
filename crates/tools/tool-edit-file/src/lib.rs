@@ -24,7 +24,9 @@ struct EditFileToolSchemaArgs {
     #[toon_schema(description = "When true, create a new file instead of editing an existing one")]
     create: bool,
 
-    #[toon_schema(description = "JSON array of edit objects. Each object must include string fields old_text and new_text.")]
+    #[toon_schema(
+        description = "JSON array of edit objects. Each object must include string fields old_text and new_text."
+    )]
     edits: String,
 }
 

@@ -305,7 +305,11 @@ fn get_struct_example_for_fields(fields: &[Field]) -> String {
         if field.optional || field.default_value.is_some() {
             continue;
         }
-        parts.push(format!("\"{}\":{}", field.name, get_example_for_type(&field.ty)));
+        parts.push(format!(
+            "\"{}\":{}",
+            field.name,
+            get_example_for_type(&field.ty)
+        ));
     }
     format!("{{{}}}", parts.join(","))
 }

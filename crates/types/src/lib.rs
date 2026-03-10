@@ -110,8 +110,7 @@ pub fn format_tool_result_message(
     if permission_denied {
         format!("Tool '{tool_id}' was denied by user")
     } else {
-        let output_str =
-            serde_json::to_string_pretty(output).unwrap_or_else(|_| "{}".to_string());
+        let output_str = serde_json::to_string_pretty(output).unwrap_or_else(|_| "{}".to_string());
         format!("Tool '{tool_id}' result:\n{output_str}")
     }
 }

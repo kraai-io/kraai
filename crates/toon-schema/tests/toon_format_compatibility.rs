@@ -85,7 +85,10 @@ struct ComplexMixedTypes {
 
 #[test]
 fn test_basic_types_match_toon_format() {
-    compare_toon_output(&json!({"s":"hello","i":42,"b":true}), BasicTypes::toon_schema());
+    compare_toon_output(
+        &json!({"s":"hello","i":42,"b":true}),
+        BasicTypes::toon_schema(),
+    );
     assert_eq!(BasicTypes::toon_schema().matches("<tool_call>").count(), 2);
 }
 

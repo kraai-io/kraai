@@ -45,7 +45,9 @@ fn value_to_toon(name: &str, ty: &Type, value: &Value) -> syn::Result<String> {
         (Type::Primitive(PrimitiveType::String), Value::String(s)) => {
             Ok(format!("{}: {}", name, toon_string(s)))
         }
-        (Type::Primitive(PrimitiveType::Integer), Value::Number(n)) => Ok(format!("{}: {}", name, n)),
+        (Type::Primitive(PrimitiveType::Integer), Value::Number(n)) => {
+            Ok(format!("{}: {}", name, n))
+        }
         (Type::Primitive(PrimitiveType::Float), Value::Number(n)) => Ok(format!("{}: {}", name, n)),
         (Type::Primitive(PrimitiveType::Boolean), Value::Bool(b)) => Ok(format!("{}: {}", name, b)),
         (Type::Primitive(_), Value::Null) => Ok(format!("{}: null", name)),

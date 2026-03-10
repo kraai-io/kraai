@@ -176,7 +176,9 @@ pub enum Event {
 
     // History events
     /// Chat history was updated
-    HistoryUpdated { session_id: String },
+    HistoryUpdated {
+        session_id: String,
+    },
 }
 
 // ============================================================================
@@ -1162,7 +1164,9 @@ impl RuntimeInner {
             let continuation = {
                 let mut agent = agent_manager.lock().await;
                 match agent.prepare_continuation_stream(&session_id).await {
-                    Ok(result) => Ok(result.map(|request| (agent.cloned_provider_manager(), request))),
+                    Ok(result) => {
+                        Ok(result.map(|request| (agent.cloned_provider_manager(), request)))
+                    }
                     Err(error) => Err(error),
                 }
             };
@@ -2449,7 +2453,9 @@ value: alpha\n\
                     call_id,
                     tool_id,
                     ..
-                } if session_id == &session_a && tool_id == "blocking_tool" => Some(call_id.clone()),
+                } if session_id == &session_a && tool_id == "blocking_tool" => {
+                    Some(call_id.clone())
+                }
                 _ => None,
             })
             .expect("tool call id should exist");
@@ -2567,7 +2573,9 @@ value: alpha\n\
                     call_id,
                     tool_id,
                     ..
-                } if event_session == &session_id && tool_id == "blocking_tool" => Some(call_id.clone()),
+                } if event_session == &session_id && tool_id == "blocking_tool" => {
+                    Some(call_id.clone())
+                }
                 _ => None,
             })
             .expect("tool call id should exist");
@@ -2754,11 +2762,15 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
         let history_after_first = harness.handle.get_chat_history(session_id.clone()).await?;
         assert!(history_after_first.values().any(|message| {
             message.content.contains("Failed to parse tool call")
-                && message.content.contains("Expected array length, found LeftBrace")
+                && message
+                    .content
+                    .contains("Expected array length, found LeftBrace")
         }));
-        assert!(history_after_first
-            .values()
-            .any(|message| message.content == "first continuation complete"));
+        assert!(
+            history_after_first
+                .values()
+                .any(|message| message.content == "first continuation complete")
+        );
 
         let second_session = harness.handle.create_session().await?;
         let load_result = tokio::time::timeout(
@@ -2811,9 +2823,11 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
             .filter(|message| message.content.contains("Failed to parse tool call"))
             .count();
         assert_eq!(parse_failure_count, 2);
-        assert!(history_after_second
-            .values()
-            .any(|message| message.content == "second continuation complete"));
+        assert!(
+            history_after_second
+                .values()
+                .any(|message| message.content == "second continuation complete")
+        );
 
         harness.shutdown().await;
         Ok(())

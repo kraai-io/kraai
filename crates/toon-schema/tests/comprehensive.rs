@@ -62,7 +62,9 @@ fn test_collections_examples_render_multiple_blocks() {
     assert!(schema.contains("items[3]: a,b,c"));
     assert!(schema.contains("maybe: null"));
     assert!(schema.contains("maybe_present: present"));
-    assert!(schema.contains("\n\n<tool_call>\ntool: Collections\nitems[0]:\nrequired: 7\n</tool_call>"));
+    assert!(
+        schema.contains("\n\n<tool_call>\ntool: Collections\nitems[0]:\nrequired: 7\n</tool_call>")
+    );
 }
 
 #[test]
