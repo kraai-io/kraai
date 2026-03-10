@@ -7,7 +7,7 @@ use futures::stream::BoxStream;
 use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
 use tokio::sync::RwLock;
-use tool_core::{ToolManager, ToolOutput, toon_parser};
+use tool_core::{ToolManager, toon_parser};
 use types::{
     CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId,
     RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
@@ -28,6 +28,26 @@ pub enum PermissionStatus {
     Pending,
     Approved,
     Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingToolInfo {
+    pub call_id: CallId,
+    pub tool_id: ToolId,
+    pub args: serde_json::Value,
+    pub description: String,
+    pub risk_level: RiskLevel,
+    pub reasons: Vec<String>,
+    pub approved: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolExecutionRequest {
+    pub call_id: CallId,
+    pub tool_id: ToolId,
+    pub args: Option<serde_json::Value>,
+    pub config: Option<types::ToolCallGlobalConfig>,
+    pub permission_denied: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -687,70 +707,83 @@ impl AgentManager {
             .is_some()
     }
 
-    pub async fn execute_approved_tools(&mut self, session_id: &str) -> Vec<ToolResult> {
+    pub fn list_pending_tools(&self, session_id: &str) -> Vec<PendingToolInfo> {
+        let Some(state) = self.session_states.get(session_id) else {
+            return Vec::new();
+        };
+
+        let mut tools: Vec<_> = state
+            .pending_tool_calls
+            .values()
+            .map(|pending| PendingToolInfo {
+                call_id: pending.call.call_id.clone(),
+                tool_id: pending.call.tool_id.clone(),
+                args: pending.call.args.clone(),
+                description: pending.description.clone(),
+                risk_level: pending.assessment.risk,
+                reasons: pending.assessment.reasons.clone(),
+                approved: match pending.status {
+                    PermissionStatus::Pending => None,
+                    PermissionStatus::Approved => Some(true),
+                    PermissionStatus::Denied => Some(false),
+                },
+            })
+            .collect();
+        tools.sort_by(|left, right| left.call_id.cmp(&right.call_id));
+        tools
+    }
+
+    pub fn session_waiting_for_approval(&self, session_id: &str) -> bool {
+        self.session_states.get(session_id).is_some_and(|state| {
+            state
+                .pending_tool_calls
+                .values()
+                .any(|pending| pending.status == PermissionStatus::Pending)
+        })
+    }
+
+    pub fn cloned_tool_manager(&self) -> ToolManager {
+        self.tools.clone()
+    }
+
+    pub fn take_ready_tool_executions(&mut self, session_id: &str) -> Vec<ToolExecutionRequest> {
         let Some(state) = self.session_states.get_mut(session_id) else {
             return Vec::new();
         };
 
-        let approved: Vec<_> = state
+        let ready_ids: Vec<_> = state
             .pending_tool_calls
             .iter()
-            .filter(|(_, pending)| pending.status == PermissionStatus::Approved)
-            .map(|(call_id, pending)| {
-                (
-                    call_id.clone(),
-                    pending.call.tool_id.clone(),
-                    pending.call.args.clone(),
-                    pending.config.clone(),
-                )
-            })
-            .collect();
-        let denied: Vec<_> = state
-            .pending_tool_calls
-            .iter()
-            .filter(|(_, pending)| pending.status == PermissionStatus::Denied)
-            .map(|(call_id, pending)| (call_id.clone(), pending.call.tool_id.clone()))
+            .filter(|(_, pending)| pending.status != PermissionStatus::Pending)
+            .map(|(call_id, _)| call_id.clone())
             .collect();
 
-        let mut results = Vec::new();
-        for (call_id, tool_id, args, config) in approved {
-            let result = self
-                .tools
-                .call_tool(
-                    &tool_id,
-                    args,
-                    &tool_core::ToolContext {
-                        global_config: &config,
-                    },
-                )
-                .await;
-            let output = match result {
-                Ok(ToolOutput::Success { data }) => data,
-                Ok(ToolOutput::Error { message }) => serde_json::json!({ "error": message }),
-                Err(error) => serde_json::json!({ "error": error.to_string() }),
+        let mut executions = Vec::new();
+        for call_id in ready_ids {
+            let Some(pending) = state.pending_tool_calls.remove(&call_id) else {
+                continue;
             };
-            results.push(ToolResult {
-                call_id,
-                tool_id,
-                output,
-                permission_denied: false,
-            });
+
+            match pending.status {
+                PermissionStatus::Pending => {}
+                PermissionStatus::Approved => executions.push(ToolExecutionRequest {
+                    call_id,
+                    tool_id: pending.call.tool_id,
+                    args: Some(pending.call.args),
+                    config: Some(pending.config),
+                    permission_denied: false,
+                }),
+                PermissionStatus::Denied => executions.push(ToolExecutionRequest {
+                    call_id,
+                    tool_id: pending.call.tool_id,
+                    args: None,
+                    config: None,
+                    permission_denied: true,
+                }),
+            }
         }
 
-        for (call_id, tool_id) in denied {
-            results.push(ToolResult {
-                call_id,
-                tool_id,
-                output: serde_json::json!({ "error": "Permission denied by user" }),
-                permission_denied: true,
-            });
-        }
-
-        for result in &results {
-            state.pending_tool_calls.remove(&result.call_id);
-        }
-
-        results
+        executions
     }
 
     pub async fn add_tool_results_to_history(
@@ -759,13 +792,11 @@ impl AgentManager {
         results: Vec<ToolResult>,
     ) -> Result<()> {
         for result in results {
-            let content = if result.permission_denied {
-                format!("Tool '{}' was denied by user", result.tool_id)
-            } else {
-                let output_str = serde_json::to_string_pretty(&result.output)
-                    .unwrap_or_else(|_| "{}".to_string());
-                format!("Tool '{}' result:\n{}", result.tool_id, output_str)
-            };
+            let content = types::format_tool_result_message(
+                &result.tool_id,
+                &result.output,
+                result.permission_denied,
+            );
 
             tracing::debug!(
                 "Adding tool result to history: session={}, tool_id={}, denied={}",

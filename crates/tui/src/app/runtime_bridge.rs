@@ -60,15 +60,21 @@ pub(super) fn spawn_runtime_bridge(
                 }
                 RuntimeRequest::GetChatHistory { session_id } => {
                     let result = rt
-                        .block_on(runtime.get_chat_history(session_id))
+                        .block_on(runtime.get_chat_history(session_id.clone()))
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::ChatHistory(result));
+                    let _ = res_tx.send(RuntimeResponse::ChatHistory { session_id, result });
                 }
                 RuntimeRequest::GetCurrentTip { session_id } => {
                     let result = rt
-                        .block_on(runtime.get_tip(session_id))
+                        .block_on(runtime.get_tip(session_id.clone()))
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::CurrentTip(result));
+                    let _ = res_tx.send(RuntimeResponse::CurrentTip { session_id, result });
+                }
+                RuntimeRequest::GetPendingTools { session_id } => {
+                    let result = rt
+                        .block_on(runtime.get_pending_tools(session_id.clone()))
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::PendingTools { session_id, result });
                 }
                 RuntimeRequest::LoadSession { session_id } => {
                     let result = rt
@@ -134,12 +140,18 @@ fn respond_with_runtime_error(
         RuntimeRequest::SaveSettings { .. } => {
             RuntimeResponse::SaveSettings(Err(message.to_string()))
         }
-        RuntimeRequest::GetChatHistory { .. } => {
-            RuntimeResponse::ChatHistory(Err(message.to_string()))
-        }
-        RuntimeRequest::GetCurrentTip { .. } => {
-            RuntimeResponse::CurrentTip(Err(message.to_string()))
-        }
+        RuntimeRequest::GetChatHistory { session_id } => RuntimeResponse::ChatHistory {
+            session_id,
+            result: Err(message.to_string()),
+        },
+        RuntimeRequest::GetCurrentTip { session_id } => RuntimeResponse::CurrentTip {
+            session_id,
+            result: Err(message.to_string()),
+        },
+        RuntimeRequest::GetPendingTools { session_id } => RuntimeResponse::PendingTools {
+            session_id,
+            result: Err(message.to_string()),
+        },
         RuntimeRequest::LoadSession { session_id } => RuntimeResponse::LoadSession {
             session_id,
             result: Err(message.to_string()),

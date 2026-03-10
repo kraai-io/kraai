@@ -66,11 +66,7 @@ impl Widget for &AppState {
         } else {
             "idle"
         };
-        let pending_tools = self
-            .pending_tools
-            .iter()
-            .filter(|tool| self.current_session_id.as_deref() == Some(tool.session_id.as_str()))
-            .count();
+        let pending_tools = self.pending_tools.len();
         let status_line = format!(
             "{} | model={} | tools={} | {}",
             self.status, selected_model, pending_tools, stream_state
@@ -854,13 +850,12 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             .current_session_id
             .as_ref()
             .is_some_and(|sid| sid == &session.id);
-        let waiting_for_approval = state.session_waiting_for_approval(&session.id);
         let title = session
             .title
             .clone()
             .unwrap_or_else(|| format!("Session {}", &session.id[..8.min(session.id.len())]));
         let current_suffix = if current { " (current)" } else { "" };
-        let approval_suffix = if waiting_for_approval {
+        let approval_suffix = if session.waiting_for_approval {
             " [approval]"
         } else {
             ""
@@ -894,11 +889,7 @@ fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
-    let current_tools: Vec<_> = state
-        .pending_tools
-        .iter()
-        .filter(|tool| state.current_session_id.as_deref() == Some(tool.session_id.as_str()))
-        .collect();
+    let current_tools: Vec<_> = state.pending_tools.iter().collect();
 
     if current_tools.is_empty() {
         lines.push(Line::raw("No pending tool calls"));

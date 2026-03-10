@@ -104,6 +104,7 @@ pub struct Session {
   pub created_at: f64,
   pub updated_at: f64,
   pub title: Option<String>,
+  pub waiting_for_approval: bool,
 }
 
 impl From<SessionMeta> for Session {
@@ -115,6 +116,7 @@ impl From<SessionMeta> for Session {
       created_at: meta.created_at as f64,
       updated_at: meta.updated_at as f64,
       title: meta.title,
+      waiting_for_approval: false,
     }
   }
 }
@@ -263,6 +265,7 @@ impl From<agent_runtime::Session> for Session {
       created_at: s.created_at as f64,
       updated_at: s.updated_at as f64,
       title: s.title,
+      waiting_for_approval: s.waiting_for_approval,
     }
   }
 }
@@ -308,6 +311,10 @@ pub enum Event {
     success: bool,
     output: String,
     denied: bool,
+  },
+  ContinuationFailed {
+    session_id: String,
+    error: String,
   },
   HistoryUpdated {
     session_id: String,
@@ -384,6 +391,9 @@ impl From<agent_runtime::Event> for Event {
         output,
         denied,
       },
+      agent_runtime::Event::ContinuationFailed { session_id, error } => {
+        Event::ContinuationFailed { session_id, error }
+      }
       agent_runtime::Event::HistoryUpdated { session_id } => Event::HistoryUpdated { session_id },
     }
   }

@@ -71,6 +71,7 @@ interface Session {
 	createdAt: number;
 	updatedAt: number;
 	title?: string;
+	waitingForApproval: boolean;
 }
 
 interface WorkspaceState {
@@ -611,10 +612,6 @@ function App(): React.JSX.Element {
 						</div>
 						<div className="p-2 pt-0">
 							{sessions.map((session) => {
-								const waitingForApproval = pendingTools.some(
-									(tool) =>
-										tool.sessionId === session.id && tool.approved === null,
-								);
 								return (
 									<button
 										type="button"
@@ -630,7 +627,7 @@ function App(): React.JSX.Element {
 											<div className="flex-1 truncate text-sm">
 												{session.title || `Session ${session.id.slice(0, 8)}`}
 											</div>
-											{waitingForApproval && (
+											{session.waitingForApproval && (
 												<span className="shrink-0 rounded-full border border-amber-300/60 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900">
 													Approval
 												</span>

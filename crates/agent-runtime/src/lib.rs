@@ -4,13 +4,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent::AgentManager;
+use agent::{AgentManager, ToolExecutionRequest};
 use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use persistence::SessionMeta;
 use provider_core::{
     ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
 };
-use tool_core::ToolManager;
+use tool_core::{ToolContext, ToolManager, ToolOutput};
 use tool_edit_file::EditFileTool;
 use tool_list_files::ListFilesTool;
 use tool_read_file::ReadFileTool;
@@ -42,6 +42,7 @@ pub struct Session {
     pub created_at: u64,
     pub updated_at: u64,
     pub title: Option<String>,
+    pub waiting_for_approval: bool,
 }
 
 impl From<SessionMeta> for Session {
@@ -53,8 +54,20 @@ impl From<SessionMeta> for Session {
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             title: meta.title,
+            waiting_for_approval: false,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingToolInfo {
+    pub call_id: String,
+    pub tool_id: String,
+    pub args: String,
+    pub description: String,
+    pub risk_level: String,
+    pub reasons: Vec<String>,
+    pub approved: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +169,10 @@ pub enum Event {
         output: String,
         denied: bool,
     },
+    ContinuationFailed {
+        session_id: String,
+        error: String,
+    },
 
     // History events
     /// Chat history was updated
@@ -236,6 +253,10 @@ enum Command {
     GetChatHistory {
         session_id: String,
         response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
+    },
+    GetPendingTools {
+        session_id: String,
+        response: oneshot::Sender<Vec<PendingToolInfo>>,
     },
     ApproveTool {
         session_id: String,
@@ -393,6 +414,17 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::GetTip {
+                session_id,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn get_pending_tools(&self, session_id: String) -> Result<Vec<PendingToolInfo>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetPendingTools {
                 session_id,
                 response: tx,
             })
@@ -576,6 +608,45 @@ fn build_default_tool_manager() -> ToolManager {
     tools
 }
 
+async fn execute_tool_requests(
+    tools: &ToolManager,
+    executions: Vec<ToolExecutionRequest>,
+) -> Vec<types::ToolResult> {
+    let mut results = Vec::with_capacity(executions.len());
+
+    for execution in executions {
+        let output = if execution.permission_denied {
+            serde_json::json!({ "error": "Permission denied by user" })
+        } else if let (Some(args), Some(config)) = (execution.args, execution.config) {
+            match tools
+                .call_tool(
+                    &execution.tool_id,
+                    args,
+                    &ToolContext {
+                        global_config: &config,
+                    },
+                )
+                .await
+            {
+                Ok(ToolOutput::Success { data }) => data,
+                Ok(ToolOutput::Error { message }) => serde_json::json!({ "error": message }),
+                Err(error) => serde_json::json!({ "error": error.to_string() }),
+            }
+        } else {
+            serde_json::json!({ "error": "Tool execution metadata missing" })
+        };
+
+        results.push(types::ToolResult {
+            call_id: execution.call_id,
+            tool_id: execution.tool_id,
+            output,
+            permission_denied: execution.permission_denied,
+        });
+    }
+
+    results
+}
+
 // ============================================================================
 // Runtime Inner - the actual runtime implementation
 // ============================================================================
@@ -690,8 +761,15 @@ impl RuntimeInner {
             }
 
             Command::ListSessions { response } => {
-                let sessions = self.agent_manager.lock().await.list_sessions().await?;
-                let sessions: Vec<Session> = sessions.into_iter().map(Into::into).collect();
+                let agent = self.agent_manager.lock().await;
+                let sessions = agent.list_sessions().await?;
+                let sessions: Vec<Session> = sessions
+                    .into_iter()
+                    .map(|session| Session {
+                        waiting_for_approval: agent.session_waiting_for_approval(&session.id),
+                        ..session.into()
+                    })
+                    .collect();
                 response
                     .send(sessions)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -768,6 +846,31 @@ impl RuntimeInner {
                     .await?;
                 response
                     .send(history)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::GetPendingTools {
+                session_id,
+                response,
+            } => {
+                let tools = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .list_pending_tools(&session_id)
+                    .into_iter()
+                    .map(|tool| PendingToolInfo {
+                        call_id: tool.call_id.to_string(),
+                        tool_id: tool.tool_id.to_string(),
+                        args: serde_json::to_string(&tool.args).unwrap_or_default(),
+                        description: tool.description,
+                        risk_level: tool.risk_level.as_str().to_string(),
+                        reasons: tool.reasons,
+                        approved: tool.approved,
+                    })
+                    .collect();
+                response
+                    .send(tools)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
@@ -983,13 +1086,18 @@ impl RuntimeInner {
         let command_tx = self.command_tx.clone();
 
         tokio::spawn(async move {
-            let results = {
+            let (tools, executions) = {
                 let mut agent = agent_manager.lock().await;
-                agent.execute_approved_tools(&session_id).await
+                (
+                    agent.cloned_tool_manager(),
+                    agent.take_ready_tool_executions(&session_id),
+                )
             };
 
+            let results = execute_tool_requests(&tools, executions).await;
+
             for result in &results {
-                let success = !result.output.get("error").is_some_and(|e| e.is_string());
+                let success = result.output.get("error").is_none();
                 let output = serde_json::to_string(&result.output).unwrap_or_default();
 
                 event_callback.on_event(Event::ToolResultReady {
@@ -1036,8 +1144,19 @@ impl RuntimeInner {
                 agent.start_continuation_stream(&session_id).await
             };
 
-            let Ok(Some((msg_id, mut stream))) = continuation else {
-                return;
+            let (msg_id, mut stream) = match continuation {
+                Ok(Some(stream)) => stream,
+                Ok(None) => return,
+                Err(error) => {
+                    event_callback.on_event(Event::HistoryUpdated {
+                        session_id: session_id.clone(),
+                    });
+                    event_callback.on_event(Event::ContinuationFailed {
+                        session_id,
+                        error: error.to_string(),
+                    });
+                    return;
+                }
             };
 
             event_callback.on_event(Event::StreamStart {
@@ -1689,6 +1808,56 @@ mod tests {
         }
     }
 
+    struct BlockingApprovalTool {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        fail_message: Option<String>,
+    }
+
+    #[async_trait]
+    impl Tool for BlockingApprovalTool {
+        fn name(&self) -> &'static str {
+            "blocking_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "blocking_tool(value: string)"
+        }
+
+        fn assess(&self, args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            ToolCallAssessment {
+                risk: RiskLevel::UndoableWorkspaceWrite,
+                policy: ExecutionPolicy::AlwaysAsk,
+                reasons: vec![format!(
+                    "blocking_tool requires approval for {:?}",
+                    args.get("value")
+                )],
+            }
+        }
+
+        async fn call(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+            self.started.notify_waiters();
+            self.release.notified().await;
+
+            if let Some(message) = &self.fail_message {
+                ToolOutput::error(message.clone())
+            } else {
+                ToolOutput::success(serde_json::json!({
+                    "tool": "blocking_tool",
+                    "value": args.get("value").cloned().unwrap_or(serde_json::Value::Null),
+                }))
+            }
+        }
+
+        async fn describe(&self, args: serde_json::Value) -> String {
+            let value = args
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            format!("Blocking tool for {value}")
+        }
+    }
+
     #[derive(Clone, Default)]
     struct EventCollector {
         events: Arc<StdMutex<Vec<Event>>>,
@@ -1739,6 +1908,13 @@ mod tests {
 
     impl RuntimeTestHarness {
         async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Self {
+            Self::new_with_tools(scripts, |_| {}).await
+        }
+
+        async fn new_with_tools<F>(scripts: Vec<Vec<ScriptedChunk>>, configure_tools: F) -> Self
+        where
+            F: FnOnce(&mut ToolManager),
+        {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1768,6 +1944,7 @@ mod tests {
 
             let mut tools = ToolManager::new();
             tools.register_tool(ApprovalTool);
+            configure_tools(&mut tools);
 
             let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                 providers,
@@ -2099,6 +2276,247 @@ value: alpha\n\
                 .values()
                 .any(|message| message.content == "continuation complete")
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_operations_remain_responsive_while_tool_executes() -> Result<()> {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![vec![
+                ScriptedChunk::plain("before tool\n"),
+                ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: blocking_tool\n\
+value: alpha\n\
+</tool_call>",
+                ),
+            ]],
+            {
+                let started = started.clone();
+                let release = release.clone();
+                move |tools| {
+                    tools.register_tool(BlockingApprovalTool {
+                        started,
+                        release,
+                        fail_message: None,
+                    });
+                }
+            },
+        )
+        .await;
+
+        let session_a = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_a.clone(),
+                String::from("start session a"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("blocking tool detection", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id,
+                            tool_id,
+                            ..
+                        } if session_id == &session_a && tool_id == "blocking_tool"
+                    )
+                })
+            })
+            .await;
+
+        let call_id = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallDetected {
+                    session_id,
+                    call_id,
+                    tool_id,
+                    ..
+                } if session_id == &session_a && tool_id == "blocking_tool" => Some(call_id.clone()),
+                _ => None,
+            })
+            .expect("tool call id should exist");
+
+        let session_b = harness.handle.create_session().await?;
+        harness
+            .handle
+            .approve_tool(session_a.clone(), call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_a.clone())
+            .await?;
+        started.notified().await;
+
+        let load_result = tokio::time::timeout(
+            Duration::from_millis(200),
+            harness.handle.load_session(session_b.clone()),
+        )
+        .await;
+        assert!(matches!(load_result, Ok(Ok(true))));
+
+        let pending_tools_result = tokio::time::timeout(
+            Duration::from_millis(200),
+            harness.handle.get_pending_tools(session_b.clone()),
+        )
+        .await;
+        assert!(matches!(pending_tools_result, Ok(Ok(tools)) if tools.is_empty()));
+
+        release.notify_waiters();
+
+        harness
+            .events
+            .wait_for("blocking tool result", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id,
+                            call_id: event_call_id,
+                            tool_id,
+                            ..
+                        } if session_id == &session_a
+                            && event_call_id == &call_id
+                            && tool_id == "blocking_tool"
+                    )
+                })
+            })
+            .await;
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_tool_result_is_persisted_before_continuation_failure() -> Result<()> {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![vec![
+                ScriptedChunk::plain("before tool\n"),
+                ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: blocking_tool\n\
+value: alpha\n\
+</tool_call>",
+                ),
+            ]],
+            {
+                let started = started.clone();
+                let release = release.clone();
+                move |tools| {
+                    tools.register_tool(BlockingApprovalTool {
+                        started,
+                        release,
+                        fail_message: Some(String::from("tool exploded")),
+                    });
+                }
+            },
+        )
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("start session"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("failing tool detection", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id: event_session,
+                            tool_id,
+                            ..
+                        } if event_session == &session_id && tool_id == "blocking_tool"
+                    )
+                })
+            })
+            .await;
+
+        let call_id = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    call_id,
+                    tool_id,
+                    ..
+                } if event_session == &session_id && tool_id == "blocking_tool" => Some(call_id.clone()),
+                _ => None,
+            })
+            .expect("tool call id should exist");
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+        started.notified().await;
+        release.notify_waiters();
+
+        harness
+            .events
+            .wait_for("continuation failure after tool error", |events| {
+                let tool_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id: event_call_id,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && event_call_id == &call_id
+                            && tool_id == "blocking_tool"
+                            && !success
+                            && !denied
+                    )
+                });
+                let continuation_failed = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ContinuationFailed {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                });
+                tool_result_ready && continuation_failed
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history.values().any(|message| {
+            message
+                .content
+                .contains("Tool 'blocking_tool' result:\n{\n  \"error\": \"tool exploded\"\n}")
+        }));
 
         harness.shutdown().await;
         Ok(())

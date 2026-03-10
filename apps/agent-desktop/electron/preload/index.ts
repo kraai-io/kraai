@@ -46,6 +46,11 @@ type Event =
 			output: string;
 			denied: boolean;
 	  }
+	| {
+			type: "ContinuationFailed";
+			sessionId: string;
+			error: string;
+	  }
 	| { type: "HistoryUpdated"; sessionId: string };
 
 type EventHandler = (event: Event) => void;

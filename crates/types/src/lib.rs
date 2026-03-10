@@ -102,6 +102,20 @@ pub struct ToolResult {
     pub permission_denied: bool,
 }
 
+pub fn format_tool_result_message(
+    tool_id: &ToolId,
+    output: &serde_json::Value,
+    permission_denied: bool,
+) -> String {
+    if permission_denied {
+        format!("Tool '{tool_id}' was denied by user")
+    } else {
+        let output_str =
+            serde_json::to_string_pretty(output).unwrap_or_else(|_| "{}".to_string());
+        format!("Tool '{tool_id}' result:\n{output_str}")
+    }
+}
+
 /// Wrapper that gives type safety while keeping Arc<String> benefits
 macro_rules! define_id {
     ($name:ident) => {

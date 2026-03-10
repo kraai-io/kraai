@@ -86,7 +86,6 @@ enum ActiveSettingsEditor {
 
 #[derive(Clone, Debug)]
 struct PendingTool {
-    session_id: String,
     call_id: String,
     tool_id: String,
     args: String,
@@ -98,6 +97,12 @@ struct PendingTool {
 
 #[derive(Clone, Debug)]
 struct OptimisticMessage {
+    local_id: String,
+    content: String,
+}
+
+#[derive(Clone, Debug)]
+struct OptimisticToolMessage {
     local_id: String,
     content: String,
 }
@@ -152,6 +157,9 @@ enum RuntimeRequest {
     GetCurrentTip {
         session_id: String,
     },
+    GetPendingTools {
+        session_id: String,
+    },
     LoadSession {
         session_id: String,
     },
@@ -178,8 +186,18 @@ enum RuntimeResponse {
     CreateSession(Result<String, String>),
     SendMessage(Result<(), String>),
     SaveSettings(Result<(), String>),
-    ChatHistory(Result<BTreeMap<MessageId, Message>, String>),
-    CurrentTip(Result<Option<String>, String>),
+    ChatHistory {
+        session_id: String,
+        result: Result<BTreeMap<MessageId, Message>, String>,
+    },
+    CurrentTip {
+        session_id: String,
+        result: Result<Option<String>, String>,
+    },
+    PendingTools {
+        session_id: String,
+        result: Result<Vec<agent_runtime::PendingToolInfo>, String>,
+    },
     LoadSession {
         session_id: String,
         result: Result<bool, String>,
@@ -216,6 +234,7 @@ pub struct AppState {
     ctrl_c_exit_armed: bool,
     chat_history: BTreeMap<MessageId, Message>,
     optimistic_messages: Vec<OptimisticMessage>,
+    optimistic_tool_messages: Vec<OptimisticToolMessage>,
     optimistic_seq: u64,
     chat_epoch: u64,
     chat_render_cache: RefCell<ChatRenderCache>,
@@ -263,6 +282,7 @@ impl Default for AppState {
             ctrl_c_exit_armed: false,
             chat_history: BTreeMap::new(),
             optimistic_messages: Vec::new(),
+            optimistic_tool_messages: Vec::new(),
             optimistic_seq: 0,
             chat_epoch: 0,
             chat_render_cache: RefCell::new(ChatRenderCache::default()),
@@ -496,12 +516,23 @@ impl App {
             Event::StreamError {
                 session_id, error, ..
             } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    return;
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.is_streaming = false;
+                    self.last_stream_refresh = None;
+                    self.state.status = format!("Stream error: {error}");
+                } else {
+                    self.request(RuntimeRequest::ListSessions);
                 }
-                self.state.is_streaming = false;
-                self.last_stream_refresh = None;
-                self.state.status = format!("Stream error: {error}");
+            }
+            Event::ContinuationFailed { session_id, error } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.is_streaming = false;
+                    self.last_stream_refresh = None;
+                    self.state.status = format!("Continuation failed: {error}");
+                    self.request_sync_for_session(&session_id);
+                } else {
+                    self.request(RuntimeRequest::ListSessions);
+                }
             }
             Event::HistoryUpdated { session_id } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
@@ -521,6 +552,11 @@ impl App {
                 risk_level,
                 reasons,
             } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    self.request(RuntimeRequest::ListSessions);
+                    return;
+                }
+
                 let exists = self
                     .state
                     .pending_tools
@@ -528,7 +564,6 @@ impl App {
                     .any(|tool| tool.call_id == call_id);
                 if !exists {
                     self.state.pending_tools.push(PendingTool {
-                        session_id,
                         call_id,
                         tool_id,
                         args,
@@ -549,18 +584,23 @@ impl App {
                 tool_id,
                 success,
                 denied,
-                ..
+                output,
             } => {
-                self.state
-                    .pending_tools
-                    .retain(|tool| !(tool.session_id == session_id && tool.call_id == call_id));
-                self.state.status = if denied {
-                    format!("Tool denied: {tool_id}")
-                } else if success {
-                    format!("Tool succeeded: {tool_id}")
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.pending_tools.retain(|tool| tool.call_id != call_id);
+                    if !success || denied {
+                        self.push_optimistic_tool_message(&call_id, &tool_id, &output, denied);
+                    }
+                    self.state.status = if denied {
+                        format!("Tool denied: {tool_id}")
+                    } else if success {
+                        format!("Tool succeeded: {tool_id}")
+                    } else {
+                        format!("Tool failed: {tool_id}")
+                    };
                 } else {
-                    format!("Tool failed: {tool_id}")
-                };
+                    self.request(RuntimeRequest::ListSessions);
+                }
             }
         }
     }
@@ -627,25 +667,75 @@ impl App {
                 self.state.settings_errors = parse_settings_errors(&err);
                 self.state.status = format!("Failed saving settings: {err}");
             }
-            RuntimeResponse::ChatHistory(Ok(history)) => {
-                self.state.chat_history = history;
-                self.invalidate_chat_cache();
-                self.reconcile_optimistic_messages();
-                self.clamp_chat_scroll();
-            }
-            RuntimeResponse::ChatHistory(Err(err)) => {
-                self.state.status = format!("Failed loading history: {err}");
-            }
-            RuntimeResponse::CurrentTip(Ok(tip)) => {
-                if self.state.current_tip_id != tip {
-                    self.state.current_tip_id = tip;
-                    self.invalidate_chat_cache();
-                    self.reconcile_optimistic_messages();
-                    self.clamp_chat_scroll();
+            RuntimeResponse::ChatHistory { session_id, result } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+
+                match result {
+                    Ok(history) => {
+                        self.state.chat_history = history;
+                        self.invalidate_chat_cache();
+                        self.reconcile_optimistic_messages();
+                        self.reconcile_optimistic_tool_messages();
+                        self.clamp_chat_scroll();
+                    }
+                    Err(err) => {
+                        self.state.status = format!("Failed loading history: {err}");
+                    }
                 }
             }
-            RuntimeResponse::CurrentTip(Err(err)) => {
-                self.state.status = format!("Failed loading tip: {err}");
+            RuntimeResponse::CurrentTip { session_id, result } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+
+                match result {
+                    Ok(tip) => {
+                        if self.state.current_tip_id != tip {
+                            self.state.current_tip_id = tip;
+                            self.invalidate_chat_cache();
+                            self.reconcile_optimistic_messages();
+                            self.reconcile_optimistic_tool_messages();
+                            self.clamp_chat_scroll();
+                        }
+                    }
+                    Err(err) => {
+                        self.state.status = format!("Failed loading tip: {err}");
+                    }
+                }
+            }
+            RuntimeResponse::PendingTools { session_id, result } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+
+                match result {
+                    Ok(pending_tools) => {
+                        self.state.pending_tools = pending_tools
+                            .into_iter()
+                            .map(|tool| PendingTool {
+                                call_id: tool.call_id,
+                                tool_id: tool.tool_id,
+                                args: tool.args,
+                                description: tool.description,
+                                risk_level: tool.risk_level,
+                                reasons: tool.reasons,
+                                approved: tool.approved,
+                            })
+                            .collect();
+                        if self.state.tools_menu_index >= self.state.pending_tools.len()
+                            && !self.state.pending_tools.is_empty()
+                        {
+                            self.state.tools_menu_index = self.state.pending_tools.len() - 1;
+                        } else if self.state.pending_tools.is_empty() {
+                            self.state.tools_menu_index = 0;
+                        }
+                    }
+                    Err(err) => {
+                        self.state.status = format!("Failed loading pending tools: {err}");
+                    }
+                }
             }
             RuntimeResponse::LoadSession {
                 session_id,
@@ -693,6 +783,11 @@ impl App {
                 result: Ok(()),
             } => {
                 self.set_tool_approval(&call_id, Some(true));
+                if let Some(session_id) = &self.state.current_session_id {
+                    self.request(RuntimeRequest::GetPendingTools {
+                        session_id: session_id.clone(),
+                    });
+                }
             }
             RuntimeResponse::ApproveTool {
                 result: Err(err), ..
@@ -704,6 +799,11 @@ impl App {
                 result: Ok(()),
             } => {
                 self.set_tool_approval(&call_id, Some(false));
+                if let Some(session_id) = &self.state.current_session_id {
+                    self.request(RuntimeRequest::GetPendingTools {
+                        session_id: session_id.clone(),
+                    });
+                }
             }
             RuntimeResponse::DenyTool {
                 result: Err(err), ..
@@ -712,6 +812,11 @@ impl App {
             }
             RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
                 self.state.status = String::from("Executing approved tools");
+                if let Some(session_id) = &self.state.current_session_id {
+                    self.request(RuntimeRequest::GetPendingTools {
+                        session_id: session_id.clone(),
+                    });
+                }
             }
             RuntimeResponse::ExecuteApprovedTools(Err(err)) => {
                 self.state.status = format!("Failed executing tools: {err}");
@@ -1627,6 +1732,11 @@ impl App {
                 self.clear_chat_selection();
                 self.state.visible_chat_view = None;
                 self.state.mode = UiMode::ToolsMenu;
+                if let Some(session_id) = &self.state.current_session_id {
+                    self.request(RuntimeRequest::GetPendingTools {
+                        session_id: session_id.clone(),
+                    });
+                }
             }
             "new" => {
                 self.start_new_chat_draft();
@@ -1838,22 +1948,18 @@ impl App {
     }
 
     fn set_tool_approval(&mut self, call_id: &str, approved: Option<bool>) {
-        if let Some(tool) = self.state.pending_tools.iter_mut().find(|tool| {
-            tool.call_id == call_id
-                && self.state.current_session_id.as_deref() == Some(tool.session_id.as_str())
-        }) {
+        if let Some(tool) = self
+            .state
+            .pending_tools
+            .iter_mut()
+            .find(|tool| tool.call_id == call_id)
+        {
             tool.approved = approved;
         }
     }
 
     fn current_session_pending_tools(&self) -> Vec<&PendingTool> {
-        self.state
-            .pending_tools
-            .iter()
-            .filter(|tool| {
-                self.state.current_session_id.as_deref() == Some(tool.session_id.as_str())
-            })
-            .collect()
+        self.state.pending_tools.iter().collect()
     }
 
     fn request_sync(&self) {
@@ -1871,6 +1977,9 @@ impl App {
         self.request(RuntimeRequest::GetChatHistory {
             session_id: session_id.to_string(),
         });
+        self.request(RuntimeRequest::GetPendingTools {
+            session_id: session_id.to_string(),
+        });
     }
 
     fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
@@ -1879,6 +1988,9 @@ impl App {
         self.state.current_tip_id = None;
         self.state.chat_history.clear();
         self.state.optimistic_messages.clear();
+        self.state.optimistic_tool_messages.clear();
+        self.state.pending_tools.clear();
+        self.state.tools_menu_index = 0;
         self.state.is_streaming = false;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
@@ -1962,6 +2074,73 @@ impl App {
         if self.state.optimistic_messages.len() != before_len {
             self.invalidate_chat_cache();
         }
+    }
+
+    fn reconcile_optimistic_tool_messages(&mut self) {
+        if self.state.optimistic_tool_messages.is_empty() {
+            return;
+        }
+
+        let before_len = self.state.optimistic_tool_messages.len();
+        let visible_chain = build_tip_chain(
+            &self.state.chat_history,
+            self.state.current_tip_id.as_deref(),
+        );
+        let mut seen_tool_messages: HashMap<String, usize> = HashMap::new();
+        for msg in visible_chain {
+            if msg.role == ChatRole::Tool {
+                *seen_tool_messages.entry(msg.content.clone()).or_insert(0) += 1;
+            }
+        }
+
+        self.state.optimistic_tool_messages.retain(|optimistic| {
+            match seen_tool_messages.get_mut(&optimistic.content) {
+                Some(count) if *count > 0 => {
+                    *count -= 1;
+                    false
+                }
+                _ => true,
+            }
+        });
+
+        if self.state.optimistic_tool_messages.len() != before_len {
+            self.invalidate_chat_cache();
+        }
+    }
+
+    fn push_optimistic_tool_message(
+        &mut self,
+        call_id: &str,
+        tool_id: &str,
+        output: &str,
+        denied: bool,
+    ) {
+        if self
+            .state
+            .optimistic_tool_messages
+            .iter()
+            .any(|msg| msg.local_id == format!("local-tool-{call_id}"))
+        {
+            return;
+        }
+
+        let output_json = serde_json::from_str(output).unwrap_or_else(|_| {
+            serde_json::json!({
+                "error": "Failed to parse tool result",
+                "raw_output": output,
+            })
+        });
+        let content = types::format_tool_result_message(
+            &types::ToolId::new(tool_id),
+            &output_json,
+            denied,
+        );
+
+        self.state.optimistic_tool_messages.push(OptimisticToolMessage {
+            local_id: format!("local-tool-{call_id}"),
+            content,
+        });
+        self.invalidate_chat_cache();
     }
 }
 
@@ -2061,12 +2240,6 @@ impl AppState {
         cache.total_lines.saturating_sub(self.chat_viewport_height)
     }
 
-    fn session_waiting_for_approval(&self, session_id: &str) -> bool {
-        self.pending_tools
-            .iter()
-            .any(|tool| tool.session_id == session_id && tool.approved.is_none())
-    }
-
     fn rendered_messages(&self) -> Vec<Message> {
         let mut rendered_messages: Vec<Message> =
             build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
@@ -2079,6 +2252,16 @@ impl AppState {
                 id: MessageId::new(optimistic.local_id.clone()),
                 parent_id: None,
                 role: ChatRole::User,
+                content: optimistic.content.clone(),
+                status: MessageStatus::Complete,
+            });
+        }
+
+        for optimistic in &self.optimistic_tool_messages {
+            rendered_messages.push(Message {
+                id: MessageId::new(optimistic.local_id.clone()),
+                parent_id: None,
+                role: ChatRole::Tool,
                 content: optimistic.content.clone(),
                 status: MessageStatus::Complete,
             });
@@ -2114,10 +2297,10 @@ mod tests {
 
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
-        PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse, SettingsFocus,
-        SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut, menu_scroll_offset,
-        model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
-        selection_text,
+        OptimisticToolMessage, PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse,
+        SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut,
+        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
+        render_chat_selection_overlay, selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -2231,6 +2414,7 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 title: Some(String::from("Refactor ideas")),
+                waiting_for_approval: true,
             },
             Session {
                 id: String::from("sess-2"),
@@ -2239,6 +2423,7 @@ mod tests {
                 created_at: 3,
                 updated_at: 4,
                 title: Some(String::from("Testing plan")),
+                waiting_for_approval: false,
             },
         ]
     }
@@ -2246,7 +2431,6 @@ mod tests {
     fn sample_pending_tools() -> Vec<PendingTool> {
         vec![
             PendingTool {
-                session_id: String::from("sess-2"),
                 call_id: String::from("call-1"),
                 tool_id: String::from("read_file"),
                 args: String::from("{\"path\":\"src/app.rs\"}"),
@@ -2259,7 +2443,6 @@ mod tests {
                 approved: Some(true),
             },
             PendingTool {
-                session_id: String::from("sess-2"),
                 call_id: String::from("call-2"),
                 tool_id: String::from("write_file"),
                 args: String::from("{\"path\":\"src/app.rs\",\"content\":\"...\"}"),
@@ -2569,8 +2752,8 @@ mod tests {
 04: Use ren┌/sessions──────────────────────────────────────────────┐o-end sm
 05: oke tes│Sessions (Enter=load/new, x=delete, Esc=close)         │
 06:        │  Start new chat                                       │
-07:        │  Refactor ideas                                       │
-08:        │> Testing plan (current) [approval]                    │
+07:        │  Refactor ideas [approval]                            │
+08:        │> Testing plan (current)                               │
 09:        │                                                       │
 10:        │                                                       │
 11:        │                                                       │
@@ -3184,6 +3367,7 @@ mod tests {
     #[test]
     fn chat_history_response_reconciles_matching_optimistic_messages() {
         let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-1"));
         harness
             .app
             .state
@@ -3195,13 +3379,80 @@ mod tests {
 
         harness
             .app
-            .handle_runtime_response(RuntimeResponse::ChatHistory(Ok(BTreeMap::from([(
-                MessageId::new("m1"),
-                message("m1", None, ChatRole::User, "hello world"),
-            )]))));
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([(
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello world"),
+                )])),
+            });
 
         assert!(harness.app.state.optimistic_messages.is_empty());
         assert_eq!(harness.app.state.chat_history.len(), 1);
+    }
+
+    #[test]
+    fn stale_chat_history_response_is_ignored() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.chat_history = BTreeMap::from([(
+            MessageId::new("m-current"),
+            message("m-current", None, ChatRole::Assistant, "current"),
+        )]);
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([(
+                    MessageId::new("m-stale"),
+                    message("m-stale", None, ChatRole::Assistant, "stale"),
+                )])),
+            });
+
+        assert!(harness.app.state.chat_history.contains_key(&MessageId::new("m-current")));
+        assert!(!harness.app.state.chat_history.contains_key(&MessageId::new("m-stale")));
+    }
+
+    #[test]
+    fn stale_current_tip_response_is_ignored() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.current_tip_id = Some(String::from("tip-current"));
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::CurrentTip {
+                session_id: String::from("sess-1"),
+                result: Ok(Some(String::from("tip-stale"))),
+            });
+
+        assert_eq!(harness.app.state.current_tip_id.as_deref(), Some("tip-current"));
+    }
+
+    #[test]
+    fn pending_tools_response_for_background_session_is_ignored() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.pending_tools = sample_pending_tools();
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::PendingTools {
+                session_id: String::from("sess-1"),
+                result: Ok(vec![agent_runtime::PendingToolInfo {
+                    call_id: String::from("call-other"),
+                    tool_id: String::from("read_file"),
+                    args: String::from("{}"),
+                    description: String::from("other"),
+                    risk_level: String::from("read_only_workspace"),
+                    reasons: Vec::new(),
+                    approved: None,
+                }]),
+            });
+
+        assert_eq!(harness.app.state.pending_tools.len(), 2);
+        assert_eq!(harness.app.state.pending_tools[0].call_id, "call-1");
     }
 
     #[test]
@@ -3240,22 +3491,19 @@ mod tests {
             });
 
         assert_eq!(harness.app.state.pending_tools[1].approved, Some(true));
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::GetPendingTools { session_id }] if session_id == "sess-2"
+        ));
     }
 
     #[test]
-    fn background_session_pending_tool_survives_session_switch() {
+    fn switching_sessions_clears_foreground_tool_state_and_requests_fresh_data() {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-1"));
+        harness.app.state.pending_tools = sample_pending_tools();
 
-        harness.app.handle_runtime_event(Event::ToolCallDetected {
-            session_id: String::from("sess-1"),
-            call_id: String::from("call-bg"),
-            tool_id: String::from("read_file"),
-            args: String::from("{\"path\":\"Cargo.toml\"}"),
-            description: String::from("Read the workspace manifest"),
-            risk_level: String::from("read_only_workspace"),
-            reasons: vec![String::from("Reads local config")],
-        });
         harness
             .app
             .handle_runtime_response(RuntimeResponse::LoadSession {
@@ -3267,41 +3515,89 @@ mod tests {
             harness.app.state.current_session_id.as_deref(),
             Some("sess-2")
         );
-        assert_eq!(harness.app.state.pending_tools.len(), 1);
-        assert_eq!(harness.app.state.pending_tools[0].session_id, "sess-1");
-        assert!(harness.app.state.session_waiting_for_approval("sess-1"));
-        assert!(!harness.app.state.session_waiting_for_approval("sess-2"));
+        assert!(harness.app.state.pending_tools.is_empty());
+
+        let requests = harness.drain_requests();
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::GetCurrentTip { session_id } if session_id == "sess-2")));
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2")));
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2")));
     }
 
     #[test]
-    fn session_waiting_for_approval_ignores_handled_tools() {
-        let state = AppState {
-            pending_tools: vec![
-                PendingTool {
-                    session_id: String::from("sess-1"),
-                    call_id: String::from("approved"),
-                    tool_id: String::from("read_file"),
-                    args: String::from("{}"),
-                    description: String::from("Approved tool"),
-                    risk_level: String::from("read_only_workspace"),
-                    reasons: Vec::new(),
-                    approved: Some(true),
-                },
-                PendingTool {
-                    session_id: String::from("sess-1"),
-                    call_id: String::from("denied"),
-                    tool_id: String::from("write_file"),
-                    args: String::from("{}"),
-                    description: String::from("Denied tool"),
-                    risk_level: String::from("undoable_workspace_write"),
-                    reasons: Vec::new(),
-                    approved: Some(false),
-                },
-            ],
-            ..AppState::default()
-        };
+    fn failed_tool_result_for_current_session_adds_optimistic_tool_message() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.pending_tools = sample_pending_tools();
 
-        assert!(!state.session_waiting_for_approval("sess-1"));
+        harness.app.handle_runtime_event(Event::ToolResultReady {
+            session_id: String::from("sess-2"),
+            call_id: String::from("call-2"),
+            tool_id: String::from("write_file"),
+            success: false,
+            output: String::from("{\"error\":\"boom\"}"),
+            denied: false,
+        });
+
+        assert_eq!(harness.app.state.pending_tools.len(), 1);
+        assert_eq!(harness.app.state.optimistic_tool_messages.len(), 1);
+        assert!(harness.app.state.optimistic_tool_messages[0]
+            .content
+            .contains("\"error\": \"boom\""));
+    }
+
+    #[test]
+    fn tool_result_for_background_session_does_not_cache_tool_message() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.pending_tools = sample_pending_tools();
+
+        harness.app.handle_runtime_event(Event::ToolResultReady {
+            session_id: String::from("sess-1"),
+            call_id: String::from("call-bg"),
+            tool_id: String::from("write_file"),
+            success: false,
+            output: String::from("{\"error\":\"boom\"}"),
+            denied: false,
+        });
+
+        assert!(harness.app.state.optimistic_tool_messages.is_empty());
+        let requests = harness.drain_requests();
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+    }
+
+    #[test]
+    fn chat_history_response_reconciles_matching_optimistic_tool_messages() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-1"));
+        harness.app.state.optimistic_tool_messages.push(OptimisticToolMessage {
+            local_id: String::from("local-tool-1"),
+            content: String::from("Tool 'write_file' result:\n{\n  \"error\": \"boom\"\n}"),
+        });
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([(
+                    MessageId::new("m1"),
+                    message(
+                        "m1",
+                        None,
+                        ChatRole::Tool,
+                        "Tool 'write_file' result:\n{\n  \"error\": \"boom\"\n}",
+                    ),
+                )])),
+            });
+
+        assert!(harness.app.state.optimistic_tool_messages.is_empty());
     }
 
     #[test]
@@ -3326,6 +3622,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tool_call_for_background_session_only_refreshes_sessions() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_runtime_event(Event::ToolCallDetected {
+            session_id: String::from("sess-1"),
+            call_id: String::from("call-3"),
+            tool_id: String::from("read_file"),
+            args: String::from("{\"path\":\"Cargo.toml\"}"),
+            description: String::from("Read the workspace manifest"),
+            risk_level: String::from("read_only_workspace"),
+            reasons: vec![String::from("Reads local config")],
+        });
+
+        assert!(harness.app.state.pending_tools.is_empty());
+        let requests = harness.drain_requests();
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+    }
+
     fn request_name(request: &RuntimeRequest) -> &'static str {
         match request {
             RuntimeRequest::ListModels => "ListModels",
@@ -3335,6 +3653,7 @@ mod tests {
             RuntimeRequest::SaveSettings { .. } => "SaveSettings",
             RuntimeRequest::GetChatHistory { .. } => "GetChatHistory",
             RuntimeRequest::GetCurrentTip { .. } => "GetCurrentTip",
+            RuntimeRequest::GetPendingTools { .. } => "GetPendingTools",
             RuntimeRequest::LoadSession { .. } => "LoadSession",
             RuntimeRequest::ListSessions => "ListSessions",
             RuntimeRequest::DeleteSession { .. } => "DeleteSession",
