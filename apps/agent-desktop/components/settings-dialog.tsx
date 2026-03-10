@@ -33,7 +33,8 @@ interface SettingsDialogProps {
 	onSaved: () => void;
 }
 
-const DEFAULT_PROVIDER_TYPE: ProviderType = "OpenAi" as ProviderType;
+const DEFAULT_PROVIDER_TYPE: ProviderType =
+	"OpenAiChatCompletions" as ProviderType;
 
 function cloneSettings(settings: SettingsDocument): SettingsDocument {
 	return {
@@ -44,7 +45,10 @@ function cloneSettings(settings: SettingsDocument): SettingsDocument {
 
 function defaultProvider(index: number): ProviderSettings {
 	return {
-		id: `provider-${index + 1}`,
+		id:
+			index === 0
+				? "openai-chat-completions"
+				: `openai-chat-completions-${index + 1}`,
 		providerType: DEFAULT_PROVIDER_TYPE,
 		baseUrl: "https://api.openai.com/v1",
 		apiKey: undefined,
@@ -77,7 +81,7 @@ function validate(settings: SettingsDocument): FieldErrors {
 		}
 
 		if (
-			provider.providerType === ("OpenAi" as ProviderType) &&
+			provider.providerType === ("OpenAiChatCompletions" as ProviderType) &&
 			!provider.baseUrl?.trim()
 		) {
 			errors[`providers[${index}].base_url`] =
@@ -473,7 +477,7 @@ export function SettingsDialog({
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
-													<SelectItem value="OpenAi">
+													<SelectItem value="OpenAiChatCompletions">
 														OpenAI-compatible
 													</SelectItem>
 												</SelectContent>
@@ -481,7 +485,7 @@ export function SettingsDialog({
 										</div>
 
 										{selectedProvider.providerType ===
-										("OpenAi" as ProviderType) ? (
+										("OpenAiChatCompletions" as ProviderType) ? (
 											<div className="space-y-1 md:col-span-2">
 												<label
 													className="text-sm font-medium"

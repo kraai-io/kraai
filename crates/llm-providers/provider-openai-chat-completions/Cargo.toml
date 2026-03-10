@@ -1,6 +1,6 @@
 [package]
 edition.workspace = true
-name = "provider-openai"
+name = "provider-openai-chat-completions"
 publish = false
 rust-version.workspace = true
 version = "0.1.0"

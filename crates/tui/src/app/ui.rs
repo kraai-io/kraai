@@ -307,7 +307,7 @@ pub(super) fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
 
 fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
-        ProviderType::OpenAi => "OpenAI-compatible",
+        ProviderType::OpenAiChatCompletions => "OpenAI-compatible",
     }
 }
 
@@ -640,7 +640,7 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             .settings_draft
             .as_ref()
             .map(|_| match provider.provider_type {
-                ProviderType::OpenAi => vec![
+                ProviderType::OpenAiChatCompletions => vec![
                     SettingsProviderField::Id,
                     SettingsProviderField::Type,
                     SettingsProviderField::BaseUrl,
@@ -860,7 +860,11 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             .clone()
             .unwrap_or_else(|| format!("Session {}", &session.id[..8.min(session.id.len())]));
         let current_suffix = if current { " (current)" } else { "" };
-        let approval_suffix = if waiting_for_approval { " [approval]" } else { "" };
+        let approval_suffix = if waiting_for_approval {
+            " [approval]"
+        } else {
+            ""
+        };
         lines.push(Line::styled(
             format!("{marker} {title}{current_suffix}{approval_suffix}"),
             if selected {

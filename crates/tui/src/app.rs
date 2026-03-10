@@ -1282,7 +1282,7 @@ impl App {
                     let next_index = draft.providers.len();
                     draft.providers.push(ProviderSettings {
                         id: format!("provider-{}", next_index + 1),
-                        provider_type: ProviderType::OpenAi,
+                        provider_type: ProviderType::OpenAiChatCompletions,
                         base_url: Some(String::from("https://api.openai.com/v1")),
                         api_key: None,
                         env_var_api_key: Some(String::from("OPENAI_API_KEY")),
@@ -1471,7 +1471,7 @@ impl App {
             .as_mut()
             .and_then(|draft| draft.providers.get_mut(provider_index))
         {
-            provider.provider_type = ProviderType::OpenAi;
+            provider.provider_type = ProviderType::OpenAiChatCompletions;
             if provider.base_url.is_none() {
                 provider.base_url = Some(String::from("https://api.openai.com/v1"));
             }
@@ -1493,7 +1493,7 @@ impl App {
             .current_provider()
             .map(|provider| &provider.provider_type)
         {
-            Some(ProviderType::OpenAi) => vec![
+            Some(ProviderType::OpenAiChatCompletions) => vec![
                 SettingsProviderField::Id,
                 SettingsProviderField::Type,
                 SettingsProviderField::BaseUrl,
@@ -2189,7 +2189,7 @@ mod tests {
 
     fn sample_models() -> HashMap<String, Vec<Model>> {
         HashMap::from([(
-            String::from("openai"),
+            String::from("openai-chat-completions"),
             vec![
                 Model {
                     id: String::from("gpt-4.1-mini"),
@@ -2206,8 +2206,8 @@ mod tests {
     fn sample_settings() -> SettingsDocument {
         SettingsDocument {
             providers: vec![ProviderSettings {
-                id: String::from("openai"),
-                provider_type: ProviderType::OpenAi,
+                id: String::from("openai-chat-completions"),
+                provider_type: ProviderType::OpenAiChatCompletions,
                 base_url: Some(String::from("https://api.openai.com/v1")),
                 api_key: None,
                 env_var_api_key: Some(String::from("OPENAI_API_KEY")),
@@ -2215,7 +2215,7 @@ mod tests {
             }],
             models: vec![ModelSettings {
                 id: String::from("gpt-4o-mini"),
-                provider_id: String::from("openai"),
+                provider_id: String::from("openai-chat-completions"),
                 name: Some(String::from("GPT-4o Mini")),
                 max_context: Some(128_000),
             }],
@@ -2276,7 +2276,7 @@ mod tests {
             config_loaded: true,
             status: String::from("Ready"),
             models_by_provider: sample_models(),
-            selected_provider_id: Some(String::from("openai")),
+            selected_provider_id: Some(String::from("openai-chat-completions")),
             selected_model_id: Some(String::from("gpt-4o-mini")),
             pending_tools: sample_pending_tools(),
             sessions: sample_sessions(),
@@ -2460,7 +2460,7 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use render tests, interaction tests, and a small number of end-to-end sm
 05: oke tests.
-14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 16:  > Add tests for the settings menu"#,
         );
     }
@@ -2481,7 +2481,7 @@ mod tests {
 11:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
 12:  │> /settings  Open settings editor        │
 13:  │  /sessions  Open sessions menu          │
-14: R└─────────────────────────────────────────┘ idle
+14: R└─────────────────────────────────────────┘-mini | tools=2 | idle
 16:  > /s"#,
         );
     }
@@ -2499,14 +2499,14 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use rende┌/model──────────────────────────────────────────────┐to-end sm
 05: oke tests│Select model (Enter to choose, Esc to close)        │
-06:          │  openai / GPT-4.1 Mini                             │
-07:          │> openai / GPT-4o Mini (current)                    │
+06:          │  openai-chat-completions / GPT-4.1 Mini            │
+07:          │> openai-chat-completions / GPT-4o Mini (current)   │
 08:          │                                                    │
 09:          │                                                    │
 10:          │                                                    │
 11:          │                                                    │
 12:          └────────────────────────────────────────────────────┘
-14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 16:  >"#,
         );
     }
@@ -2539,7 +2539,7 @@ mod tests {
 04: Use r│Tab=next pane, Enter=edit/toggle, a=add, x=delete, s=save, Esc=close                    │
 05:      │┌───────────────────┐┌─────────────────────┐┌───────────────────┐┌─────────────────────┐│
 06:      ││Providers          ││Provider Fields      ││Models             ││Model Fields         ││
-07:      ││> openai           ││  Provider ID        ││> gpt-4o-mini      ││  Model ID           ││
+07:      ││> openai-chat-compl││  Provider ID        ││> gpt-4o-mini      ││  Model ID           ││
 08:      ││                   ││  Provider Type      ││                   ││  Display Name       ││
 09:      ││                   ││> Base URL           ││                   ││> Max Context        ││
 10:      ││                   ││  Inline API Key     ││                   ││                     ││
@@ -2575,7 +2575,7 @@ mod tests {
 10:        │                                                       │
 11:        │                                                       │
 12:        └───────────────────────────────────────────────────────┘
-14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 16:  >"#,
         );
     }
@@ -2604,7 +2604,7 @@ mod tests {
 13:         │                                                              │
 14:         │                                                              │
 15:         └──────────────────────────────────────────────────────────────┘
-16: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+16: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 18:  >"#,
         );
     }
@@ -2628,7 +2628,7 @@ mod tests {
 10:               │/tools     Open tools approval menu      │
 11:               │/new       Start a new session           │
 12:               └─────────────────────────────────────────┘
-14: Ready | model=openai/gpt-4o-mini | tools=2 | idle
+14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 16:  >"#,
         );
     }
@@ -2834,7 +2834,7 @@ mod tests {
         harness.app.state.pending_submit = Some(PendingSubmit {
             message: String::from("stale"),
             model_id: String::from("gpt-4o-mini"),
-            provider_id: String::from("openai"),
+            provider_id: String::from("openai-chat-completions"),
         });
 
         harness.app.handle_command("new");
@@ -2853,7 +2853,7 @@ mod tests {
     fn first_submit_after_new_command_creates_session_lazily() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
-        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
 
         harness.app.handle_command("new");
@@ -2900,7 +2900,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("hello world");
         harness.app.state.input_cursor = harness.app.state.input.len();
@@ -2927,7 +2927,7 @@ mod tests {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "hello world");
                 assert_eq!(model_id, "gpt-4o-mini");
-                assert_eq!(provider_id, "openai");
+                assert_eq!(provider_id, "openai-chat-completions");
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -2938,7 +2938,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/not-a-command");
         harness.app.state.input_cursor = harness.app.state.input.len();
@@ -2965,7 +2965,7 @@ mod tests {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/not-a-command");
                 assert_eq!(model_id, "gpt-4o-mini");
-                assert_eq!(provider_id, "openai");
+                assert_eq!(provider_id, "openai-chat-completions");
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -3058,7 +3058,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/s");
         harness.app.state.input_cursor = harness.app.state.input.len();
@@ -3084,7 +3084,7 @@ mod tests {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/se");
                 assert_eq!(model_id, "gpt-4o-mini");
-                assert_eq!(provider_id, "openai");
+                assert_eq!(provider_id, "openai-chat-completions");
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -3095,7 +3095,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.selected_provider_id = Some(String::from("openai"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
         harness.app.state.input = String::from("/s");
         harness.app.state.input_cursor = harness.app.state.input.len();
@@ -3126,7 +3126,7 @@ mod tests {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/settings");
                 assert_eq!(model_id, "gpt-4o-mini");
-                assert_eq!(provider_id, "openai");
+                assert_eq!(provider_id, "openai-chat-completions");
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -3263,7 +3263,10 @@ mod tests {
                 result: Ok(true),
             });
 
-        assert_eq!(harness.app.state.current_session_id.as_deref(), Some("sess-2"));
+        assert_eq!(
+            harness.app.state.current_session_id.as_deref(),
+            Some("sess-2")
+        );
         assert_eq!(harness.app.state.pending_tools.len(), 1);
         assert_eq!(harness.app.state.pending_tools[0].session_id, "sess-1");
         assert!(harness.app.state.session_waiting_for_approval("sess-1"));

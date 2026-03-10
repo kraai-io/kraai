@@ -12,17 +12,17 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use types::{ChatMessage, ModelId, ProviderId};
 
-/// OpenAI-compatible provider.
-pub struct OpenAIProvider {
+/// OpenAI-compatible chat completions provider.
+pub struct OpenAiChatCompletionsProvider {
     id: ProviderId,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
-    model_configs: BTreeMap<ModelId, OpenAIModelConfig>,
-    config: OpenAIConfig,
+    model_configs: BTreeMap<ModelId, OpenAiChatCompletionsModelConfig>,
+    config: OpenAiChatCompletionsConfig,
     client: Client<async_openai::config::OpenAIConfig>,
 }
 
 #[async_trait::async_trait]
-impl Provider for OpenAIProvider {
+impl Provider for OpenAiChatCompletionsProvider {
     fn get_provider_id(&self) -> ProviderId {
         self.id.clone()
     }
@@ -34,7 +34,8 @@ impl Provider for OpenAIProvider {
     async fn cache_models(&self) -> Result<()> {
         let mut cache = self.cached_models.write().await;
         cache.clear();
-        let models_raw: ListOpenAIModelResponse = self.client.models().list_byot().await?;
+        let models_raw: ListOpenAiChatCompletionsModelResponse =
+            self.client.models().list_byot().await?;
 
         for model in models_raw.data {
             let id = ModelId::new(model.id);
@@ -63,7 +64,7 @@ impl Provider for OpenAIProvider {
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
-        let config: OpenAIModelConfig = model.config.try_into()?;
+        let config: OpenAiChatCompletionsModelConfig = model.config.try_into()?;
         self.model_configs.insert(config.id.clone(), config);
         Ok(())
     }
@@ -123,7 +124,7 @@ impl Provider for OpenAIProvider {
     }
 }
 
-impl OpenAIProvider {
+impl OpenAiChatCompletionsProvider {
     fn serialize_messages(&self, messages: Vec<ChatMessage>) -> Result<serde_json::Value> {
         let converted: Vec<serde_json::Value> = messages
             .into_iter()
@@ -147,9 +148,9 @@ impl OpenAIProvider {
     }
 }
 
-/// Model configuration for OpenAI provider.
+/// Model configuration for the OpenAI chat completions provider.
 #[derive(Deserialize)]
-pub struct OpenAIModelConfig {
+pub struct OpenAiChatCompletionsModelConfig {
     pub id: ModelId,
     pub name: Option<String>,
     pub max_context: Option<usize>,
@@ -157,7 +158,7 @@ pub struct OpenAIModelConfig {
 
 /// Provider configuration for OpenAI-compatible APIs.
 #[derive(Deserialize)]
-pub struct OpenAIConfig {
+pub struct OpenAiChatCompletionsConfig {
     #[allow(rustdoc::bare_urls)]
     /// Base URL for the API (e.g., "https://api.openai.com/v1").
     pub base_url: String,
@@ -176,13 +177,13 @@ fn default_env_var() -> String {
     "OPENAI_API_KEY".to_string()
 }
 
-/// Factory for creating OpenAI providers.
-pub struct OpenAIFactory;
+/// Factory for creating OpenAI chat completions providers.
+pub struct OpenAiChatCompletionsFactory;
 
-impl ProviderFactory for OpenAIFactory {
-    const TYPE: &'static str = "openai";
+impl ProviderFactory for OpenAiChatCompletionsFactory {
+    const TYPE: &'static str = "openai-chat-completions";
 
-    type Config = OpenAIConfig;
+    type Config = OpenAiChatCompletionsConfig;
 
     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
         let api_key = config
@@ -201,7 +202,7 @@ impl ProviderFactory for OpenAIFactory {
             .with_api_base(base_url)
             .with_api_key(api_key);
         let client = Client::with_config(cconfig);
-        let provider = OpenAIProvider {
+        let provider = OpenAiChatCompletionsProvider {
             id,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
@@ -213,11 +214,11 @@ impl ProviderFactory for OpenAIFactory {
 }
 
 #[derive(Debug, Deserialize)]
-struct ListOpenAIModelResponse {
-    pub data: Vec<OpenAIModel>,
+struct ListOpenAiChatCompletionsModelResponse {
+    pub data: Vec<OpenAiChatCompletionsModel>,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAIModel {
+struct OpenAiChatCompletionsModel {
     pub id: String,
 }

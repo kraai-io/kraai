@@ -19,7 +19,7 @@ use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
-use provider_openai::OpenAIFactory;
+use provider_openai_chat_completions::OpenAiChatCompletionsFactory;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 // ============================================================================
@@ -66,7 +66,7 @@ pub struct WorkspaceState {
 /// Supported provider types for settings editing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderType {
-    OpenAi,
+    OpenAiChatCompletions,
 }
 
 /// Editable provider settings shared across clients.
@@ -1239,7 +1239,7 @@ impl RuntimeInner {
 
         let mut helper = ProviderManagerHelper::default();
         helper
-            .register_factory::<OpenAIFactory>()
+            .register_factory::<OpenAiChatCompletionsFactory>()
             .map_err(|e| eyre!("{}", e))?;
 
         self.agent_manager
@@ -1341,7 +1341,7 @@ fn settings_from_provider_config(config: ProviderManagerConfig) -> Result<Settin
 
 fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSettings> {
     let provider_type = match config.r#type.as_str() {
-        "openai" => ProviderType::OpenAi,
+        "openai-chat-completions" => ProviderType::OpenAiChatCompletions,
         other => return Err(eyre!("Unsupported provider type in settings: {other}")),
     };
     let table = as_table(&config.config)?;
@@ -1395,7 +1395,7 @@ fn provider_config_from_settings(settings: &SettingsDocument) -> Result<Provider
 fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<ProviderConfig> {
     let mut table = toml::map::Map::new();
     match settings.provider_type {
-        ProviderType::OpenAi => {
+        ProviderType::OpenAiChatCompletions => {
             let base_url = trim_optional(&settings.base_url)
                 .ok_or_else(|| eyre!("OpenAI providers require a base_url"))?;
             table.insert(String::from("base_url"), toml::Value::String(base_url));
@@ -1419,7 +1419,7 @@ fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<Pr
     Ok(ProviderConfig {
         id: ProviderId::new(settings.id.trim().to_string()),
         r#type: match settings.provider_type {
-            ProviderType::OpenAi => String::from("openai"),
+            ProviderType::OpenAiChatCompletions => String::from("openai-chat-completions"),
         },
         config: toml::Value::Table(table),
     })
@@ -1466,7 +1466,7 @@ fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError
             });
         }
 
-        if matches!(provider.provider_type, ProviderType::OpenAi)
+        if matches!(provider.provider_type, ProviderType::OpenAiChatCompletions)
             && trim_optional(&provider.base_url).is_none()
         {
             errors.push(SettingsValidationError {

@@ -69,7 +69,7 @@ pub struct ProviderManager {
 ///
 /// ```ignore
 /// let mut helper = ProviderManagerHelper::default();
-/// helper.register_factory::<OpenAIFactory>();
+/// helper.register_factory::<OpenAiChatCompletionsFactory>();
 ///
 /// let mut manager = ProviderManager::new();
 /// manager.load_config(config, helper).await?;
@@ -110,7 +110,7 @@ pub struct ModelConfig {
 pub struct ProviderConfig {
     /// Unique identifier for this provider instance.
     pub id: ProviderId,
-    /// Type of provider (e.g., "openai").
+    /// Type of provider (e.g., "openai-chat-completions").
     pub r#type: String,
     /// Provider-specific configuration.
     #[serde(flatten)]
@@ -125,14 +125,14 @@ pub struct ProviderConfig {
 /// # Example
 ///
 /// ```ignore
-/// pub struct OpenAIFactory;
+/// pub struct OpenAiChatCompletionsFactory;
 ///
-/// impl ProviderFactory for OpenAIFactory {
-///     const TYPE: &'static str = "openai";
-///     type Config = OpenAIConfig;
+/// impl ProviderFactory for OpenAiChatCompletionsFactory {
+///     const TYPE: &'static str = "openai-chat-completions";
+///     type Config = OpenAiChatCompletionsConfig;
 ///
 ///     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
-///         Ok(Box::new(OpenAIProvider::new(id, config)))
+///         Ok(Box::new(OpenAiChatCompletionsProvider::new(id, config)))
 ///     }
 /// }
 /// ```
