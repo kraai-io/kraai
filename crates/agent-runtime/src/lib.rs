@@ -1037,10 +1037,12 @@ impl RuntimeInner {
 
             if !failed.is_empty() {
                 tracing::warn!("Failed tool calls found, adding to history");
-                let mut agent = agent_manager.lock().await;
-                let _ = agent
-                    .add_failed_tool_calls_to_history(&completed_session, failed)
-                    .await;
+                {
+                    let mut agent = agent_manager.lock().await;
+                    let _ = agent
+                        .add_failed_tool_calls_to_history(&completed_session, failed)
+                        .await;
+                }
                 event_callback.on_event(Event::HistoryUpdated {
                     session_id: completed_session.clone(),
                 });
@@ -2684,6 +2686,134 @@ value: alpha\n\
                 })
             })
             .await;
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_malformed_tool_calls_continue_without_deadlocking() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: edit_file\n\
+path: Cargo.toml\n\
+create: false\n\
+edits: [{\"old_text\":\"rust = \\\"1.88.0\\\"\",\"new_text\":\"rust = \\\"1.90.0\\\"\"}]\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("first continuation complete")],
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: edit_file\n\
+path: Cargo.toml\n\
+create: false\n\
+edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0\\\"\"}]\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("second continuation complete")],
+        ])
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("first malformed tool call continuation", |events| {
+                let history_updates = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::HistoryUpdated { session_id: event_session }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                let continuation_completed = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete { session_id: event_session, .. }
+                            if event_session == &session_id
+                    )
+                });
+                history_updates >= 2 && continuation_completed
+            })
+            .await;
+
+        let history_after_first = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history_after_first.values().any(|message| {
+            message.content.contains("Failed to parse tool call")
+                && message.content.contains("Expected array length, found LeftBrace")
+        }));
+        assert!(history_after_first
+            .values()
+            .any(|message| message.content == "first continuation complete"));
+
+        let second_session = harness.handle.create_session().await?;
+        let load_result = tokio::time::timeout(
+            Duration::from_millis(200),
+            harness.handle.load_session(second_session.clone()),
+        )
+        .await;
+        assert!(matches!(load_result, Ok(Ok(true))));
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("second message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("second malformed tool call continuation", |events| {
+                let parse_failures = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::HistoryUpdated { session_id: event_session }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                let stream_completions = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                parse_failures >= 4 && stream_completions >= 4
+            })
+            .await;
+
+        let history_after_second = harness.handle.get_chat_history(session_id.clone()).await?;
+        let parse_failure_count = history_after_second
+            .values()
+            .filter(|message| message.content.contains("Failed to parse tool call"))
+            .count();
+        assert_eq!(parse_failure_count, 2);
+        assert!(history_after_second
+            .values()
+            .any(|message| message.content == "second continuation complete"));
 
         harness.shutdown().await;
         Ok(())
