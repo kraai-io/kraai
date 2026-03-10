@@ -4,32 +4,29 @@ use std::path::Path;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tool_core::{Tool, ToolContext, ToolOutput, assess_write_path, resolve_tool_path};
+use toon_schema::ToonSchema;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 pub struct EditFileTool;
-const EDIT_FILE_SCHEMA: &str = r#"# Apply one or more deterministic exact-text replacements to a single file
-tool: edit_file
-# File path to edit or create
-path: string
-# When true, create a new file instead of editing an existing one
-create[0:1]: boolean
-# JSON array of edit objects. Each object must include string fields old_text and new_text.
-edits: string
 
-Examples:
-<tool_call>
-tool: edit_file
-path: src/lib.rs
-create: false
-edits: [{"old_text":"old","new_text":"new"}]
-</tool_call>
+#[derive(Deserialize, ToonSchema, Serialize)]
+#[toon_schema(
+    name = "edit_file",
+    description = "Apply one or more deterministic exact-text replacements to a single file",
+    example = r#"{"path":"src/lib.rs","create":false,"edits":"[{\"old_text\":\"old\",\"new_text\":\"new\"}]"}"#,
+    example = r#"{"path":"src/new_file.rs","create":true,"edits":"[{\"old_text\":\"\",\"new_text\":\"pub fn hello() {\\n    println!(\\\"hello\\\");\\n}\\n\"}]"}"#
+)]
+struct EditFileToolSchemaArgs {
+    #[toon_schema(description = "File path to edit or create")]
+    path: String,
 
-<tool_call>
-tool: edit_file
-path: src/new_file.rs
-create: true
-edits: [{"old_text":"","new_text":"pub fn hello() {\n    println!(\"hello\");\n}\n"}]
-</tool_call>"#;
+    #[serde(default)]
+    #[toon_schema(description = "When true, create a new file instead of editing an existing one")]
+    create: bool,
+
+    #[toon_schema(description = "JSON array of edit objects. Each object must include string fields old_text and new_text.")]
+    edits: String,
+}
 
 #[derive(Deserialize, Serialize)]
 struct EditFileToolArgs {
@@ -53,11 +50,11 @@ struct EditFileToolSuccess {
 #[async_trait]
 impl Tool for EditFileTool {
     fn name(&self) -> &'static str {
-        "edit_file"
+        EditFileToolSchemaArgs::tool_name()
     }
 
     fn schema(&self) -> &'static str {
-        EDIT_FILE_SCHEMA
+        EditFileToolSchemaArgs::toon_schema()
     }
 
     fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
