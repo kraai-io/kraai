@@ -6,6 +6,7 @@ pub struct Schema {
     pub name: String,
     pub description: Option<String>,
     pub fields: Vec<Field>,
+    pub examples: Vec<String>,
 }
 
 /// Field in a struct
@@ -14,10 +15,10 @@ pub struct Field {
     pub name: String,
     pub ty: Type,
     pub description: Option<String>,
-    pub example: String, // JSON string
     pub range: Range,
     pub skipped: bool,
     pub default_value: Option<String>, // JSON string or None
+    pub optional: bool,
 }
 
 /// Type representation

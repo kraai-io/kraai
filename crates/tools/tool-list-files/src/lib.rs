@@ -11,13 +11,12 @@ pub struct ListFilesTool;
 #[derive(Deserialize, ToonSchema, Serialize)]
 #[toon_schema(
     name = "list_files",
-    description = "List files in a directory like ls. Returns a shallow directory listing and includes hidden files."
+    description = "List files in a directory like ls. Returns a shallow directory listing and includes hidden files.",
+    example = r#"{"path":"."}"#,
+    example = r#"{"path":"/path/to/directory"}"#
 )]
 struct ListFilesToolArgs {
-    #[toon_schema(
-        description = "Directory path to list",
-        example = "\"/path/to/directory\""
-    )]
+    #[toon_schema(description = "Directory path to list")]
     path: String,
 }
 

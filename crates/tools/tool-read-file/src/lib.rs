@@ -11,14 +11,12 @@ pub struct ReadFileTool;
 #[derive(Deserialize, ToonSchema, Serialize)]
 #[toon_schema(
     name = "read_files",
-    description = "Read files from the filesystem and return their contents with line numbers"
+    description = "Read files from the filesystem and return their contents with line numbers",
+    example = r#"{"files":["/path/to/file.txt"]}"#,
+    example = r#"{"files":["/path/to/file.txt","/path/to/another/file.md"]}"#
 )]
 struct ReadFileToolArgs {
-    #[toon_schema(
-        description = "List of file paths to read",
-        example = "[\"/path/to/file.txt\", \"/path/to/another/file.md\"]",
-        min = 1
-    )]
+    #[toon_schema(description = "List of file paths to read", min = 1)]
     files: Vec<String>,
 }
 

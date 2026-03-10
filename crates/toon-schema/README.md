@@ -4,13 +4,13 @@ A proc-macro derive crate for generating Toon format schema documentation from R
 
 ## Overview
 
-`toon-schema` automatically generates structured schema documentation for your Rust types at **compile time**. It provides compile-time validation of examples and type checking, ensuring your documentation stays in sync with your code.
+`toon-schema` automatically generates structured schema documentation for your Rust types at **compile time**. It provides compile-time validation of complete tool-call examples and type checking, ensuring your documentation stays in sync with your code.
 
 ## Features
 
 - **Fully compile-time** - Schema generation, Toon encoding, and type validation all happen during macro expansion
 - **Zero runtime dependencies** - No external crates needed at runtime; returns `&'static str` directly
-- **Compile-time validation** - JSON examples validated and type-checked during compilation
+- **Compile-time validation** - Full JSON tool-call examples validated and type-checked during compilation
 - **Serde integration** - Respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`
 - **Custom ranges** for Vec fields (`min`/`max` attributes)
 - **Helpful error messages** - Clear compile-time errors with suggestions
@@ -32,18 +32,16 @@ use serde::{Deserialize, Serialize};
 use toon_schema::ToonSchema;
 
 #[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(description = "Read files from the filesystem")]
+#[toon_schema(
+    description = "Read files from the filesystem",
+    example = r#"{"files":["/etc/passwd"],"max_lines":100}"#,
+    example = r#"{"files":["/etc/passwd","/etc/hosts"]}"#
+)]
 struct ReadFileArgs {
-    #[toon_schema(
-        description = "File paths to read",
-        example = "[\"/etc/passwd\", \"/etc/hosts\"]"
-    )]
+    #[toon_schema(description = "File paths to read")]
     files: Vec<String>,
-    
-    #[toon_schema(
-        description = "Maximum number of lines to read",
-        example = "100"
-    )]
+
+    #[toon_schema(description = "Maximum number of lines to read")]
     max_lines: Option<i32>,
 }
 
@@ -66,10 +64,17 @@ files[0:]: array<string>
 # Maximum number of lines to read
 max_lines[0:1]: integer
 
-Example:
+Examples:
+<tool_call>
+tool: ReadFileArgs
+files[1]: /etc/passwd
+max_lines: 100
+</tool_call>
+
+<tool_call>
 tool: ReadFileArgs
 files[2]: /etc/passwd,/etc/hosts
-max_lines: 100
+</tool_call>
 ```
 
 ### Custom Tool Name
@@ -78,9 +83,13 @@ Use the `name` attribute to customize the tool name:
 
 ```rust
 #[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(description = "Greeting tool", name = "say_hello")]
+#[toon_schema(
+    description = "Greeting tool",
+    name = "say_hello",
+    example = r#"{"name":"World"}"#
+)]
 struct GreetingArgs {
-    #[toon_schema(description = "Name to greet", example = "\"World\"")]
+    #[toon_schema(description = "Name to greet")]
     name: String,
 }
 
@@ -93,13 +102,9 @@ For Vec fields, specify minimum and maximum counts:
 
 ```rust
 #[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(example = r#"{"items":[1,2,3]}"#)]
 struct BatchRequest {
-    #[toon_schema(
-        description = "Items to process",
-        example = "[1, 2, 3]",
-        min = 1,
-        max = 100
-    )]
+    #[toon_schema(description = "Items to process", min = 1, max = 100)]
     items: Vec<i32>,
 }
 ```
@@ -112,16 +117,17 @@ The derive respects serde attributes:
 
 ```rust
 #[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(example = r#"{"api_key":"secret123","timeout":30}"#)]
 struct ApiRequest {
     #[serde(rename = "api_key")]
-    #[toon_schema(description = "API authentication key", example = "\"secret123\"")]
+    #[toon_schema(description = "API authentication key")]
     key: String,
     
     #[serde(skip)]
     internal_id: String, // Not included in schema
     
     #[serde(default)]
-    #[toon_schema(description = "Timeout in seconds", example = "30")]
+    #[toon_schema(description = "Timeout in seconds")]
     timeout: i32, // Shows default in schema
 }
 ```
@@ -141,13 +147,13 @@ struct ApiRequest {
 |-----------|-------------|
 | `name = "..."` | Custom tool name (defaults to struct name) |
 | `description = "..."` | Tool description |
+| `example = "..."` | **Required, repeatable.** Full JSON object example for the tool |
 
 ### Field-level (`#[toon_schema(...)]`)
 
 | Attribute | Description |
 |-----------|-------------|
 | `description = "..."` | Field description |
-| `example = "..."` | **Required.** JSON example for the field |
 | `min = N` | Minimum count for Vec fields |
 | `max = N` | Maximum count for Vec fields |
 
@@ -155,9 +161,10 @@ struct ApiRequest {
 
 All validation happens at compile time:
 
-- **Missing example**: Suggests appropriate example for the type
+- **Missing example**: Suggests a struct-level JSON object example
 - **Invalid JSON**: Shows what's wrong and how to fix it
 - **Type mismatch**: Example value doesn't match field type
+- **Unknown field**: Example contains a key not declared in the schema
 - **Unknown type**: Lists supported types
 - **Custom range on non-Vec**: Explains ranges only work with Vec types
 - **Reserved field name**: 'tool' is reserved in Toon format
@@ -166,15 +173,16 @@ All validation happens at compile time:
 
 ```rust
 #[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(example = r#"{"count":"not a number"}"#)]
 struct BadExample {
-    #[toon_schema(example = "\"not a number\"")] // Wrong! Should be a number
+    #[toon_schema(description = "Count")]
     count: i32,
 }
 ```
 
 Produces a compile-time error:
 ```
-error: Type mismatch for field 'count': expected Integer, got JSON value '"not a number"'
+error: example 1 field 'count' has wrong type; expected integer, got string
 ```
 
 ## Generated Methods
@@ -186,7 +194,7 @@ impl MyStruct {
     /// Returns the tool name (from `name` attribute or struct name)
     pub fn tool_name() -> &'static str;
     
-    /// Returns the complete Toon format schema with example
+    /// Returns the complete Toon format schema with examples
     pub fn toon_schema() -> &'static str;
 }
 ```

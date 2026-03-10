@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use toon_schema::ToonSchema;
 
 #[derive(ToonSchema, Serialize, Deserialize)]
-struct MissingExample {
-    #[toon_schema(description = "This field is missing from the struct-level example list")]
+#[toon_schema(example = r#"{"field":"value","extra":true}"#)]
+struct UnknownFieldInExample {
+    #[toon_schema(description = "Field")]
     field: String,
 }
 

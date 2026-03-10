@@ -1,0 +1,5 @@
+error: example 1 field 'items' has wrong type; expected string, got integer
+ --> tests/compile_fail/wrong_array_item_type.rs:6:8
+  |
+6 | struct WrongArrayItemType {
+  |        ^^^^^^^^^^^^^^^^^^

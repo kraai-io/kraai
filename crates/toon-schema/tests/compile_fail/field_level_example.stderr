@@ -1,0 +1,5 @@
+error: field-level #[toon_schema(example = ...)] is no longer supported; move examples to the struct as full JSON objects
+ --> tests/compile_fail/field_level_example.rs:7:19
+  |
+7 |     #[toon_schema(example = "\"value\"")]
+  |                   ^^^^^^^

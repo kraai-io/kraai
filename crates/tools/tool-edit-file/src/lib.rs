@@ -16,11 +16,20 @@ create[0:1]: boolean
 # JSON array of edit objects. Each object must include string fields old_text and new_text.
 edits: string
 
-Example:
+Examples:
+<tool_call>
 tool: edit_file
 path: src/lib.rs
 create: false
-edits: [{"old_text":"old","new_text":"new"}]"#;
+edits: [{"old_text":"old","new_text":"new"}]
+</tool_call>
+
+<tool_call>
+tool: edit_file
+path: src/new_file.rs
+create: true
+edits: [{"old_text":"","new_text":"pub fn hello() {\n    println!(\"hello\");\n}\n"}]
+</tool_call>"#;
 
 #[derive(Deserialize, Serialize)]
 struct EditFileToolArgs {

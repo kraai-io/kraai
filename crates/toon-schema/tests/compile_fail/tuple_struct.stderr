@@ -2,5 +2,5 @@ error: ToonSchema can only be derived for structs with named fields
        help: change the struct to use named fields like `struct Tool { field: String }`
  --> tests/compile_fail/tuple_struct.rs:6:8
   |
-6 | struct TupleStruct(#[toon_schema(example = "\"value\"")] String);
+6 | struct TupleStruct(String);
   |        ^^^^^^^^^^^

@@ -1,7 +1,7 @@
-error: Field 'field' is missing required #[toon_schema(example = "...")] attribute
-       help: every field must have an example for documentation
-       example: #[toon_schema(example = ""example_value"")]
- --> tests/compile_fail/missing_example.rs:8:5
+error: Struct 'MissingExample' is missing required #[toon_schema(example = "...")] attribute
+       help: add one or more full JSON object examples at the struct level
+       example: #[toon_schema(example = r#"{"field":"example_value"}"#)]
+ --> tests/compile_fail/missing_example.rs:5:8
   |
-8 |     field: String,
-  |     ^^^^^
+5 | struct MissingExample {
+  |        ^^^^^^^^^^^^^^

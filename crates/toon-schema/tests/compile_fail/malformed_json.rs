@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use toon_schema::ToonSchema;
 
 #[derive(ToonSchema, Serialize, Deserialize)]
+#[toon_schema(example = "not valid json")]
 struct MalformedJson {
-    // ERROR: Invalid JSON in example
-    #[toon_schema(description = "A field", example = "not valid json")]
+    #[toon_schema(description = "A field")]
     field: String,
 }
 

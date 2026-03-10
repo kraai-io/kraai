@@ -8,7 +8,7 @@ mod toon_encode;
 
 use ir::{PrimitiveType, Schema, Type};
 use parse::parse_toon_schema;
-use toon_encode::encode_example_toon;
+use toon_encode::encode_examples_toon;
 
 /// Derive macro for generating Toon format schema documentation from Rust structs.
 ///
@@ -17,8 +17,8 @@ use toon_encode::encode_example_toon;
 ///
 /// # Requirements
 ///
-/// - Every field MUST have an `example` attribute with valid JSON
-/// - Examples MUST match their field types (validated at compile time)
+/// - Every schema MUST have at least one struct-level `example` attribute with valid JSON
+/// - Examples MUST be complete JSON objects matching the schema (validated at compile time)
 /// - Supported types: primitives, `Vec<T>`, `Option<T>`
 ///
 /// # Generated Methods
@@ -33,15 +33,16 @@ use toon_encode::encode_example_toon;
 /// use toon_schema::ToonSchema;
 ///
 /// #[derive(ToonSchema, Serialize, Deserialize)]
-/// #[toon_schema(description = "Read files from the filesystem", name = "read_file")]
+/// #[toon_schema(
+///     description = "Read files from the filesystem",
+///     name = "read_file",
+///     example = r#"{"files":["/etc/passwd"],"max_size":1048576}"#
+/// )]
 /// struct ReadFileArgs {
-///     #[toon_schema(
-///         description = "File paths to read",
-///         example = "[\"/etc/passwd\", \"/etc/hosts\"]"
-///     )]
+///     #[toon_schema(description = "File paths to read")]
 ///     files: Vec<String>,
 ///
-///     #[toon_schema(description = "Maximum file size", example = "1048576")]
+///     #[toon_schema(description = "Maximum file size")]
 ///     max_size: i64,
 /// }
 ///
@@ -56,11 +57,11 @@ use toon_encode::encode_example_toon;
 ///
 /// - `name = "..."` - Custom tool name (defaults to struct name)
 /// - `description = "..."` - Tool description
+/// - `example = "..."` - **Required.** Complete JSON object example for the tool. Repeatable.
 ///
 /// ## Field-level (`#[toon_schema(...)]`)
 ///
 /// - `description = "..."` - Field description
-/// - `example = "..."` - **Required.** JSON example for the field
 /// - `min = N` - Minimum count for Vec fields
 /// - `max = N` - Maximum count for Vec fields
 ///
@@ -73,16 +74,17 @@ use toon_encode::encode_example_toon;
 /// use toon_schema::ToonSchema;
 ///
 /// #[derive(ToonSchema, Serialize, Deserialize)]
+/// #[toon_schema(example = r#"{"api_key":"secret","timeout":30}"#)]
 /// struct ApiRequest {
 ///     #[serde(rename = "api_key")]
-///     #[toon_schema(description = "API key", example = "\"secret\"")]
+///     #[toon_schema(description = "API key")]
 ///     key: String,  // Shows as "api_key" in schema
 ///
 ///     #[serde(skip)]
 ///     internal: String,  // Not included in schema
 ///
 ///     #[serde(default)]
-///     #[toon_schema(description = "Timeout", example = "30")]
+///     #[toon_schema(description = "Timeout")]
 ///     timeout: i32,  // Shows "# default: default" in schema
 /// }
 /// ```
@@ -152,14 +154,17 @@ fn generate_complete_schema(schema: &Schema) -> syn::Result<String> {
     }
 
     lines.push(String::new());
-    lines.push("Example:".to_string());
-    lines.push("<tool_call>".to_string());
-    lines.push(format!("tool: {}", schema.name));
+    lines.push("Examples:".to_string());
 
-    let example_lines = encode_example_toon(&schema.fields)?;
-    lines.extend(example_lines);
-
-    lines.push("</tool_call>".to_string());
+    let examples = encode_examples_toon(schema)?;
+    for (index, example_lines) in examples.iter().enumerate() {
+        lines.push("<tool_call>".to_string());
+        lines.extend(example_lines.iter().cloned());
+        lines.push("</tool_call>".to_string());
+        if index + 1 != examples.len() {
+            lines.push(String::new());
+        }
+    }
 
     Ok(lines.join("\n"))
 }

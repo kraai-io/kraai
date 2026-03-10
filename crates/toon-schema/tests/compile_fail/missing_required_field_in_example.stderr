@@ -1,0 +1,5 @@
+error: example 1 is missing required field 'field' (expected string)
+ --> tests/compile_fail/missing_required_field_in_example.rs:6:8
+  |
+6 | struct MissingRequiredFieldInExample {
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

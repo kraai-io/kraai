@@ -17,19 +17,15 @@ pub struct SearchFilesTool;
 #[derive(Deserialize, ToonSchema, Serialize)]
 #[toon_schema(
     name = "search_files",
-    description = "Search files recursively using ripgrep and return matching lines"
+    description = "Search files recursively using ripgrep and return matching lines",
+    example = r#"{"query":"fn name\\(","path":"crates/agent-runtime"}"#,
+    example = r#"{"query":"TODO"}"#
 )]
 struct SearchFilesToolArgs {
-    #[toon_schema(
-        description = "Regex pattern to search for",
-        example = "\"fn name\\\\(\""
-    )]
+    #[toon_schema(description = "Regex pattern to search for")]
     query: String,
 
-    #[toon_schema(
-        description = "Optional file or directory path to search. Uses the workspace root when omitted",
-        example = "\"crates/agent-runtime\""
-    )]
+    #[toon_schema(description = "Optional file or directory path to search. Uses the workspace root when omitted")]
     path: Option<String>,
 }
 
