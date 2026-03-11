@@ -17,6 +17,8 @@ use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig
 pub enum ToolError {
     #[error("Tool not found: {0}")]
     ToolNotFound(ToolId),
+    #[error("{0}")]
+    Validation(String),
     #[error("Failed to serialize tool output: {0}")]
     OutputSerialization(#[from] serde_json::Error),
 }
@@ -71,6 +73,10 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn schema(&self) -> &'static str;
+
+    fn validate(&self, _args: &serde_json::Value) -> Result<(), String> {
+        Ok(())
+    }
 
     fn assess(&self, _args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
         ToolCallAssessment {
@@ -152,6 +158,14 @@ impl ToolManager {
             .get(id)
             .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
         Ok(tool.assess(args, ctx))
+    }
+
+    pub fn validate_tool(&self, id: &ToolId, args: &serde_json::Value) -> Result<(), ToolError> {
+        let tool = self
+            .tools
+            .get(id)
+            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
+        tool.validate(args).map_err(ToolError::Validation)
     }
 
     pub async fn describe_tool(

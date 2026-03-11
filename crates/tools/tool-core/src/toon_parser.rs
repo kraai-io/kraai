@@ -10,6 +10,7 @@ static TOOL_CALL_BLOCK_RE: LazyLock<Regex> =
 pub struct ParsedToolCall {
     pub tool_id: String,
     pub args: Value,
+    pub raw_content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ fn parse_single_tool_call(toon_content: &str) -> Result<ParsedToolCall, ParseErr
     Ok(ParsedToolCall {
         tool_id,
         args: Value::Object(args),
+        raw_content: toon_content.to_string(),
     })
 }
 

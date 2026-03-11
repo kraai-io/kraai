@@ -9,16 +9,16 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
 use crate::components::{ChatHistory, TextInput, VisibleChatView};
 
 use super::{
     ActiveSettingsEditor, AppState, CachedMessageRender, ChatCellPosition, ChatSelection,
-    SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, flatten_models_map,
-    message_fingerprint,
+    SettingsFocus, SettingsModelField, SettingsProviderField, ToolApprovalAction, ToolPhase,
+    UiMode, flatten_models_map, message_fingerprint,
 };
 
 pub(super) const SETTINGS_MODEL_FIELDS: [SettingsModelField; 3] = [
@@ -27,12 +27,20 @@ pub(super) const SETTINGS_MODEL_FIELDS: [SettingsModelField; 3] = [
     SettingsModelField::MaxContext,
 ];
 
+pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
+    if state.mode == UiMode::Chat && state.tool_phase == ToolPhase::Deciding {
+        10.min(area.height.saturating_sub(1).max(3))
+    } else {
+        TextInput::new(&state.input, state.input_cursor).get_height(area.width)
+    }
+}
+
 impl Widget for &AppState {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
-        let input_height = TextInput::new(&self.input, self.input_cursor).get_height(area.width);
+        let input_height = bottom_panel_height(self, area);
         let layout = Layout::vertical([
             Constraint::Min(area.height.saturating_sub(input_height + 1)),
             Constraint::Length(1),
@@ -76,8 +84,12 @@ impl Widget for &AppState {
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
 
-        TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
-        if self.mode == UiMode::Chat {
+        if self.mode == UiMode::Chat && self.tool_phase == ToolPhase::Deciding {
+            render_tool_approval_panel(self, input_area, buf);
+        } else {
+            TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
+        }
+        if self.mode == UiMode::Chat && self.tool_phase != ToolPhase::Deciding {
             render_command_popup(self, area, input_area, buf);
         }
 
@@ -85,7 +97,6 @@ impl Widget for &AppState {
             UiMode::ModelMenu => render_model_menu(self, area, buf),
             UiMode::SettingsMenu => render_settings_menu(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::ToolsMenu => render_tools_menu(self, area, buf),
             UiMode::Help => render_help_menu(area, buf),
             UiMode::Chat => {}
         }
@@ -882,65 +893,87 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         .render(popup_area, buf);
 }
 
-fn render_tools_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let popup_area = centered_rect(
-        area.width.saturating_mul(4) / 5,
-        area.height.saturating_mul(2) / 3,
-        area,
-    );
+fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut Buffer) {
+    let Some(tool) = state.pending_tools.iter().find(|tool| tool.approved.is_none()) else {
+        return;
+    };
 
-    let mut lines = vec![Line::styled(
-        "Tools (a=approve, d=deny, e=execute approved, Esc=close)",
-        Style::default().add_modifier(Modifier::BOLD),
-    )];
+    let block = Block::default()
+        .title(" Permission required ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
 
-    let current_tools: Vec<_> = state.pending_tools.iter().collect();
+    Clear.render(area, buf);
+    block.render(area, buf);
 
-    if current_tools.is_empty() {
-        lines.push(Line::raw("No pending tool calls"));
-    } else {
-        for (idx, tool) in current_tools.iter().enumerate() {
-            let selected = idx == state.tools_menu_index;
-            let marker = if selected { ">" } else { " " };
-            let status = match tool.approved {
-                Some(true) => "approved",
-                Some(false) => "denied",
-                None => "pending",
-            };
-            lines.push(Line::styled(
-                format!(
-                    "{marker} [{}] {} - {}",
-                    status, tool.tool_id, tool.description
-                ),
-                if selected {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                },
-            ));
-            if selected {
-                lines.push(Line::styled(
-                    format!("    args: {}", tool.args),
-                    Style::default().fg(Color::DarkGray),
-                ));
-                lines.push(Line::styled(
-                    format!("    risk: {}", tool.risk_level),
-                    Style::default().fg(Color::DarkGray),
-                ));
-                for reason in &tool.reasons {
-                    lines.push(Line::styled(
-                        format!("    why: {reason}"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-            }
-        }
+    for y in area.y..area.y + area.height {
+        let cell = &mut buf[(area.x, y)];
+        cell.set_char(' ').set_bg(Color::Yellow);
     }
 
-    Clear.render(popup_area, buf);
+    let inner = area.inner(ratatui::layout::Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let footer_height = 1;
+    let body_height = inner.height.saturating_sub(footer_height + 1);
+    let [body_area, _spacer, footer_area] = Layout::vertical([
+        Constraint::Length(body_height),
+        Constraint::Length(inner.height.saturating_sub(body_height + footer_height)),
+        Constraint::Length(footer_height),
+    ])
+    .areas(inner);
+
+    let mut lines = vec![
+        Line::styled(&tool.description, Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled(
+            format!("tool: {}  risk: {}", tool.tool_id, tool.risk_level),
+            Style::default().fg(Color::Gray),
+        ),
+    ];
+
+    for reason in &tool.reasons {
+        lines.push(Line::styled(
+            format!("why: {reason}"),
+            Style::default().fg(Color::Gray),
+        ));
+    }
+
+    lines.push(Line::raw(String::new()));
+    lines.push(Line::styled("args", Style::default().fg(Color::Gray)));
+    lines.push(Line::raw(tool.args.clone()));
+
     Paragraph::new(Text::from(lines))
-        .block(Block::default().title("/tools").borders(Borders::ALL))
-        .render(popup_area, buf);
+        .wrap(Wrap { trim: false })
+        .render(body_area, buf);
+
+    let allow_style = if state.tool_approval_action == ToolApprovalAction::Allow {
+        Style::default().fg(Color::Black).bg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let reject_style = if state.tool_approval_action == ToolApprovalAction::Reject {
+        Style::default().fg(Color::Black).bg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let footer = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Allow", allow_style),
+        Span::raw("   "),
+        Span::styled("Reject", reject_style),
+        Span::raw(" ".repeat(footer_area.width.saturating_sub(33) as usize)),
+        Span::styled("select <->  confirm Enter", Style::default().fg(Color::Gray)),
+    ]);
+
+    Paragraph::new(footer)
+        .style(Style::default().bg(Color::DarkGray))
+        .render(footer_area, buf);
 }
 
 fn render_help_menu(area: Rect, buf: &mut Buffer) {
@@ -955,7 +988,6 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("/model     Open model selector"),
         Line::raw("/settings  Open settings editor"),
         Line::raw("/sessions  Open sessions menu"),
-        Line::raw("/tools     Open tools approval menu"),
         Line::raw("/new       Start a new session"),
         Line::raw("/quit      Exit the TUI"),
         Line::raw(""),

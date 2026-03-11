@@ -72,6 +72,7 @@ pub struct PendingToolInfo {
     pub risk_level: String,
     pub reasons: Vec<String>,
     pub approved: Option<bool>,
+    pub queue_order: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +169,7 @@ pub enum Event {
         description: String,
         risk_level: String,
         reasons: Vec<String>,
+        queue_order: u64,
     },
     /// Tool execution result ready
     ToolResultReady {
@@ -916,6 +918,7 @@ impl RuntimeInner {
                         risk_level: tool.risk_level.as_str().to_string(),
                         reasons: tool.reasons,
                         approved: tool.approved,
+                        queue_order: tool.queue_order,
                     })
                     .collect();
                 response
@@ -1430,6 +1433,7 @@ impl RuntimeInner {
                     description: tool_call.description,
                     risk_level: tool_call.assessment.risk.as_str().to_string(),
                     reasons: tool_call.assessment.reasons,
+                    queue_order: tool_call.queue_order,
                 });
             } else {
                 has_auto_approved_tools = true;
@@ -1878,6 +1882,7 @@ mod tests {
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
     use persistence::{FileMessageStore, FileSessionStore};
+    use tool_edit_file::EditFileTool;
     use tool_core::{Tool, ToolContext, ToolManager, ToolOutput};
     use types::{
         ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
@@ -3270,6 +3275,15 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
                     .content
                     .contains("Expected array length, found LeftBrace")
         }));
+        assert!(!harness.events.snapshot().iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id
+            )
+        }));
         assert!(
             history_after_first
                 .values()
@@ -3321,6 +3335,80 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
             history_after_second
                 .values()
                 .any(|message| message.content == "second continuation complete")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_tool_arguments_do_not_emit_permission_events() -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![
+                vec![ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: edit_file\n\
+path: /tmp/providers.toml\n\
+create: false\n\
+edits: \"[{\\\"old_text\\\":\\\"old\\\",\\\"new_text\\\":\\\"new\\\"}]\"\n\
+</tool_call>",
+                )],
+                vec![ScriptedChunk::plain("continuation complete")],
+            ],
+            |tools| {
+                tools.register_tool(EditFileTool);
+            },
+        )
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("trigger invalid edit"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("invalid tool call continuation", |events| {
+                let stream_completions = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                stream_completions >= 2
+            })
+            .await;
+
+        assert!(!harness.events.snapshot().iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id
+            )
+        }));
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history.values().any(|message| {
+            message
+                .content
+                .contains("Unable to validate edit_file arguments")
+        }));
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "continuation complete")
         );
 
         harness.shutdown().await;

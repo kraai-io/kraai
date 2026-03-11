@@ -65,6 +65,12 @@ impl Tool for SearchFilesTool {
         SearchFilesToolArgs::toon_schema()
     }
 
+    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<SearchFilesToolArgs>(args.clone())
+            .map(|_| ())
+            .map_err(|error| format!("Unable to validate search_files arguments: {error}"))
+    }
+
     fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let parsed: SearchFilesToolArgs = match serde_json::from_value(args.clone()) {
             Ok(args) => args,

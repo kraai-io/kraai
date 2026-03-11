@@ -310,6 +310,7 @@ pub enum Event {
     description: String,
     risk_level: String,
     reasons: Vec<String>,
+    queue_order: u32,
   },
   ToolResultReady {
     session_id: String,
@@ -381,6 +382,7 @@ impl From<agent_runtime::Event> for Event {
         description,
         risk_level,
         reasons,
+        queue_order,
       } => Event::ToolCallDetected {
         session_id,
         call_id,
@@ -389,6 +391,7 @@ impl From<agent_runtime::Event> for Event {
         description,
         risk_level,
         reasons,
+        queue_order: queue_order as u32,
       },
       agent_runtime::Event::ToolResultReady {
         session_id,

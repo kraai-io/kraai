@@ -45,6 +45,12 @@ impl Tool for ListFilesTool {
         ListFilesToolArgs::toon_schema()
     }
 
+    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<ListFilesToolArgs>(args.clone())
+            .map(|_| ())
+            .map_err(|error| format!("Unable to validate list_files arguments: {error}"))
+    }
+
     fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let parsed: ListFilesToolArgs = match serde_json::from_value(args.clone()) {
             Ok(args) => args,

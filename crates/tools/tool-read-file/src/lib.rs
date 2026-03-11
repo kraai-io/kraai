@@ -37,6 +37,12 @@ impl Tool for ReadFileTool {
         ReadFileToolArgs::toon_schema()
     }
 
+    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<ReadFileToolArgs>(args.clone())
+            .map(|_| ())
+            .map_err(|error| format!("Unable to validate read_files arguments: {error}"))
+    }
+
     fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let parsed: ReadFileToolArgs = match serde_json::from_value(args.clone()) {
             Ok(args) => args,

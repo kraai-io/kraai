@@ -61,6 +61,12 @@ impl Tool for EditFileTool {
         EditFileToolSchemaArgs::toon_schema()
     }
 
+    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<EditFileToolArgs>(args.clone())
+            .map(|_| ())
+            .map_err(|error| format!("Unable to validate edit_file arguments: {error}"))
+    }
+
     fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let parsed: EditFileToolArgs = match serde_json::from_value(args.clone()) {
             Ok(args) => args,

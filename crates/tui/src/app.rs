@@ -26,21 +26,20 @@ mod ui;
 
 use self::runtime_bridge::spawn_runtime_bridge;
 use self::ui::{
-    SETTINGS_MODEL_FIELDS, active_command_prefix, adjust_index, copy_via_osc52, is_copy_shortcut,
-    is_known_slash_command, model_menu_next_index, model_menu_previous_index,
-    parse_settings_errors, selection_text, slash_command_matches,
+    SETTINGS_MODEL_FIELDS, active_command_prefix, adjust_index, bottom_panel_height,
+    copy_via_osc52, is_copy_shortcut, is_known_slash_command, model_menu_next_index,
+    model_menu_previous_index, parse_settings_errors, selection_text, slash_command_matches,
 };
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
 
-const SLASH_COMMANDS: [(&str, &str); 7] = [
+const SLASH_COMMANDS: [(&str, &str); 6] = [
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("new", "Start new session"),
     ("quit", "Exit the TUI"),
     ("settings", "Open settings editor"),
     ("sessions", "Open sessions menu"),
-    ("tools", "Open tools approval menu"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,8 +48,20 @@ enum UiMode {
     ModelMenu,
     SettingsMenu,
     SessionsMenu,
-    ToolsMenu,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolApprovalAction {
+    Allow,
+    Reject,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolPhase {
+    Idle,
+    Deciding,
+    ExecutingBatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +104,7 @@ struct PendingTool {
     risk_level: String,
     reasons: Vec<String>,
     approved: Option<bool>,
+    queue_order: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +121,7 @@ struct OptimisticToolMessage {
 
 #[derive(Clone, Debug)]
 struct PendingSubmit {
+    session_id: Option<String>,
     message: String,
     model_id: String,
     provider_id: String,
@@ -260,7 +273,9 @@ pub struct AppState {
     current_tip_id: Option<String>,
     model_menu_index: usize,
     sessions_menu_index: usize,
-    tools_menu_index: usize,
+    tool_approval_action: ToolApprovalAction,
+    tool_phase: ToolPhase,
+    tool_batch_execution_started: bool,
     command_completion_prefix: Option<String>,
     command_completion_index: usize,
     command_popup_dismissed: bool,
@@ -275,6 +290,7 @@ pub struct AppState {
     settings_editor_input: String,
     settings_delete_armed: bool,
     pending_submit: Option<PendingSubmit>,
+    queued_submit_after_tools: Option<PendingSubmit>,
 }
 
 impl Default for AppState {
@@ -308,7 +324,9 @@ impl Default for AppState {
             current_tip_id: None,
             model_menu_index: 0,
             sessions_menu_index: 0,
-            tools_menu_index: 0,
+            tool_approval_action: ToolApprovalAction::Allow,
+            tool_phase: ToolPhase::Idle,
+            tool_batch_execution_started: false,
             command_completion_prefix: None,
             command_completion_index: 0,
             command_popup_dismissed: false,
@@ -323,6 +341,7 @@ impl Default for AppState {
             settings_editor_input: String::new(),
             settings_delete_armed: false,
             pending_submit: None,
+            queued_submit_after_tools: None,
         }
     }
 }
@@ -404,11 +423,16 @@ impl App {
                 continue;
             }
 
+            if self.state.mode == UiMode::Chat && self.state.tool_phase == ToolPhase::Deciding {
+                terminal.hide_cursor()?;
+            } else {
+                terminal.show_cursor()?;
+            }
+
             terminal.draw(|frame| {
                 let area = frame.area();
-                if self.state.mode == UiMode::Chat {
-                    let input_height = TextInput::new(&self.state.input, self.state.input_cursor)
-                        .get_height(area.width);
+                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding {
+                    let input_height = bottom_panel_height(&self.state, area);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
                         Constraint::Length(1),
@@ -435,9 +459,9 @@ impl App {
 
                 frame.render_widget(&self.state, area);
 
-                if self.state.mode == UiMode::Chat {
-                    let input_height = TextInput::new(&self.state.input, self.state.input_cursor)
-                        .get_height(area.width);
+                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding
+                {
+                    let input_height = bottom_panel_height(&self.state, area);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
                         Constraint::Length(1),
@@ -514,6 +538,11 @@ impl App {
                     self.state.is_streaming = false;
                     self.last_stream_refresh = None;
                     self.request_sync_for_session(&session_id);
+                    if self.state.tool_phase == ToolPhase::ExecutingBatch
+                        && self.state.pending_tools.is_empty()
+                    {
+                        self.finish_tool_batch_execution();
+                    }
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -524,6 +553,11 @@ impl App {
                     self.state.is_streaming = false;
                     self.last_stream_refresh = None;
                     self.state.status = format!("Stream error: {error}");
+                    if self.state.tool_phase == ToolPhase::ExecutingBatch
+                        && self.state.pending_tools.is_empty()
+                    {
+                        self.finish_tool_batch_execution();
+                    }
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -533,6 +567,11 @@ impl App {
                     self.last_stream_refresh = None;
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
+                    if self.state.tool_phase == ToolPhase::ExecutingBatch
+                        && self.state.pending_tools.is_empty()
+                    {
+                        self.finish_tool_batch_execution();
+                    }
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -542,6 +581,11 @@ impl App {
                     self.last_stream_refresh = None;
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
+                    if self.state.tool_phase == ToolPhase::ExecutingBatch
+                        && self.state.pending_tools.is_empty()
+                    {
+                        self.finish_tool_batch_execution();
+                    }
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
@@ -563,6 +607,7 @@ impl App {
                 description,
                 risk_level,
                 reasons,
+                queue_order,
             } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     self.request(RuntimeRequest::ListSessions);
@@ -583,12 +628,13 @@ impl App {
                         risk_level,
                         reasons,
                         approved: None,
+                        queue_order,
                     });
-                    self.state.status = format!(
-                        "{} tool call(s) pending. Use /tools",
-                        self.current_session_pending_tools().len()
-                    );
                 }
+                self.sort_pending_tools();
+                self.enter_tool_decision_phase();
+                self.state.status =
+                    format!("{} tool call(s) pending", self.state.pending_tools.len());
             }
             Event::ToolResultReady {
                 session_id,
@@ -602,6 +648,7 @@ impl App {
                     self.state
                         .pending_tools
                         .retain(|tool| tool.call_id != call_id);
+                    self.sort_pending_tools();
                     if !success || denied {
                         self.push_optimistic_tool_message(&call_id, &tool_id, &output, denied);
                     }
@@ -612,6 +659,14 @@ impl App {
                     } else {
                         format!("Tool failed: {tool_id}")
                     };
+                    if self.state.pending_tools.is_empty()
+                        && self.state.tool_phase == ToolPhase::ExecutingBatch
+                        && !self.state.is_streaming
+                    {
+                        self.state.status = format!("Waiting for assistant after {tool_id}");
+                    } else {
+                        self.sync_tool_phase_from_pending_tools();
+                    }
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
@@ -726,6 +781,7 @@ impl App {
 
                 match result {
                     Ok(pending_tools) => {
+                        let should_auto_start_execution = self.state.tool_phase == ToolPhase::Idle;
                         self.state.pending_tools = pending_tools
                             .into_iter()
                             .map(|tool| PendingTool {
@@ -736,14 +792,17 @@ impl App {
                                 risk_level: tool.risk_level,
                                 reasons: tool.reasons,
                                 approved: tool.approved,
+                                queue_order: tool.queue_order,
                             })
                             .collect();
-                        if self.state.tools_menu_index >= self.state.pending_tools.len()
+                        self.sync_tool_phase_from_pending_tools();
+                        if should_auto_start_execution
+                            && self.state.tool_phase == ToolPhase::ExecutingBatch
+                            && !self.state.tool_batch_execution_started
+                            && !self.has_undecided_tools()
                             && !self.state.pending_tools.is_empty()
                         {
-                            self.state.tools_menu_index = self.state.pending_tools.len() - 1;
-                        } else if self.state.pending_tools.is_empty() {
-                            self.state.tools_menu_index = 0;
+                            self.maybe_start_tool_batch_execution();
                         }
                     }
                     Err(err) => {
@@ -797,10 +856,11 @@ impl App {
                 result: Ok(()),
             } => {
                 self.set_tool_approval(&call_id, Some(true));
-                if let Some(session_id) = &self.state.current_session_id {
-                    self.request(RuntimeRequest::GetPendingTools {
-                        session_id: session_id.clone(),
-                    });
+                if self.has_undecided_tools() {
+                    self.enter_tool_decision_phase();
+                } else {
+                    self.state.tool_phase = ToolPhase::ExecutingBatch;
+                    self.maybe_start_tool_batch_execution();
                 }
             }
             RuntimeResponse::ApproveTool {
@@ -813,10 +873,11 @@ impl App {
                 result: Ok(()),
             } => {
                 self.set_tool_approval(&call_id, Some(false));
-                if let Some(session_id) = &self.state.current_session_id {
-                    self.request(RuntimeRequest::GetPendingTools {
-                        session_id: session_id.clone(),
-                    });
+                if self.has_undecided_tools() {
+                    self.enter_tool_decision_phase();
+                } else {
+                    self.state.tool_phase = ToolPhase::ExecutingBatch;
+                    self.maybe_start_tool_batch_execution();
                 }
             }
             RuntimeResponse::DenyTool {
@@ -832,14 +893,10 @@ impl App {
                 self.state.status = format!("Failed cancelling stream: {err}");
             }
             RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
-                self.state.status = String::from("Executing approved tools");
-                if let Some(session_id) = &self.state.current_session_id {
-                    self.request(RuntimeRequest::GetPendingTools {
-                        session_id: session_id.clone(),
-                    });
-                }
+                self.state.status = String::from("Executing decided tool calls");
             }
             RuntimeResponse::ExecuteApprovedTools(Err(err)) => {
+                self.state.tool_batch_execution_started = false;
                 self.state.status = format!("Failed executing tools: {err}");
             }
         }
@@ -888,7 +945,7 @@ impl App {
     }
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if self.state.mode != UiMode::Chat {
+        if self.state.mode != UiMode::Chat || self.state.tool_phase == ToolPhase::Deciding {
             return;
         }
 
@@ -929,6 +986,14 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.state.mode == UiMode::Chat && self.state.tool_phase == ToolPhase::Deciding {
+            if matches!(key_event.code, KeyCode::Esc) {
+                return;
+            }
+            self.handle_tool_approval_key_event(key_event);
+            return;
+        }
+
         if matches!(key_event.code, KeyCode::Esc) {
             if self.state.mode == UiMode::Chat && self.command_popup_visible() {
                 self.state.command_popup_dismissed = true;
@@ -963,7 +1028,6 @@ impl App {
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::SettingsMenu => self.handle_settings_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
-            UiMode::ToolsMenu => self.handle_tools_menu_key_event(key_event),
             UiMode::Help => {
                 if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
                     self.clear_chat_selection();
@@ -1053,7 +1117,10 @@ impl App {
     }
 
     fn handle_paste(&mut self, text: String) {
-        if self.state.mode != UiMode::Chat || text.is_empty() {
+        if self.state.mode != UiMode::Chat
+            || self.state.tool_phase == ToolPhase::Deciding
+            || text.is_empty()
+        {
             return;
         }
 
@@ -1230,51 +1297,13 @@ impl App {
         }
     }
 
-    fn handle_tools_menu_key_event(&mut self, key_event: KeyEvent) {
-        let current_pending_tools = self.current_session_pending_tools();
-        let len = current_pending_tools.len();
-
+    fn handle_tool_approval_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Up => {
-                self.state.tools_menu_index = self.state.tools_menu_index.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                if len > 0 {
-                    self.state.tools_menu_index = (self.state.tools_menu_index + 1).min(len - 1);
-                }
-            }
-            KeyCode::Char('a') => {
-                if let Some(tool) = current_pending_tools.get(self.state.tools_menu_index)
-                    && let Some(session_id) = &self.state.current_session_id
-                {
-                    self.request(RuntimeRequest::ApproveTool {
-                        session_id: session_id.clone(),
-                        call_id: tool.call_id.clone(),
-                    });
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(tool) = current_pending_tools.get(self.state.tools_menu_index)
-                    && let Some(session_id) = &self.state.current_session_id
-                {
-                    self.request(RuntimeRequest::DenyTool {
-                        session_id: session_id.clone(),
-                        call_id: tool.call_id.clone(),
-                    });
-                }
-            }
-            KeyCode::Char('e') => {
-                if current_pending_tools
-                    .iter()
-                    .any(|tool| tool.approved == Some(true))
-                    && let Some(session_id) = &self.state.current_session_id
-                {
-                    self.request(RuntimeRequest::ExecuteApprovedTools {
-                        session_id: session_id.clone(),
-                    });
-                    self.state.mode = UiMode::Chat;
-                }
-            }
+            KeyCode::Left | KeyCode::BackTab => self.select_previous_tool_action(),
+            KeyCode::Right | KeyCode::Tab => self.select_next_tool_action(),
+            KeyCode::Enter => self.confirm_current_tool_action(),
+            KeyCode::Char('a') => self.submit_tool_decision(true),
+            KeyCode::Char('d') => self.submit_tool_decision(false),
             _ => {}
         }
     }
@@ -1690,6 +1719,35 @@ impl App {
         if raw_input.is_empty() {
             return;
         }
+        if self.state.tool_phase == ToolPhase::ExecutingBatch {
+            if self.state.queued_submit_after_tools.is_some() {
+                self.state.status =
+                    String::from("Tool execution in progress. One queued message is already pending.");
+                return;
+            }
+            let Some(provider_id) = self.state.selected_provider_id.clone() else {
+                self.state.status = String::from("No provider selected. Use /model");
+                return;
+            };
+            let Some(model_id) = self.state.selected_model_id.clone() else {
+                self.state.status = String::from("No model selected. Use /model");
+                return;
+            };
+            let Some(session_id) = self.state.current_session_id.clone() else {
+                self.state.status = String::from("No active session for queued message");
+                return;
+            };
+            self.state.input.clear();
+            self.state.input_cursor = 0;
+            self.state.queued_submit_after_tools = Some(PendingSubmit {
+                session_id: Some(session_id),
+                message: raw_input,
+                model_id,
+                provider_id,
+            });
+            self.state.status = String::from("Tool execution in progress. Message queued.");
+            return;
+        }
         if self.state.is_streaming {
             self.state.status = String::from("Stream in progress. Press Esc to cancel.");
             return;
@@ -1727,6 +1785,7 @@ impl App {
         }
 
         self.state.pending_submit = Some(PendingSubmit {
+            session_id: None,
             message: raw_input,
             model_id,
             provider_id,
@@ -1760,16 +1819,6 @@ impl App {
                 self.state.visible_chat_view = None;
                 self.state.mode = UiMode::SessionsMenu;
                 self.request(RuntimeRequest::ListSessions);
-            }
-            "tools" => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
-                self.state.mode = UiMode::ToolsMenu;
-                if let Some(session_id) = &self.state.current_session_id {
-                    self.request(RuntimeRequest::GetPendingTools {
-                        session_id: session_id.clone(),
-                    });
-                }
             }
             "new" => {
                 self.start_new_chat_draft();
@@ -1991,8 +2040,136 @@ impl App {
         }
     }
 
-    fn current_session_pending_tools(&self) -> Vec<&PendingTool> {
-        self.state.pending_tools.iter().collect()
+    fn sort_pending_tools(&mut self) {
+        self.state
+            .pending_tools
+            .sort_by_key(|tool| tool.queue_order);
+    }
+
+    fn current_pending_tool(&self) -> Option<&PendingTool> {
+        self.state
+            .pending_tools
+            .iter()
+            .find(|tool| tool.approved.is_none())
+    }
+
+    fn has_undecided_tools(&self) -> bool {
+        self.state
+            .pending_tools
+            .iter()
+            .any(|tool| tool.approved.is_none())
+    }
+
+    fn select_previous_tool_action(&mut self) {
+        self.state.tool_approval_action = match self.state.tool_approval_action {
+            ToolApprovalAction::Allow => ToolApprovalAction::Reject,
+            ToolApprovalAction::Reject => ToolApprovalAction::Allow,
+        };
+    }
+
+    fn select_next_tool_action(&mut self) {
+        self.select_previous_tool_action();
+    }
+
+    fn confirm_current_tool_action(&mut self) {
+        let approved = matches!(self.state.tool_approval_action, ToolApprovalAction::Allow);
+        self.submit_tool_decision(approved);
+    }
+
+    fn submit_tool_decision(&mut self, approved: bool) {
+        let Some(tool) = self.current_pending_tool() else {
+            return;
+        };
+        let Some(session_id) = &self.state.current_session_id else {
+            return;
+        };
+
+        if approved {
+            self.request(RuntimeRequest::ApproveTool {
+                session_id: session_id.clone(),
+                call_id: tool.call_id.clone(),
+            });
+        } else {
+            self.request(RuntimeRequest::DenyTool {
+                session_id: session_id.clone(),
+                call_id: tool.call_id.clone(),
+            });
+        }
+    }
+
+    fn enter_tool_decision_phase(&mut self) {
+        self.clear_chat_selection();
+        self.state.visible_chat_view = None;
+        self.state.mode = UiMode::Chat;
+        self.state.tool_phase = ToolPhase::Deciding;
+        self.state.tool_approval_action = ToolApprovalAction::Allow;
+    }
+
+    fn sync_tool_phase_from_pending_tools(&mut self) {
+        self.sort_pending_tools();
+        if self.has_undecided_tools() {
+            self.enter_tool_decision_phase();
+            return;
+        }
+
+        if !self.state.pending_tools.is_empty() {
+            self.state.mode = UiMode::Chat;
+            self.state.tool_phase = ToolPhase::ExecutingBatch;
+        } else if self.state.tool_phase != ToolPhase::ExecutingBatch {
+            self.state.tool_phase = ToolPhase::Idle;
+            self.state.tool_batch_execution_started = false;
+        }
+    }
+
+    fn maybe_start_tool_batch_execution(&mut self) {
+        if self.state.tool_phase != ToolPhase::ExecutingBatch
+            || self.state.tool_batch_execution_started
+            || self.state.pending_tools.is_empty()
+            || self.has_undecided_tools()
+        {
+            return;
+        }
+
+        let Some(session_id) = &self.state.current_session_id else {
+            return;
+        };
+
+        self.state.tool_batch_execution_started = true;
+        self.state.status = format!(
+            "Executing {} decided tool call(s)",
+            self.state.pending_tools.len()
+        );
+        self.request(RuntimeRequest::ExecuteApprovedTools {
+            session_id: session_id.clone(),
+        });
+    }
+
+    fn finish_tool_batch_execution(&mut self) {
+        self.state.tool_phase = ToolPhase::Idle;
+        self.state.tool_batch_execution_started = false;
+        self.dispatch_queued_submit_after_tools();
+    }
+
+    fn dispatch_queued_submit_after_tools(&mut self) {
+        let Some(pending_submit) = self.state.queued_submit_after_tools.take() else {
+            return;
+        };
+        if self.state.is_streaming
+            || self.state.tool_phase != ToolPhase::Idle
+            || !self.state.pending_tools.is_empty()
+        {
+            self.state.queued_submit_after_tools = Some(pending_submit);
+            return;
+        }
+
+        if let Some(session_id) = pending_submit.session_id {
+            self.dispatch_send_message(
+                session_id,
+                pending_submit.message,
+                pending_submit.model_id,
+                pending_submit.provider_id,
+            );
+        }
     }
 
     fn request_sync(&self) {
@@ -2023,17 +2200,21 @@ impl App {
         self.state.optimistic_messages.clear();
         self.state.optimistic_tool_messages.clear();
         self.state.pending_tools.clear();
-        self.state.tools_menu_index = 0;
+        self.state.tool_approval_action = ToolApprovalAction::Allow;
+        self.state.tool_phase = ToolPhase::Idle;
+        self.state.tool_batch_execution_started = false;
         self.state.is_streaming = false;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
         self.state.status = status.to_string();
+        self.state.queued_submit_after_tools = None;
         self.invalidate_chat_cache();
         self.clamp_chat_scroll();
     }
 
     fn start_new_chat_draft(&mut self) {
         self.state.pending_submit = None;
+        self.state.queued_submit_after_tools = None;
         self.reset_chat_session(None, "Started new chat");
     }
 
@@ -2330,7 +2511,7 @@ mod tests {
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
         OptimisticToolMessage, PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse,
-        SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, is_copy_shortcut,
+        SettingsFocus, SettingsModelField, SettingsProviderField, ToolPhase, UiMode, is_copy_shortcut,
         menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
         render_chat_selection_overlay, selection_text,
     };
@@ -2475,6 +2656,7 @@ mod tests {
                     String::from("Needed to answer the user"),
                 ],
                 approved: Some(true),
+                queue_order: 0,
             },
             PendingTool {
                 call_id: String::from("call-2"),
@@ -2484,6 +2666,7 @@ mod tests {
                 risk_level: String::from("undoable_workspace_write"),
                 reasons: vec![String::from("Updates tracked source code")],
                 approved: None,
+                queue_order: 1,
             },
         ]
     }
@@ -2798,31 +2981,28 @@ mod tests {
     }
 
     #[test]
-    fn renders_tools_menu_snapshot() {
+    fn renders_tool_approval_panel_snapshot() {
         let mut state = populated_state();
-        state.mode = UiMode::ToolsMenu;
-        state.tools_menu_index = 1;
+        state.tool_phase = ToolPhase::Deciding;
 
         let rendered = render_state_snapshot(&state, 80, 20);
 
         assert_snapshot(
             &rendered,
             r#"01: How should we test the TUI?
-03:         ┌/tools────────────────────────────────────────────────────────┐
-04: Use rend│Tools (a=approve, d=deny, e=execute approved, Esc=close)      │oke test
-05: s.      │  [approved] read_file - Inspect the app module               │
-06:         │> [pending] write_file - Patch the app module                 │
-07:         │    args: {"path":"src/app.rs","content":"..."}               │
-08:         │    risk: undoable_workspace_write                            │
-09:         │    why: Updates tracked source code                          │
-10:         │                                                              │
-11:         │                                                              │
-12:         │                                                              │
-13:         │                                                              │
-14:         │                                                              │
-15:         └──────────────────────────────────────────────────────────────┘
-16: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
-18:  >"#,
+04: Use render tests, interaction tests, and a small number of end-to-end smoke test
+05: s.
+09: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+10:   Permission required ─────────────────────────────────────────────────────────┐
+11:   Patch the app module                                                         │
+12:   tool: write_file  risk: undoable_workspace_write                             │
+13:   why: Updates tracked source code                                             │
+14:                                                                                │
+15:   args                                                                         │
+16:   {"path":"src/app.rs","content":"..."}                                        │
+17:                                                                                │
+18:    Allow   Reject                                           select <->  confir │
+19:  ──────────────────────────────────────────────────────────────────────────────┘"#,
         );
     }
 
@@ -2842,8 +3022,8 @@ mod tests {
 07:               │/model     Open model selector           │
 08:               │/settings  Open settings editor          │
 09:               │/sessions  Open sessions menu            │
-10:               │/tools     Open tools approval menu      │
-11:               │/new       Start a new session           │
+10:               │/new       Start a new session           │
+11:               │/quit      Exit the TUI                  │
 12:               └─────────────────────────────────────────┘
 14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
 16:  >"#,
@@ -3049,6 +3229,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state = populated_state();
         harness.app.state.pending_submit = Some(PendingSubmit {
+            session_id: None,
             message: String::from("stale"),
             model_id: String::from("gpt-4o-mini"),
             provider_id: String::from("openai-chat-completions"),
@@ -3355,6 +3536,73 @@ mod tests {
     }
 
     #[test]
+    fn submit_during_tool_execution_queues_message() {
+        let mut harness = test_harness();
+        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("queue this");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(harness.app.state.input.is_empty());
+        assert_eq!(
+            harness
+                .app
+                .state
+                .queued_submit_after_tools
+                .as_ref()
+                .map(|submit| submit.message.as_str()),
+            Some("queue this")
+        );
+        assert_eq!(
+            harness.app.state.status,
+            "Tool execution in progress. Message queued."
+        );
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn stream_complete_after_tool_batch_dispatches_queued_message() {
+        let mut harness = test_harness();
+        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.pending_tools.clear();
+        harness.app.state.queued_submit_after_tools = Some(PendingSubmit {
+            session_id: Some(String::from("sess-2")),
+            message: String::from("queued follow-up"),
+            model_id: String::from("gpt-4o-mini"),
+            provider_id: String::from("openai-chat-completions"),
+        });
+        harness.app.state.is_streaming = true;
+
+        harness.app.handle_runtime_event(Event::StreamComplete {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+        });
+
+        assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+        assert!(harness.app.state.is_streaming);
+        assert!(harness.app.state.queued_submit_after_tools.is_none());
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::SendMessage {
+                session_id,
+                message,
+                model_id,
+                provider_id,
+            } if session_id == "sess-2"
+                && message == "queued follow-up"
+                && model_id == "gpt-4o-mini"
+                && provider_id == "openai-chat-completions"
+        )));
+    }
+
+    #[test]
     fn escape_then_typing_full_command_submits_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
@@ -3397,20 +3645,30 @@ mod tests {
     }
 
     #[test]
-    fn tool_menu_execute_approved_returns_to_chat_and_requests_execution() {
+    fn final_tool_decision_starts_batch_execution() {
         let mut harness = test_harness();
-        harness.app.state.mode = UiMode::ToolsMenu;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.pending_tools = sample_pending_tools();
+        harness.app.state.tool_phase = ToolPhase::Deciding;
+        harness.app.state.pending_tools = vec![PendingTool {
+            call_id: String::from("call-2"),
+            tool_id: String::from("write_file"),
+            args: String::from("{\"path\":\"src/app.rs\",\"content\":\"...\"}"),
+            description: String::from("Patch the app module"),
+            risk_level: String::from("undoable_workspace_write"),
+            reasons: vec![String::from("Updates tracked source code")],
+            approved: None,
+            queue_order: 0,
+        }];
 
-        harness.app.handle_key_event(key(KeyCode::Char('e')));
+        harness.app.handle_key_event(key(KeyCode::Enter));
 
-        assert_eq!(harness.app.state.mode, UiMode::Chat);
+        assert_eq!(harness.app.state.tool_phase, ToolPhase::Deciding);
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 1);
         assert!(matches!(
             &requests[0],
-            RuntimeRequest::ExecuteApprovedTools { session_id } if session_id == "sess-2"
+            RuntimeRequest::ApproveTool { session_id, call_id }
+                if session_id == "sess-2" && call_id == "call-2"
         ));
     }
 
@@ -3544,6 +3802,7 @@ mod tests {
                     risk_level: String::from("read_only_workspace"),
                     reasons: Vec::new(),
                     approved: None,
+                    queue_order: 0,
                 }]),
             });
 
@@ -3578,6 +3837,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.pending_tools = sample_pending_tools();
+        harness.app.state.tool_phase = ToolPhase::Deciding;
 
         harness
             .app
@@ -3587,10 +3847,11 @@ mod tests {
             });
 
         assert_eq!(harness.app.state.pending_tools[1].approved, Some(true));
+        assert_eq!(harness.app.state.tool_phase, ToolPhase::ExecutingBatch);
         let requests = harness.drain_requests();
         assert!(matches!(
             requests.as_slice(),
-            [RuntimeRequest::GetPendingTools { session_id }] if session_id == "sess-2"
+            [RuntimeRequest::ExecuteApprovedTools { session_id }] if session_id == "sess-2"
         ));
     }
 
@@ -3717,13 +3978,12 @@ mod tests {
             description: String::from("Read the workspace manifest"),
             risk_level: String::from("read_only_workspace"),
             reasons: vec![String::from("Reads local config")],
+            queue_order: 0,
         });
 
         assert_eq!(harness.app.state.pending_tools.len(), 1);
-        assert_eq!(
-            harness.app.state.status,
-            "1 tool call(s) pending. Use /tools"
-        );
+        assert_eq!(harness.app.state.tool_phase, ToolPhase::Deciding);
+        assert_eq!(harness.app.state.status, "1 tool call(s) pending");
     }
 
     #[test]
@@ -3739,6 +3999,7 @@ mod tests {
             description: String::from("Read the workspace manifest"),
             risk_level: String::from("read_only_workspace"),
             reasons: vec![String::from("Reads local config")],
+            queue_order: 0,
         });
 
         assert!(harness.app.state.pending_tools.is_empty());

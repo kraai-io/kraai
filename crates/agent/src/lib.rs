@@ -22,6 +22,7 @@ pub struct PendingToolCall {
     pub assessment: ToolCallAssessment,
     pub config: types::ToolCallGlobalConfig,
     pub status: PermissionStatus,
+    pub queue_order: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +41,7 @@ pub struct PendingToolInfo {
     pub risk_level: RiskLevel,
     pub reasons: Vec<String>,
     pub approved: Option<bool>,
+    pub queue_order: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +73,7 @@ struct SessionRuntimeState {
     active_tool_config: types::ToolCallGlobalConfig,
     pending_tool_config: Option<types::ToolCallGlobalConfig>,
     pending_tool_calls: HashMap<CallId, PendingToolCall>,
+    next_tool_queue_order: u64,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
 }
@@ -81,6 +84,7 @@ impl SessionRuntimeState {
             active_tool_config: types::ToolCallGlobalConfig { workspace_dir },
             pending_tool_config: None,
             pending_tool_calls: HashMap::new(),
+            next_tool_queue_order: 0,
             last_model: None,
             last_provider: None,
         }
@@ -126,6 +130,7 @@ pub struct DetectedToolCall {
     pub description: String,
     pub assessment: ToolCallAssessment,
     pub requires_confirmation: bool,
+    pub queue_order: u64,
 }
 
 impl AgentManager {
@@ -606,29 +611,47 @@ impl AgentManager {
 
         let mut detected_calls = Vec::new();
         let mut pending_tool_calls = Vec::new();
+        let mut failed_calls = result.failed;
+
+        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+        let mut next_queue_order = state.next_tool_queue_order;
 
         for parsed in result.successful {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
-            let assessment = self
-                .tools
-                .assess_tool(
-                    &tool_id,
-                    &parsed.args,
-                    &tool_core::ToolContext {
-                        global_config: &active_tool_config,
-                    },
-                )
-                .unwrap_or_else(|_| ToolCallAssessment {
-                    risk: RiskLevel::WriteOutsideWorkspace,
-                    policy: types::ExecutionPolicy::AlwaysAsk,
-                    reasons: vec![format!("Unknown tool: {}", parsed.tool_id)],
+            if let Err(error) = self.tools.validate_tool(&tool_id, &parsed.args) {
+                failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                    raw_content: parsed.raw_content,
+                    error: error.to_string(),
                 });
-            let description = self
-                .tools
-                .describe_tool(&tool_id, parsed.args.clone())
-                .await
-                .unwrap_or_else(|_| format!("Unknown tool: {}", parsed.tool_id));
+                continue;
+            }
+            let assessment = match self.tools.assess_tool(
+                &tool_id,
+                &parsed.args,
+                &tool_core::ToolContext {
+                    global_config: &active_tool_config,
+                },
+            ) {
+                Ok(assessment) => assessment,
+                Err(error) => {
+                    failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                        raw_content: parsed.raw_content.clone(),
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let description = match self.tools.describe_tool(&tool_id, parsed.args.clone()).await {
+                Ok(description) => description,
+                Err(error) => {
+                    failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                        raw_content: parsed.raw_content,
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
             let requires_confirmation = !assessment.is_auto_approved(default_autonomy_threshold());
 
             let call = ToolCall {
@@ -649,6 +672,7 @@ impl AgentManager {
                     } else {
                         PermissionStatus::Approved
                     },
+                    queue_order: next_queue_order,
                 },
             ));
 
@@ -658,15 +682,16 @@ impl AgentManager {
                 description,
                 assessment,
                 requires_confirmation,
+                queue_order: next_queue_order,
             });
+            next_queue_order = next_queue_order.saturating_add(1);
         }
 
-        self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_tool_calls
-            .extend(pending_tool_calls);
+        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+        state.pending_tool_calls.extend(pending_tool_calls);
+        state.next_tool_queue_order = next_queue_order;
 
-        let failed_calls: Vec<(String, String)> = result
-            .failed
+        let failed_calls: Vec<(String, String)> = failed_calls
             .into_iter()
             .map(|failure| (failure.raw_content, failure.error))
             .collect();
@@ -753,9 +778,10 @@ impl AgentManager {
                     PermissionStatus::Approved => Some(true),
                     PermissionStatus::Denied => Some(false),
                 },
+                queue_order: pending.queue_order,
             })
             .collect();
-        tools.sort_by(|left, right| left.call_id.cmp(&right.call_id));
+        tools.sort_by_key(|tool| tool.queue_order);
         tools
     }
 
@@ -1162,6 +1188,7 @@ mod tests {
                         workspace_dir: PathBuf::from("/tmp/workspace-a"),
                     },
                     status: PermissionStatus::Pending,
+                    queue_order: 0,
                 },
             );
 
