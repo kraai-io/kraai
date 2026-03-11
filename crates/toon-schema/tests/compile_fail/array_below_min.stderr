@@ -1,5 +1,0 @@
-error: example 1 field 'items' has 0 items, which violates range [1:]
- --> tests/compile_fail/array_below_min.rs:6:8
-  |
-6 | struct ArrayBelowMin {
-  |        ^^^^^^^^^^^^^

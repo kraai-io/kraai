@@ -1,206 +1,91 @@
 # toon-schema
 
-A proc-macro derive crate for generating Toon format schema documentation from Rust structs.
+`toon-schema` is a proc-macro crate for generating TOON tool schemas at compile time.
 
-## Overview
+## API
 
-`toon-schema` automatically generates structured schema documentation for your Rust types at **compile time**. It provides compile-time validation of complete tool-call examples and type checking, ensuring your documentation stays in sync with your code.
+Use `toon_tool!` to declare:
+- the tool name
+- the tool description
+- the owned type definitions used by the tool
+- the root argument type
+- object-style examples
 
-## Features
+The macro emits:
+- the declared Rust structs
+- `tool_name()`
+- `toon_schema()`
 
-- **Fully compile-time** - Schema generation, Toon encoding, and type validation all happen during macro expansion
-- **Zero runtime dependencies** - No external crates needed at runtime; returns `&'static str` directly
-- **Compile-time validation** - Full JSON tool-call examples validated and type-checked during compilation
-- **Serde integration** - Respects `#[serde(rename)]`, `#[serde(skip)]`, and `#[serde(default)]`
-- **Custom ranges** for Vec fields (`min`/`max` attributes)
-- **Helpful error messages** - Clear compile-time errors with suggestions
+Examples are rendered with `toon-format::encode_default`, so the generated TOON matches the canonical encoder exactly.
 
-## Usage
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-toon-schema = "0.1.0"
-serde = { version = "1.0", features = ["derive"] }
-```
-
-### Basic Example
+## Example
 
 ```rust
-use serde::{Deserialize, Serialize};
-use toon_schema::ToonSchema;
+use toon_schema::toon_tool;
 
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(
-    description = "Read files from the filesystem",
-    example = r#"{"files":["/etc/passwd"],"max_lines":100}"#,
-    example = r#"{"files":["/etc/passwd","/etc/hosts"]}"#
-)]
-struct ReadFileArgs {
-    #[toon_schema(description = "File paths to read")]
-    files: Vec<String>,
+toon_tool! {
+    name: "read_files",
+    description: "Read files from the filesystem",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct ReadFileArgs {
+            #[toon_schema(description = "File paths to read", min = 1)]
+            files: Vec<String>,
 
-    #[toon_schema(description = "Maximum number of lines to read")]
-    max_lines: Option<i32>,
-}
-
-fn main() {
-    // Returns &'static str - fully computed at compile time
-    let schema: &'static str = ReadFileArgs::toon_schema();
-    println!("{}", schema);
-    
-    // Also available: tool name
-    println!("Tool: {}", ReadFileArgs::tool_name());
+            #[toon_schema(description = "Optional encoding")]
+            encoding: Option<String>,
+        }
+    },
+    root: ReadFileArgs,
+    examples: [
+        {
+            files: ["/etc/passwd", "/etc/hosts"],
+            encoding: "utf-8"
+        }
+    ]
 }
 ```
 
-Output:
-```
+Generated schema shape:
+
+```text
 # Read files from the filesystem
-tool: ReadFileArgs
+tool: read_files
 # File paths to read
-files[0:]: array<string>
-# Maximum number of lines to read
-max_lines[0:1]: integer
+files[1:]: array<string>
+# Optional encoding
+encoding[0:1]: string
 
 Examples:
 <tool_call>
-tool: ReadFileArgs
-files[1]: /etc/passwd
-max_lines: 100
-</tool_call>
-
-<tool_call>
-tool: ReadFileArgs
+tool: read_files
 files[2]: /etc/passwd,/etc/hosts
+encoding: utf-8
 </tool_call>
 ```
 
-### Custom Tool Name
+## Supported type shapes
 
-Use the `name` attribute to customize the tool name:
+- named structs declared inside `types:`
+- nested named structs
+- `Option<T>`
+- `Vec<T>`
+- fixed arrays `[T; N]`
+- `HashMap<String, T>` and `BTreeMap<String, T>`
 
-```rust
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(
-    description = "Greeting tool",
-    name = "say_hello",
-    example = r#"{"name":"World"}"#
-)]
-struct GreetingArgs {
-    #[toon_schema(description = "Name to greet")]
-    name: String,
-}
+## Supported field attributes
 
-// GreetingArgs::tool_name() returns "say_hello"
-```
+- `#[toon_schema(description = "...")]`
+- `#[toon_schema(min = N)]`
+- `#[toon_schema(max = N)]`
+- `#[serde(rename = "...")]`
+- `#[serde(skip)]`
+- `#[serde(default)]`
 
-### Custom Ranges
+## Not supported
 
-For Vec fields, specify minimum and maximum counts:
-
-```rust
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(example = r#"{"items":[1,2,3]}"#)]
-struct BatchRequest {
-    #[toon_schema(description = "Items to process", min = 1, max = 100)]
-    items: Vec<i32>,
-}
-```
-
-This generates `items[1:100]: array<integer>`.
-
-### Serde Integration
-
-The derive respects serde attributes:
-
-```rust
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(example = r#"{"api_key":"secret123","timeout":30}"#)]
-struct ApiRequest {
-    #[serde(rename = "api_key")]
-    #[toon_schema(description = "API authentication key")]
-    key: String,
-    
-    #[serde(skip)]
-    internal_id: String, // Not included in schema
-    
-    #[serde(default)]
-    #[toon_schema(description = "Timeout in seconds")]
-    timeout: i32, // Shows default in schema
-}
-```
-
-## Supported Types
-
-- **Primitives**: `String`, `i8`-`i128`, `u8`-`u128`, `isize`, `usize`, `f32`, `f64`, `bool`
-- **Collections**: `Vec<T>` (arrays), `Option<T>` (optional fields)
-
-**Not supported**: Enums, nested structs, maps, tuples, or generic types beyond `Vec` and `Option`.
-
-## Attributes
-
-### Struct-level (`#[toon_schema(...)]`)
-
-| Attribute | Description |
-|-----------|-------------|
-| `name = "..."` | Custom tool name (defaults to struct name) |
-| `description = "..."` | Tool description |
-| `example = "..."` | **Required, repeatable.** Full JSON object example for the tool |
-
-### Field-level (`#[toon_schema(...)]`)
-
-| Attribute | Description |
-|-----------|-------------|
-| `description = "..."` | Field description |
-| `min = N` | Minimum count for Vec fields |
-| `max = N` | Maximum count for Vec fields |
-
-## Compile-Time Validation
-
-All validation happens at compile time:
-
-- **Missing example**: Suggests a struct-level JSON object example
-- **Invalid JSON**: Shows what's wrong and how to fix it
-- **Type mismatch**: Example value doesn't match field type
-- **Unknown field**: Example contains a key not declared in the schema
-- **Unknown type**: Lists supported types
-- **Custom range on non-Vec**: Explains ranges only work with Vec types
-- **Reserved field name**: 'tool' is reserved in Toon format
-
-### Example: Type Mismatch Error
-
-```rust
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(example = r#"{"count":"not a number"}"#)]
-struct BadExample {
-    #[toon_schema(description = "Count")]
-    count: i32,
-}
-```
-
-Produces a compile-time error:
-```
-error: example 1 field 'count' has wrong type; expected integer, got string
-```
-
-## Generated Methods
-
-The derive generates two methods:
-
-```rust
-impl MyStruct {
-    /// Returns the tool name (from `name` attribute or struct name)
-    pub fn tool_name() -> &'static str;
-    
-    /// Returns the complete Toon format schema with examples
-    pub fn toon_schema() -> &'static str;
-}
-```
-
-Both methods return `&'static str` with all computation done at compile time.
-
-## License
-
-MIT OR Apache-2.0
+- enums
+- tuple structs
+- unit structs
+- external nested types not declared inside `types:`
+- arbitrary custom serde serialization behavior

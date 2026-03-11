@@ -1,35 +1,47 @@
-//! Intermediate representation for Toon schema generation
+//! Intermediate representation for the `toon_tool!` proc macro.
+use serde_json::Value;
+use syn::ItemStruct;
 
-/// Schema for a struct
-#[derive(Debug)]
-pub struct Schema {
+#[derive(Debug, Clone)]
+pub struct ToolSchema {
     pub name: String,
     pub description: Option<String>,
-    pub fields: Vec<Field>,
-    pub examples: Vec<String>,
+    pub root: String,
+    pub types: Vec<TypeItem>,
+    pub examples: Vec<ExampleObject>,
 }
 
-/// Field in a struct
-#[derive(Debug)]
-pub struct Field {
+#[derive(Debug, Clone)]
+pub struct TypeItem {
+    pub item: ItemStruct,
+    pub def: ObjectDef,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectDef {
     pub name: String,
-    pub ty: Type,
+    pub fields: Vec<FieldDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldDef {
+    pub visible_name: String,
     pub description: Option<String>,
+    pub ty: FieldType,
     pub range: Range,
+    pub default_value: Option<String>,
     pub skipped: bool,
-    pub default_value: Option<String>, // JSON string or None
-    pub optional: bool,
 }
 
-/// Type representation
-#[derive(Debug)]
-pub enum Type {
+#[derive(Debug, Clone)]
+pub enum FieldType {
     Primitive(PrimitiveType),
-    Array(Box<Type>),
+    Object(String),
+    Array(Box<FieldType>),
+    Map(Box<FieldType>),
 }
 
-/// Primitive types
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimitiveType {
     String,
     Integer,
@@ -37,25 +49,49 @@ pub enum PrimitiveType {
     Boolean,
 }
 
-/// Range notation [min:max]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Range {
-    Exactly(u32),      // [N:N] - required fields
-    ZeroToOne,         // [0:1] - Option<T>
-    ZeroOrMore,        // [0:] - Vec<T> without custom range
-    AtLeast(u32),      // [N:] - Vec<T> with min=N
-    Bounded(u32, u32), // [min:max] - Vec<T> with custom range
+    Exactly(u32),
+    ZeroToOne,
+    ZeroOrMore,
+    AtLeast(u32),
+    Bounded(u32, u32),
 }
 
 impl Range {
-    /// Format the range as a string for display
-    pub fn format(&self) -> String {
+    pub fn format(self) -> String {
         match self {
-            Range::Exactly(n) => format!("[{}:{}]", n, n),
-            Range::ZeroToOne => "[0:1]".to_string(),
-            Range::ZeroOrMore => "[0:]".to_string(),
-            Range::AtLeast(n) => format!("[{}:]", n),
-            Range::Bounded(min, max) => format!("[{}:{}]", min, max),
+            Self::Exactly(n) => format!("[{n}:{n}]"),
+            Self::ZeroToOne => String::from("[0:1]"),
+            Self::ZeroOrMore => String::from("[0:]"),
+            Self::AtLeast(n) => format!("[{n}:]"),
+            Self::Bounded(min, max) => format!("[{min}:{max}]"),
         }
     }
+
+    pub fn allows_missing(self) -> bool {
+        matches!(self, Self::ZeroToOne | Self::ZeroOrMore | Self::AtLeast(0) | Self::Bounded(0, _))
+    }
+
+    pub fn validate_len(self, len: usize) -> Result<(), String> {
+        match self {
+            Self::Exactly(n) if len != n as usize => {
+                Err(format!("expected exactly {n} item(s), found {len}"))
+            }
+            Self::ZeroToOne if len > 1 => Err(format!("expected at most 1 item, found {len}")),
+            Self::ZeroOrMore => Ok(()),
+            Self::AtLeast(n) if len < n as usize => {
+                Err(format!("expected at least {n} item(s), found {len}"))
+            }
+            Self::Bounded(min, max) if len < min as usize || len > max as usize => Err(format!(
+                "expected between {min} and {max} item(s), found {len}"
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExampleObject {
+    pub value: Value,
 }

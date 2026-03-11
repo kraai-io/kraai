@@ -1,5 +1,0 @@
-error: Invalid JSON in example: expected ident at line 1 column 2. Struct-level examples must be valid JSON objects.
- --> tests/compile_fail/malformed_json.rs:5:25
-  |
-5 | #[toon_schema(example = "not valid json")]
-  |                         ^^^^^^^^^^^^^^^^

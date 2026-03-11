@@ -3346,12 +3346,13 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
         let harness = RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
-                    "<tool_call>\n\
-tool: edit_file\n\
-path: /tmp/providers.toml\n\
-create: false\n\
-edits: \"[{\\\"old_text\\\":\\\"old\\\",\\\"new_text\\\":\\\"new\\\"}]\"\n\
-</tool_call>",
+                    r#"<tool_call>
+tool: edit_file
+path: /tmp/providers.toml
+create: false
+edits[1]{old_text,new_text}:
+  old,true
+</tool_call>"#,
                 )],
                 vec![ScriptedChunk::plain("continuation complete")],
             ],
@@ -3410,6 +3411,68 @@ edits: \"[{\\\"old_text\\\":\\\"old\\\",\\\"new_text\\\":\\\"new\\\"}]\"\n\
                 .values()
                 .any(|message| message.content == "continuation complete")
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_toon_edit_file_call_is_detected_and_queued() -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![vec![ScriptedChunk::plain(
+                r#"<tool_call>
+tool: edit_file
+path: src/lib.rs
+create: false
+edits[1]{old_text,new_text}:
+  old,new
+</tool_call>"#,
+            )]],
+            |tools| {
+                tools.register_tool(EditFileTool);
+            },
+        )
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("trigger edit"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("native edit_file tool detection", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id: event_session,
+                            tool_id,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "edit_file"
+                    )
+                })
+            })
+            .await;
+
+        assert!(harness.events.snapshot().iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    tool_id,
+                    ..
+                } if event_session == &session_id
+                    && tool_id == "edit_file"
+            )
+        }));
 
         harness.shutdown().await;
         Ok(())

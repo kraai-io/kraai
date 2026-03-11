@@ -1,5 +1,0 @@
-error: example 1 field 'count' has wrong type; expected integer, got string
- --> tests/compile_fail/wrong_primitive_type.rs:6:8
-  |
-6 | struct WrongPrimitiveType {
-  |        ^^^^^^^^^^^^^^^^^^

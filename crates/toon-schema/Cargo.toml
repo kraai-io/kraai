@@ -13,6 +13,7 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 serde_json = { workspace = true }
 syn = { workspace = true }
+toon-format = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]

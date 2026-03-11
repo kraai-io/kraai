@@ -3,23 +3,28 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tool_core::{Tool, ToolContext, ToolOutput, assess_read_path, resolve_tool_path};
-use toon_schema::ToonSchema;
+use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 pub struct ListFilesTool;
 
-#[derive(Deserialize, ToonSchema, Serialize)]
-#[toon_schema(
-    name = "list_files",
-    description = "List files in a directory like ls. Returns a shallow directory listing and includes hidden files.",
-    example = r#"{"path":"."}"#,
-    example = r#"{"path":"/path/to/directory"}"#
-)]
-struct ListFilesToolArgs {
-    #[toon_schema(description = "Directory path to list")]
-    path: String,
+toon_tool! {
+    name: "list_files",
+    description: "List files in a directory like ls. Returns a shallow directory listing and includes hidden files.",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct ListFilesToolArgs {
+            #[toon_schema(description = "Directory path to list")]
+            path: String,
+        }
+    },
+    root: ListFilesToolArgs,
+    examples: [
+        { path: "." },
+        { path: "/path/to/directory" },
+    ]
 }
 
 #[derive(Serialize)]

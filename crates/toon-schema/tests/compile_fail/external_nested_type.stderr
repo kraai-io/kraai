@@ -1,0 +1,5 @@
+error: unsupported external type `ExternalType`; declare nested types inside `types:`
+  --> tests/compile_fail/external_nested_type.rs:10:21
+   |
+10 |             nested: ExternalType,
+   |                     ^^^^^^^^^^^^

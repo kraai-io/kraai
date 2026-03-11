@@ -7,30 +7,35 @@ use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tool_core::{Tool, ToolContext, ToolOutput, assess_read_path, resolve_tool_path};
-use toon_schema::ToonSchema;
+use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 const MAX_MATCHES: usize = 100;
 
 pub struct SearchFilesTool;
 
-#[derive(Deserialize, ToonSchema, Serialize)]
-#[toon_schema(
-    name = "search_files",
-    description = "Search files recursively using ripgrep and return matching lines",
-    example = r#"{"query":"fn name\\(","path":"crates/agent-runtime"}"#,
-    example = r#"{"query":"TODO"}"#
-)]
-struct SearchFilesToolArgs {
-    #[toon_schema(description = "Regex pattern to search for")]
-    query: String,
+toon_tool! {
+    name: "search_files",
+    description: "Search files recursively using ripgrep and return matching lines",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct SearchFilesToolArgs {
+            #[toon_schema(description = "Regex pattern to search for")]
+            query: String,
 
-    #[toon_schema(
-        description = "Optional file or directory path to search. Uses the workspace root when omitted"
-    )]
-    path: Option<String>,
+            #[toon_schema(
+                description = "Optional file or directory path to search. Uses the workspace root when omitted"
+            )]
+            path: Option<String>,
+        }
+    },
+    root: SearchFilesToolArgs,
+    examples: [
+        { query: "fn name\\(", path: "crates/agent-runtime" },
+        { query: "TODO" },
+    ]
 }
 
 #[derive(Serialize)]

@@ -1,21 +1,23 @@
-use serde::{Deserialize, Serialize};
-use toon_schema::ToonSchema;
+use toon_schema::toon_tool;
 
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(
-    description = "A simple person struct",
-    example = r#"{"name":"Alice","age":30,"active":true}"#,
-    example = r#"{"name":"Bob","age":41,"active":false}"#
-)]
-struct Person {
-    #[toon_schema(description = "Person's name")]
-    name: String,
-
-    #[toon_schema(description = "Person's age")]
-    age: i32,
-
-    #[toon_schema(description = "Is person active")]
-    active: bool,
+toon_tool! {
+    name: "person",
+    description: "Simple example schema",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct Person {
+            #[toon_schema(description = "Person's name")]
+            name: String,
+            #[toon_schema(description = "Person's age")]
+            age: i32,
+            #[toon_schema(description = "Is person active")]
+            active: bool,
+        }
+    },
+    root: Person,
+    examples: [
+        { name: "Alice", age: 30, active: true }
+    ]
 }
 
 fn main() {

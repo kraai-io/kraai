@@ -1,5 +1,0 @@
-error: example 1 field 'items' has 3 items, which violates range [0:2]
- --> tests/compile_fail/array_above_max.rs:6:8
-  |
-6 | struct ArrayAboveMax {
-  |        ^^^^^^^^^^^^^

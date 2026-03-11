@@ -1,5 +1,0 @@
-error: example 1 must be a JSON object, got array
- --> tests/compile_fail/example_not_object.rs:6:8
-  |
-6 | struct ExampleNotObject {
-  |        ^^^^^^^^^^^^^^^^

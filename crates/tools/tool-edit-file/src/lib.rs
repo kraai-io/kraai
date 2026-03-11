@@ -4,46 +4,55 @@ use std::fs;
 use std::path::Path;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tool_core::{Tool, ToolContext, ToolOutput, assess_write_path, resolve_tool_path};
-use toon_schema::ToonSchema;
+use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
 pub struct EditFileTool;
 
-#[derive(Deserialize, ToonSchema, Serialize)]
-#[toon_schema(
-    name = "edit_file",
-    description = "Apply one or more deterministic exact-text replacements to a single file",
-    example = r#"{"path":"src/lib.rs","create":false,"edits":"[{\"old_text\":\"old\",\"new_text\":\"new\"}]"}"#,
-    example = r#"{"path":"src/new_file.rs","create":true,"edits":"[{\"old_text\":\"\",\"new_text\":\"pub fn hello() {\\n    println!(\\\"hello\\\");\\n}\\n\"}]"}"#
-)]
-struct EditFileToolSchemaArgs {
-    #[toon_schema(description = "File path to edit or create")]
-    path: String,
+toon_tool! {
+    name: "edit_file",
+    description: "Apply one or more deterministic exact-text replacements to a single file",
+    types: {
+        #[derive(Clone, serde::Deserialize, serde::Serialize)]
+        struct EditOperation {
+            #[toon_schema(description = "Exact existing text to replace")]
+            old_text: String,
+            #[toon_schema(description = "Replacement text")]
+            new_text: String,
+        }
 
-    #[serde(default)]
-    #[toon_schema(description = "When true, create a new file instead of editing an existing one")]
-    create: bool,
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct EditFileToolArgs {
+            #[toon_schema(description = "File path to edit or create")]
+            path: String,
 
-    #[toon_schema(
-        description = "JSON array of edit objects. Each object must include string fields old_text and new_text."
-    )]
-    edits: String,
-}
+            #[serde(default)]
+            #[toon_schema(description = "When true, create a new file instead of editing an existing one")]
+            create: bool,
 
-#[derive(Deserialize, Serialize)]
-struct EditFileToolArgs {
-    path: String,
-    #[serde(default)]
-    create: bool,
-    edits: Vec<EditOperation>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct EditOperation {
-    old_text: String,
-    new_text: String,
+            #[toon_schema(description = "Edit operations to apply", min = 1)]
+            edits: Vec<EditOperation>,
+        }
+    },
+    root: EditFileToolArgs,
+    examples: [
+        {
+            path: "src/lib.rs",
+            create: false,
+            edits: [
+                { old_text: "old", new_text: "new" }
+            ]
+        },
+        {
+            path: "src/new_file.rs",
+            create: true,
+            edits: [
+                { old_text: "", new_text: "pub fn hello() {\\n    println!(\\\"hello\\\");\\n}\\n" }
+            ]
+        }
+    ]
 }
 
 #[derive(Serialize)]
@@ -54,11 +63,11 @@ struct EditFileToolSuccess {
 #[async_trait]
 impl Tool for EditFileTool {
     fn name(&self) -> &'static str {
-        EditFileToolSchemaArgs::tool_name()
+        EditFileToolArgs::tool_name()
     }
 
     fn schema(&self) -> &'static str {
-        EditFileToolSchemaArgs::toon_schema()
+        EditFileToolArgs::toon_schema()
     }
 
     fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
@@ -232,6 +241,7 @@ mod tests {
 
     use serde_json::json;
     use tool_core::{Tool, ToolContext, ToolOutput};
+    use toon_format::decode_default;
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
     use super::EditFileTool;
@@ -569,5 +579,16 @@ mod tests {
             .await;
 
         assert_eq!(description, "Edit file src/lib.rs with 1 replacement(s)");
+    }
+
+    #[test]
+    fn native_toon_edit_arguments_validate_successfully() {
+        let tool = EditFileTool;
+        let args: serde_json::Value = decode_default(
+            "path: notes.txt\ncreate: false\nedits[1]{old_text,new_text}:\n  beta,gamma",
+        )
+        .expect("decode native toon edit args");
+
+        tool.validate(&args).expect("validate native edit args");
     }
 }

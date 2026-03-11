@@ -1,0 +1,5 @@
+error: enums are not supported in `toon_tool!`
+ --> tests/compile_fail/enum_not_supported.rs:6:9
+  |
+6 |         enum Bad {
+  |         ^^^^

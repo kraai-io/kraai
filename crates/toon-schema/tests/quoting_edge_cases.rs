@@ -1,64 +1,53 @@
-use serde::{Deserialize, Serialize};
-use toon_schema::ToonSchema;
+use serde_json::json;
+use toon_schema::toon_tool;
 
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(
-    description = "Case-sensitive keyword tests",
-    example = r#"{"lower_true":"true","lower_false":"false","lower_null":"null","upper_true":"TRUE","mixed_false":"False","upper_null":"NULL"}"#
-)]
-struct CaseSensitiveKeywords {
-    #[toon_schema(description = "Lower true")]
-    lower_true: String,
-    #[toon_schema(description = "Lower false")]
-    lower_false: String,
-    #[toon_schema(description = "Lower null")]
-    lower_null: String,
-    #[toon_schema(description = "Upper true")]
-    upper_true: String,
-    #[toon_schema(description = "Mixed false")]
-    mixed_false: String,
-    #[toon_schema(description = "Upper null")]
-    upper_null: String,
+fn extract_first_example_lines(schema: &str) -> Vec<String> {
+    let lines: Vec<&str> = schema.lines().collect();
+    let tool_call_start = lines
+        .iter()
+        .position(|line| *line == "<tool_call>")
+        .expect("tool call start");
+    let tool_call_end = lines
+        .iter()
+        .position(|line| *line == "</tool_call>")
+        .expect("tool call end");
+
+    lines[tool_call_start + 1..tool_call_end]
+        .iter()
+        .filter(|line| !line.starts_with("tool:"))
+        .map(|line| line.to_string())
+        .collect()
 }
 
-#[derive(ToonSchema, Serialize, Deserialize)]
-#[toon_schema(
-    description = "Structural strings",
-    example = r#"{"just_dash":"-","dash_test":"-test","dash_in_middle":"hello-world","with_colon":"key:value","with_quote":"say \"hello\"","safe":"hello_world"}"#
-)]
-struct StructuralStrings {
-    #[toon_schema(description = "Just dash")]
-    just_dash: String,
-    #[toon_schema(description = "Dash test")]
-    dash_test: String,
-    #[toon_schema(description = "Dash middle")]
-    dash_in_middle: String,
-    #[toon_schema(description = "Colon")]
-    with_colon: String,
-    #[toon_schema(description = "Quote")]
-    with_quote: String,
-    #[toon_schema(description = "Safe")]
-    safe: String,
-}
-
-#[test]
-fn test_case_sensitive_keywords() {
-    let schema = CaseSensitiveKeywords::toon_schema();
-    assert!(schema.contains("lower_true: \"true\""));
-    assert!(schema.contains("lower_false: \"false\""));
-    assert!(schema.contains("lower_null: \"null\""));
-    assert!(schema.contains("upper_true: TRUE"));
-    assert!(schema.contains("mixed_false: False"));
-    assert!(schema.contains("upper_null: NULL"));
+toon_tool! {
+    name: "quoted_strings",
+    description: "Quoted string coverage",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct QuotedStrings {
+            #[toon_schema(description = "Message")]
+            message: String,
+            #[toon_schema(description = "Tokens")]
+            tokens: Vec<String>,
+        }
+    },
+    root: QuotedStrings,
+    examples: [
+        {
+            message: "key: value, [array], {obj} - dash",
+            tokens: ["true", "42", "-3.14"]
+        }
+    ]
 }
 
 #[test]
-fn test_structural_strings_are_quoted_only_when_needed() {
-    let schema = StructuralStrings::toon_schema();
-    assert!(schema.contains("just_dash: \"-\""));
-    assert!(schema.contains("dash_test: \"-test\""));
-    assert!(schema.contains("dash_in_middle: \"hello-world\""));
-    assert!(schema.contains("with_colon: \"key:value\""));
-    assert!(schema.contains("with_quote: \"say \\\"hello\\\"\""));
-    assert!(schema.contains("safe: hello_world"));
+fn example_rendering_matches_toon_format_for_quoted_strings() {
+    let expected = toon_format::encode_default(&json!({
+        "message": "key: value, [array], {obj} - dash",
+        "tokens": ["true", "42", "-3.14"]
+    }))
+    .expect("encode");
+
+    let expected_lines: Vec<String> = expected.lines().map(ToOwned::to_owned).collect();
+    assert_eq!(extract_first_example_lines(QuotedStrings::toon_schema()), expected_lines);
 }

@@ -1,6 +1,5 @@
-error: ToonSchema can only be derived for structs with named fields
-       help: change the struct to use named fields like `struct Tool { field: String }`
- --> tests/compile_fail/tuple_struct.rs:6:8
+error: tuple structs are not supported in `toon_tool!`
+ --> tests/compile_fail/tuple_struct.rs:6:9
   |
-6 | struct TupleStruct(String);
-  |        ^^^^^^^^^^^
+6 |         #[derive(serde::Deserialize, serde::Serialize)]
+  |         ^

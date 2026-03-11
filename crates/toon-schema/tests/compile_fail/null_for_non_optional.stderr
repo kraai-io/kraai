@@ -1,5 +1,0 @@
-error: example 1 field 'field' does not allow null; expected string
- --> tests/compile_fail/null_for_non_optional.rs:6:8
-  |
-6 | struct NullForNonOptional {
-  |        ^^^^^^^^^^^^^^^^^^
