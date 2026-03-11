@@ -1077,8 +1077,7 @@ mod tests {
         let history = manager.get_chat_history(&session_id).await?;
         let latest_user_message = history
             .values()
-            .filter(|message| message.role == ChatRole::User)
-            .max_by_key(|message| message.id.to_string())
+            .find(|message| message.role == ChatRole::User && message.content == "trigger failure")
             .unwrap();
 
         assert_eq!(tip, Some(latest_user_message.id.clone()));

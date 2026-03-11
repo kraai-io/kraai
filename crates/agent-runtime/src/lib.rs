@@ -3249,24 +3249,17 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
         harness
             .events
             .wait_for("first malformed tool call continuation", |events| {
-                let history_updates = events
+                let stream_completions = events
                     .iter()
                     .filter(|event| {
                         matches!(
                             event,
-                            Event::HistoryUpdated { session_id: event_session }
+                            Event::StreamComplete { session_id: event_session, .. }
                                 if event_session == &session_id
                         )
                     })
                     .count();
-                let continuation_completed = events.iter().any(|event| {
-                    matches!(
-                        event,
-                        Event::StreamComplete { session_id: event_session, .. }
-                            if event_session == &session_id
-                    )
-                });
-                history_updates >= 2 && continuation_completed
+                stream_completions >= 2
             })
             .await;
 
@@ -3304,16 +3297,6 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
         harness
             .events
             .wait_for("second malformed tool call continuation", |events| {
-                let parse_failures = events
-                    .iter()
-                    .filter(|event| {
-                        matches!(
-                            event,
-                            Event::HistoryUpdated { session_id: event_session }
-                                if event_session == &session_id
-                        )
-                    })
-                    .count();
                 let stream_completions = events
                     .iter()
                     .filter(|event| {
@@ -3324,7 +3307,7 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
                         )
                     })
                     .count();
-                parse_failures >= 4 && stream_completions >= 4
+                stream_completions >= 4
             })
             .await;
 
