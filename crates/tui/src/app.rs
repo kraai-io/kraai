@@ -175,6 +175,9 @@ enum RuntimeRequest {
         session_id: String,
         call_id: String,
     },
+    CancelStream {
+        session_id: String,
+    },
     ExecuteApprovedTools {
         session_id: String,
     },
@@ -215,6 +218,7 @@ enum RuntimeResponse {
         call_id: String,
         result: Result<(), String>,
     },
+    CancelStream(Result<bool, String>),
     ExecuteApprovedTools(Result<(), String>),
 }
 
@@ -481,6 +485,7 @@ impl App {
                 self.state.status = format!("Runtime error: {msg}");
             }
             Event::StreamStart { session_id, .. } => {
+                self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
                 }
@@ -509,9 +514,8 @@ impl App {
                     self.state.is_streaming = false;
                     self.last_stream_refresh = None;
                     self.request_sync_for_session(&session_id);
-                } else {
-                    self.request(RuntimeRequest::ListSessions);
                 }
+                self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamError {
                 session_id, error, ..
@@ -520,9 +524,17 @@ impl App {
                     self.state.is_streaming = false;
                     self.last_stream_refresh = None;
                     self.state.status = format!("Stream error: {error}");
-                } else {
-                    self.request(RuntimeRequest::ListSessions);
                 }
+                self.request(RuntimeRequest::ListSessions);
+            }
+            Event::StreamCancelled { session_id, .. } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.is_streaming = false;
+                    self.last_stream_refresh = None;
+                    self.state.status = String::from("Stream cancelled");
+                    self.request_sync_for_session(&session_id);
+                }
+                self.request(RuntimeRequest::ListSessions);
             }
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
@@ -812,6 +824,13 @@ impl App {
             } => {
                 self.state.status = format!("Failed denying tool: {err}");
             }
+            RuntimeResponse::CancelStream(Ok(true)) => {}
+            RuntimeResponse::CancelStream(Ok(false)) => {
+                self.state.status = String::from("No active stream to cancel");
+            }
+            RuntimeResponse::CancelStream(Err(err)) => {
+                self.state.status = format!("Failed cancelling stream: {err}");
+            }
             RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
                 self.state.status = String::from("Executing approved tools");
                 if let Some(session_id) = &self.state.current_session_id {
@@ -914,6 +933,14 @@ impl App {
             if self.state.mode == UiMode::Chat && self.command_popup_visible() {
                 self.state.command_popup_dismissed = true;
                 self.reset_completion_cycle();
+                return;
+            }
+            if self.state.mode == UiMode::Chat && self.state.is_streaming {
+                if let Some(session_id) = &self.state.current_session_id {
+                    self.request(RuntimeRequest::CancelStream {
+                        session_id: session_id.clone(),
+                    });
+                }
                 return;
             }
             if self.state.mode == UiMode::SettingsMenu {
@@ -1661,6 +1688,10 @@ impl App {
     fn handle_submit(&mut self) {
         let raw_input = self.state.input.trim().to_string();
         if raw_input.is_empty() {
+            return;
+        }
+        if self.state.is_streaming {
+            self.state.status = String::from("Stream in progress. Press Esc to cancel.");
             return;
         }
         self.state.input.clear();
@@ -2416,6 +2447,7 @@ mod tests {
                 updated_at: 2,
                 title: Some(String::from("Refactor ideas")),
                 waiting_for_approval: true,
+                is_streaming: true,
             },
             Session {
                 id: String::from("sess-2"),
@@ -2425,6 +2457,7 @@ mod tests {
                 updated_at: 4,
                 title: Some(String::from("Testing plan")),
                 waiting_for_approval: false,
+                is_streaming: false,
             },
         ]
     }
@@ -2753,7 +2786,7 @@ mod tests {
 04: Use ren┌/sessions──────────────────────────────────────────────┐o-end sm
 05: oke tes│Sessions (Enter=load/new, x=delete, Esc=close)         │
 06:        │  Start new chat                                       │
-07:        │  Refactor ideas [approval]                            │
+07:        │  Refactor ideas [approval] [streaming]                │
 08:        │> Testing plan (current)                               │
 09:        │                                                       │
 10:        │                                                       │
@@ -3238,6 +3271,36 @@ mod tests {
     }
 
     #[test]
+    fn escape_dismisses_command_popup_before_cancelling_stream() {
+        let mut harness = test_harness();
+        harness.app.state.is_streaming = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.input = String::from("/s");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+
+        assert!(harness.app.state.command_popup_dismissed);
+        assert!(harness.app.state.is_streaming);
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn escape_cancels_stream_when_chat_input_is_active() {
+        let mut harness = test_harness();
+        harness.app.state.is_streaming = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::CancelStream { session_id }] if session_id == "sess-2"
+        ));
+    }
+
+    #[test]
     fn escape_then_typing_partial_command_submits_message() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
@@ -3272,6 +3335,23 @@ mod tests {
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
+    }
+
+    #[test]
+    fn submit_while_streaming_keeps_draft_and_requests_no_send() {
+        let mut harness = test_harness();
+        harness.app.state.is_streaming = true;
+        harness.app.state.input = String::from("keep this draft");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        assert_eq!(harness.app.state.input, "keep this draft");
+        assert_eq!(
+            harness.app.state.status,
+            "Stream in progress. Press Esc to cancel."
+        );
+        assert!(harness.drain_requests().is_empty());
     }
 
     #[test]
@@ -3670,6 +3750,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stream_cancelled_event_refreshes_foreground_session_and_sessions_list() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.is_streaming = true;
+
+        harness.app.handle_runtime_event(Event::StreamCancelled {
+            session_id: String::from("sess-2"),
+            message_id: String::from("m-cancelled"),
+        });
+
+        assert!(!harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.status, "Stream cancelled");
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::GetCurrentTip { session_id } if session_id == "sess-2"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2"
+        )));
+        assert!(requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+    }
+
+    #[test]
+    fn sessions_menu_renders_streaming_suffix() {
+        let state = AppState {
+            mode: UiMode::SessionsMenu,
+            sessions: sample_sessions(),
+            ..AppState::default()
+        };
+
+        let snapshot = render_state_snapshot(&state, 80, 12);
+
+        assert!(snapshot.contains("[streaming]"));
+    }
+
     fn request_name(request: &RuntimeRequest) -> &'static str {
         match request {
             RuntimeRequest::ListModels => "ListModels",
@@ -3685,6 +3809,7 @@ mod tests {
             RuntimeRequest::DeleteSession { .. } => "DeleteSession",
             RuntimeRequest::ApproveTool { .. } => "ApproveTool",
             RuntimeRequest::DenyTool { .. } => "DenyTool",
+            RuntimeRequest::CancelStream { .. } => "CancelStream",
             RuntimeRequest::ExecuteApprovedTools { .. } => "ExecuteApprovedTools",
         }
     }

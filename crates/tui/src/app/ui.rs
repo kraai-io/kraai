@@ -860,8 +860,15 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         } else {
             ""
         };
+        let streaming_suffix = if session.is_streaming {
+            " [streaming]"
+        } else {
+            ""
+        };
         lines.push(Line::styled(
-            format!("{marker} {title}{current_suffix}{approval_suffix}"),
+            format!(
+                "{marker} {title}{current_suffix}{approval_suffix}{streaming_suffix}"
+            ),
             if selected {
                 Style::default().fg(Color::Cyan)
             } else {

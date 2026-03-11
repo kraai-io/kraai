@@ -105,6 +105,7 @@ pub struct Session {
   pub updated_at: f64,
   pub title: Option<String>,
   pub waiting_for_approval: bool,
+  pub is_streaming: bool,
 }
 
 impl From<SessionMeta> for Session {
@@ -117,6 +118,7 @@ impl From<SessionMeta> for Session {
       updated_at: meta.updated_at as f64,
       title: meta.title,
       waiting_for_approval: false,
+      is_streaming: false,
     }
   }
 }
@@ -266,6 +268,7 @@ impl From<agent_runtime::Session> for Session {
       updated_at: s.updated_at as f64,
       title: s.title,
       waiting_for_approval: s.waiting_for_approval,
+      is_streaming: s.is_streaming,
     }
   }
 }
@@ -294,6 +297,10 @@ pub enum Event {
     session_id: String,
     message_id: String,
     error: String,
+  },
+  StreamCancelled {
+    session_id: String,
+    message_id: String,
   },
   ToolCallDetected {
     session_id: String,
@@ -358,6 +365,13 @@ impl From<agent_runtime::Event> for Event {
         session_id,
         message_id,
         error,
+      },
+      agent_runtime::Event::StreamCancelled {
+        session_id,
+        message_id,
+      } => Event::StreamCancelled {
+        session_id,
+        message_id,
       },
       agent_runtime::Event::ToolCallDetected {
         session_id,
@@ -581,6 +595,15 @@ impl AgentRuntime {
     self
       .handle
       .deny_tool(session_id, call_id)
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn cancel_stream(&self, session_id: String) -> napi::Result<bool> {
+    self
+      .handle
+      .cancel_stream(session_id)
       .await
       .map_err(to_napi_error)
   }

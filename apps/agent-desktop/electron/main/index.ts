@@ -98,6 +98,11 @@ function setupIpcHandlers() {
 		},
 	);
 
+	ipcMain.handle("agent:cancelStream", async (_, sessionId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.cancelStream(sessionId);
+	});
+
 	// executeApprovedTools - async
 	ipcMain.handle("agent:executeApprovedTools", async (_, sessionId: string) => {
 		if (!runtime) throw new Error("Runtime not initialized");

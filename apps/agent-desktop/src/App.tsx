@@ -72,6 +72,7 @@ interface Session {
 	updatedAt: number;
 	title?: string;
 	waitingForApproval: boolean;
+	isStreaming: boolean;
 }
 
 interface WorkspaceState {
@@ -94,6 +95,7 @@ interface WindowAPI {
 	getChatHistoryTree: (sessionId: string) => Promise<Record<string, Message>>;
 	approveTool: (sessionId: string, callId: string) => Promise<void>;
 	denyTool: (sessionId: string, callId: string) => Promise<void>;
+	cancelStream: (sessionId: string) => Promise<boolean>;
 	executeApprovedTools: (sessionId: string) => Promise<void>;
 	listSessions: () => Promise<Session[]>;
 	loadSession: (sessionId: string) => Promise<boolean>;
@@ -303,6 +305,7 @@ function App(): React.JSX.Element {
 					setIsLoading(false);
 					break;
 				case "StreamStart":
+					loadSessions();
 					if (event.sessionId !== currentSessionId) break;
 					loadWorkspaceState(event.sessionId);
 					setMessages((prev) => [
@@ -328,21 +331,26 @@ function App(): React.JSX.Element {
 					scrollToBottom();
 					break;
 				case "StreamComplete":
-					if (event.sessionId !== currentSessionId) {
-						loadSessions();
-						break;
-					}
+					loadSessions();
+					if (event.sessionId !== currentSessionId) break;
 					setIsLoading(false);
 					loadChatHistory(event.sessionId);
-					loadSessions();
 					break;
 				case "StreamError":
+					loadSessions();
 					if (event.sessionId !== currentSessionId) break;
 					console.error("[UI] Stream error:", event.error);
 					setIsLoading(false);
 					setMessages((prev) =>
 						prev.filter((msg) => msg.id !== event.messageId),
 					);
+					break;
+				case "StreamCancelled":
+					loadSessions();
+					if (event.sessionId !== currentSessionId) break;
+					setIsLoading(false);
+					loadChatHistory(event.sessionId);
+					loadWorkspaceState(event.sessionId);
 					break;
 				case "ToolCallDetected":
 					loadSessions();
@@ -451,6 +459,19 @@ function App(): React.JSX.Element {
 		});
 	};
 
+	const handleCancelStream = async () => {
+		if (!currentSessionId) return;
+		try {
+			const cancelled = await window.api?.cancelStream(currentSessionId);
+			if (!cancelled) {
+				setIsLoading(false);
+			}
+		} catch (err) {
+			console.error("[UI] Cancel failed:", err);
+			setIsLoading(false);
+		}
+	};
+
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
@@ -544,6 +565,9 @@ function App(): React.JSX.Element {
 			? `...${workspaceDir.slice(-37)}`
 			: workspaceDir
 		: "Select workspace";
+	const sendDisabled = isLoading
+		? !currentSessionId
+		: !inputValue.trim() || !selectedModel;
 
 	return (
 		<div className="flex h-screen bg-background">
@@ -627,6 +651,11 @@ function App(): React.JSX.Element {
 											<div className="flex-1 truncate text-sm">
 												{session.title || `Session ${session.id.slice(0, 8)}`}
 											</div>
+											{session.isStreaming && (
+												<span className="shrink-0 text-xs text-muted-foreground">
+													[streaming]
+												</span>
+											)}
 											{session.waitingForApproval && (
 												<span className="shrink-0 rounded-full border border-amber-300/60 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900">
 													Approval
@@ -851,8 +880,8 @@ function App(): React.JSX.Element {
 									<Button
 										size="icon"
 										className="h-8 w-8 rounded-xl"
-										onClick={handleSend}
-										disabled={!inputValue.trim() || isLoading || !selectedModel}
+										onClick={isLoading ? handleCancelStream : handleSend}
+										disabled={sendDisabled}
 									>
 										{isLoading ? (
 											<Square className="h-3.5 w-3.5" />

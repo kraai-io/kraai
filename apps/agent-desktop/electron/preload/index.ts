@@ -27,6 +27,7 @@ type Event =
 			messageId: string;
 			error: string;
 	  }
+	| { type: "StreamCancelled"; sessionId: string; messageId: string }
 	| {
 			type: "ToolCallDetected";
 			sessionId: string;
@@ -110,6 +111,10 @@ const api = {
 
 	async denyTool(sessionId: string, callId: string): Promise<void> {
 		await ipcRenderer.invoke("agent:denyTool", sessionId, callId);
+	},
+
+	async cancelStream(sessionId: string): Promise<boolean> {
+		return await ipcRenderer.invoke("agent:cancelStream", sessionId);
 	},
 
 	async executeApprovedTools(sessionId: string): Promise<void> {

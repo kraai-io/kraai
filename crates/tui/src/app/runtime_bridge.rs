@@ -112,6 +112,12 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::DenyTool { call_id, result });
                 }
+                RuntimeRequest::CancelStream { session_id } => {
+                    let result = rt
+                        .block_on(runtime.cancel_stream(session_id))
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::CancelStream(result));
+                }
                 RuntimeRequest::ExecuteApprovedTools { session_id } => {
                     let result = rt
                         .block_on(runtime.execute_approved_tools(session_id))
@@ -169,6 +175,9 @@ fn respond_with_runtime_error(
             call_id,
             result: Err(message.to_string()),
         },
+        RuntimeRequest::CancelStream { .. } => {
+            RuntimeResponse::CancelStream(Err(message.to_string()))
+        }
         RuntimeRequest::ExecuteApprovedTools { .. } => {
             RuntimeResponse::ExecuteApprovedTools(Err(message.to_string()))
         }

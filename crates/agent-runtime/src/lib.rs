@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent::{AgentManager, ToolExecutionRequest};
+use agent::{AgentManager, PendingStreamRequest, ToolExecutionRequest};
 use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use persistence::SessionMeta;
 use provider_core::{
@@ -21,6 +21,7 @@ use types::{MessageId, ModelId, ProviderId};
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
 use provider_openai_chat_completions::OpenAiChatCompletionsFactory;
+use tokio::task::AbortHandle;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 // ============================================================================
@@ -44,6 +45,7 @@ pub struct Session {
     pub updated_at: u64,
     pub title: Option<String>,
     pub waiting_for_approval: bool,
+    pub is_streaming: bool,
 }
 
 impl From<SessionMeta> for Session {
@@ -56,6 +58,7 @@ impl From<SessionMeta> for Session {
             updated_at: meta.updated_at,
             title: meta.title,
             waiting_for_approval: false,
+            is_streaming: false,
         }
     }
 }
@@ -148,6 +151,11 @@ pub enum Event {
         session_id: String,
         message_id: String,
         error: String,
+    },
+    /// Stream cancelled by the user
+    StreamCancelled {
+        session_id: String,
+        message_id: String,
     },
 
     // Tool events
@@ -268,6 +276,10 @@ enum Command {
     DenyTool {
         session_id: String,
         call_id: String,
+    },
+    CancelStream {
+        session_id: String,
+        response: oneshot::Sender<bool>,
     },
     ExecuteApprovedTools {
         session_id: String,
@@ -457,6 +469,18 @@ impl RuntimeHandle {
         Ok(())
     }
 
+    /// Cancel the active stream for a session.
+    pub async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::CancelStream {
+                session_id,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
     /// Execute all approved tools
     pub async fn execute_approved_tools(&self, session_id: String) -> Result<()> {
         self.command_tx
@@ -547,6 +571,7 @@ impl RuntimeBuilder {
             event_callback: callback,
             command_tx,
             agent_manager,
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
         };
 
         runtime.run(command_rx).await;
@@ -654,10 +679,26 @@ async fn execute_tool_requests(
 // Runtime Inner - the actual runtime implementation
 // ============================================================================
 
+#[derive(Clone)]
 struct RuntimeInner {
     event_callback: Arc<dyn EventCallback>,
     command_tx: mpsc::Sender<Command>,
     agent_manager: Arc<Mutex<AgentManager>>,
+    active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveStream {
+    message_id: MessageId,
+    abort_handle: AbortHandle,
+}
+
+#[derive(Debug)]
+enum StreamDriveResult {
+    Completed { session_id: String, content: String },
+    FailedToStart { error: String },
+    FailedDuringStream { error: String },
+    Stopped,
 }
 
 impl RuntimeInner {
@@ -766,10 +807,12 @@ impl RuntimeInner {
             Command::ListSessions { response } => {
                 let agent = self.agent_manager.lock().await;
                 let sessions = agent.list_sessions().await?;
+                let streaming_sessions = agent.streaming_session_ids().await;
                 let sessions: Vec<Session> = sessions
                     .into_iter()
                     .map(|session| Session {
                         waiting_for_approval: agent.session_waiting_for_approval(&session.id),
+                        is_streaming: streaming_sessions.contains(&session.id),
                         ..session.into()
                     })
                     .collect();
@@ -779,6 +822,9 @@ impl RuntimeInner {
             }
 
             Command::DeleteSession { session_id } => {
+                if let Some(active_stream) = self.take_active_stream(&session_id).await {
+                    active_stream.abort_handle.abort();
+                }
                 self.agent_manager
                     .lock()
                     .await
@@ -899,6 +945,16 @@ impl RuntimeInner {
                     .deny_tool(&session_id, call_id);
             }
 
+            Command::CancelStream {
+                session_id,
+                response,
+            } => {
+                let cancelled = self.cancel_stream(session_id).await?;
+                response
+                    .send(cancelled)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
             Command::ExecuteApprovedTools { session_id } => {
                 self.handle_execute_tools(session_id).await;
             }
@@ -914,199 +970,32 @@ impl RuntimeInner {
         model_id: ModelId,
         provider_id: ProviderId,
     ) {
-        let event_callback = self.event_callback.clone();
-        let agent_manager = self.agent_manager.clone();
-        let command_tx = self.command_tx.clone();
-
-        tokio::spawn(async move {
-            let (providers, request) = {
-                let mut agent = agent_manager.lock().await;
-                match agent
-                    .prepare_start_stream(&session_id, message, model_id, provider_id)
-                    .await
-                {
-                    Ok(result) => (agent.cloned_provider_manager(), result),
-                    Err(e) => {
-                        event_callback.on_event(Event::Error(e.to_string()));
-                        return;
-                    }
-                }
-            };
-
-            let msg_id = request.message_id.clone();
-            let mut stream = match providers
-                .generate_reply_stream(
-                    request.provider_id,
-                    &request.model_id,
-                    request.provider_messages,
-                )
+        let stream_request = {
+            let mut agent = self.agent_manager.lock().await;
+            match agent
+                .prepare_start_stream(&session_id, message, model_id, provider_id)
                 .await
             {
-                Ok(stream) => stream,
+                Ok(result) => Some((agent.cloned_provider_manager(), result)),
                 Err(error) => {
-                    let agent = agent_manager.lock().await;
-                    let _ = agent.abort_streaming_message(&msg_id).await;
-                    event_callback.on_event(Event::Error(error.to_string()));
-                    return;
-                }
-            };
-
-            // Send stream start event
-            event_callback.on_event(Event::StreamStart {
-                session_id: session_id.clone(),
-                message_id: msg_id.to_string(),
-            });
-
-            let mut full_content = String::new();
-
-            // Process stream chunks
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        full_content.push_str(&chunk);
-
-                        // Append to message in session
-                        {
-                            let agent = agent_manager.lock().await;
-                            if !agent.append_chunk(&msg_id, &chunk).await {
-                                return;
-                            }
-                        }
-
-                        // Send chunk event
-                        event_callback.on_event(Event::StreamChunk {
-                            session_id: session_id.clone(),
-                            message_id: msg_id.to_string(),
-                            chunk,
-                        });
-                    }
-                    Err(e) => {
-                        {
-                            let agent = agent_manager.lock().await;
-                            let _ = agent.abort_streaming_message(&msg_id).await;
-                        }
-                        event_callback.on_event(Event::StreamError {
-                            session_id: session_id.clone(),
-                            message_id: msg_id.to_string(),
-                            error: e.to_string(),
-                        });
-                        return;
-                    }
+                    self.send_event(Event::Error(error.to_string()));
+                    None
                 }
             }
+        };
 
-            tracing::debug!("Full content length: {}", full_content.len());
+        let Some((providers, request)) = stream_request else {
+            return;
+        };
 
-            // Complete the message
-            let completed_session = {
-                let agent = agent_manager.lock().await;
-                agent.complete_message(&msg_id).await
-            };
-            let Ok(Some(completed_session)) = completed_session else {
-                return;
-            };
-
-            // Send completion event
-            event_callback.on_event(Event::StreamComplete {
-                session_id: completed_session.clone(),
-                message_id: msg_id.to_string(),
-            });
-
-            // Notify UI that history was updated
-            event_callback.on_event(Event::HistoryUpdated {
-                session_id: completed_session.clone(),
-            });
-
-            // Check for tool calls
-            let (tool_calls, failed) = {
-                let mut agent = agent_manager.lock().await;
-                match agent
-                    .parse_tool_calls_from_content(&completed_session, &full_content)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        event_callback.on_event(Event::Error(error.to_string()));
-                        return;
-                    }
-                }
-            };
-
-            tracing::debug!(
-                "Found {} tool calls, {} failed",
-                tool_calls.len(),
-                failed.len()
-            );
-
-            if !failed.is_empty() {
-                tracing::warn!("Failed tool calls found, adding to history");
-                {
-                    let mut agent = agent_manager.lock().await;
-                    let _ = agent
-                        .add_failed_tool_calls_to_history(&completed_session, failed)
-                        .await;
-                }
-                event_callback.on_event(Event::HistoryUpdated {
-                    session_id: completed_session.clone(),
-                });
-
-                // Start continuation stream
-                Self::start_continuation(
-                    completed_session,
-                    agent_manager.clone(),
-                    event_callback.clone(),
-                    command_tx,
-                )
-                .await;
-                return;
-            }
-
-            let mut has_auto_approved_tools = false;
-
-            // Emit tool call events
-            for tool_call in tool_calls {
-                let args_json = {
-                    let agent = agent_manager.lock().await;
-                    agent
-                        .get_pending_tool_args(&completed_session, &tool_call.call_id)
-                        .map(|a| serde_json::to_string(&a).unwrap_or_default())
-                        .unwrap_or_default()
-                };
-
-                if tool_call.requires_confirmation {
-                    tracing::debug!(
-                        "Emitting ToolCallDetected: {} - {}",
-                        tool_call.tool_id,
-                        tool_call.description
-                    );
-                    event_callback.on_event(Event::ToolCallDetected {
-                        session_id: completed_session.clone(),
-                        call_id: tool_call.call_id.to_string(),
-                        tool_id: tool_call.tool_id,
-                        args: args_json,
-                        description: tool_call.description,
-                        risk_level: tool_call.assessment.risk.as_str().to_string(),
-                        reasons: tool_call.assessment.reasons,
-                    });
-                } else {
-                    has_auto_approved_tools = true;
-                }
-            }
-
-            if has_auto_approved_tools {
-                let _ = command_tx
-                    .send(Command::ExecuteApprovedTools {
-                        session_id: completed_session,
-                    })
-                    .await;
-            }
-        });
+        self.spawn_stream_task(session_id, providers, request).await;
     }
 
     async fn handle_execute_tools(&self, session_id: String) {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
+        let active_streams = self.active_streams.clone();
 
         tokio::spawn(async move {
             let (tools, executions) = {
@@ -1149,8 +1038,14 @@ impl RuntimeInner {
             let has_pending_tools = { agent_manager.lock().await.has_pending_tools(&session_id) };
             if !has_pending_tools {
                 // Start continuation stream
-                Self::start_continuation(session_id, agent_manager, event_callback, command_tx)
-                    .await;
+                Self::start_continuation(
+                    session_id,
+                    agent_manager,
+                    event_callback,
+                    command_tx,
+                    active_streams,
+                )
+                .await;
             }
         });
     }
@@ -1160,6 +1055,7 @@ impl RuntimeInner {
         agent_manager: Arc<Mutex<AgentManager>>,
         event_callback: Arc<dyn EventCallback>,
         command_tx: mpsc::Sender<Command>,
+        active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
             let continuation = {
@@ -1190,155 +1086,407 @@ impl RuntimeInner {
                 }
             };
 
-            let mut stream = match providers
-                .generate_reply_stream(
-                    request.provider_id,
-                    &request.model_id,
-                    request.provider_messages,
-                )
-                .await
-            {
-                Ok(stream) => stream,
-                Err(error) => {
-                    let agent = agent_manager.lock().await;
-                    let _ = agent.abort_streaming_message(&msg_id).await;
-                    event_callback.on_event(Event::HistoryUpdated {
-                        session_id: session_id.clone(),
-                    });
-                    event_callback.on_event(Event::ContinuationFailed {
-                        session_id,
-                        error: error.to_string(),
-                    });
-                    return;
-                }
-            };
+            let start_gate = Arc::new(tokio::sync::Notify::new());
+            let request_message_id = msg_id.clone();
+            let request_session_id = session_id.clone();
+            let task_active_streams = active_streams.clone();
+            let task = tokio::spawn({
+                let start_gate = start_gate.clone();
+                async move {
+                    start_gate.notified().await;
+                    let result = Self::drive_stream(
+                        request_session_id.clone(),
+                        request,
+                        providers,
+                        agent_manager.clone(),
+                        event_callback.clone(),
+                    )
+                    .await;
 
-            event_callback.on_event(Event::StreamStart {
-                session_id: session_id.clone(),
-                message_id: msg_id.to_string(),
-            });
-
-            let mut content = String::new();
-
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        content.push_str(&chunk);
-                        {
-                            let agent = agent_manager.lock().await;
-                            if !agent.append_chunk(&msg_id, &chunk).await {
-                                return;
-                            }
-                        }
-                        event_callback.on_event(Event::StreamChunk {
-                            session_id: session_id.clone(),
-                            message_id: msg_id.to_string(),
-                            chunk,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!("Continuation stream error: {}", e);
-                        {
-                            let agent = agent_manager.lock().await;
-                            let _ = agent.abort_streaming_message(&msg_id).await;
-                        }
-                        event_callback.on_event(Event::StreamError {
-                            session_id: session_id.clone(),
-                            message_id: msg_id.to_string(),
-                            error: e.to_string(),
-                        });
+                    let stream_was_active = Self::clear_active_stream(
+                        &task_active_streams,
+                        &request_session_id,
+                        &request_message_id,
+                    )
+                    .await;
+                    if !stream_was_active {
                         return;
                     }
+
+                    match result {
+                        StreamDriveResult::Completed {
+                            session_id: _completed_session,
+                            content,
+                        } => {
+                            let completed_session = {
+                                let agent = agent_manager.lock().await;
+                                agent.complete_message(&request_message_id).await
+                            };
+                            let Ok(Some(completed_session)) = completed_session else {
+                                return;
+                            };
+
+                            event_callback.on_event(Event::StreamComplete {
+                                session_id: completed_session.clone(),
+                                message_id: request_message_id.to_string(),
+                            });
+                            event_callback.on_event(Event::HistoryUpdated {
+                                session_id: completed_session.clone(),
+                            });
+                            Self::process_completed_stream_output(
+                                completed_session,
+                                content,
+                                agent_manager,
+                                event_callback,
+                                command_tx,
+                                task_active_streams,
+                            )
+                            .await;
+                        }
+                        StreamDriveResult::FailedToStart { error } => {
+                            {
+                                let agent = agent_manager.lock().await;
+                                let _ = agent.abort_streaming_message(&request_message_id).await;
+                            }
+                            event_callback.on_event(Event::HistoryUpdated {
+                                session_id: request_session_id.clone(),
+                            });
+                            event_callback.on_event(Event::ContinuationFailed {
+                                session_id: request_session_id,
+                                error,
+                            });
+                        }
+                        StreamDriveResult::FailedDuringStream { error } => {
+                            {
+                                let agent = agent_manager.lock().await;
+                                let _ = agent.abort_streaming_message(&request_message_id).await;
+                            }
+                            tracing::error!("Continuation stream error: {}", error);
+                            event_callback.on_event(Event::StreamError {
+                                session_id: request_session_id,
+                                message_id: request_message_id.to_string(),
+                                error,
+                            });
+                        }
+                        StreamDriveResult::Stopped => {}
+                    }
+                }
+            });
+
+            let previous = active_streams.lock().await.insert(
+                session_id,
+                ActiveStream {
+                    message_id: msg_id,
+                    abort_handle: task.abort_handle(),
+                },
+            );
+            if let Some(previous) = previous {
+                previous.abort_handle.abort();
+            }
+            start_gate.notify_one();
+        })
+    }
+
+    async fn spawn_stream_task(
+        &self,
+        session_id: String,
+        providers: ProviderManager,
+        request: PendingStreamRequest,
+    ) {
+        let event_callback = self.event_callback.clone();
+        let agent_manager = self.agent_manager.clone();
+        let command_tx = self.command_tx.clone();
+        let active_streams = self.active_streams.clone();
+        let msg_id = request.message_id.clone();
+        let start_gate = Arc::new(tokio::sync::Notify::new());
+        let request_session_id = session_id.clone();
+        let request_message_id = msg_id.clone();
+        let task_active_streams = active_streams.clone();
+
+        let task = tokio::spawn({
+            let start_gate = start_gate.clone();
+            async move {
+                start_gate.notified().await;
+                let result = Self::drive_stream(
+                    request_session_id.clone(),
+                    request,
+                    providers,
+                    agent_manager.clone(),
+                    event_callback.clone(),
+                )
+                .await;
+
+                let stream_was_active = Self::clear_active_stream(
+                    &task_active_streams,
+                    &request_session_id,
+                    &request_message_id,
+                )
+                .await;
+                if !stream_was_active {
+                    return;
+                }
+
+                match result {
+                    StreamDriveResult::Completed {
+                        session_id: _completed_session,
+                        content,
+                    } => {
+                        let completed_session = {
+                            let agent = agent_manager.lock().await;
+                            agent.complete_message(&request_message_id).await
+                        };
+                        let Ok(Some(completed_session)) = completed_session else {
+                            return;
+                        };
+
+                        event_callback.on_event(Event::StreamComplete {
+                            session_id: completed_session.clone(),
+                            message_id: request_message_id.to_string(),
+                        });
+                        event_callback.on_event(Event::HistoryUpdated {
+                            session_id: completed_session.clone(),
+                        });
+                        Self::process_completed_stream_output(
+                            completed_session,
+                            content,
+                            agent_manager,
+                            event_callback,
+                            command_tx,
+                            task_active_streams,
+                        )
+                        .await;
+                    }
+                    StreamDriveResult::FailedToStart { error } => {
+                        {
+                            let agent = agent_manager.lock().await;
+                            let _ = agent.abort_streaming_message(&request_message_id).await;
+                        }
+                        event_callback.on_event(Event::Error(error));
+                    }
+                    StreamDriveResult::FailedDuringStream { error } => {
+                        {
+                            let agent = agent_manager.lock().await;
+                            let _ = agent.abort_streaming_message(&request_message_id).await;
+                        }
+                        event_callback.on_event(Event::StreamError {
+                            session_id: request_session_id,
+                            message_id: request_message_id.to_string(),
+                            error,
+                        });
+                    }
+                    StreamDriveResult::Stopped => {}
                 }
             }
+        });
 
-            let completed_session = {
-                let agent = agent_manager.lock().await;
-                agent.complete_message(&msg_id).await
-            };
-            let Ok(Some(completed_session)) = completed_session else {
-                return;
-            };
+        let previous = self.active_streams.lock().await.insert(
+            session_id,
+            ActiveStream {
+                message_id: msg_id,
+                abort_handle: task.abort_handle(),
+            },
+        );
+        if let Some(previous) = previous {
+            previous.abort_handle.abort();
+        }
+        start_gate.notify_one();
+    }
 
-            event_callback.on_event(Event::StreamComplete {
-                session_id: completed_session.clone(),
-                message_id: msg_id.to_string(),
-            });
+    async fn drive_stream(
+        session_id: String,
+        request: PendingStreamRequest,
+        providers: ProviderManager,
+        agent_manager: Arc<Mutex<AgentManager>>,
+        event_callback: Arc<dyn EventCallback>,
+    ) -> StreamDriveResult {
+        let msg_id = request.message_id.clone();
+        let mut stream = match providers
+            .generate_reply_stream(
+                request.provider_id,
+                &request.model_id,
+                request.provider_messages,
+            )
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                return StreamDriveResult::FailedToStart {
+                    error: error.to_string(),
+                };
+            }
+        };
+
+        event_callback.on_event(Event::StreamStart {
+            session_id: session_id.clone(),
+            message_id: msg_id.to_string(),
+        });
+
+        let mut content = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    content.push_str(&chunk);
+                    {
+                        let agent = agent_manager.lock().await;
+                        if !agent.append_chunk(&msg_id, &chunk).await {
+                            return StreamDriveResult::Stopped;
+                        }
+                    }
+                    event_callback.on_event(Event::StreamChunk {
+                        session_id: session_id.clone(),
+                        message_id: msg_id.to_string(),
+                        chunk,
+                    });
+                }
+                Err(error) => {
+                    return StreamDriveResult::FailedDuringStream {
+                        error: error.to_string(),
+                    };
+                }
+            }
+        }
+
+        tracing::debug!("Full content length: {}", content.len());
+
+        StreamDriveResult::Completed {
+            session_id,
+            content,
+        }
+    }
+
+    async fn process_completed_stream_output(
+        completed_session: String,
+        content: String,
+        agent_manager: Arc<Mutex<AgentManager>>,
+        event_callback: Arc<dyn EventCallback>,
+        command_tx: mpsc::Sender<Command>,
+        active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    ) {
+        let (tool_calls, failed) = {
+            let mut agent = agent_manager.lock().await;
+            match agent
+                .parse_tool_calls_from_content(&completed_session, &content)
+                .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    event_callback.on_event(Event::Error(error.to_string()));
+                    return;
+                }
+            }
+        };
+
+        tracing::debug!(
+            "Found {} tool calls, {} failed",
+            tool_calls.len(),
+            failed.len()
+        );
+
+        if !failed.is_empty() {
+            tracing::warn!("Failed tool calls found, adding to history");
+            {
+                let mut agent = agent_manager.lock().await;
+                let _ = agent
+                    .add_failed_tool_calls_to_history(&completed_session, failed)
+                    .await;
+            }
             event_callback.on_event(Event::HistoryUpdated {
                 session_id: completed_session.clone(),
             });
+            Self::start_continuation(
+                completed_session,
+                agent_manager,
+                event_callback,
+                command_tx,
+                active_streams,
+            )
+            .await;
+            return;
+        }
 
-            // Check for more tool calls
-            let (tool_calls, failed) = {
-                let mut agent = agent_manager.lock().await;
-                match agent
-                    .parse_tool_calls_from_content(&completed_session, &content)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        event_callback.on_event(Event::Error(error.to_string()));
-                        return;
-                    }
-                }
+        let mut has_auto_approved_tools = false;
+
+        for tool_call in tool_calls {
+            let args_json = {
+                let agent = agent_manager.lock().await;
+                agent
+                    .get_pending_tool_args(&completed_session, &tool_call.call_id)
+                    .map(|args| serde_json::to_string(&args).unwrap_or_default())
+                    .unwrap_or_default()
             };
 
-            if !failed.is_empty() {
-                {
-                    let mut agent = agent_manager.lock().await;
-                    let _ = agent
-                        .add_failed_tool_calls_to_history(&completed_session, failed)
-                        .await;
-                }
-                event_callback.on_event(Event::HistoryUpdated {
+            if tool_call.requires_confirmation {
+                tracing::debug!(
+                    "Emitting ToolCallDetected: {} - {}",
+                    tool_call.tool_id,
+                    tool_call.description
+                );
+                event_callback.on_event(Event::ToolCallDetected {
                     session_id: completed_session.clone(),
+                    call_id: tool_call.call_id.to_string(),
+                    tool_id: tool_call.tool_id,
+                    args: args_json,
+                    description: tool_call.description,
+                    risk_level: tool_call.assessment.risk.as_str().to_string(),
+                    reasons: tool_call.assessment.reasons,
                 });
+            } else {
+                has_auto_approved_tools = true;
+            }
+        }
 
-                // Recurse for retry
-                Self::start_continuation(
-                    completed_session,
-                    agent_manager,
-                    event_callback,
-                    command_tx,
-                )
+        if has_auto_approved_tools {
+            let _ = command_tx
+                .send(Command::ExecuteApprovedTools {
+                    session_id: completed_session,
+                })
                 .await;
-                return;
-            }
+        }
+    }
 
-            let mut has_auto_approved_tools = false;
+    async fn clear_active_stream(
+        active_streams: &Arc<Mutex<HashMap<String, ActiveStream>>>,
+        session_id: &str,
+        message_id: &MessageId,
+    ) -> bool {
+        let mut active_streams = active_streams.lock().await;
+        let should_remove = active_streams
+            .get(session_id)
+            .is_some_and(|stream| &stream.message_id == message_id);
+        if should_remove {
+            active_streams.remove(session_id);
+        }
+        should_remove
+    }
 
-            for tool_call in tool_calls {
-                let args_json = {
-                    let agent = agent_manager.lock().await;
-                    agent
-                        .get_pending_tool_args(&completed_session, &tool_call.call_id)
-                        .map(|a| serde_json::to_string(&a).unwrap_or_default())
-                        .unwrap_or_default()
-                };
+    async fn take_active_stream(&self, session_id: &str) -> Option<ActiveStream> {
+        self.active_streams.lock().await.remove(session_id)
+    }
 
-                if tool_call.requires_confirmation {
-                    event_callback.on_event(Event::ToolCallDetected {
-                        session_id: completed_session.clone(),
-                        call_id: tool_call.call_id.to_string(),
-                        tool_id: tool_call.tool_id,
-                        args: args_json,
-                        description: tool_call.description,
-                        risk_level: tool_call.assessment.risk.as_str().to_string(),
-                        reasons: tool_call.assessment.reasons,
-                    });
-                } else {
-                    has_auto_approved_tools = true;
-                }
-            }
+    async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+        let Some(active_stream) = self.take_active_stream(&session_id).await else {
+            return Ok(false);
+        };
 
-            if has_auto_approved_tools {
-                let _ = command_tx
-                    .send(Command::ExecuteApprovedTools {
-                        session_id: completed_session,
-                    })
-                    .await;
-            }
-        })
+        active_stream.abort_handle.abort();
+
+        let cancelled_stream = {
+            let agent = self.agent_manager.lock().await;
+            agent.cancel_streaming_message(&active_stream.message_id).await?
+        };
+        let Some(cancelled_stream) = cancelled_stream else {
+            return Ok(false);
+        };
+
+        self.send_event(Event::StreamCancelled {
+            session_id: cancelled_stream.session_id.clone(),
+            message_id: cancelled_stream.message_id.to_string(),
+        });
+        self.send_event(Event::HistoryUpdated {
+            session_id: cancelled_stream.session_id,
+        });
+        Ok(true)
     }
 
     fn spawn_config_watcher(&self) {
@@ -1730,7 +1878,8 @@ mod tests {
     use persistence::{FileMessageStore, FileSessionStore};
     use tool_core::{Tool, ToolContext, ToolManager, ToolOutput};
     use types::{
-        ChatMessage, ChatRole, ExecutionPolicy, ModelId, ProviderId, RiskLevel, ToolCallAssessment,
+        ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
+        ToolCallAssessment,
     };
 
     #[derive(Clone, Debug)]
@@ -2074,6 +2223,7 @@ mod tests {
                 event_callback: Arc::new(events.clone()),
                 command_tx,
                 agent_manager,
+                active_streams: Arc::new(Mutex::new(HashMap::new())),
             };
 
             let runtime_task = tokio::spawn(async move {
@@ -2695,6 +2845,347 @@ value: alpha\n\
                 })
             })
             .await;
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_stream_persists_partial_message_as_complete() -> Result<()> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new(vec![vec![
+            ScriptedChunk::plain("partial "),
+            ScriptedChunk::gated("more text", gate),
+        ]])
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("start session"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("first chunk before cancellation", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamChunk {
+                            session_id: event_session,
+                            chunk,
+                            ..
+                        } if event_session == &session_id && chunk == "partial "
+                    )
+                })
+            })
+            .await;
+
+        assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+
+        let events = harness
+            .events
+            .wait_for("stream cancelled event", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamCancelled {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Event::StreamComplete {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id
+            )
+        }));
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        let cancelled_message = history
+            .values()
+            .find(|message| message.role == ChatRole::Assistant)
+            .expect("assistant message should persist");
+        assert_eq!(cancelled_message.content, "partial ");
+        assert_eq!(cancelled_message.status, MessageStatus::Complete);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_stream_before_first_chunk_discards_empty_placeholder() -> Result<()> {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("mock"),
+            Box::new(BlockingStartProvider {
+                id: ProviderId::new("mock"),
+                started: started.clone(),
+                release,
+            }),
+        );
+
+        let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("start session"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+        started.notified().await;
+
+        assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+        harness
+            .events
+            .wait_for("stream cancelled before first chunk", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamCancelled {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert_eq!(history.len(), 1);
+        assert!(history.values().all(|message| message.role == ChatRole::User));
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_stream_prevents_tool_detection() -> Result<()> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new(vec![vec![
+            ScriptedChunk::plain("before tool\n"),
+            ScriptedChunk::gated(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>",
+                gate,
+            ),
+        ]])
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("start session"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("pre-tool chunk before cancellation", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamChunk {
+                            session_id: event_session,
+                            chunk,
+                            ..
+                        } if event_session == &session_id && chunk == "before tool\n"
+                    )
+                })
+            })
+            .await;
+
+        assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let events = harness.events.snapshot();
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id
+            )
+        }));
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_stream_frees_session_for_next_send() -> Result<()> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new(vec![
+            vec![
+                ScriptedChunk::plain("partial "),
+                ScriptedChunk::gated("blocked", gate),
+            ],
+            vec![ScriptedChunk::plain("second reply")],
+        ])
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("first stream chunk", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamChunk {
+                            session_id: event_session,
+                            chunk,
+                            ..
+                        } if event_session == &session_id && chunk == "partial "
+                    )
+                })
+            })
+            .await;
+
+        assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+        harness
+            .events
+            .wait_for("first cancellation", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamCancelled {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("second"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("second stream completion", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history.values().any(|message| message.content == "partial "));
+        assert!(history.values().any(|message| message.content == "second reply"));
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_sessions_marks_streaming_session_while_active_and_clears_after_cancel() -> Result<()> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let harness = RuntimeTestHarness::new(vec![vec![
+            ScriptedChunk::plain("partial "),
+            ScriptedChunk::gated("blocked", gate),
+        ]])
+        .await;
+
+        let session_id = harness.handle.create_session().await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("stream start", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamStart {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        let sessions = harness.handle.list_sessions().await?;
+        assert!(sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.is_streaming));
+
+        assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+        harness
+            .events
+            .wait_for("stream cancelled", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamCancelled {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        let sessions = harness.handle.list_sessions().await?;
+        assert!(sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| !session.is_streaming));
 
         harness.shutdown().await;
         Ok(())

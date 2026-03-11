@@ -59,6 +59,13 @@ pub struct PendingStreamRequest {
     pub provider_messages: Vec<ChatMessage>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelledStreamResult {
+    pub session_id: String,
+    pub message_id: MessageId,
+    pub persisted: bool,
+}
+
 #[derive(Clone, Debug)]
 struct SessionRuntimeState {
     active_tool_config: types::ToolCallGlobalConfig,
@@ -493,6 +500,30 @@ impl AgentManager {
         Ok(Some(state.session_id))
     }
 
+    pub async fn cancel_streaming_message(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<CancelledStreamResult>> {
+        let state = self.streaming_messages.write().await.remove(message_id);
+        let Some(mut state) = state else {
+            return Ok(None);
+        };
+
+        let persisted = !state.message.content.is_empty();
+        if persisted {
+            state.message.status = MessageStatus::Complete;
+            self.message_store.save(&state.message).await?;
+        } else {
+            self.set_tip(&state.session_id, state.previous_tip).await?;
+        }
+
+        Ok(Some(CancelledStreamResult {
+            session_id: state.session_id,
+            message_id: message_id.clone(),
+            persisted,
+        }))
+    }
+
     async fn abort_streaming_messages_for_session(&self, session_id: &str) -> Result<()> {
         let to_abort: Vec<MessageId> = {
             let streaming = self.streaming_messages.read().await;
@@ -735,6 +766,15 @@ impl AgentManager {
                 .values()
                 .any(|pending| pending.status == PermissionStatus::Pending)
         })
+    }
+
+    pub async fn streaming_session_ids(&self) -> HashSet<String> {
+        self.streaming_messages
+            .read()
+            .await
+            .values()
+            .map(|state| state.session_id.clone())
+            .collect()
     }
 
     pub fn cloned_tool_manager(&self) -> ToolManager {
