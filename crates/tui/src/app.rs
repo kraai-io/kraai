@@ -3776,9 +3776,11 @@ mod tests {
             request,
             RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2"
         )));
-        assert!(requests
-            .iter()
-            .any(|request| matches!(request, RuntimeRequest::ListSessions)));
+        assert!(
+            requests
+                .iter()
+                .any(|request| matches!(request, RuntimeRequest::ListSessions))
+        );
     }
 
     #[test]

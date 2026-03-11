@@ -21,8 +21,8 @@ use types::{MessageId, ModelId, ProviderId};
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
 use provider_openai_chat_completions::OpenAiChatCompletionsFactory;
-use tokio::task::AbortHandle;
 use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::AbortHandle;
 
 // ============================================================================
 // Public Types - exposed to all clients
@@ -1473,7 +1473,9 @@ impl RuntimeInner {
 
         let cancelled_stream = {
             let agent = self.agent_manager.lock().await;
-            agent.cancel_streaming_message(&active_stream.message_id).await?
+            agent
+                .cancel_streaming_message(&active_stream.message_id)
+                .await?
         };
         let Some(cancelled_stream) = cancelled_stream else {
             return Ok(false);
@@ -2970,7 +2972,11 @@ value: alpha\n\
 
         let history = harness.handle.get_chat_history(session_id.clone()).await?;
         assert_eq!(history.len(), 1);
-        assert!(history.values().all(|message| message.role == ChatRole::User));
+        assert!(
+            history
+                .values()
+                .all(|message| message.role == ChatRole::User)
+        );
 
         harness.shutdown().await;
         Ok(())
@@ -3117,15 +3123,24 @@ value: alpha\n\
             .await;
 
         let history = harness.handle.get_chat_history(session_id.clone()).await?;
-        assert!(history.values().any(|message| message.content == "partial "));
-        assert!(history.values().any(|message| message.content == "second reply"));
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "partial ")
+        );
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "second reply")
+        );
 
         harness.shutdown().await;
         Ok(())
     }
 
     #[tokio::test]
-    async fn list_sessions_marks_streaming_session_while_active_and_clears_after_cancel() -> Result<()> {
+    async fn list_sessions_marks_streaming_session_while_active_and_clears_after_cancel()
+    -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
         let harness = RuntimeTestHarness::new(vec![vec![
             ScriptedChunk::plain("partial "),
@@ -3160,10 +3175,12 @@ value: alpha\n\
             .await;
 
         let sessions = harness.handle.list_sessions().await?;
-        assert!(sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| session.is_streaming));
+        assert!(
+            sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .is_some_and(|session| session.is_streaming)
+        );
 
         assert!(harness.handle.cancel_stream(session_id.clone()).await?);
         harness
@@ -3182,10 +3199,12 @@ value: alpha\n\
             .await;
 
         let sessions = harness.handle.list_sessions().await?;
-        assert!(sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| !session.is_streaming));
+        assert!(
+            sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .is_some_and(|session| !session.is_streaming)
+        );
 
         harness.shutdown().await;
         Ok(())

@@ -866,9 +866,7 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             ""
         };
         lines.push(Line::styled(
-            format!(
-                "{marker} {title}{current_suffix}{approval_suffix}{streaming_suffix}"
-            ),
+            format!("{marker} {title}{current_suffix}{approval_suffix}{streaming_suffix}"),
             if selected {
                 Style::default().fg(Color::Cyan)
             } else {
