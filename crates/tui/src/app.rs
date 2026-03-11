@@ -459,8 +459,7 @@ impl App {
 
                 frame.render_widget(&self.state, area);
 
-                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding
-                {
+                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding {
                     let input_height = bottom_panel_height(&self.state, area);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
@@ -1721,8 +1720,9 @@ impl App {
         }
         if self.state.tool_phase == ToolPhase::ExecutingBatch {
             if self.state.queued_submit_after_tools.is_some() {
-                self.state.status =
-                    String::from("Tool execution in progress. One queued message is already pending.");
+                self.state.status = String::from(
+                    "Tool execution in progress. One queued message is already pending.",
+                );
                 return;
             }
             let Some(provider_id) = self.state.selected_provider_id.clone() else {
@@ -2511,8 +2511,8 @@ mod tests {
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
         OptimisticToolMessage, PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse,
-        SettingsFocus, SettingsModelField, SettingsProviderField, ToolPhase, UiMode, is_copy_shortcut,
-        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
+        SettingsFocus, SettingsModelField, SettingsProviderField, ToolPhase, UiMode,
+        is_copy_shortcut, menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
         render_chat_selection_overlay, selection_text,
     };
     use crate::components::VisibleChatView;

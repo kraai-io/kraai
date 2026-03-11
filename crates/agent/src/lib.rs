@@ -642,7 +642,11 @@ impl AgentManager {
                     continue;
                 }
             };
-            let description = match self.tools.describe_tool(&tool_id, parsed.args.clone()).await {
+            let description = match self
+                .tools
+                .describe_tool(&tool_id, parsed.args.clone())
+                .await
+            {
                 Ok(description) => description,
                 Err(error) => {
                     failed_calls.push(tool_core::toon_parser::FailedToolCall {

@@ -894,7 +894,11 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let Some(tool) = state.pending_tools.iter().find(|tool| tool.approved.is_none()) else {
+    let Some(tool) = state
+        .pending_tools
+        .iter()
+        .find(|tool| tool.approved.is_none())
+    else {
         return;
     };
 
@@ -929,7 +933,10 @@ fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut Buffer) {
     .areas(inner);
 
     let mut lines = vec![
-        Line::styled(&tool.description, Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled(
+            &tool.description,
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Line::styled(
             format!("tool: {}  risk: {}", tool.tool_id, tool.risk_level),
             Style::default().fg(Color::Gray),
@@ -968,7 +975,10 @@ fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut Buffer) {
         Span::raw("   "),
         Span::styled("Reject", reject_style),
         Span::raw(" ".repeat(footer_area.width.saturating_sub(33) as usize)),
-        Span::styled("select <->  confirm Enter", Style::default().fg(Color::Gray)),
+        Span::styled(
+            "select <->  confirm Enter",
+            Style::default().fg(Color::Gray),
+        ),
     ]);
 
     Paragraph::new(footer)

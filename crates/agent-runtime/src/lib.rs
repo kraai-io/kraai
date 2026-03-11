@@ -1882,8 +1882,8 @@ mod tests {
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
     use persistence::{FileMessageStore, FileSessionStore};
-    use tool_edit_file::EditFileTool;
     use tool_core::{Tool, ToolContext, ToolManager, ToolOutput};
+    use tool_edit_file::EditFileTool;
     use types::{
         ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
         ToolCallAssessment,
