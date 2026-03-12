@@ -167,10 +167,12 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::SetSessionProfile { profile_id, .. } => RuntimeResponse::SetSessionProfile {
-            profile_id,
-            result: Err(message.to_string()),
-        },
+        RuntimeRequest::SetSessionProfile { profile_id, .. } => {
+            RuntimeResponse::SetSessionProfile {
+                profile_id,
+                result: Err(message.to_string()),
+            }
+        }
         RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
         RuntimeRequest::SendMessage { .. } => {
             RuntimeResponse::SendMessage(Err(message.to_string()))

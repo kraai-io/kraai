@@ -51,7 +51,10 @@ struct ExternalProfile {
     default_risk_level: String,
 }
 
-pub fn resolve_profiles(workspace_dir: &Path, available_tools: &HashSet<String>) -> ResolvedProfiles {
+pub fn resolve_profiles(
+    workspace_dir: &Path,
+    available_tools: &HashSet<String>,
+) -> ResolvedProfiles {
     let mut resolved = ResolvedProfiles {
         profiles: built_in_profiles(),
         warnings: Vec::new(),
@@ -65,8 +68,12 @@ pub fn resolve_profiles(workspace_dir: &Path, available_tools: &HashSet<String>)
     }
 
     let workspace_path = workspace_profiles_path(workspace_dir);
-    if let Err(warning) = load_layer(&workspace_path, AgentProfileSource::Workspace, available_tools)
-        .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
+    if let Err(warning) = load_layer(
+        &workspace_path,
+        AgentProfileSource::Workspace,
+        available_tools,
+    )
+    .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
     {
         resolved.warnings.push(warning);
     }
@@ -172,7 +179,10 @@ fn load_layer(
                 return Err(AgentProfileWarning {
                     source,
                     path: Some(path.display().to_string()),
-                    message: format!("Profile '{}' references unknown tool '{}'", profile.id, tool),
+                    message: format!(
+                        "Profile '{}' references unknown tool '{}'",
+                        profile.id, tool
+                    ),
                 });
             }
             tools.push(ToolId::new(tool));
@@ -290,8 +300,18 @@ default_risk_level = "read_only_workspace"
         .unwrap();
 
         let resolved = resolve_profiles(&dir, &available_tools());
-        assert!(resolved.profiles.iter().any(|profile| profile.id == "plan-code"));
-        assert!(resolved.profiles.iter().any(|profile| profile.id == "build-code"));
+        assert!(
+            resolved
+                .profiles
+                .iter()
+                .any(|profile| profile.id == "plan-code")
+        );
+        assert!(
+            resolved
+                .profiles
+                .iter()
+                .any(|profile| profile.id == "build-code")
+        );
         assert!(!resolved.warnings.is_empty());
 
         let _ = fs::remove_dir_all(dir);

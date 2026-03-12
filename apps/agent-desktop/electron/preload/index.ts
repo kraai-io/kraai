@@ -86,10 +86,7 @@ const api = {
 		return await ipcRenderer.invoke("agent:listProviderDefinitions");
 	},
 
-	async setSessionProfile(
-		sessionId: string,
-		profileId: string,
-	): Promise<void> {
+	async setSessionProfile(sessionId: string, profileId: string): Promise<void> {
 		await ipcRenderer.invoke("agent:setSessionProfile", sessionId, profileId);
 	},
 

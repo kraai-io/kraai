@@ -101,7 +101,8 @@ interface AgentProfileWarning {
 	message: string;
 }
 
-interface AgentProfilesState extends Omit<BindingAgentProfilesState, "profiles" | "warnings"> {
+interface AgentProfilesState
+	extends Omit<BindingAgentProfilesState, "profiles" | "warnings"> {
 	profiles: AgentProfileSummary[];
 	warnings: AgentProfileWarning[];
 }
@@ -156,7 +157,9 @@ function App(): React.JSX.Element {
 		null,
 	);
 	const [profiles, setProfiles] = useState<AgentProfileSummary[]>([]);
-	const [profileWarnings, setProfileWarnings] = useState<AgentProfileWarning[]>([]);
+	const [profileWarnings, setProfileWarnings] = useState<AgentProfileWarning[]>(
+		[],
+	);
 	const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
 		DEFAULT_AGENT_PROFILE_ID,
 	);
@@ -274,9 +277,7 @@ function App(): React.JSX.Element {
 			const state = await api.listAgentProfiles(sessionId);
 			setProfiles(state.profiles);
 			setProfileWarnings(state.warnings);
-			setSelectedProfileId(
-				state.selectedProfileId ?? DEFAULT_AGENT_PROFILE_ID,
-			);
+			setSelectedProfileId(state.selectedProfileId ?? DEFAULT_AGENT_PROFILE_ID);
 			setProfileLocked(state.profileLocked);
 		} catch (err) {
 			console.error("[UI] Failed to load agent profiles:", err);
@@ -699,8 +700,11 @@ function App(): React.JSX.Element {
 			? `...${workspaceDir.slice(-37)}`
 			: workspaceDir
 		: "Select workspace";
-	const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
-	const selectedProfileLabel = selectedProfile?.displayName ?? selectedProfileId;
+	const selectedProfile = profiles.find(
+		(profile) => profile.id === selectedProfileId,
+	);
+	const selectedProfileLabel =
+		selectedProfile?.displayName ?? selectedProfileId;
 	const sendDisabled = isLoading
 		? !currentSessionId
 		: !inputValue.trim() ||
@@ -1067,7 +1071,9 @@ function App(): React.JSX.Element {
 							{profileWarnings.length > 0 && (
 								<div className="space-y-1 pt-2 px-1 text-xs text-amber-700">
 									{profileWarnings.map((warning, index) => (
-										<p key={`${warning.source}:${warning.path ?? "none"}:${index}`}>
+										<p
+											key={`${warning.source}:${warning.path ?? "none"}:${index}`}
+										>
 											{warning.path
 												? `${warning.message} (${warning.path})`
 												: warning.message}

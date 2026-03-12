@@ -1486,9 +1486,8 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.state.profile_locked {
-                    self.state.status = String::from(
-                        "Cannot change agent while the current turn is active",
-                    );
+                    self.state.status =
+                        String::from("Cannot change agent while the current turn is active");
                     self.state.mode = UiMode::Chat;
                     return;
                 }
@@ -2260,7 +2259,12 @@ impl App {
             self.state.profile_locked = false;
             return;
         };
-        if let Some(session) = self.state.sessions.iter().find(|session| &session.id == session_id) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| &session.id == session_id)
+        {
             self.state.selected_profile_id = session.selected_profile_id.clone();
             self.state.profile_locked = session.profile_locked;
         }
@@ -3804,7 +3808,15 @@ mod tests {
 
         harness.app.handle_key_event(key(KeyCode::Enter));
         assert_eq!(harness.app.state.status, "Creating session");
-        assert_eq!(harness.app.state.pending_submit.as_ref().map(|submit| submit.message.as_str()), Some("hello world"));
+        assert_eq!(
+            harness
+                .app
+                .state
+                .pending_submit
+                .as_ref()
+                .map(|submit| submit.message.as_str()),
+            Some("hello world")
+        );
 
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 1);
@@ -3822,13 +3834,14 @@ mod tests {
         harness.app.state.input_cursor = harness.app.state.input.len();
 
         harness.app.handle_key_event(key(KeyCode::Enter));
-        assert!(matches!(harness.drain_requests().as_slice(), [RuntimeRequest::CreateSession]));
+        assert!(matches!(
+            harness.drain_requests().as_slice(),
+            [RuntimeRequest::CreateSession]
+        ));
 
         harness
             .app
-            .handle_runtime_response(RuntimeResponse::CreateSession(Ok(String::from(
-                "sess-3",
-            ))));
+            .handle_runtime_response(RuntimeResponse::CreateSession(Ok(String::from("sess-3"))));
 
         let requests = harness.drain_requests();
         assert!(requests.iter().any(|request| {
@@ -3838,9 +3851,11 @@ mod tests {
                     if session_id == "sess-3" && profile_id == "build-code"
             )
         }));
-        assert!(!requests.iter().any(|request| {
-            matches!(request, RuntimeRequest::SendMessage { .. })
-        }));
+        assert!(
+            !requests
+                .iter()
+                .any(|request| { matches!(request, RuntimeRequest::SendMessage { .. }) })
+        );
 
         harness
             .app

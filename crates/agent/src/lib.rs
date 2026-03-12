@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use persistence::{MessageStore, SessionMeta, SessionStore};
-use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
+use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use tokio::sync::RwLock;
 use tool_core::{ToolManager, toon_parser};
 use types::{
-    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus,
-    ModelId, ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
+    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
+    ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
 };
 use ulid::Ulid;
 
@@ -264,14 +264,23 @@ impl AgentManager {
         })
     }
 
-    pub async fn set_session_profile(&mut self, session_id: &str, profile_id: String) -> Result<()> {
+    pub async fn set_session_profile(
+        &mut self,
+        session_id: &str,
+        profile_id: String,
+    ) -> Result<()> {
         if self.is_profile_locked(session_id) {
-            return Err(eyre!("Cannot change profile while the current turn is active"));
+            return Err(eyre!(
+                "Cannot change profile while the current turn is active"
+            ));
         }
 
         let mut session = self.require_session(session_id).await?;
         let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
-        let exists = resolved.profiles.iter().any(|profile| profile.id == profile_id);
+        let exists = resolved
+            .profiles
+            .iter()
+            .any(|profile| profile.id == profile_id);
         if !exists {
             return Err(eyre!("Unknown profile: {profile_id}"));
         }
@@ -346,7 +355,9 @@ impl AgentManager {
         {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             if state.active_turn_profile.is_some() {
-                return Err(eyre!("Cannot send a new message while the current turn is active"));
+                return Err(eyre!(
+                    "Cannot send a new message while the current turn is active"
+                ));
             }
             state.promote_pending_tool_config();
             state.last_model = Some(model_id.clone());
@@ -356,7 +367,12 @@ impl AgentManager {
         self.last_used_profile_id = Some(profile.id.clone());
 
         let user_msg_id = match self
-            .add_message(session_id, ChatRole::User, message, Some(profile.id.clone()))
+            .add_message(
+                session_id,
+                ChatRole::User,
+                message,
+                Some(profile.id.clone()),
+            )
             .await
         {
             Ok(message_id) => message_id,
@@ -864,8 +880,13 @@ impl AgentManager {
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",
                 raw_content, error
             );
-            self.add_message(session_id, ChatRole::Tool, content, agent_profile_id.clone())
-                .await?;
+            self.add_message(
+                session_id,
+                ChatRole::Tool,
+                content,
+                agent_profile_id.clone(),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1032,8 +1053,13 @@ impl AgentManager {
                 result.permission_denied
             );
 
-            self.add_message(session_id, ChatRole::Tool, content, agent_profile_id.clone())
-                .await?;
+            self.add_message(
+                session_id,
+                ChatRole::Tool,
+                content,
+                agent_profile_id.clone(),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1180,7 +1206,9 @@ mod tests {
 
         let mut tools = ToolManager::new();
         tools.register_tool(MockTool { name: "list_files" });
-        tools.register_tool(MockTool { name: "search_files" });
+        tools.register_tool(MockTool {
+            name: "search_files",
+        });
         tools.register_tool(MockTool { name: "read_files" });
         tools.register_tool(MockTool { name: "edit_file" });
 
@@ -1206,7 +1234,10 @@ mod tests {
         let sessions = manager.list_sessions().await?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, session_id);
-        assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("plan-code"));
+        assert_eq!(
+            sessions[0].selected_profile_id.as_deref(),
+            Some("plan-code")
+        );
         assert_eq!(manager.get_tip(&session_id).await?, None);
 
         cleanup_dir(data_dir).await;
@@ -1315,7 +1346,9 @@ mod tests {
         let manager_providers = ProviderManager::new();
         let mut tools = ToolManager::new();
         tools.register_tool(MockTool { name: "list_files" });
-        tools.register_tool(MockTool { name: "search_files" });
+        tools.register_tool(MockTool {
+            name: "search_files",
+        });
         tools.register_tool(MockTool { name: "read_files" });
         tools.register_tool(MockTool { name: "edit_file" });
         let mut manager = AgentManager::new(
@@ -1327,7 +1360,9 @@ mod tests {
         );
 
         let session_id = manager.create_session().await?;
-        manager.set_session_profile(&session_id, String::from("plan-code")).await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
         manager
             .add_message(&session_id, ChatRole::User, String::from("hello"), None)
             .await?;
@@ -1376,7 +1411,12 @@ mod tests {
 
         let session_id = manager.create_session().await?;
         let stable_tip = manager
-            .add_message(&session_id, ChatRole::User, String::from("before stream"), None)
+            .add_message(
+                &session_id,
+                ChatRole::User,
+                String::from("before stream"),
+                None,
+            )
             .await?;
         let streaming_id = manager
             .start_streaming_message(
