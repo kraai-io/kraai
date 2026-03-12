@@ -63,6 +63,10 @@ impl Widget for &AppState {
             .zip(self.selected_model_id.as_ref())
             .map(|(p, m)| format!("{p}/{m}"))
             .unwrap_or_else(|| String::from("none"));
+        let selected_agent = self
+            .selected_profile_id
+            .clone()
+            .unwrap_or_else(|| String::from("none"));
         let stream_state = if self.is_streaming {
             "streaming"
         } else {
@@ -70,8 +74,8 @@ impl Widget for &AppState {
         };
         let pending_tools = self.pending_tools.len();
         let status_line = format!(
-            "{} | model={} | tools={} | {}",
-            self.status, selected_model, pending_tools, stream_state
+            "{} | agent={} | model={} | tools={} | {}",
+            self.status, selected_agent, selected_model, pending_tools, stream_state
         );
 
         Paragraph::new(Line::raw(status_line))
@@ -88,6 +92,7 @@ impl Widget for &AppState {
         }
 
         match self.mode {
+            UiMode::AgentMenu => render_agent_menu(self, area, buf),
             UiMode::ModelMenu => render_model_menu(self, area, buf),
             UiMode::SettingsMenu => render_settings_menu(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
@@ -548,6 +553,69 @@ fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
         .block(Block::default().title("/model").borders(Borders::ALL))
+        .scroll((scroll_offset as u16, 0))
+        .render(popup_area, buf);
+}
+
+fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
+    let popup_area = centered_rect(area.width.saturating_mul(3) / 4, area.height / 2, area);
+
+    let mut lines = vec![Line::styled(
+        "Select agent (Enter to choose, Esc to close)",
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+
+    if state.agent_profiles.is_empty() {
+        lines.push(Line::raw("No agents available"));
+    } else {
+        for (idx, profile) in state.agent_profiles.iter().enumerate() {
+            let selected = idx == state.agent_menu_index;
+            let marker = if selected { ">" } else { " " };
+            let current = state
+                .selected_profile_id
+                .as_ref()
+                .is_some_and(|profile_id| profile_id == &profile.id);
+            let suffix = if current { " (current)" } else { "" };
+            lines.push(Line::styled(
+                format!("{marker} {}{}", profile.id, suffix),
+                if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                },
+            ));
+            lines.push(Line::raw(format!(
+                "  {} | risk={} | source={}",
+                profile.description,
+                profile.default_risk_level.as_str(),
+                match profile.source {
+                    agent_runtime::AgentProfileSource::BuiltIn => "built-in",
+                    agent_runtime::AgentProfileSource::Global => "global",
+                    agent_runtime::AgentProfileSource::Workspace => "workspace",
+                }
+            )));
+        }
+    }
+
+    if let Some(warning) = state.agent_profile_warnings.first() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!("Warning: {}", warning.message),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    let visible_lines = popup_area.height.saturating_sub(2) as usize;
+    let selected_line = if state.agent_profiles.is_empty() {
+        1
+    } else {
+        state.agent_menu_index.saturating_mul(2).saturating_add(1)
+    };
+    let scroll_offset = menu_scroll_offset(selected_line, lines.len(), visible_lines);
+
+    Clear.render(popup_area, buf);
+    Paragraph::new(Text::from(lines))
+        .block(Block::default().title("/agent").borders(Borders::ALL))
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
@@ -1013,11 +1081,12 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
             "Slash Commands",
             Style::default().add_modifier(Modifier::BOLD),
         ),
+        Line::raw("/agent     Open agent selector"),
         Line::raw("/help      Open this help menu"),
         Line::raw("/model     Open model selector"),
         Line::raw("/settings  Open settings editor"),
         Line::raw("/sessions  Open sessions menu"),
-        Line::raw("/new       Start a new session"),
+        Line::raw("/new       Start a new chat"),
         Line::raw("/quit      Exit the TUI"),
         Line::raw(""),
         Line::styled(

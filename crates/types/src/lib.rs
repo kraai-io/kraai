@@ -28,6 +28,8 @@ pub struct Message {
     pub role: ChatRole,
     pub content: String,
     pub status: MessageStatus,
+    #[serde(default)]
+    pub agent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +71,59 @@ impl RiskLevel {
             Self::WriteOutsideWorkspace => "write_outside_workspace",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "read_only_workspace" => Some(Self::ReadOnlyWorkspace),
+            "undoable_workspace_write" => Some(Self::UndoableWorkspaceWrite),
+            "non_undoable_workspace_write" => Some(Self::NonUndoableWorkspaceWrite),
+            "read_only_outside_workspace" => Some(Self::ReadOnlyOutsideWorkspace),
+            "write_outside_workspace" => Some(Self::WriteOutsideWorkspace),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentProfileSource {
+    BuiltIn,
+    Global,
+    Workspace,
+}
+
+impl AgentProfileSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built_in",
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProfileSummary {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub tools: Vec<String>,
+    pub default_risk_level: RiskLevel,
+    pub source: AgentProfileSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProfileWarning {
+    pub source: AgentProfileSource,
+    pub path: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProfilesState {
+    pub profiles: Vec<AgentProfileSummary>,
+    pub warnings: Vec<AgentProfileWarning>,
+    pub selected_profile_id: Option<String>,
+    pub profile_locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

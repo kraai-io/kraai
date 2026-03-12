@@ -88,7 +88,7 @@ impl Tool for EditFileTool {
             }
         };
 
-        assess_write_path(
+        let mut assessment = assess_write_path(
             &ctx.global_config.workspace_dir,
             &parsed.path,
             if parsed.create {
@@ -101,7 +101,11 @@ impl Tool for EditFileTool {
             } else {
                 "Edits file outside workspace"
             },
-        )
+        );
+        if assessment.risk == RiskLevel::UndoableWorkspaceWrite {
+            assessment.policy = ExecutionPolicy::AutonomousUpTo(RiskLevel::UndoableWorkspaceWrite);
+        }
+        assessment
     }
 
     async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
@@ -536,7 +540,10 @@ mod tests {
         );
 
         assert_eq!(assessment.risk, RiskLevel::UndoableWorkspaceWrite);
-        assert_eq!(assessment.policy, ExecutionPolicy::AlwaysAsk);
+        assert_eq!(
+            assessment.policy,
+            ExecutionPolicy::AutonomousUpTo(RiskLevel::UndoableWorkspaceWrite)
+        );
 
         cleanup_temp_dir(&workspace_dir);
     }

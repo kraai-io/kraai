@@ -19,6 +19,8 @@ pub struct SessionMeta {
     pub created_at: u64,
     pub updated_at: u64,
     pub title: Option<String>,
+    #[serde(default)]
+    pub selected_profile_id: Option<String>,
 }
 
 /// Trait for storing and retrieving messages
@@ -471,6 +473,7 @@ mod tests {
             created_at: updated_at.saturating_sub(1),
             updated_at,
             title: Some(format!("session-{id}")),
+            selected_profile_id: None,
         }
     }
 
@@ -481,6 +484,7 @@ mod tests {
             role: ChatRole::Assistant,
             content: content.to_string(),
             status: MessageStatus::Complete,
+            agent_profile_id: None,
         }
     }
 

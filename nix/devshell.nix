@@ -22,6 +22,8 @@
           cargo-llvm-cov
           cargo-geiger
           cargo-crev
+          cargo-flamegraph
+          samply
           (rust-bin.stable.latest.default.override {
             extensions = ["llvm-tools-preview"];
           })

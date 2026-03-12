@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod profiles;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,13 +9,16 @@ use std::sync::Arc;
 use color_eyre::eyre::{Result, eyre};
 use persistence::{MessageStore, SessionMeta, SessionStore};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
+use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 use tokio::sync::RwLock;
 use tool_core::{ToolManager, toon_parser};
 use types::{
-    CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId, ProviderId,
-    RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
+    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus,
+    ModelId, ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
 };
 use ulid::Ulid;
+
+const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
 
 #[derive(Clone, Debug)]
 pub struct PendingToolCall {
@@ -76,6 +81,7 @@ struct SessionRuntimeState {
     next_tool_queue_order: u64,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
+    active_turn_profile: Option<AgentProfile>,
 }
 
 impl SessionRuntimeState {
@@ -87,6 +93,7 @@ impl SessionRuntimeState {
             next_tool_queue_order: 0,
             last_model: None,
             last_provider: None,
+            active_turn_profile: None,
         }
     }
 
@@ -119,6 +126,7 @@ pub struct AgentManager {
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     session_states: HashMap<String, SessionRuntimeState>,
+    last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<HashMap<MessageId, StreamingMessageState>>,
 }
@@ -148,6 +156,7 @@ impl AgentManager {
             message_store,
             session_store,
             session_states: HashMap::new(),
+            last_used_profile_id: None,
             streaming_messages: RwLock::new(HashMap::new()),
         }
     }
@@ -166,6 +175,11 @@ impl AgentManager {
             created_at: now,
             updated_at: now,
             title: None,
+            selected_profile_id: Some(
+                self.last_used_profile_id
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string()),
+            ),
         };
 
         self.session_store.save(&session).await?;
@@ -234,6 +248,40 @@ impl AgentManager {
         Ok(())
     }
 
+    pub async fn list_agent_profiles(&mut self, session_id: &str) -> Result<AgentProfilesState> {
+        let session = self.require_session(session_id).await?;
+        let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
+        let profile_locked = self.is_profile_locked(session_id);
+        Ok(AgentProfilesState {
+            profiles: resolved
+                .profiles
+                .iter()
+                .map(AgentProfile::summary)
+                .collect(),
+            warnings: resolved.warnings,
+            selected_profile_id: session.selected_profile_id,
+            profile_locked,
+        })
+    }
+
+    pub async fn set_session_profile(&mut self, session_id: &str, profile_id: String) -> Result<()> {
+        if self.is_profile_locked(session_id) {
+            return Err(eyre!("Cannot change profile while the current turn is active"));
+        }
+
+        let mut session = self.require_session(session_id).await?;
+        let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
+        let exists = resolved.profiles.iter().any(|profile| profile.id == profile_id);
+        if !exists {
+            return Err(eyre!("Unknown profile: {profile_id}"));
+        }
+
+        session.selected_profile_id = Some(profile_id);
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await?;
+        Ok(())
+    }
+
     pub async fn get_workspace_dir_state(
         &mut self,
         session_id: &str,
@@ -247,6 +295,12 @@ impl AgentManager {
             state.effective_workspace_dir(),
             state.pending_tool_config.is_some(),
         )))
+    }
+
+    pub fn is_profile_locked(&self, session_id: &str) -> bool {
+        self.session_states
+            .get(session_id)
+            .is_some_and(|state| state.active_turn_profile.is_some())
     }
 
     pub async fn set_providers(
@@ -287,17 +341,37 @@ impl AgentManager {
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
         let session = self.require_session(session_id).await?;
+        let profile = self.resolve_selected_profile(&session)?;
+        let system_prompt = self.build_system_prompt(&profile)?;
         {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+            if state.active_turn_profile.is_some() {
+                return Err(eyre!("Cannot send a new message while the current turn is active"));
+            }
             state.promote_pending_tool_config();
             state.last_model = Some(model_id.clone());
             state.last_provider = Some(provider_id.clone());
+            state.active_turn_profile = Some(profile.clone());
         }
+        self.last_used_profile_id = Some(profile.id.clone());
 
-        let user_msg_id = self
-            .add_message(session_id, ChatRole::User, message)
-            .await?;
-        let context = self.get_history_context(&user_msg_id).await?;
+        let user_msg_id = match self
+            .add_message(session_id, ChatRole::User, message, Some(profile.id.clone()))
+            .await
+        {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                self.clear_active_turn(session_id);
+                return Err(error);
+            }
+        };
+        let context = match self.get_history_context(&user_msg_id).await {
+            Ok(context) => context,
+            Err(error) => {
+                self.clear_active_turn(session_id);
+                return Err(error);
+            }
+        };
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -307,7 +381,6 @@ impl AgentManager {
             })
             .collect();
 
-        let system_prompt = self.tools.generate_system_prompt();
         if !system_prompt.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -316,9 +389,16 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
-        let assistant_msg_id = self
-            .start_streaming_message(session_id, ChatRole::Assistant, call_id)
-            .await?;
+        let assistant_msg_id = match self
+            .start_streaming_message(session_id, ChatRole::Assistant, call_id, Some(profile.id))
+            .await
+        {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                self.clear_active_turn(session_id);
+                return Err(error);
+            }
+        };
 
         Ok(PendingStreamRequest {
             message_id: assistant_msg_id,
@@ -333,7 +413,7 @@ impl AgentManager {
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
         let session = self.require_session(session_id).await?;
-        let (model_id, provider_id) = {
+        let (model_id, provider_id, profile) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             let Some(model_id) = &state.last_model else {
                 return Ok(None);
@@ -341,7 +421,10 @@ impl AgentManager {
             let Some(provider_id) = &state.last_provider else {
                 return Ok(None);
             };
-            (model_id.clone(), provider_id.clone())
+            let Some(profile) = &state.active_turn_profile else {
+                return Ok(None);
+            };
+            (model_id.clone(), provider_id.clone(), profile.clone())
         };
 
         let tip_id = match self.get_tip(session_id).await? {
@@ -359,7 +442,7 @@ impl AgentManager {
             })
             .collect();
 
-        let system_prompt = self.tools.generate_system_prompt();
+        let system_prompt = self.build_system_prompt(&profile)?;
         if !system_prompt.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -369,7 +452,7 @@ impl AgentManager {
 
         let call_id = CallId::new(Ulid::new());
         let assistant_msg_id = self
-            .start_streaming_message(session_id, ChatRole::Assistant, call_id)
+            .start_streaming_message(session_id, ChatRole::Assistant, call_id, Some(profile.id))
             .await?;
 
         Ok(Some(PendingStreamRequest {
@@ -390,6 +473,49 @@ impl AgentManager {
             .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()))
     }
 
+    fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
+        let available_tools = self
+            .tools
+            .list_tools()
+            .into_iter()
+            .map(|tool_id| tool_id.to_string())
+            .collect::<HashSet<_>>();
+        resolve_profiles(workspace_dir, &available_tools)
+    }
+
+    fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {
+        let Some(profile_id) = session.selected_profile_id.as_ref() else {
+            return Err(eyre!("No profile selected for this session"));
+        };
+
+        self.resolve_profiles_for_workspace(&session.workspace_dir)
+            .profiles
+            .into_iter()
+            .find(|profile| &profile.id == profile_id)
+            .ok_or_else(|| eyre!("Selected profile is unavailable: {profile_id}"))
+    }
+
+    fn build_system_prompt(&self, profile: &AgentProfile) -> Result<String> {
+        let tool_prompt = self
+            .tools
+            .generate_system_prompt_for_tools(&profile.tools)
+            .map_err(|error| eyre!(error.to_string()))?;
+        if profile.system_prompt.is_empty() {
+            Ok(tool_prompt)
+        } else if tool_prompt.is_empty() {
+            Ok(profile.system_prompt.clone())
+        } else {
+            Ok(format!("{}\n\n{}", profile.system_prompt, tool_prompt))
+        }
+    }
+
+    fn current_turn_profile_id(&self, session_id: &str) -> Option<String> {
+        self.session_states
+            .get(session_id)
+            .and_then(|state| state.active_turn_profile.as_ref())
+            .map(|profile| profile.id.clone())
+    }
+
     async fn require_session(&self, session_id: &str) -> Result<SessionMeta> {
         self.session_store
             .get(session_id)
@@ -402,6 +528,7 @@ impl AgentManager {
         session_id: &str,
         role: ChatRole,
         content: String,
+        agent_profile_id: Option<String>,
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
@@ -422,6 +549,7 @@ impl AgentManager {
             role,
             content,
             status: MessageStatus::Complete,
+            agent_profile_id,
         };
 
         self.message_store.save(&message).await?;
@@ -435,6 +563,7 @@ impl AgentManager {
         session_id: &str,
         role: ChatRole,
         call_id: CallId,
+        agent_profile_id: Option<String>,
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
@@ -457,6 +586,7 @@ impl AgentManager {
             role,
             content: String::new(),
             status: MessageStatus::Streaming { call_id },
+            agent_profile_id,
         };
 
         let mut streaming = self.streaming_messages.write().await;
@@ -602,23 +732,42 @@ impl AgentManager {
         content: &str,
     ) -> Result<(Vec<DetectedToolCall>, Vec<(String, String)>)> {
         let session = self.require_session(session_id).await?;
-        let active_tool_config = self
-            .ensure_runtime_state(session_id, &session.workspace_dir)
-            .active_tool_config
-            .clone();
+        let (active_tool_config, active_turn_profile, mut next_queue_order) = {
+            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+            let Some(active_turn_profile) = state.active_turn_profile.clone() else {
+                return Ok((Vec::new(), Vec::new()));
+            };
+            (
+                state.active_tool_config.clone(),
+                active_turn_profile,
+                state.next_tool_queue_order,
+            )
+        };
 
         let result = toon_parser::parse_tool_calls(content);
 
         let mut detected_calls = Vec::new();
         let mut pending_tool_calls = Vec::new();
         let mut failed_calls = result.failed;
-
-        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-        let mut next_queue_order = state.next_tool_queue_order;
+        let allowed_tools = active_turn_profile
+            .tools
+            .iter()
+            .map(|tool_id| tool_id.as_str())
+            .collect::<HashSet<_>>();
 
         for parsed in result.successful {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
+            if !allowed_tools.contains(parsed.tool_id.as_str()) {
+                failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                    raw_content: parsed.raw_content,
+                    error: format!(
+                        "Tool '{}' is not allowed by the active profile '{}'",
+                        parsed.tool_id, active_turn_profile.id
+                    ),
+                });
+                continue;
+            }
             if let Err(error) = self.tools.validate_tool(&tool_id, &parsed.args) {
                 failed_calls.push(tool_core::toon_parser::FailedToolCall {
                     raw_content: parsed.raw_content,
@@ -656,7 +805,8 @@ impl AgentManager {
                     continue;
                 }
             };
-            let requires_confirmation = !assessment.is_auto_approved(default_autonomy_threshold());
+            let requires_confirmation =
+                !assessment.is_auto_approved(active_turn_profile.default_risk_level);
 
             let call = ToolCall {
                 call_id: call_id.clone(),
@@ -708,12 +858,13 @@ impl AgentManager {
         session_id: &str,
         failed: Vec<(String, String)>,
     ) -> Result<()> {
+        let agent_profile_id = self.current_turn_profile_id(session_id);
         for (raw_content, error) in failed {
             let content = format!(
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",
                 raw_content, error
             );
-            self.add_message(session_id, ChatRole::Tool, content)
+            self.add_message(session_id, ChatRole::Tool, content, agent_profile_id.clone())
                 .await?;
         }
         Ok(())
@@ -798,6 +949,12 @@ impl AgentManager {
         })
     }
 
+    pub fn clear_active_turn(&mut self, session_id: &str) {
+        if let Some(state) = self.session_states.get_mut(session_id) {
+            state.active_turn_profile = None;
+        }
+    }
+
     pub async fn streaming_session_ids(&self) -> HashSet<String> {
         self.streaming_messages
             .read()
@@ -860,6 +1017,7 @@ impl AgentManager {
         session_id: &str,
         results: Vec<ToolResult>,
     ) -> Result<()> {
+        let agent_profile_id = self.current_turn_profile_id(session_id);
         for result in results {
             let content = types::format_tool_result_message(
                 &result.tool_id,
@@ -874,7 +1032,7 @@ impl AgentManager {
                 result.permission_denied
             );
 
-            self.add_message(session_id, ChatRole::Tool, content)
+            self.add_message(session_id, ChatRole::Tool, content, agent_profile_id.clone())
                 .await?;
         }
         Ok(())
@@ -916,21 +1074,38 @@ fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 
-fn default_autonomy_threshold() -> RiskLevel {
-    RiskLevel::ReadOnlyWorkspace
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use color_eyre::eyre::Result;
     use futures::stream::BoxStream;
     use provider_core::Provider;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tool_core::{Tool, ToolContext, ToolOutput};
     use types::{ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus};
 
     struct MockProvider {
         id: ProviderId,
+    }
+
+    struct MockTool {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for MockTool {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn schema(&self) -> &'static str {
+            "mock schema"
+        }
+
+        async fn call(&self, _args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+            ToolOutput::success(serde_json::json!({ "ok": true }))
+        }
     }
 
     #[async_trait::async_trait]
@@ -1003,9 +1178,15 @@ mod tests {
             }),
         );
 
+        let mut tools = ToolManager::new();
+        tools.register_tool(MockTool { name: "list_files" });
+        tools.register_tool(MockTool { name: "search_files" });
+        tools.register_tool(MockTool { name: "read_files" });
+        tools.register_tool(MockTool { name: "edit_file" });
+
         let manager = AgentManager::new(
             providers,
-            ToolManager::new(),
+            tools,
             PathBuf::from("/tmp/default-workspace"),
             message_store,
             session_store,
@@ -1025,7 +1206,68 @@ mod tests {
         let sessions = manager.list_sessions().await?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, session_id);
+        assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("plan-code"));
         assert_eq!(manager.get_tip(&session_id).await?, None);
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn last_used_profile_is_inherited_by_new_sessions() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let first_session = manager.create_session().await?;
+        manager
+            .set_session_profile(&first_session, String::from("plan-code"))
+            .await?;
+        let _request = manager
+            .prepare_start_stream(
+                &first_session,
+                String::from("hello"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+
+        let second_session = manager.create_session().await?;
+        let sessions = manager.list_sessions().await?;
+        let inherited = sessions
+            .into_iter()
+            .find(|session| session.id == second_session)
+            .unwrap();
+        assert_eq!(inherited.selected_profile_id.as_deref(), Some("plan-code"));
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+        let _request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("hello"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+
+        let locked = manager
+            .set_session_profile(&session_id, String::from("build-code"))
+            .await;
+        assert!(locked.is_err());
+
+        manager.clear_active_turn(&session_id);
+        manager
+            .set_session_profile(&session_id, String::from("build-code"))
+            .await?;
 
         cleanup_dir(data_dir).await;
         Ok(())
@@ -1039,10 +1281,10 @@ mod tests {
         let session_b = manager.create_session().await?;
 
         let a_message = manager
-            .add_message(&session_a, ChatRole::User, String::from("hello a"))
+            .add_message(&session_a, ChatRole::User, String::from("hello a"), None)
             .await?;
         let b_message = manager
-            .add_message(&session_b, ChatRole::User, String::from("hello b"))
+            .add_message(&session_b, ChatRole::User, String::from("hello b"), None)
             .await?;
 
         assert_eq!(manager.get_tip(&session_a).await?, Some(a_message.clone()));
@@ -1071,17 +1313,23 @@ mod tests {
             message_store.clone(),
         ));
         let manager_providers = ProviderManager::new();
+        let mut tools = ToolManager::new();
+        tools.register_tool(MockTool { name: "list_files" });
+        tools.register_tool(MockTool { name: "search_files" });
+        tools.register_tool(MockTool { name: "read_files" });
+        tools.register_tool(MockTool { name: "edit_file" });
         let mut manager = AgentManager::new(
             manager_providers,
-            ToolManager::new(),
+            tools,
             PathBuf::from("/tmp/default-workspace"),
             message_store,
             session_store,
         );
 
         let session_id = manager.create_session().await?;
+        manager.set_session_profile(&session_id, String::from("plan-code")).await?;
         manager
-            .add_message(&session_id, ChatRole::User, String::from("hello"))
+            .add_message(&session_id, ChatRole::User, String::from("hello"), None)
             .await?;
 
         let request = manager
@@ -1128,10 +1376,15 @@ mod tests {
 
         let session_id = manager.create_session().await?;
         let stable_tip = manager
-            .add_message(&session_id, ChatRole::User, String::from("before stream"))
+            .add_message(&session_id, ChatRole::User, String::from("before stream"), None)
             .await?;
         let streaming_id = manager
-            .start_streaming_message(&session_id, ChatRole::Assistant, CallId::new("call-1"))
+            .start_streaming_message(
+                &session_id,
+                ChatRole::Assistant,
+                CallId::new("call-1"),
+                None,
+            )
             .await?;
 
         assert_eq!(
@@ -1207,6 +1460,85 @@ mod tests {
         assert!(!manager.has_pending_tools(&session_b));
         assert!(!manager.approve_tool(&session_b, call_id.clone()));
         assert!(manager.approve_tool(&session_a, call_id));
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_sessions_default_to_plan_code_on_fresh_manager() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        let session = manager
+            .list_sessions()
+            .await?
+            .into_iter()
+            .find(|session| session.id == session_id)
+            .unwrap();
+
+        assert_eq!(session.selected_profile_id.as_deref(), Some("plan-code"));
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let first_session = manager.create_session().await?;
+        manager
+            .set_session_profile(&first_session, String::from("build-code"))
+            .await?;
+        let pending = manager
+            .prepare_start_stream(
+                &first_session,
+                String::from("build something"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        manager.abort_streaming_message(&pending.message_id).await?;
+        manager.clear_active_turn(&first_session);
+
+        let second_session = manager.create_session().await?;
+        let inherited = manager
+            .list_sessions()
+            .await?
+            .into_iter()
+            .find(|session| session.id == second_session)
+            .unwrap();
+
+        assert_eq!(inherited.selected_profile_id.as_deref(), Some("build-code"));
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        let mut session = manager
+            .session_store
+            .get(&session_id)
+            .await?
+            .expect("session should exist");
+        session.selected_profile_id = None;
+        manager.session_store.save(&session).await?;
+        let error = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("hello"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("No profile selected"));
 
         cleanup_dir(data_dir).await;
         Ok(())

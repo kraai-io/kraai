@@ -1,5 +1,6 @@
 import { electronAPI } from "@electron-toolkit/preload";
 import type {
+	AgentProfilesState,
 	Message,
 	Model,
 	ProviderDefinition,
@@ -77,8 +78,19 @@ const api = {
 		return await ipcRenderer.invoke("agent:getSettings");
 	},
 
+	async listAgentProfiles(sessionId: string): Promise<AgentProfilesState> {
+		return await ipcRenderer.invoke("agent:listAgentProfiles", sessionId);
+	},
+
 	async listProviderDefinitions(): Promise<ProviderDefinition[]> {
 		return await ipcRenderer.invoke("agent:listProviderDefinitions");
+	},
+
+	async setSessionProfile(
+		sessionId: string,
+		profileId: string,
+	): Promise<void> {
+		await ipcRenderer.invoke("agent:setSessionProfile", sessionId, profileId);
 	},
 
 	async saveSettings(settings: SettingsDocument): Promise<void> {

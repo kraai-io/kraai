@@ -41,6 +41,21 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::Settings(result));
                 }
+                RuntimeRequest::ListAgentProfiles { session_id } => {
+                    let result = rt
+                        .block_on(runtime.list_agent_profiles(session_id.clone()))
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::AgentProfiles { session_id, result });
+                }
+                RuntimeRequest::SetSessionProfile {
+                    session_id,
+                    profile_id,
+                } => {
+                    let result = rt
+                        .block_on(runtime.set_session_profile(session_id, profile_id.clone()))
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile { profile_id, result });
+                }
                 RuntimeRequest::CreateSession => {
                     let result = rt
                         .block_on(runtime.create_session())
@@ -148,6 +163,14 @@ fn respond_with_runtime_error(
             RuntimeResponse::ProviderDefinitions(Err(message.to_string()))
         }
         RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(message.to_string())),
+        RuntimeRequest::ListAgentProfiles { session_id } => RuntimeResponse::AgentProfiles {
+            session_id,
+            result: Err(message.to_string()),
+        },
+        RuntimeRequest::SetSessionProfile { profile_id, .. } => RuntimeResponse::SetSessionProfile {
+            profile_id,
+            result: Err(message.to_string()),
+        },
         RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
         RuntimeRequest::SendMessage { .. } => {
             RuntimeResponse::SendMessage(Err(message.to_string()))

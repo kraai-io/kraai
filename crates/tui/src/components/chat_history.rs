@@ -815,6 +815,7 @@ mod tests {
             role,
             content: content.to_string(),
             status: MessageStatus::Complete,
+            agent_profile_id: None,
         }
     }
 

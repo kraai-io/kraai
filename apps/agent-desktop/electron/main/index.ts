@@ -53,6 +53,11 @@ function setupIpcHandlers() {
 		return await runtime.getSettings();
 	});
 
+	ipcMain.handle("agent:listAgentProfiles", async (_, sessionId: string) => {
+		if (!runtime) throw new Error("Runtime not initialized");
+		return await runtime.listAgentProfiles(sessionId);
+	});
+
 	ipcMain.handle(
 		"agent:listProviderDefinitions",
 		async (): Promise<ProviderDefinition[]> => {
@@ -65,6 +70,14 @@ function setupIpcHandlers() {
 		if (!runtime) throw new Error("Runtime not initialized");
 		await runtime.saveSettings(settings);
 	});
+
+	ipcMain.handle(
+		"agent:setSessionProfile",
+		async (_, sessionId: string, profileId: string) => {
+			if (!runtime) throw new Error("Runtime not initialized");
+			await runtime.setSessionProfile(sessionId, profileId);
+		},
+	);
 
 	ipcMain.handle("agent:createSession", async () => {
 		if (!runtime) throw new Error("Runtime not initialized");

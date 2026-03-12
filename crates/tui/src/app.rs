@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_runtime::{
-    Event, FieldDefinition, FieldValueEntry, Model, ModelSettings, ProviderDefinition,
-    ProviderSettings, RuntimeHandle, Session, SettingsDocument, SettingsValue,
+    AgentProfileSummary, AgentProfileWarning, AgentProfilesState, Event, FieldDefinition,
+    FieldValueEntry, Model, ModelSettings, ProviderDefinition, ProviderSettings, RuntimeHandle,
+    Session, SettingsDocument, SettingsValue,
 };
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
@@ -17,7 +18,7 @@ use ratatui::{
     },
     layout::{Constraint, Flex, Layout},
 };
-use types::{ChatRole, Message, MessageId, MessageStatus};
+use types::{ChatRole, Message, MessageId, MessageStatus, RiskLevel};
 
 use crate::components::{ChatHistory, RenderedLine, TextInput, VisibleChatView};
 
@@ -33,18 +34,50 @@ use self::ui::{
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
 
-const SLASH_COMMANDS: [(&str, &str); 6] = [
+const SLASH_COMMANDS: [(&str, &str); 7] = [
+    ("agent", "Open agent selector"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
-    ("new", "Start new session"),
+    ("new", "Start new chat"),
     ("quit", "Exit the TUI"),
     ("settings", "Open settings editor"),
     ("sessions", "Open sessions menu"),
 ];
 
+fn default_agent_profiles() -> Vec<AgentProfileSummary> {
+    vec![
+        AgentProfileSummary {
+            id: String::from("plan-code"),
+            display_name: String::from("Plan Code"),
+            description: String::from("Read-only planning agent"),
+            tools: vec![
+                String::from("list_files"),
+                String::from("search_files"),
+                String::from("read_files"),
+            ],
+            default_risk_level: RiskLevel::ReadOnlyWorkspace,
+            source: agent_runtime::AgentProfileSource::BuiltIn,
+        },
+        AgentProfileSummary {
+            id: String::from("build-code"),
+            display_name: String::from("Build Code"),
+            description: String::from("Implementation agent"),
+            tools: vec![
+                String::from("list_files"),
+                String::from("search_files"),
+                String::from("read_files"),
+                String::from("edit_file"),
+            ],
+            default_risk_level: RiskLevel::UndoableWorkspaceWrite,
+            source: agent_runtime::AgentProfileSource::BuiltIn,
+        },
+    ]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum UiMode {
     Chat,
+    AgentMenu,
     ModelMenu,
     SettingsMenu,
     SessionsMenu,
@@ -149,9 +182,16 @@ impl ChatSelection {
 
 enum RuntimeRequest {
     ListModels,
+    ListAgentProfiles {
+        session_id: String,
+    },
     ListProviderDefinitions,
     GetSettings,
     CreateSession,
+    SetSessionProfile {
+        session_id: String,
+        profile_id: String,
+    },
     SendMessage {
         session_id: String,
         message: String,
@@ -195,9 +235,17 @@ enum RuntimeRequest {
 
 enum RuntimeResponse {
     Models(Result<HashMap<String, Vec<Model>>, String>),
+    AgentProfiles {
+        session_id: String,
+        result: Result<AgentProfilesState, String>,
+    },
     ProviderDefinitions(Result<Vec<ProviderDefinition>, String>),
     Settings(Result<SettingsDocument, String>),
     CreateSession(Result<String, String>),
+    SetSessionProfile {
+        profile_id: String,
+        result: Result<(), String>,
+    },
     SendMessage(Result<(), String>),
     SaveSettings(Result<(), String>),
     ChatHistory {
@@ -242,6 +290,8 @@ pub struct App {
     last_stream_refresh: Option<Instant>,
 }
 
+const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+
 pub struct AppState {
     exit: bool,
     input: String,
@@ -263,13 +313,18 @@ pub struct AppState {
     status: String,
     is_streaming: bool,
     models_by_provider: HashMap<String, Vec<Model>>,
+    agent_profiles: Vec<AgentProfileSummary>,
+    agent_profile_warnings: Vec<AgentProfileWarning>,
     provider_definitions: Vec<ProviderDefinition>,
+    selected_profile_id: Option<String>,
+    profile_locked: bool,
     selected_provider_id: Option<String>,
     selected_model_id: Option<String>,
     pending_tools: Vec<PendingTool>,
     sessions: Vec<Session>,
     current_session_id: Option<String>,
     current_tip_id: Option<String>,
+    agent_menu_index: usize,
     model_menu_index: usize,
     sessions_menu_index: usize,
     tool_approval_action: ToolApprovalAction,
@@ -315,13 +370,18 @@ impl Default for AppState {
             status: String::from("Type /help for commands"),
             is_streaming: false,
             models_by_provider: HashMap::new(),
+            agent_profiles: default_agent_profiles(),
+            agent_profile_warnings: Vec::new(),
             provider_definitions: Vec::new(),
+            selected_profile_id: Some(String::from(DEFAULT_AGENT_PROFILE_ID)),
+            profile_locked: false,
             selected_provider_id: None,
             selected_model_id: None,
             pending_tools: Vec::new(),
             sessions: Vec::new(),
             current_session_id: None,
             current_tip_id: None,
+            agent_menu_index: 0,
             model_menu_index: 0,
             sessions_menu_index: 0,
             tool_approval_action: ToolApprovalAction::Allow,
@@ -770,6 +830,20 @@ impl App {
             RuntimeResponse::Models(Err(err)) => {
                 self.state.status = format!("Failed loading models: {err}");
             }
+            RuntimeResponse::AgentProfiles {
+                session_id,
+                result: Ok(state),
+            } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+                self.apply_agent_profiles_state(state);
+            }
+            RuntimeResponse::AgentProfiles {
+                result: Err(err), ..
+            } => {
+                self.state.status = format!("Failed loading agent profiles: {err}");
+            }
             RuntimeResponse::ProviderDefinitions(Ok(definitions)) => {
                 self.state.provider_definitions = definitions;
             }
@@ -796,8 +870,25 @@ impl App {
                 self.state.status = format!("Failed loading settings: {err}");
             }
             RuntimeResponse::CreateSession(Ok(session_id)) => {
+                let draft_profile_id = self.state.selected_profile_id.clone();
+                let pending_submit = self.state.pending_submit.take().map(|mut pending_submit| {
+                    pending_submit.session_id = Some(session_id.clone());
+                    pending_submit
+                });
                 self.reset_chat_session(Some(session_id.clone()), "Session ready");
+                self.state.pending_submit = pending_submit;
+                self.state.selected_profile_id = draft_profile_id.clone();
                 self.request_sync_for_session(&session_id);
+
+                if draft_profile_id.as_deref() != Some(DEFAULT_AGENT_PROFILE_ID)
+                    && let Some(profile_id) = draft_profile_id
+                {
+                    self.request(RuntimeRequest::SetSessionProfile {
+                        session_id,
+                        profile_id,
+                    });
+                    return;
+                }
 
                 if let Some(pending_submit) = self.state.pending_submit.take() {
                     self.dispatch_send_message(
@@ -811,6 +902,35 @@ impl App {
             RuntimeResponse::CreateSession(Err(err)) => {
                 self.state.pending_submit = None;
                 self.state.status = format!("Failed creating session: {err}");
+            }
+            RuntimeResponse::SetSessionProfile {
+                profile_id,
+                result: Ok(()),
+            } => {
+                self.state.selected_profile_id = Some(profile_id.clone());
+                self.state.status = format!("Selected agent: {profile_id}");
+                if let Some(session_id) = self.state.current_session_id.clone() {
+                    self.request(RuntimeRequest::ListSessions);
+                    self.request(RuntimeRequest::ListAgentProfiles { session_id });
+                }
+                self.state.mode = UiMode::Chat;
+
+                if let Some(pending_submit) = self.state.pending_submit.take()
+                    && let Some(session_id) = pending_submit.session_id
+                {
+                    self.dispatch_send_message(
+                        session_id,
+                        pending_submit.message,
+                        pending_submit.model_id,
+                        pending_submit.provider_id,
+                    );
+                }
+            }
+            RuntimeResponse::SetSessionProfile {
+                result: Err(err), ..
+            } => {
+                self.state.pending_submit = None;
+                self.state.status = format!("Failed changing agent: {err}");
             }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
@@ -925,6 +1045,7 @@ impl App {
                 if self.state.sessions_menu_index > self.state.sessions.len() {
                     self.state.sessions_menu_index = self.state.sessions.len();
                 }
+                self.sync_current_session_profile_from_sessions();
             }
             RuntimeResponse::Sessions(Err(err)) => {
                 self.state.status = format!("Failed loading sessions: {err}");
@@ -1118,6 +1239,7 @@ impl App {
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
+            UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::SettingsMenu => self.handle_settings_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
@@ -1346,6 +1468,47 @@ impl App {
         }
     }
 
+    fn handle_agent_menu_key_event(&mut self, key_event: KeyEvent) {
+        let len = self.state.agent_profiles.len();
+
+        match key_event.code {
+            KeyCode::Up => {
+                if len > 0 {
+                    self.state.agent_menu_index =
+                        model_menu_previous_index(self.state.agent_menu_index, len);
+                }
+            }
+            KeyCode::Down => {
+                if len > 0 {
+                    self.state.agent_menu_index =
+                        model_menu_next_index(self.state.agent_menu_index, len);
+                }
+            }
+            KeyCode::Enter => {
+                if self.state.profile_locked {
+                    self.state.status = String::from(
+                        "Cannot change agent while the current turn is active",
+                    );
+                    self.state.mode = UiMode::Chat;
+                    return;
+                }
+                if let Some(profile) = self.state.agent_profiles.get(self.state.agent_menu_index) {
+                    if let Some(session_id) = self.state.current_session_id.clone() {
+                        self.request(RuntimeRequest::SetSessionProfile {
+                            session_id,
+                            profile_id: profile.id.clone(),
+                        });
+                    } else {
+                        self.state.selected_profile_id = Some(profile.id.clone());
+                        self.state.status = format!("Selected agent: {}", profile.id);
+                        self.state.mode = UiMode::Chat;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle_sessions_menu_key_event(&mut self, key_event: KeyEvent) {
         let total = self.state.sessions.len() + 1;
 
@@ -1363,7 +1526,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.state.sessions_menu_index == 0 {
-                    self.start_new_chat_draft();
+                    self.start_new_chat();
                 } else if let Some(session) = self
                     .state
                     .sessions
@@ -1912,6 +2075,10 @@ impl App {
                 self.state.status = String::from("No model selected. Use /model");
                 return;
             };
+            if self.state.selected_profile_id.is_none() {
+                self.state.status = String::from("No agent selected. Use /agent");
+                return;
+            }
             let Some(session_id) = self.state.current_session_id.clone() else {
                 self.state.status = String::from("No active session for queued message");
                 return;
@@ -1957,6 +2124,10 @@ impl App {
             self.state.status = String::from("No model selected. Use /model");
             return;
         };
+        if self.state.selected_profile_id.is_none() {
+            self.state.status = String::from("No agent selected. Use /agent");
+            return;
+        }
 
         if let Some(session_id) = self.state.current_session_id.clone() {
             self.dispatch_send_message(session_id, raw_input, model_id, provider_id);
@@ -1990,6 +2161,33 @@ impl App {
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
             }
+            "agent" => {
+                if self.state.profile_locked {
+                    self.state.status =
+                        String::from("Cannot change agent while the current turn is active");
+                    return;
+                }
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
+                self.state.mode = UiMode::AgentMenu;
+                if let Some(session_id) = self.state.current_session_id.clone() {
+                    self.request(RuntimeRequest::ListAgentProfiles { session_id });
+                } else {
+                    self.state.agent_profiles = default_agent_profiles();
+                    self.state.agent_profile_warnings.clear();
+                    if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
+                        && let Some(index) = self
+                            .state
+                            .agent_profiles
+                            .iter()
+                            .position(|profile| &profile.id == selected_profile_id)
+                    {
+                        self.state.agent_menu_index = index;
+                    } else {
+                        self.state.agent_menu_index = 0;
+                    }
+                }
+            }
             "settings" => {
                 self.request(RuntimeRequest::ListProviderDefinitions);
                 self.request(RuntimeRequest::GetSettings);
@@ -2001,7 +2199,7 @@ impl App {
                 self.request(RuntimeRequest::ListSessions);
             }
             "new" => {
-                self.start_new_chat_draft();
+                self.start_new_chat();
             }
             "help" => {
                 self.clear_chat_selection();
@@ -2032,6 +2230,39 @@ impl App {
         {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.state.selected_model_id = Some(model.id.clone());
+        }
+    }
+
+    fn apply_agent_profiles_state(&mut self, state: AgentProfilesState) {
+        self.state.agent_profiles = state.profiles;
+        self.state.agent_profile_warnings = state.warnings;
+        self.state.selected_profile_id = state.selected_profile_id;
+        self.state.profile_locked = state.profile_locked;
+        if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
+            && let Some(index) = self
+                .state
+                .agent_profiles
+                .iter()
+                .position(|profile| &profile.id == selected_profile_id)
+        {
+            self.state.agent_menu_index = index;
+        } else {
+            self.state.agent_menu_index = 0;
+        }
+        if let Some(warning) = self.state.agent_profile_warnings.first() {
+            self.state.status = format!("Agent profile warning: {}", warning.message);
+        }
+    }
+
+    fn sync_current_session_profile_from_sessions(&mut self) {
+        let Some(session_id) = self.state.current_session_id.as_ref() else {
+            self.state.selected_profile_id = Some(String::from(DEFAULT_AGENT_PROFILE_ID));
+            self.state.profile_locked = false;
+            return;
+        };
+        if let Some(session) = self.state.sessions.iter().find(|session| &session.id == session_id) {
+            self.state.selected_profile_id = session.selected_profile_id.clone();
+            self.state.profile_locked = session.profile_locked;
         }
     }
 
@@ -2370,9 +2601,13 @@ impl App {
         self.request(RuntimeRequest::GetPendingTools {
             session_id: session_id.to_string(),
         });
+        self.request(RuntimeRequest::ListAgentProfiles {
+            session_id: session_id.to_string(),
+        });
     }
 
     fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
+        let has_session = session_id.is_some();
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
         self.state.current_tip_id = None;
@@ -2380,6 +2615,18 @@ impl App {
         self.state.optimistic_messages.clear();
         self.state.optimistic_tool_messages.clear();
         self.state.pending_tools.clear();
+        self.state.agent_profiles = if has_session {
+            Vec::new()
+        } else {
+            default_agent_profiles()
+        };
+        self.state.agent_profile_warnings.clear();
+        self.state.selected_profile_id = if has_session {
+            None
+        } else {
+            Some(String::from(DEFAULT_AGENT_PROFILE_ID))
+        };
+        self.state.profile_locked = false;
         self.state.tool_approval_action = ToolApprovalAction::Allow;
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
@@ -2392,9 +2639,8 @@ impl App {
         self.clamp_chat_scroll();
     }
 
-    fn start_new_chat_draft(&mut self) {
+    fn start_new_chat(&mut self) {
         self.state.pending_submit = None;
-        self.state.queued_submit_after_tools = None;
         self.reset_chat_session(None, "Started new chat");
     }
 
@@ -2647,6 +2893,7 @@ impl AppState {
                 role: ChatRole::User,
                 content: optimistic.content.clone(),
                 status: MessageStatus::Complete,
+                agent_profile_id: self.selected_profile_id.clone(),
             });
         }
 
@@ -2657,6 +2904,7 @@ impl AppState {
                 role: ChatRole::Tool,
                 content: optimistic.content.clone(),
                 status: MessageStatus::Complete,
+                agent_profile_id: self.selected_profile_id.clone(),
             });
         }
 
@@ -2673,8 +2921,9 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     use agent_runtime::{
-        Event, FieldDefinition, FieldValueEntry, FieldValueKind, Model, ModelSettings,
-        ProviderDefinition, ProviderSettings, Session, SettingsDocument, SettingsValue,
+        AgentProfileSummary, Event, FieldDefinition, FieldValueEntry, FieldValueKind, Model,
+        ModelSettings, ProviderDefinition, ProviderSettings, Session, SettingsDocument,
+        SettingsValue,
     };
     use crossbeam_channel::{Receiver, unbounded};
     use ratatui::{
@@ -2693,8 +2942,8 @@ mod tests {
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
         OptimisticToolMessage, PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse,
         SettingsFocus, SettingsModelField, SettingsProviderField, ToolPhase, UiMode,
-        is_copy_shortcut, menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
-        render_chat_selection_overlay, selection_text,
+        default_agent_profiles, is_copy_shortcut, menu_scroll_offset, model_menu_next_index,
+        model_menu_previous_index, render_chat_selection_overlay, selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -2761,6 +3010,7 @@ mod tests {
             role,
             content: content.to_string(),
             status: MessageStatus::Complete,
+            agent_profile_id: None,
         }
     }
 
@@ -2897,6 +3147,8 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 title: Some(String::from("Refactor ideas")),
+                selected_profile_id: Some(String::from("plan-code")),
+                profile_locked: true,
                 waiting_for_approval: true,
                 is_streaming: true,
             },
@@ -2907,10 +3159,16 @@ mod tests {
                 created_at: 3,
                 updated_at: 4,
                 title: Some(String::from("Testing plan")),
+                selected_profile_id: Some(String::from("build-code")),
+                profile_locked: false,
                 waiting_for_approval: false,
                 is_streaming: false,
             },
         ]
+    }
+
+    fn sample_agent_profiles() -> Vec<AgentProfileSummary> {
+        default_agent_profiles()
     }
 
     fn sample_pending_tools() -> Vec<PendingTool> {
@@ -2946,7 +3204,9 @@ mod tests {
             config_loaded: true,
             status: String::from("Ready"),
             models_by_provider: sample_models(),
+            agent_profiles: sample_agent_profiles(),
             provider_definitions: sample_provider_definitions(),
+            selected_profile_id: Some(String::from("plan-code")),
             selected_provider_id: Some(String::from("openai-chat-completions")),
             selected_model_id: Some(String::from("gpt-4o-mini")),
             pending_tools: sample_pending_tools(),
@@ -3131,7 +3391,7 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use render tests, interaction tests, and a small number of end-to-end sm
 05: oke tests.
-14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  > Add tests for the settings menu"#,
         );
     }
@@ -3152,7 +3412,7 @@ mod tests {
 11:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
 12:  │> /settings  Open settings editor        │
 13:  │  /sessions  Open sessions menu          │
-14: R└─────────────────────────────────────────┘-mini | tools=2 | idle
+14: R└─────────────────────────────────────────┘completions/gpt-4o-mini | to
 16:  > /s"#,
         );
     }
@@ -3177,7 +3437,7 @@ mod tests {
 10:          │                                                    │
 11:          │                                                    │
 12:          └────────────────────────────────────────────────────┘
-14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  >"#,
         );
     }
@@ -3246,7 +3506,7 @@ mod tests {
 10:        │                                                       │
 11:        │                                                       │
 12:        └───────────────────────────────────────────────────────┘
-14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  >"#,
         );
     }
@@ -3263,7 +3523,7 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use render tests, interaction tests, and a small number of end-to-end smoke test
 05: s.
-09: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+09: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | tools=2 |
 10:   Permission required ─────────────────────────────────────────────────────────┐
 11:   Patch the app module                                                         │
 12:   tool: write_file  risk: undoable_workspace_write                             │
@@ -3289,14 +3549,14 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use render tes┌/help────────────────────────────────────┐f end-to-end sm
 05: oke tests.    │Slash Commands                           │
-06:               │/help      Open this help menu           │
-07:               │/model     Open model selector           │
-08:               │/settings  Open settings editor          │
-09:               │/sessions  Open sessions menu            │
-10:               │/new       Start a new session           │
-11:               │/quit      Exit the TUI                  │
+06:               │/agent     Open agent selector           │
+07:               │/help      Open this help menu           │
+08:               │/model     Open model selector           │
+09:               │/settings  Open settings editor          │
+10:               │/sessions  Open sessions menu            │
+11:               │/new       Start a new chat              │
 12:               └─────────────────────────────────────────┘
-14: Ready | model=openai-chat-completions/gpt-4o-mini | tools=2 | idle
+14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  >"#,
         );
     }
@@ -3496,7 +3756,7 @@ mod tests {
     }
 
     #[test]
-    fn new_command_starts_local_draft_without_creating_session() {
+    fn new_command_clears_local_state_without_creating_session() {
         let mut harness = test_harness();
         harness.app.state = populated_state();
         harness.app.state.pending_submit = Some(PendingSubmit {
@@ -3514,32 +3774,37 @@ mod tests {
         assert!(harness.app.state.chat_history.is_empty());
         assert!(harness.app.state.optimistic_messages.is_empty());
         assert!(harness.app.state.pending_submit.is_none());
+        assert_eq!(
+            harness.app.state.selected_profile_id.as_deref(),
+            Some("plan-code")
+        );
         assert_eq!(harness.app.state.status, "Started new chat");
         assert!(harness.drain_requests().is_empty());
     }
 
     #[test]
-    fn first_submit_after_new_command_creates_session_lazily() {
+    fn agent_command_opens_selector_without_session() {
+        let mut harness = test_harness();
+
+        harness.app.handle_command("agent");
+
+        assert_eq!(harness.app.state.mode, UiMode::AgentMenu);
+        assert_eq!(harness.app.state.agent_profiles.len(), 2);
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn submit_without_session_requests_session_creation() {
         let mut harness = test_harness();
         harness.app.state.config_loaded = true;
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
-
-        harness.app.handle_command("new");
         harness.app.state.input = String::from("hello world");
         harness.app.state.input_cursor = harness.app.state.input.len();
-        harness.app.handle_key_event(key(KeyCode::Enter));
 
-        assert_eq!(
-            harness
-                .app
-                .state
-                .pending_submit
-                .as_ref()
-                .map(|submit| submit.message.as_str()),
-            Some("hello world")
-        );
+        harness.app.handle_key_event(key(KeyCode::Enter));
         assert_eq!(harness.app.state.status, "Creating session");
+        assert_eq!(harness.app.state.pending_submit.as_ref().map(|submit| submit.message.as_str()), Some("hello world"));
 
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 1);
@@ -3547,7 +3812,62 @@ mod tests {
     }
 
     #[test]
-    fn sessions_menu_new_chat_starts_local_draft_without_creating_session() {
+    fn create_session_applies_draft_agent_before_sending() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.selected_profile_id = Some(String::from("build-code"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.input = String::from("hello world");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+        assert!(matches!(harness.drain_requests().as_slice(), [RuntimeRequest::CreateSession]));
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::CreateSession(Ok(String::from(
+                "sess-3",
+            ))));
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| {
+            matches!(
+                request,
+                RuntimeRequest::SetSessionProfile { session_id, profile_id }
+                    if session_id == "sess-3" && profile_id == "build-code"
+            )
+        }));
+        assert!(!requests.iter().any(|request| {
+            matches!(request, RuntimeRequest::SendMessage { .. })
+        }));
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+                profile_id: String::from("build-code"),
+                result: Ok(()),
+            });
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| {
+            matches!(
+                request,
+                RuntimeRequest::SendMessage {
+                    session_id,
+                    message,
+                    model_id,
+                    provider_id,
+                } if session_id == "sess-3"
+                    && message == "hello world"
+                    && model_id == "gpt-4o-mini"
+                    && provider_id == "openai-chat-completions"
+            )
+        }));
+    }
+
+    #[test]
+    fn sessions_menu_new_chat_starts_lazy_draft() {
         let mut harness = test_harness();
         harness.app.state = populated_state();
         harness.app.state.mode = UiMode::SessionsMenu;
@@ -3558,8 +3878,6 @@ mod tests {
             .handle_sessions_menu_key_event(key(KeyCode::Enter));
 
         assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert_eq!(harness.app.state.current_session_id, None);
-        assert!(harness.app.state.chat_history.is_empty());
         assert_eq!(harness.app.state.status, "Started new chat");
         assert!(harness.drain_requests().is_empty());
     }
@@ -3571,6 +3889,7 @@ mod tests {
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("hello world");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
@@ -3609,6 +3928,7 @@ mod tests {
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("/not-a-command");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
@@ -3759,6 +4079,7 @@ mod tests {
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("/s");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
@@ -3813,6 +4134,7 @@ mod tests {
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("queue this");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
@@ -3880,6 +4202,7 @@ mod tests {
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
         harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("/s");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
@@ -4332,9 +4655,11 @@ mod tests {
     fn request_name(request: &RuntimeRequest) -> &'static str {
         match request {
             RuntimeRequest::ListModels => "ListModels",
+            RuntimeRequest::ListAgentProfiles { .. } => "ListAgentProfiles",
             RuntimeRequest::ListProviderDefinitions => "ListProviderDefinitions",
             RuntimeRequest::GetSettings => "GetSettings",
             RuntimeRequest::CreateSession => "CreateSession",
+            RuntimeRequest::SetSessionProfile { .. } => "SetSessionProfile",
             RuntimeRequest::SendMessage { .. } => "SendMessage",
             RuntimeRequest::SaveSettings { .. } => "SaveSettings",
             RuntimeRequest::GetChatHistory { .. } => "GetChatHistory",

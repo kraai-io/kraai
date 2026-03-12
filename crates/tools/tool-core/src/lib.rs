@@ -134,6 +134,18 @@ impl ToolManager {
             .join("\n\n")
     }
 
+    pub fn generate_system_prompt_for_tools(&self, tool_ids: &[ToolId]) -> Result<String, ToolError> {
+        let mut sections = Vec::with_capacity(tool_ids.len());
+        for tool_id in tool_ids {
+            let tool = self
+                .tools
+                .get(tool_id)
+                .ok_or_else(|| ToolError::ToolNotFound(tool_id.clone()))?;
+            sections.push(tool.schema());
+        }
+        Ok(sections.join("\n\n"))
+    }
+
     pub async fn call_tool(
         &self,
         id: &ToolId,

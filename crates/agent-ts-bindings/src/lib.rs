@@ -63,6 +63,7 @@ pub struct Message {
   pub role: ChatRole,
   pub content: String,
   pub status: MessageStatus,
+  pub agent_profile_id: Option<String>,
 }
 
 impl From<TypesMessage> for Message {
@@ -73,6 +74,87 @@ impl From<TypesMessage> for Message {
       role: msg.role.into(),
       content: msg.content,
       status: msg.status.into(),
+      agent_profile_id: msg.agent_profile_id,
+    }
+  }
+}
+
+#[napi(string_enum)]
+#[derive(Clone, Debug)]
+pub enum AgentProfileSource {
+  BuiltIn,
+  Global,
+  Workspace,
+}
+
+impl From<agent_runtime::AgentProfileSource> for AgentProfileSource {
+  fn from(value: agent_runtime::AgentProfileSource) -> Self {
+    match value {
+      agent_runtime::AgentProfileSource::BuiltIn => AgentProfileSource::BuiltIn,
+      agent_runtime::AgentProfileSource::Global => AgentProfileSource::Global,
+      agent_runtime::AgentProfileSource::Workspace => AgentProfileSource::Workspace,
+    }
+  }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct AgentProfileSummary {
+  pub id: String,
+  pub display_name: String,
+  pub description: String,
+  pub tools: Vec<String>,
+  pub default_risk_level: String,
+  pub source: AgentProfileSource,
+}
+
+impl From<agent_runtime::AgentProfileSummary> for AgentProfileSummary {
+  fn from(value: agent_runtime::AgentProfileSummary) -> Self {
+    AgentProfileSummary {
+      id: value.id,
+      display_name: value.display_name,
+      description: value.description,
+      tools: value.tools,
+      default_risk_level: value.default_risk_level.as_str().to_string(),
+      source: value.source.into(),
+    }
+  }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct AgentProfileWarning {
+  pub source: AgentProfileSource,
+  pub path: Option<String>,
+  pub message: String,
+}
+
+impl From<agent_runtime::AgentProfileWarning> for AgentProfileWarning {
+  fn from(value: agent_runtime::AgentProfileWarning) -> Self {
+    AgentProfileWarning {
+      source: value.source.into(),
+      path: value.path,
+      message: value.message,
+    }
+  }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct AgentProfilesState {
+  pub profiles: Vec<AgentProfileSummary>,
+  pub warnings: Vec<AgentProfileWarning>,
+  pub selected_profile_id: Option<String>,
+  pub profile_locked: bool,
+}
+
+impl From<agent_runtime::AgentProfilesState> for AgentProfilesState {
+  fn from(value: agent_runtime::AgentProfilesState) -> Self {
+    AgentProfilesState {
+      profiles: value.profiles.into_iter().map(Into::into).collect(),
+      warnings: value.warnings.into_iter().map(Into::into).collect(),
+      selected_profile_id: value.selected_profile_id,
+      profile_locked: value.profile_locked,
     }
   }
 }
@@ -104,6 +186,8 @@ pub struct Session {
   pub created_at: f64,
   pub updated_at: f64,
   pub title: Option<String>,
+  pub selected_profile_id: Option<String>,
+  pub profile_locked: bool,
   pub waiting_for_approval: bool,
   pub is_streaming: bool,
 }
@@ -117,6 +201,8 @@ impl From<SessionMeta> for Session {
       created_at: meta.created_at as f64,
       updated_at: meta.updated_at as f64,
       title: meta.title,
+      selected_profile_id: meta.selected_profile_id,
+      profile_locked: false,
       waiting_for_approval: false,
       is_streaming: false,
     }
@@ -363,6 +449,8 @@ impl From<agent_runtime::Session> for Session {
       created_at: s.created_at as f64,
       updated_at: s.updated_at as f64,
       title: s.title,
+      selected_profile_id: s.selected_profile_id,
+      profile_locked: s.profile_locked,
       waiting_for_approval: s.waiting_for_approval,
       is_streaming: s.is_streaming,
     }
@@ -606,6 +694,29 @@ impl AgentRuntime {
       .get_settings()
       .await
       .map(Into::into)
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn list_agent_profiles(&self, session_id: String) -> napi::Result<AgentProfilesState> {
+    self
+      .handle
+      .list_agent_profiles(session_id)
+      .await
+      .map(Into::into)
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn set_session_profile(
+    &self,
+    session_id: String,
+    profile_id: String,
+  ) -> napi::Result<()> {
+    self
+      .handle
+      .set_session_profile(session_id, profile_id)
+      .await
       .map_err(to_napi_error)
   }
 

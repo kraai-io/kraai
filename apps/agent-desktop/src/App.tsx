@@ -1,4 +1,5 @@
 import type {
+	AgentProfilesState as BindingAgentProfilesState,
 	Model as BindingModel,
 	Event,
 	ProviderDefinition,
@@ -30,6 +31,13 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 
 interface Message {
 	id: string;
@@ -72,8 +80,30 @@ interface Session {
 	createdAt: number;
 	updatedAt: number;
 	title?: string;
+	selectedProfileId?: string;
+	profileLocked: boolean;
 	waitingForApproval: boolean;
 	isStreaming: boolean;
+}
+
+interface AgentProfileSummary {
+	id: string;
+	displayName: string;
+	description: string;
+	tools: string[];
+	defaultRiskLevel: string;
+	source: "BuiltIn" | "Global" | "Workspace";
+}
+
+interface AgentProfileWarning {
+	source: "BuiltIn" | "Global" | "Workspace";
+	path?: string;
+	message: string;
+}
+
+interface AgentProfilesState extends Omit<BindingAgentProfilesState, "profiles" | "warnings"> {
+	profiles: AgentProfileSummary[];
+	warnings: AgentProfileWarning[];
 }
 
 interface WorkspaceState {
@@ -87,6 +117,8 @@ interface WindowAPI {
 	listProviderDefinitions: () => Promise<ProviderDefinition[]>;
 	getSettings: () => Promise<SettingsDocument>;
 	saveSettings: (settings: SettingsDocument) => Promise<void>;
+	listAgentProfiles: (sessionId: string) => Promise<AgentProfilesState>;
+	setSessionProfile: (sessionId: string, profileId: string) => Promise<void>;
 	createSession: () => Promise<string>;
 	sendMessage: (
 		sessionId: string,
@@ -107,6 +139,8 @@ interface WindowAPI {
 	pickWorkspaceDir: (defaultPath?: string) => Promise<string | null>;
 }
 
+const DEFAULT_AGENT_PROFILE_ID = "plan-code";
+
 declare global {
 	interface Window {
 		api: WindowAPI;
@@ -121,6 +155,12 @@ function App(): React.JSX.Element {
 	const [selectedModel, setSelectedModel] = useState<[string, string] | null>(
 		null,
 	);
+	const [profiles, setProfiles] = useState<AgentProfileSummary[]>([]);
+	const [profileWarnings, setProfileWarnings] = useState<AgentProfileWarning[]>([]);
+	const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
+		DEFAULT_AGENT_PROFILE_ID,
+	);
+	const [profileLocked, setProfileLocked] = useState(false);
 	const [pendingTools, setPendingTools] = useState<PendingTool[]>([]);
 	const [sessions, setSessions] = useState<Session[]>([]);
 	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -179,26 +219,69 @@ function App(): React.JSX.Element {
 		}
 	}, [selectedModel]);
 
-	const loadSessions = useCallback(async () => {
+	const loadSessions = useCallback(
+		async (activeSessionId: string | null = currentSessionId) => {
+			const api = window.api;
+			if (!api) return;
+
+			try {
+				const sessionsList = await api.listSessions();
+				setSessions(sessionsList);
+				if (activeSessionId) {
+					const currentSession = sessionsList.find(
+						(session) => session.id === activeSessionId,
+					);
+					setSelectedProfileId(
+						currentSession?.selectedProfileId ?? DEFAULT_AGENT_PROFILE_ID,
+					);
+					setProfileLocked(currentSession?.profileLocked ?? false);
+				} else {
+					setSelectedProfileId(DEFAULT_AGENT_PROFILE_ID);
+					setProfileLocked(false);
+				}
+				if (
+					activeSessionId &&
+					!sessionsList.some((session) => session.id === activeSessionId)
+				) {
+					setCurrentSessionId(null);
+					setMessages([]);
+					setWorkspaceDir(null);
+					setWorkspaceAppliesNextChat(false);
+					setProfiles([]);
+					setProfileWarnings([]);
+					setSelectedProfileId(DEFAULT_AGENT_PROFILE_ID);
+					setProfileLocked(false);
+				}
+			} catch (err) {
+				console.error("[UI] Failed to load sessions:", err);
+			}
+		},
+		[currentSessionId],
+	);
+
+	const loadAgentProfiles = useCallback(async (sessionId: string | null) => {
 		const api = window.api;
 		if (!api) return;
+		if (!sessionId) {
+			setProfiles([]);
+			setProfileWarnings([]);
+			setSelectedProfileId(DEFAULT_AGENT_PROFILE_ID);
+			setProfileLocked(false);
+			return;
+		}
 
 		try {
-			const sessionsList = await api.listSessions();
-			setSessions(sessionsList);
-			if (
-				currentSessionId &&
-				!sessionsList.some((session) => session.id === currentSessionId)
-			) {
-				setCurrentSessionId(null);
-				setMessages([]);
-				setWorkspaceDir(null);
-				setWorkspaceAppliesNextChat(false);
-			}
+			const state = await api.listAgentProfiles(sessionId);
+			setProfiles(state.profiles);
+			setProfileWarnings(state.warnings);
+			setSelectedProfileId(
+				state.selectedProfileId ?? DEFAULT_AGENT_PROFILE_ID,
+			);
+			setProfileLocked(state.profileLocked);
 		} catch (err) {
-			console.error("[UI] Failed to load sessions:", err);
+			console.error("[UI] Failed to load agent profiles:", err);
 		}
-	}, [currentSessionId]);
+	}, []);
 
 	const loadWorkspaceState = useCallback(async (sessionId: string | null) => {
 		const api = window.api;
@@ -310,6 +393,7 @@ function App(): React.JSX.Element {
 					loadSessions();
 					if (event.sessionId !== currentSessionId) break;
 					loadWorkspaceState(event.sessionId);
+					loadAgentProfiles(event.sessionId);
 					setMessages((prev) => [
 						...prev,
 						{
@@ -337,6 +421,7 @@ function App(): React.JSX.Element {
 					if (event.sessionId !== currentSessionId) break;
 					setIsLoading(false);
 					loadChatHistory(event.sessionId);
+					loadAgentProfiles(event.sessionId);
 					break;
 				case "StreamError":
 					loadSessions();
@@ -353,6 +438,7 @@ function App(): React.JSX.Element {
 					setIsLoading(false);
 					loadChatHistory(event.sessionId);
 					loadWorkspaceState(event.sessionId);
+					loadAgentProfiles(event.sessionId);
 					break;
 				case "ToolCallDetected":
 					loadSessions();
@@ -396,6 +482,7 @@ function App(): React.JSX.Element {
 					if (event.sessionId === currentSessionId) {
 						loadChatHistory(event.sessionId);
 						loadWorkspaceState(event.sessionId);
+						loadAgentProfiles(event.sessionId);
 					}
 					break;
 			}
@@ -407,6 +494,7 @@ function App(): React.JSX.Element {
 		forceScrollToBottom,
 		scrollToBottom,
 		loadSessions,
+		loadAgentProfiles,
 		loadWorkspaceState,
 		currentSessionId,
 		loadChatHistory,
@@ -428,20 +516,20 @@ function App(): React.JSX.Element {
 	}, []);
 
 	const handleSend = async () => {
-		if (!inputValue.trim() || isLoading || !selectedModel) return;
+		if (
+			!inputValue.trim() ||
+			isLoading ||
+			!selectedModel ||
+			!selectedProfileId ||
+			profileLocked
+		) {
+			return;
+		}
 
 		const [providerId, modelId] = selectedModel;
 		const content = inputValue.trim();
 		const api = window.api;
 		if (!api) return;
-
-		let sessionId = currentSessionId;
-		if (!sessionId) {
-			sessionId = await api.createSession();
-			setCurrentSessionId(sessionId);
-			await loadSessions();
-			await loadWorkspaceState(sessionId);
-		}
 
 		setInputValue("");
 		setIsLoading(true);
@@ -455,10 +543,24 @@ function App(): React.JSX.Element {
 		setMessages((prev) => [...prev, optimisticMessage]);
 		forceScrollToBottom();
 
-		api.sendMessage(sessionId, content, modelId, providerId).catch((err) => {
+		try {
+			let sessionId = currentSessionId;
+			if (!sessionId) {
+				sessionId = await api.createSession();
+				setCurrentSessionId(sessionId);
+				setPendingTools([]);
+				await Promise.all([
+					loadSessions(sessionId),
+					loadWorkspaceState(sessionId),
+					loadAgentProfiles(sessionId),
+				]);
+			}
+
+			await api.sendMessage(sessionId, content, modelId, providerId);
+		} catch (err) {
 			console.error("[UI] Send failed:", err);
 			setIsLoading(false);
-		});
+		}
 	};
 
 	const handleCancelStream = async () => {
@@ -481,11 +583,19 @@ function App(): React.JSX.Element {
 		}
 	};
 
-	const handleNewChat = () => {
+	const handleNewChat = async () => {
 		setCurrentSessionId(null);
 		setMessages([]);
+		setPendingTools([]);
+		setInputValue("");
+		setIsLoading(false);
 		setWorkspaceDir(null);
 		setWorkspaceAppliesNextChat(false);
+		setProfiles([]);
+		setProfileWarnings([]);
+		setSelectedProfileId(DEFAULT_AGENT_PROFILE_ID);
+		setProfileLocked(false);
+		setIsSidebarOpen(false);
 	};
 
 	const handleLoadSession = async (sessionId: string) => {
@@ -493,8 +603,12 @@ function App(): React.JSX.Element {
 		if (success) {
 			setCurrentSessionId(sessionId);
 			setIsSidebarOpen(false);
-			await loadChatHistory(sessionId);
-			await loadWorkspaceState(sessionId);
+			await Promise.all([
+				loadSessions(sessionId),
+				loadChatHistory(sessionId),
+				loadWorkspaceState(sessionId),
+				loadAgentProfiles(sessionId),
+			]);
 		}
 	};
 
@@ -509,6 +623,10 @@ function App(): React.JSX.Element {
 			setCurrentSessionId(null);
 			setWorkspaceDir(null);
 			setWorkspaceAppliesNextChat(false);
+			setProfiles([]);
+			setProfileWarnings([]);
+			setSelectedProfileId(DEFAULT_AGENT_PROFILE_ID);
+			setProfileLocked(false);
 		}
 		setSessionToDelete(null);
 	};
@@ -550,10 +668,24 @@ function App(): React.JSX.Element {
 			);
 			if (!selected) return;
 			await window.api?.setWorkspaceDir(currentSessionId, selected);
-			await loadWorkspaceState(currentSessionId);
-			await loadSessions();
+			await Promise.all([
+				loadWorkspaceState(currentSessionId),
+				loadAgentProfiles(currentSessionId),
+				loadSessions(),
+			]);
 		} catch (err) {
 			console.error("[UI] Failed to set workspace directory:", err);
+		}
+	};
+
+	const handleSetProfile = async (profileId: string) => {
+		if (!currentSessionId || profileLocked) return;
+		try {
+			await window.api?.setSessionProfile(currentSessionId, profileId);
+			setSelectedProfileId(profileId);
+			await Promise.all([loadSessions(), loadAgentProfiles(currentSessionId)]);
+		} catch (err) {
+			console.error("[UI] Failed to set profile:", err);
 		}
 	};
 
@@ -567,9 +699,14 @@ function App(): React.JSX.Element {
 			? `...${workspaceDir.slice(-37)}`
 			: workspaceDir
 		: "Select workspace";
+	const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+	const selectedProfileLabel = selectedProfile?.displayName ?? selectedProfileId;
 	const sendDisabled = isLoading
 		? !currentSessionId
-		: !inputValue.trim() || !selectedModel;
+		: !inputValue.trim() ||
+			!selectedModel ||
+			!selectedProfileId ||
+			profileLocked;
 
 	return (
 		<div className="flex h-screen bg-background">
@@ -661,6 +798,11 @@ function App(): React.JSX.Element {
 											{session.waitingForApproval && (
 												<span className="shrink-0 rounded-full border border-amber-300/60 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900">
 													Approval
+												</span>
+											)}
+											{session.selectedProfileId && (
+												<span className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+													{session.selectedProfileId}
 												</span>
 											)}
 										</div>
@@ -864,11 +1006,31 @@ function App(): React.JSX.Element {
 								disabled={isLoading}
 							/>
 							<div className="flex items-center justify-between gap-2 pt-2">
-								<ModelSelector
-									models={models}
-									value={selectedModel}
-									onChange={setSelectedModel}
-								/>
+								<div className="flex min-w-0 flex-1 items-center gap-2">
+									<ModelSelector
+										models={models}
+										value={selectedModel}
+										onChange={setSelectedModel}
+									/>
+									<Select
+										value={selectedProfileId ?? undefined}
+										onValueChange={handleSetProfile}
+										disabled={!currentSessionId || profileLocked}
+									>
+										<SelectTrigger className="h-8 w-[180px] text-xs">
+											<SelectValue placeholder="Select agent">
+												{selectedProfile?.displayName ?? "Select agent"}
+											</SelectValue>
+										</SelectTrigger>
+										<SelectContent>
+											{profiles.map((profile) => (
+												<SelectItem key={profile.id} value={profile.id}>
+													{profile.displayName}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
 								<div className="flex items-center gap-2">
 									<Button
 										variant="outline"
@@ -897,6 +1059,21 @@ function App(): React.JSX.Element {
 								<p className="pt-2 px-1 text-xs text-muted-foreground">
 									Workspace update will apply on next chat turn.
 								</p>
+							)}
+							<p className="pt-2 px-1 text-xs text-muted-foreground">
+								Agent: {selectedProfileLabel ?? "None selected"}
+								{profileLocked ? " (locked for current turn)" : ""}
+							</p>
+							{profileWarnings.length > 0 && (
+								<div className="space-y-1 pt-2 px-1 text-xs text-amber-700">
+									{profileWarnings.map((warning, index) => (
+										<p key={`${warning.source}:${warning.path ?? "none"}:${index}`}>
+											{warning.path
+												? `${warning.message} (${warning.path})`
+												: warning.message}
+										</p>
+									))}
+								</div>
 							)}
 						</div>
 					</div>

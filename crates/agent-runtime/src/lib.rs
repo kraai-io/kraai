@@ -28,6 +28,7 @@ use tokio::task::AbortHandle;
 pub use provider_core::{
     DynamicValue as SettingsValue, FieldDefinition, FieldValueKind, ProviderDefinition,
 };
+pub use types::{AgentProfileSource, AgentProfileSummary, AgentProfileWarning, AgentProfilesState};
 
 // ============================================================================
 // Public Types - exposed to all clients
@@ -49,6 +50,8 @@ pub struct Session {
     pub created_at: u64,
     pub updated_at: u64,
     pub title: Option<String>,
+    pub selected_profile_id: Option<String>,
+    pub profile_locked: bool,
     pub waiting_for_approval: bool,
     pub is_streaming: bool,
 }
@@ -62,6 +65,8 @@ impl From<SessionMeta> for Session {
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             title: meta.title,
+            selected_profile_id: meta.selected_profile_id,
+            profile_locked: false,
             waiting_for_approval: false,
             is_streaming: false,
         }
@@ -230,6 +235,15 @@ enum Command {
     GetSettings {
         response: oneshot::Sender<SettingsDocument>,
     },
+    ListAgentProfiles {
+        session_id: String,
+        response: oneshot::Sender<AgentProfilesState>,
+    },
+    SetSessionProfile {
+        session_id: String,
+        profile_id: String,
+        response: oneshot::Sender<()>,
+    },
     SaveSettings {
         settings: SettingsDocument,
         response: oneshot::Sender<()>,
@@ -328,6 +342,29 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::GetSettings { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn list_agent_profiles(&self, session_id: String) -> Result<AgentProfilesState> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::ListAgentProfiles {
+                session_id,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn set_session_profile(&self, session_id: String, profile_id: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::SetSessionProfile {
+                session_id,
+                profile_id,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
     }
@@ -793,6 +830,36 @@ impl RuntimeInner {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
+            Command::ListAgentProfiles {
+                session_id,
+                response,
+            } => {
+                let profiles = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .list_agent_profiles(&session_id)
+                    .await?;
+                response
+                    .send(profiles)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::SetSessionProfile {
+                session_id,
+                profile_id,
+                response,
+            } => {
+                self.agent_manager
+                    .lock()
+                    .await
+                    .set_session_profile(&session_id, profile_id)
+                    .await?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
             Command::SaveSettings { settings, response } => {
                 self.save_settings_document(settings).await?;
                 response
@@ -845,6 +912,7 @@ impl RuntimeInner {
                 let sessions: Vec<Session> = sessions
                     .into_iter()
                     .map(|session| Session {
+                        profile_locked: agent.is_profile_locked(&session.id),
                         waiting_for_approval: agent.session_waiting_for_approval(&session.id),
                         is_streaming: streaming_sessions.contains(&session.id),
                         ..session.into()
@@ -1110,6 +1178,10 @@ impl RuntimeInner {
                 }
                 Ok(None) => return,
                 Err(error) => {
+                    {
+                        let mut agent = agent_manager.lock().await;
+                        agent.clear_active_turn(&session_id);
+                    }
                     event_callback.on_event(Event::HistoryUpdated {
                         session_id: session_id.clone(),
                     });
@@ -1180,8 +1252,9 @@ impl RuntimeInner {
                         }
                         StreamDriveResult::FailedToStart { error } => {
                             {
-                                let agent = agent_manager.lock().await;
+                                let mut agent = agent_manager.lock().await;
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
+                                agent.clear_active_turn(&request_session_id);
                             }
                             event_callback.on_event(Event::HistoryUpdated {
                                 session_id: request_session_id.clone(),
@@ -1193,8 +1266,9 @@ impl RuntimeInner {
                         }
                         StreamDriveResult::FailedDuringStream { error } => {
                             {
-                                let agent = agent_manager.lock().await;
+                                let mut agent = agent_manager.lock().await;
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
+                                agent.clear_active_turn(&request_session_id);
                             }
                             tracing::error!("Continuation stream error: {}", error);
                             event_callback.on_event(Event::StreamError {
@@ -1293,15 +1367,17 @@ impl RuntimeInner {
                     }
                     StreamDriveResult::FailedToStart { error } => {
                         {
-                            let agent = agent_manager.lock().await;
+                            let mut agent = agent_manager.lock().await;
                             let _ = agent.abort_streaming_message(&request_message_id).await;
+                            agent.clear_active_turn(&request_session_id);
                         }
                         event_callback.on_event(Event::Error(error));
                     }
                     StreamDriveResult::FailedDuringStream { error } => {
                         {
-                            let agent = agent_manager.lock().await;
+                            let mut agent = agent_manager.lock().await;
                             let _ = agent.abort_streaming_message(&request_message_id).await;
+                            agent.clear_active_turn(&request_session_id);
                         }
                         event_callback.on_event(Event::StreamError {
                             session_id: request_session_id,
@@ -1440,6 +1516,7 @@ impl RuntimeInner {
             return;
         }
 
+        let had_tool_calls = !tool_calls.is_empty();
         let mut has_auto_approved_tools = false;
 
         for tool_call in tool_calls {
@@ -1478,6 +1555,14 @@ impl RuntimeInner {
                     session_id: completed_session,
                 })
                 .await;
+        } else if !had_tool_calls {
+            {
+                let mut agent = agent_manager.lock().await;
+                agent.clear_active_turn(&completed_session);
+            }
+            event_callback.on_event(Event::HistoryUpdated {
+                session_id: completed_session,
+            });
         }
     }
 
@@ -1508,10 +1593,12 @@ impl RuntimeInner {
         active_stream.abort_handle.abort();
 
         let cancelled_stream = {
-            let agent = self.agent_manager.lock().await;
-            agent
+            let mut agent = self.agent_manager.lock().await;
+            let cancelled = agent
                 .cancel_streaming_message(&active_stream.message_id)
-                .await?
+                .await?;
+            agent.clear_active_turn(&session_id);
+            cancelled
         };
         let Some(cancelled_stream) = cancelled_stream else {
             return Ok(false);
@@ -2065,6 +2152,23 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
+    struct NoopTool;
+
+    #[async_trait]
+    impl Tool for NoopTool {
+        fn name(&self) -> &'static str {
+            "noop_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "noop_tool()"
+        }
+
+        async fn call(&self, _args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+            ToolOutput::success(serde_json::json!({ "ok": true }))
+        }
+    }
+
     #[async_trait]
     impl provider_core::Provider for BlockingStartProvider {
         fn get_provider_id(&self) -> ProviderId {
@@ -2184,7 +2288,10 @@ mod tests {
             Self::new_with_parts(providers, tools).await
         }
 
-        async fn new_with_parts(providers: ProviderManager, tools: ToolManager) -> Self {
+        async fn new_with_parts(providers: ProviderManager, mut tools: ToolManager) -> Self {
+            if tools.list_tools().is_empty() {
+                tools.register_tool(ApprovalTool);
+            }
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -2199,6 +2306,29 @@ mod tests {
             tokio::fs::create_dir_all(&workspace_dir)
                 .await
                 .expect("create temp workspace dir");
+            tools.register_tool(NoopTool);
+            let profile_dir = workspace_dir.join(".agent");
+            tokio::fs::create_dir_all(&profile_dir)
+                .await
+                .expect("create temp profile dir");
+            let tool_ids = tools
+                .list_tools()
+                .into_iter()
+                .map(|tool_id| format!("\"{}\"", tool_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let profile_doc = format!(
+                "[[profiles]]\n\
+id = \"test-profile\"\n\
+display_name = \"Test Profile\"\n\
+description = \"Runtime test profile\"\n\
+system_prompt = \"Runtime test profile\"\n\
+tools = [{tool_ids}]\n\
+default_risk_level = \"undoable_workspace_write\"\n"
+            );
+            tokio::fs::write(profile_dir.join("agents.toml"), profile_doc)
+                .await
+                .expect("write test profile config");
 
             let message_store = Arc::new(FileMessageStore::new(&data_dir));
             let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
@@ -2250,6 +2380,17 @@ mod tests {
         }
     }
 
+    async fn create_session_with_profile(
+        handle: &RuntimeHandle,
+        profile_id: &str,
+    ) -> Result<String> {
+        let session_id = handle.create_session().await?;
+        handle
+            .set_session_profile(session_id.clone(), profile_id.to_string())
+            .await?;
+        Ok(session_id)
+    }
+
     fn stream_complete_for(events: &[Event], session_id: &str) -> usize {
         events
             .iter()
@@ -2277,7 +2418,7 @@ mod tests {
         ])
         .await;
 
-        let session_a = harness.handle.create_session().await?;
+        let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2304,7 +2445,7 @@ mod tests {
             })
             .await;
 
-        let session_b = harness.handle.create_session().await?;
+        let session_b = create_session_with_profile(&harness.handle, "test-profile").await?;
         assert!(harness.handle.load_session(session_b.clone()).await?);
         harness
             .handle
@@ -2401,7 +2542,7 @@ value: alpha\n\
         ])
         .await;
 
-        let session_a = harness.handle.create_session().await?;
+        let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2441,7 +2582,7 @@ value: alpha\n\
             })
             .expect("tool call id should exist");
 
-        let session_b = harness.handle.create_session().await?;
+        let session_b = create_session_with_profile(&harness.handle, "test-profile").await?;
         assert!(harness.handle.load_session(session_b.clone()).await?);
         harness
             .handle
@@ -2568,7 +2709,7 @@ value: alpha\n\
         )
         .await;
 
-        let session_a = harness.handle.create_session().await?;
+        let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2610,7 +2751,7 @@ value: alpha\n\
             })
             .expect("tool call id should exist");
 
-        let session_b = harness.handle.create_session().await?;
+        let session_b = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .approve_tool(session_a.clone(), call_id.clone())
@@ -2688,7 +2829,7 @@ value: alpha\n\
         )
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2800,8 +2941,8 @@ value: alpha\n\
         );
 
         let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
-        let session_a = harness.handle.create_session().await?;
-        let session_b = harness.handle.create_session().await?;
+        let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
+        let session_b = create_session_with_profile(&harness.handle, "test-profile").await?;
 
         harness
             .handle
@@ -2858,7 +2999,7 @@ value: alpha\n\
         ]])
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2939,7 +3080,7 @@ value: alpha\n\
         );
 
         let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -2994,7 +3135,7 @@ value: alpha\n\
         ]])
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -3051,7 +3192,7 @@ value: alpha\n\
         ])
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -3145,7 +3286,7 @@ value: alpha\n\
         ]])
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -3231,7 +3372,7 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
         ])
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
 
         harness
             .handle
@@ -3282,7 +3423,7 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
                 .any(|message| message.content == "first continuation complete")
         );
 
-        let second_session = harness.handle.create_session().await?;
+        let second_session = create_session_with_profile(&harness.handle, "test-profile").await?;
         let load_result = tokio::time::timeout(
             Duration::from_millis(200),
             harness.handle.load_session(second_session.clone()),
@@ -3354,7 +3495,7 @@ edits[1]{old_text,new_text}:
         )
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -3409,24 +3550,31 @@ edits[1]{old_text,new_text}:
     }
 
     #[tokio::test]
-    async fn native_toon_edit_file_call_is_detected_and_queued() -> Result<()> {
+    async fn native_toon_edit_file_call_executes_automatically_in_workspace() -> Result<()> {
         let harness = RuntimeTestHarness::new_with_tools(
-            vec![vec![ScriptedChunk::plain(
-                r#"<tool_call>
+            vec![
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
 tool: edit_file
 path: src/lib.rs
 create: false
 edits[1]{old_text,new_text}:
   old,new
 </tool_call>"#,
-            )]],
+                )],
+                vec![ScriptedChunk::plain("continuation complete")],
+            ],
             |tools| {
                 tools.register_tool(EditFileTool);
             },
         )
         .await;
 
-        let session_id = harness.handle.create_session().await?;
+        let workspace_src = harness.data_dir.join("workspace").join("src");
+        tokio::fs::create_dir_all(&workspace_src).await?;
+        tokio::fs::write(workspace_src.join("lib.rs"), "old").await?;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
             .send_message(
@@ -3439,32 +3587,96 @@ edits[1]{old_text,new_text}:
 
         harness
             .events
-            .wait_for("native edit_file tool detection", |events| {
+            .wait_for("native edit_file execution", |events| {
                 events.iter().any(|event| {
                     matches!(
                         event,
-                        Event::ToolCallDetected {
+                        Event::ToolResultReady {
                             session_id: event_session,
                             tool_id,
+                            success,
+                            denied,
                             ..
                         } if event_session == &session_id
                             && tool_id == "edit_file"
+                            && *success
+                            && !denied
                     )
                 })
             })
             .await;
 
-        assert!(harness.events.snapshot().iter().any(|event| {
+        let events = harness.events.snapshot();
+        assert!(!events.iter().any(|event| {
             matches!(
                 event,
                 Event::ToolCallDetected {
                     session_id: event_session,
                     tool_id,
                     ..
-                } if event_session == &session_id
-                    && tool_id == "edit_file"
+                } if event_session == &session_id && tool_id == "edit_file"
             )
         }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolResultReady {
+                    session_id: event_session,
+                    tool_id,
+                    success,
+                    denied,
+                    ..
+                } if event_session == &session_id
+                    && tool_id == "edit_file"
+                    && *success
+                    && !denied
+            )
+        }));
+
+        harness
+            .events
+            .wait_for("edit_file continuation", |events| {
+                let tool_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "edit_file"
+                            && *success
+                            && !denied
+                    )
+                });
+                let stream_completions = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete {
+                                session_id: event_session,
+                                ..
+                            } if event_session == &session_id
+                        )
+                    })
+                    .count();
+                tool_result_ready && stream_completions >= 2
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "continuation complete")
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(workspace_src.join("lib.rs")).await?,
+            "new"
+        );
 
         harness.shutdown().await;
         Ok(())
