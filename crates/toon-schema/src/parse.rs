@@ -101,9 +101,11 @@ impl Parse for ToolMacroInput {
         Ok(Self {
             name: name.ok_or_else(|| syn::Error::new(input.span(), "missing `name`"))?,
             description,
-            type_items: type_items.ok_or_else(|| syn::Error::new(input.span(), "missing `types`"))?,
+            type_items: type_items
+                .ok_or_else(|| syn::Error::new(input.span(), "missing `types`"))?,
             root: root.ok_or_else(|| syn::Error::new(input.span(), "missing `root`"))?,
-            examples: examples.ok_or_else(|| syn::Error::new(input.span(), "missing `examples`"))?,
+            examples: examples
+                .ok_or_else(|| syn::Error::new(input.span(), "missing `examples`"))?,
         })
     }
 }
@@ -145,10 +147,13 @@ fn build_tool_schema(parsed: ToolMacroInput) -> Result<ToolSchema> {
 }
 
 fn strip_toon_schema_attrs(item: &mut ItemStruct) {
-    item.attrs.retain(|attr| !attr.path().is_ident("toon_schema"));
+    item.attrs
+        .retain(|attr| !attr.path().is_ident("toon_schema"));
     if let Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {
-            field.attrs.retain(|attr| !attr.path().is_ident("toon_schema"));
+            field
+                .attrs
+                .retain(|attr| !attr.path().is_ident("toon_schema"));
         }
     }
 }
@@ -208,12 +213,7 @@ fn parse_field_def(field: &Field, declared: &BTreeSet<String>) -> Result<Option<
 
     for attr in &field.attrs {
         if attr.path().is_ident("serde") {
-            parse_serde_attr(
-                attr,
-                &mut visible_name,
-                &mut skipped,
-                &mut default_value,
-            )?;
+            parse_serde_attr(attr, &mut visible_name, &mut skipped, &mut default_value)?;
         } else if attr.path().is_ident("toon_schema") {
             parse_toon_field_attr(attr, &mut description, &mut min, &mut max)?;
         }
@@ -380,11 +380,15 @@ fn parse_value_type(ty: &Type, declared: &BTreeSet<String>) -> Result<FieldType>
     }
 
     if let Some(inner) = vec_inner(ty) {
-        return Ok(FieldType::Array(Box::new(parse_value_type(inner, declared)?)));
+        return Ok(FieldType::Array(Box::new(parse_value_type(
+            inner, declared,
+        )?)));
     }
 
     if let Some((inner, _)) = fixed_array_inner(ty)? {
-        return Ok(FieldType::Array(Box::new(parse_value_type(inner, declared)?)));
+        return Ok(FieldType::Array(Box::new(parse_value_type(
+            inner, declared,
+        )?)));
     }
 
     if let Some(value) = map_value_type(ty)? {
@@ -393,16 +397,17 @@ fn parse_value_type(ty: &Type, declared: &BTreeSet<String>) -> Result<FieldType>
 
     match ty {
         Type::Path(TypePath { path, .. }) => {
-            let segment = path.segments.last().ok_or_else(|| {
-                syn::Error::new(ty.span(), "unsupported type")
-            })?;
+            let segment = path
+                .segments
+                .last()
+                .ok_or_else(|| syn::Error::new(ty.span(), "unsupported type"))?;
 
             let ident = segment.ident.to_string();
             match ident.as_str() {
                 "String" => Ok(FieldType::Primitive(PrimitiveType::String)),
                 "bool" => Ok(FieldType::Primitive(PrimitiveType::Boolean)),
-                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
-                | "u64" | "u128" | "usize" => Ok(FieldType::Primitive(PrimitiveType::Integer)),
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "u128" | "usize" => Ok(FieldType::Primitive(PrimitiveType::Integer)),
                 "f32" | "f64" => Ok(FieldType::Primitive(PrimitiveType::Float)),
                 other if declared.contains(other) => Ok(FieldType::Object(other.to_string())),
                 other => Err(syn::Error::new(
@@ -508,7 +513,9 @@ struct ExampleExpr {
 impl Parse for ExampleExpr {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let object = ExampleObjectExpr::parse(input)?;
-        Ok(Self { value: object.value })
+        Ok(Self {
+            value: object.value,
+        })
     }
 }
 
@@ -566,9 +573,8 @@ fn parse_example_value(input: ParseStream<'_>) -> Result<Value> {
     if input.peek(LitFloat) {
         let lit = input.parse::<LitFloat>()?;
         let value = lit.base10_parse::<f64>()?;
-        let number = Number::from_f64(value).ok_or_else(|| {
-            syn::Error::new(lit.span(), "floating-point example must be finite")
-        })?;
+        let number = Number::from_f64(value)
+            .ok_or_else(|| syn::Error::new(lit.span(), "floating-point example must be finite"))?;
         return Ok(Value::Number(number));
     }
     if input.peek(token::Bracket) {
@@ -628,7 +634,11 @@ fn validate_object(
     defs: &BTreeMap<String, ObjectDef>,
 ) -> Result<()> {
     for key in object.keys() {
-        if def.fields.iter().any(|field| !field.skipped && field.visible_name == *key) {
+        if def
+            .fields
+            .iter()
+            .any(|field| !field.skipped && field.visible_name == *key)
+        {
             continue;
         }
 
@@ -724,7 +734,9 @@ fn validate_inner_value(
     field_name: &str,
 ) -> Result<()> {
     match (ty, value) {
-        (FieldType::Primitive(expected), actual) => validate_primitive_name(field_name, *expected, actual),
+        (FieldType::Primitive(expected), actual) => {
+            validate_primitive_name(field_name, *expected, actual)
+        }
         (FieldType::Object(name), Value::Object(object)) => {
             let def = defs.get(name).ok_or_else(|| {
                 syn::Error::new(
@@ -748,7 +760,10 @@ fn validate_inner_value(
         }
         _ => Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("field `{field_name}` has the wrong nested type; expected {}", describe_type(ty)),
+            format!(
+                "field `{field_name}` has the wrong nested type; expected {}",
+                describe_type(ty)
+            ),
         )),
     }
 }
@@ -757,7 +772,11 @@ fn validate_primitive(field: &FieldDef, expected: PrimitiveType, actual: &Value)
     validate_primitive_name(&field.visible_name, expected, actual)
 }
 
-fn validate_primitive_name(field_name: &str, expected: PrimitiveType, actual: &Value) -> Result<()> {
+fn validate_primitive_name(
+    field_name: &str,
+    expected: PrimitiveType,
+    actual: &Value,
+) -> Result<()> {
     let ok = match (expected, actual) {
         (PrimitiveType::String, Value::String(_)) => true,
         (PrimitiveType::Integer, Value::Number(n)) => n.is_i64() || n.is_u64(),

@@ -60,5 +60,8 @@ fn array_of_objects_examples_match_toon_format_exactly() {
     .expect("encode");
 
     let expected_lines: Vec<String> = expected.lines().map(ToOwned::to_owned).collect();
-    assert_eq!(extract_first_example_lines(EditLike::toon_schema()), expected_lines);
+    assert_eq!(
+        extract_first_example_lines(EditLike::toon_schema()),
+        expected_lines
+    );
 }

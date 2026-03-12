@@ -9,7 +9,8 @@ use agent::{AgentManager, PendingStreamRequest, ToolExecutionRequest};
 use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use persistence::SessionMeta;
 use provider_core::{
-    ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig, ProviderManagerHelper,
+    DynamicConfig, ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig,
+    ProviderRegistry,
 };
 use tool_core::{ToolContext, ToolManager, ToolOutput};
 use tool_edit_file::EditFileTool;
@@ -20,9 +21,13 @@ use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
-use provider_openai_chat_completions::OpenAiChatCompletionsFactory;
+use provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
+
+pub use provider_core::{
+    DynamicValue as SettingsValue, FieldDefinition, FieldValueKind, ProviderDefinition,
+};
 
 // ============================================================================
 // Public Types - exposed to all clients
@@ -81,21 +86,12 @@ pub struct WorkspaceState {
     pub applies_next_chat: bool,
 }
 
-/// Supported provider types for settings editing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProviderType {
-    OpenAiChatCompletions,
-}
-
 /// Editable provider settings shared across clients.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderSettings {
     pub id: String,
-    pub provider_type: ProviderType,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub env_var_api_key: Option<String>,
-    pub only_listed_models: bool,
+    pub type_id: String,
+    pub values: Vec<FieldValueEntry>,
 }
 
 /// Editable model settings shared across clients.
@@ -103,8 +99,7 @@ pub struct ProviderSettings {
 pub struct ModelSettings {
     pub id: String,
     pub provider_id: String,
-    pub name: Option<String>,
-    pub max_context: Option<u32>,
+    pub values: Vec<FieldValueEntry>,
 }
 
 /// Full editable settings document persisted to providers.toml.
@@ -112,6 +107,12 @@ pub struct ModelSettings {
 pub struct SettingsDocument {
     pub providers: Vec<ProviderSettings>,
     pub models: Vec<ModelSettings>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldValueEntry {
+    pub key: String,
+    pub value: SettingsValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,6 +224,9 @@ enum Command {
     ListModels {
         response: oneshot::Sender<HashMap<String, Vec<Model>>>,
     },
+    ListProviderDefinitions {
+        response: oneshot::Sender<Vec<ProviderDefinition>>,
+    },
     GetSettings {
         response: oneshot::Sender<SettingsDocument>,
     },
@@ -307,6 +311,14 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::ListModels { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn list_provider_definitions(&self) -> Result<Vec<ProviderDefinition>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::ListProviderDefinitions { response: tx })
             .await?;
         Ok(rx.await?)
     }
@@ -560,6 +572,7 @@ impl RuntimeBuilder {
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
         let tools = build_default_tool_manager();
+        let registry = build_provider_registry()?;
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
@@ -573,6 +586,7 @@ impl RuntimeBuilder {
             event_callback: callback,
             command_tx,
             agent_manager,
+            provider_registry: registry,
             active_streams: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -638,6 +652,17 @@ fn build_default_tool_manager() -> ToolManager {
     tools
 }
 
+fn build_provider_registry() -> Result<ProviderRegistry> {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register_factory::<OpenAiChatCompletionsFactory>()
+        .map_err(|error| eyre!(error.to_string()))?;
+    registry
+        .register_factory::<OpenAiFactory>()
+        .map_err(|error| eyre!(error.to_string()))?;
+    Ok(registry)
+}
+
 async fn execute_tool_requests(
     tools: &ToolManager,
     executions: Vec<ToolExecutionRequest>,
@@ -686,6 +711,7 @@ struct RuntimeInner {
     event_callback: Arc<dyn EventCallback>,
     command_tx: mpsc::Sender<Command>,
     agent_manager: Arc<Mutex<AgentManager>>,
+    provider_registry: ProviderRegistry,
     active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
 }
 
@@ -754,8 +780,14 @@ impl RuntimeInner {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
+            Command::ListProviderDefinitions { response } => {
+                response
+                    .send(self.provider_registry.list_definitions())
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
             Command::GetSettings { response } => {
-                let settings = read_settings_document(&settings_path()?)?;
+                let settings = read_settings_document(&settings_path()?, &self.provider_registry)?;
                 response
                     .send(settings)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -1564,15 +1596,10 @@ impl RuntimeInner {
         let config: ProviderManagerConfig =
             toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
 
-        let mut helper = ProviderManagerHelper::default();
-        helper
-            .register_factory::<OpenAiChatCompletionsFactory>()
-            .map_err(|e| eyre!("{}", e))?;
-
         self.agent_manager
             .lock()
             .await
-            .set_providers(config, helper)
+            .set_providers(config, self.provider_registry.clone())
             .await?;
 
         Ok(())
@@ -1580,7 +1607,7 @@ impl RuntimeInner {
 
     async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
         let config_loc = settings_path()?;
-        write_settings_document(&config_loc, &settings).await?;
+        write_settings_document(&config_loc, &settings, &self.provider_registry).await?;
         self.load_providers_config().await?;
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
@@ -1613,7 +1640,10 @@ fn settings_path() -> Result<std::path::PathBuf> {
         .join(".agent-desktop/providers.toml"))
 }
 
-fn read_settings_document(path: &std::path::Path) -> Result<SettingsDocument> {
+fn read_settings_document(
+    path: &std::path::Path,
+    registry: &ProviderRegistry,
+) -> Result<SettingsDocument> {
     if !path.exists() {
         return Ok(SettingsDocument::default());
     }
@@ -1621,14 +1651,15 @@ fn read_settings_document(path: &std::path::Path) -> Result<SettingsDocument> {
     let config_slice = std::fs::read(path)?;
     let config: ProviderManagerConfig =
         toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
-    settings_from_provider_config(config)
+    settings_from_provider_config(config, registry)
 }
 
 async fn write_settings_document(
     path: &std::path::Path,
     settings: &SettingsDocument,
+    registry: &ProviderRegistry,
 ) -> Result<()> {
-    let errors = validate_settings(settings);
+    let errors = validate_settings(settings, registry);
     if !errors.is_empty() {
         let message = errors
             .into_iter()
@@ -1651,7 +1682,10 @@ async fn write_settings_document(
     Ok(())
 }
 
-fn settings_from_provider_config(config: ProviderManagerConfig) -> Result<SettingsDocument> {
+fn settings_from_provider_config(
+    config: ProviderManagerConfig,
+    registry: &ProviderRegistry,
+) -> Result<SettingsDocument> {
     let providers = config
         .providers
         .into_iter()
@@ -1663,45 +1697,36 @@ fn settings_from_provider_config(config: ProviderManagerConfig) -> Result<Settin
         .map(model_settings_from_config)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(SettingsDocument { providers, models })
+    let settings = SettingsDocument { providers, models };
+    let errors = validate_settings(&settings, registry);
+    if errors.is_empty() {
+        Ok(settings)
+    } else {
+        Err(eyre!(format_settings_errors(errors)))
+    }
 }
 
 fn provider_settings_from_config(config: ProviderConfig) -> Result<ProviderSettings> {
-    let provider_type = match config.r#type.as_str() {
-        "openai-chat-completions" => ProviderType::OpenAiChatCompletions,
-        other => return Err(eyre!("Unsupported provider type in settings: {other}")),
-    };
-    let table = as_table(&config.config)?;
-    let base_url = table_string(table, "base_url");
-    let api_key = table_string(table, "api_key");
-    let env_var_api_key = table_string(table, "env_var_api_key");
-    let only_listed_models = table_bool(table, "only_listed_models").unwrap_or(false);
-
     Ok(ProviderSettings {
         id: config.id.to_string(),
-        provider_type,
-        base_url,
-        api_key,
-        env_var_api_key,
-        only_listed_models,
+        type_id: config.type_id,
+        values: config
+            .config
+            .into_iter()
+            .map(|(key, value)| FieldValueEntry { key, value })
+            .collect(),
     })
 }
 
 fn model_settings_from_config(config: ModelConfig) -> Result<ModelSettings> {
-    let table = as_table(&config.config)?;
-    let id = table_string(table, "id").ok_or_else(|| eyre!("Model config missing id"))?;
-    let name = table_string(table, "name");
-    let max_context = table
-        .get("max_context")
-        .and_then(toml::Value::as_integer)
-        .map(|value| u32::try_from(value).map_err(|_| eyre!("Invalid max_context: {value}")))
-        .transpose()?;
-
     Ok(ModelSettings {
-        id,
+        id: config.id.to_string(),
         provider_id: config.provider_id.to_string(),
-        name,
-        max_context,
+        values: config
+            .config
+            .into_iter()
+            .map(|(key, value)| FieldValueEntry { key, value })
+            .collect(),
     })
 }
 
@@ -1720,63 +1745,28 @@ fn provider_config_from_settings(settings: &SettingsDocument) -> Result<Provider
 }
 
 fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<ProviderConfig> {
-    let mut table = toml::map::Map::new();
-    match settings.provider_type {
-        ProviderType::OpenAiChatCompletions => {
-            let base_url = trim_optional(&settings.base_url)
-                .ok_or_else(|| eyre!("OpenAI providers require a base_url"))?;
-            table.insert(String::from("base_url"), toml::Value::String(base_url));
-        }
-    }
-
-    if let Some(api_key) = trim_optional(&settings.api_key) {
-        table.insert(String::from("api_key"), toml::Value::String(api_key));
-    }
-    if let Some(env_var_api_key) = trim_optional(&settings.env_var_api_key) {
-        table.insert(
-            String::from("env_var_api_key"),
-            toml::Value::String(env_var_api_key),
-        );
-    }
-    table.insert(
-        String::from("only_listed_models"),
-        toml::Value::Boolean(settings.only_listed_models),
-    );
-
     Ok(ProviderConfig {
         id: ProviderId::new(settings.id.trim().to_string()),
-        r#type: match settings.provider_type {
-            ProviderType::OpenAiChatCompletions => String::from("openai-chat-completions"),
-        },
-        config: toml::Value::Table(table),
+        type_id: settings.type_id.trim().to_string(),
+        config: values_to_dynamic_config(&settings.values),
     })
 }
 
 fn model_config_entry_from_settings(settings: &ModelSettings) -> Result<ModelConfig> {
-    let mut table = toml::map::Map::new();
-    table.insert(
-        String::from("id"),
-        toml::Value::String(settings.id.trim().to_string()),
-    );
-    if let Some(name) = trim_optional(&settings.name) {
-        table.insert(String::from("name"), toml::Value::String(name));
-    }
-    if let Some(max_context) = settings.max_context {
-        table.insert(
-            String::from("max_context"),
-            toml::Value::Integer(i64::from(max_context)),
-        );
-    }
-
     Ok(ModelConfig {
+        id: ModelId::new(settings.id.trim().to_string()),
         provider_id: ProviderId::new(settings.provider_id.trim().to_string()),
-        config: toml::Value::Table(table),
+        config: values_to_dynamic_config(&settings.values),
     })
 }
 
-fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError> {
+fn validate_settings(
+    settings: &SettingsDocument,
+    registry: &ProviderRegistry,
+) -> Vec<SettingsValidationError> {
     let mut errors = Vec::new();
     let mut provider_ids = std::collections::BTreeSet::new();
+    let mut provider_types = BTreeMap::new();
 
     for (index, provider) in settings.providers.iter().enumerate() {
         let field_prefix = format!("providers[{index}]");
@@ -1792,22 +1782,29 @@ fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError
                 message: String::from("Provider ID must be unique"),
             });
         }
-
-        if matches!(provider.provider_type, ProviderType::OpenAiChatCompletions)
-            && trim_optional(&provider.base_url).is_none()
-        {
+        let type_id = provider.type_id.trim();
+        if type_id.is_empty() {
             errors.push(SettingsValidationError {
-                field: format!("{field_prefix}.base_url"),
-                message: String::from("Base URL is required for OpenAI-compatible providers"),
+                field: format!("{field_prefix}.type_id"),
+                message: String::from("Provider type is required"),
             });
+            continue;
         }
-
-        if trim_optional(&provider.api_key).is_none()
-            && trim_optional(&provider.env_var_api_key).is_none()
+        if !registry.has_factory(type_id) {
+            errors.push(SettingsValidationError {
+                field: format!("{field_prefix}.type_id"),
+                message: format!("Unsupported provider type: {type_id}"),
+            });
+            continue;
+        }
+        provider_types.insert(id.to_string(), type_id.to_string());
+        for error in registry
+            .validate_provider_config(type_id, &values_to_dynamic_config(&provider.values))
+            .unwrap_or_default()
         {
             errors.push(SettingsValidationError {
-                field: format!("{field_prefix}.credentials"),
-                message: String::from("Provide either an API key or an environment variable name"),
+                field: format!("{field_prefix}.{}", error.field),
+                message: error.message,
             });
         }
     }
@@ -1825,18 +1822,22 @@ fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError
                 field: format!("{field_prefix}.provider_id"),
                 message: String::from("Provider ID is required"),
             });
-        } else if !provider_ids.contains(model.provider_id.trim()) {
+            continue;
+        }
+        let Some(provider_type) = provider_types.get(model.provider_id.trim()) else {
             errors.push(SettingsValidationError {
                 field: format!("{field_prefix}.provider_id"),
                 message: String::from("Model must reference an existing provider"),
             });
-        }
-        if let Some(max_context) = model.max_context
-            && max_context == 0
+            continue;
+        };
+        for error in registry
+            .validate_model_config(provider_type, &values_to_dynamic_config(&model.values))
+            .unwrap_or_default()
         {
             errors.push(SettingsValidationError {
-                field: format!("{field_prefix}.max_context"),
-                message: String::from("Max context must be greater than zero"),
+                field: format!("{field_prefix}.{}", error.field),
+                message: error.message,
             });
         }
     }
@@ -1844,29 +1845,19 @@ fn validate_settings(settings: &SettingsDocument) -> Vec<SettingsValidationError
     errors
 }
 
-fn as_table(value: &toml::Value) -> Result<&toml::map::Map<String, toml::Value>> {
-    value
-        .as_table()
-        .ok_or_else(|| eyre!("provider/model config should be a table"))
+fn values_to_dynamic_config(values: &[FieldValueEntry]) -> DynamicConfig {
+    values
+        .iter()
+        .map(|entry| (entry.key.clone(), entry.value.clone()))
+        .collect()
 }
 
-fn table_string(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<String> {
-    table
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .map(ToString::to_string)
-}
-
-fn table_bool(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<bool> {
-    table.get(key).and_then(toml::Value::as_bool)
-}
-
-fn trim_optional(value: &Option<String>) -> Option<String> {
-    value
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+fn format_settings_errors(errors: Vec<SettingsValidationError>) -> String {
+    errors
+        .into_iter()
+        .map(|error| format!("{}: {}", error.field, error.message))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -2230,6 +2221,7 @@ mod tests {
                 event_callback: Arc::new(events.clone()),
                 command_tx,
                 agent_manager,
+                provider_registry: build_provider_registry().expect("provider registry"),
                 active_streams: Arc::new(Mutex::new(HashMap::new())),
             };
 

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_runtime::{
-    Event, Model, ModelSettings, ProviderSettings, ProviderType, RuntimeHandle, Session,
-    SettingsDocument,
+    Event, FieldDefinition, FieldValueEntry, Model, ModelSettings, ProviderDefinition,
+    ProviderSettings, RuntimeHandle, Session, SettingsDocument, SettingsValue,
 };
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
@@ -26,9 +26,9 @@ mod ui;
 
 use self::runtime_bridge::spawn_runtime_bridge;
 use self::ui::{
-    SETTINGS_MODEL_FIELDS, active_command_prefix, adjust_index, bottom_panel_height,
-    copy_via_osc52, is_copy_shortcut, is_known_slash_command, model_menu_next_index,
-    model_menu_previous_index, parse_settings_errors, selection_text, slash_command_matches,
+    active_command_prefix, adjust_index, bottom_panel_height, copy_via_osc52, is_copy_shortcut,
+    is_known_slash_command, model_menu_next_index, model_menu_previous_index,
+    parse_settings_errors, selection_text, slash_command_matches,
 };
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
@@ -72,24 +72,20 @@ enum SettingsFocus {
     ModelForm,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SettingsProviderField {
     Id,
-    Type,
-    BaseUrl,
-    ApiKey,
-    EnvVarApiKey,
-    OnlyListedModels,
+    TypeId,
+    Value(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SettingsModelField {
     Id,
-    Name,
-    MaxContext,
+    Value(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ActiveSettingsEditor {
     Provider(SettingsProviderField),
     Model(SettingsModelField),
@@ -153,6 +149,7 @@ impl ChatSelection {
 
 enum RuntimeRequest {
     ListModels,
+    ListProviderDefinitions,
     GetSettings,
     CreateSession,
     SendMessage {
@@ -198,6 +195,7 @@ enum RuntimeRequest {
 
 enum RuntimeResponse {
     Models(Result<HashMap<String, Vec<Model>>, String>),
+    ProviderDefinitions(Result<Vec<ProviderDefinition>, String>),
     Settings(Result<SettingsDocument, String>),
     CreateSession(Result<String, String>),
     SendMessage(Result<(), String>),
@@ -265,6 +263,7 @@ pub struct AppState {
     status: String,
     is_streaming: bool,
     models_by_provider: HashMap<String, Vec<Model>>,
+    provider_definitions: Vec<ProviderDefinition>,
     selected_provider_id: Option<String>,
     selected_model_id: Option<String>,
     pending_tools: Vec<PendingTool>,
@@ -316,6 +315,7 @@ impl Default for AppState {
             status: String::from("Type /help for commands"),
             is_streaming: false,
             models_by_provider: HashMap::new(),
+            provider_definitions: Vec::new(),
             selected_provider_id: None,
             selected_model_id: None,
             pending_tools: Vec::new(),
@@ -358,6 +358,94 @@ struct ChatRenderCache {
 struct CachedMessageRender {
     fingerprint: u64,
     lines: Arc<Vec<RenderedLine>>,
+}
+
+fn default_values(fields: &[FieldDefinition]) -> Vec<FieldValueEntry> {
+    fields
+        .iter()
+        .filter_map(|field| {
+            field.default_value.clone().map(|value| FieldValueEntry {
+                key: field.key.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+fn merge_values(fields: &[FieldDefinition], existing: &[FieldValueEntry]) -> Vec<FieldValueEntry> {
+    fields
+        .iter()
+        .filter_map(|field| {
+            existing
+                .iter()
+                .find(|value| value.key == field.key)
+                .cloned()
+                .or_else(|| {
+                    field.default_value.clone().map(|value| FieldValueEntry {
+                        key: field.key.clone(),
+                        value,
+                    })
+                })
+        })
+        .collect()
+}
+
+pub(super) fn field_value_display(values: &[FieldValueEntry], key: &str) -> String {
+    values
+        .iter()
+        .find(|value| value.key == key)
+        .map(|value| match &value.value {
+            SettingsValue::String(value) => value.clone(),
+            SettingsValue::Bool(value) => {
+                if *value {
+                    String::from("yes")
+                } else {
+                    String::from("no")
+                }
+            }
+            SettingsValue::Integer(value) => value.to_string(),
+        })
+        .unwrap_or_default()
+}
+
+fn set_field_value(values: &mut Vec<FieldValueEntry>, key: &str, value: SettingsValue) {
+    clear_field_value(values, key);
+    values.push(FieldValueEntry {
+        key: key.to_string(),
+        value,
+    });
+}
+
+fn clear_field_value(values: &mut Vec<FieldValueEntry>, key: &str) {
+    values.retain(|value| value.key != key);
+}
+
+fn parse_field_input(field: &FieldDefinition, value: &str) -> Option<SettingsValue> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match field.value_kind {
+        agent_runtime::FieldValueKind::Integer => {
+            trimmed.parse::<i64>().ok().map(SettingsValue::Integer)
+        }
+        agent_runtime::FieldValueKind::Boolean => {
+            let normalized = trimmed.to_ascii_lowercase();
+            match normalized.as_str() {
+                "true" | "yes" | "1" => Some(SettingsValue::Bool(true)),
+                "false" | "no" | "0" => Some(SettingsValue::Bool(false)),
+                _ => None,
+            }
+        }
+        agent_runtime::FieldValueKind::String
+        | agent_runtime::FieldValueKind::SecretString
+        | agent_runtime::FieldValueKind::Url => Some(SettingsValue::String(trimmed.to_string())),
+    }
+}
+
+fn is_boolean_field(field: &FieldDefinition) -> bool {
+    matches!(field.value_kind, agent_runtime::FieldValueKind::Boolean)
 }
 
 impl App {
@@ -681,6 +769,12 @@ impl App {
             }
             RuntimeResponse::Models(Err(err)) => {
                 self.state.status = format!("Failed loading models: {err}");
+            }
+            RuntimeResponse::ProviderDefinitions(Ok(definitions)) => {
+                self.state.provider_definitions = definitions;
+            }
+            RuntimeResponse::ProviderDefinitions(Err(err)) => {
+                self.state.status = format!("Failed loading provider definitions: {err}");
             }
             RuntimeResponse::Settings(Ok(settings)) => {
                 self.clear_chat_selection();
@@ -1380,7 +1474,7 @@ impl App {
                     adjust_index(self.state.settings_model_index, len, delta);
             }
             SettingsFocus::ModelForm => {
-                let len = SETTINGS_MODEL_FIELDS.len();
+                let len = self.current_model_fields().len();
                 self.state.settings_model_field_index =
                     adjust_index(self.state.settings_model_field_index, len, delta);
             }
@@ -1390,11 +1484,11 @@ impl App {
     fn adjust_settings_field(&mut self, forward: bool) {
         match self.state.settings_focus {
             SettingsFocus::ProviderForm => {
-                if self.current_provider_field() == Some(SettingsProviderField::Type) {
+                if self.current_provider_field() == Some(SettingsProviderField::TypeId) {
                     self.cycle_provider_type(forward);
-                } else if self.current_provider_field()
-                    == Some(SettingsProviderField::OnlyListedModels)
-                {
+                } else if self.current_provider_field().is_some_and(|field| {
+                    matches!(field, SettingsProviderField::Value(ref key) if self.current_provider_field_definition(key).is_some_and(is_boolean_field))
+                }) {
                     self.toggle_settings_field();
                 }
             }
@@ -1406,8 +1500,14 @@ impl App {
         self.state.settings_delete_armed = false;
         match self.state.settings_focus {
             SettingsFocus::ProviderForm => match self.current_provider_field() {
-                Some(SettingsProviderField::Type) => self.cycle_provider_type(true),
-                Some(SettingsProviderField::OnlyListedModels) => self.toggle_settings_field(),
+                Some(SettingsProviderField::TypeId) => self.cycle_provider_type(true),
+                Some(SettingsProviderField::Value(ref key))
+                    if self
+                        .current_provider_field_definition(key)
+                        .is_some_and(is_boolean_field) =>
+                {
+                    self.toggle_settings_field()
+                }
                 Some(field) => self.start_provider_editor(field),
                 None => {}
             },
@@ -1421,18 +1521,26 @@ impl App {
     }
 
     fn toggle_settings_field(&mut self) {
-        if self.current_provider_field() != Some(SettingsProviderField::OnlyListedModels) {
-            return;
-        }
-
         let provider_index = self.state.settings_provider_index;
+        let Some(SettingsProviderField::Value(key)) = self.current_provider_field() else {
+            return;
+        };
         if let Some(provider) = self
             .state
             .settings_draft
             .as_mut()
             .and_then(|draft| draft.providers.get_mut(provider_index))
         {
-            provider.only_listed_models = !provider.only_listed_models;
+            let current = provider
+                .values
+                .iter()
+                .find(|value| value.key == key)
+                .and_then(|value| match value.value {
+                    SettingsValue::Bool(value) => Some(value),
+                    SettingsValue::String(_) | SettingsValue::Integer(_) => None,
+                })
+                .unwrap_or(false);
+            set_field_value(&mut provider.values, &key, SettingsValue::Bool(!current));
         }
     }
 
@@ -1441,14 +1549,23 @@ impl App {
         match self.state.settings_focus {
             SettingsFocus::ProviderList | SettingsFocus::ProviderForm => {
                 if let Some(draft) = self.state.settings_draft.as_mut() {
+                    let Some(definition) = self.state.provider_definitions.first() else {
+                        self.state.status = String::from("No provider definitions registered");
+                        return;
+                    };
                     let next_index = draft.providers.len();
                     draft.providers.push(ProviderSettings {
-                        id: format!("provider-{}", next_index + 1),
-                        provider_type: ProviderType::OpenAiChatCompletions,
-                        base_url: Some(String::from("https://api.openai.com/v1")),
-                        api_key: None,
-                        env_var_api_key: Some(String::from("OPENAI_API_KEY")),
-                        only_listed_models: true,
+                        id: if next_index == 0 {
+                            definition.default_provider_id_prefix.clone()
+                        } else {
+                            format!(
+                                "{}-{}",
+                                definition.default_provider_id_prefix,
+                                next_index + 1
+                            )
+                        },
+                        type_id: definition.type_id.clone(),
+                        values: default_values(&definition.provider_fields),
                     });
                     self.state.settings_provider_index = next_index;
                     self.state.settings_model_index = 0;
@@ -1457,6 +1574,10 @@ impl App {
             }
             SettingsFocus::ModelList | SettingsFocus::ModelForm => {
                 let provider_id = self.current_provider().map(|provider| provider.id.clone());
+                let model_fields = self
+                    .current_provider_definition()
+                    .map(|definition| definition.model_fields.clone())
+                    .unwrap_or_default();
                 if let (Some(draft), Some(provider_id)) =
                     (self.state.settings_draft.as_mut(), provider_id)
                 {
@@ -1468,8 +1589,7 @@ impl App {
                     draft.models.push(ModelSettings {
                         id: format!("model-{}", next_count + 1),
                         provider_id,
-                        name: None,
-                        max_context: None,
+                        values: default_values(&model_fields),
                     });
                     self.state.settings_model_index = next_count;
                     self.state.status = String::from("Added model");
@@ -1535,14 +1655,18 @@ impl App {
         let Some(provider) = self.current_provider() else {
             return;
         };
-        let value = match field {
+        let value = match &field {
             SettingsProviderField::Id => provider.id.clone(),
-            SettingsProviderField::BaseUrl => provider.base_url.clone().unwrap_or_default(),
-            SettingsProviderField::ApiKey => provider.api_key.clone().unwrap_or_default(),
-            SettingsProviderField::EnvVarApiKey => {
-                provider.env_var_api_key.clone().unwrap_or_default()
+            SettingsProviderField::TypeId => return,
+            SettingsProviderField::Value(key) => {
+                if self
+                    .current_provider_field_definition(key)
+                    .is_some_and(is_boolean_field)
+                {
+                    return;
+                }
+                field_value_display(&provider.values, key)
             }
-            SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => return,
         };
         self.state.settings_editor = Some(ActiveSettingsEditor::Provider(field));
         self.state.settings_editor_input = value;
@@ -1552,13 +1676,9 @@ impl App {
         let Some(model) = self.current_model() else {
             return;
         };
-        let value = match field {
+        let value = match &field {
             SettingsModelField::Id => model.id.clone(),
-            SettingsModelField::Name => model.name.clone().unwrap_or_default(),
-            SettingsModelField::MaxContext => model
-                .max_context
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
+            SettingsModelField::Value(key) => field_value_display(&model.values, key),
         };
         self.state.settings_editor = Some(ActiveSettingsEditor::Model(field));
         self.state.settings_editor_input = value;
@@ -1573,6 +1693,12 @@ impl App {
         match editor {
             ActiveSettingsEditor::Provider(field) => {
                 let provider_index = self.state.settings_provider_index;
+                let provider_field_definition = match &field {
+                    SettingsProviderField::Value(key) => {
+                        self.current_provider_field_definition(key).cloned()
+                    }
+                    SettingsProviderField::Id | SettingsProviderField::TypeId => None,
+                };
                 if let Some(draft) = self.state.settings_draft.as_mut()
                     && let Some(provider) = draft.providers.get_mut(provider_index)
                 {
@@ -1586,21 +1712,27 @@ impl App {
                                 }
                             }
                         }
-                        SettingsProviderField::BaseUrl => {
-                            provider.base_url = if value.is_empty() { None } else { Some(value) };
+                        SettingsProviderField::TypeId => {}
+                        SettingsProviderField::Value(key) => {
+                            if let Some(definition) = provider_field_definition
+                                && let Some(next_value) =
+                                    parse_field_input(&definition, value.as_str())
+                            {
+                                set_field_value(&mut provider.values, &key, next_value);
+                            } else {
+                                clear_field_value(&mut provider.values, &key);
+                            }
                         }
-                        SettingsProviderField::ApiKey => {
-                            provider.api_key = if value.is_empty() { None } else { Some(value) };
-                        }
-                        SettingsProviderField::EnvVarApiKey => {
-                            provider.env_var_api_key =
-                                if value.is_empty() { None } else { Some(value) };
-                        }
-                        SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => {}
                     }
                 }
             }
             ActiveSettingsEditor::Model(field) => {
+                let model_field_definition = match &field {
+                    SettingsModelField::Value(key) => {
+                        self.current_model_field_definition(key).cloned()
+                    }
+                    SettingsModelField::Id => None,
+                };
                 if let Some(global_index) = self.current_model_global_index()
                     && let Some(model) = self
                         .state
@@ -1610,11 +1742,15 @@ impl App {
                 {
                     match field {
                         SettingsModelField::Id => model.id = value,
-                        SettingsModelField::Name => {
-                            model.name = if value.is_empty() { None } else { Some(value) };
-                        }
-                        SettingsModelField::MaxContext => {
-                            model.max_context = value.parse::<u32>().ok();
+                        SettingsModelField::Value(key) => {
+                            if let Some(definition) = model_field_definition
+                                && let Some(next_value) =
+                                    parse_field_input(&definition, value.as_str())
+                            {
+                                set_field_value(&mut model.values, &key, next_value);
+                            } else {
+                                clear_field_value(&mut model.values, &key);
+                            }
                         }
                     }
                 }
@@ -1625,21 +1761,33 @@ impl App {
     }
 
     fn cycle_provider_type(&mut self, forward: bool) {
-        let _ = forward;
         let provider_index = self.state.settings_provider_index;
-        if let Some(provider) = self
+        let Some(provider) = self
             .state
             .settings_draft
             .as_mut()
             .and_then(|draft| draft.providers.get_mut(provider_index))
-        {
-            provider.provider_type = ProviderType::OpenAiChatCompletions;
-            if provider.base_url.is_none() {
-                provider.base_url = Some(String::from("https://api.openai.com/v1"));
-            }
-            if provider.env_var_api_key.is_none() {
-                provider.env_var_api_key = Some(String::from("OPENAI_API_KEY"));
-            }
+        else {
+            return;
+        };
+        if self.state.provider_definitions.is_empty() {
+            return;
+        }
+        let len = self.state.provider_definitions.len();
+        let current_index = self
+            .state
+            .provider_definitions
+            .iter()
+            .position(|definition| definition.type_id == provider.type_id)
+            .unwrap_or(0);
+        let next_index = if forward {
+            (current_index + 1) % len
+        } else {
+            (current_index + len - 1) % len
+        };
+        if let Some(definition) = self.state.provider_definitions.get(next_index) {
+            provider.type_id = definition.type_id.clone();
+            provider.values = merge_values(&definition.provider_fields, &provider.values);
         }
     }
 
@@ -1650,27 +1798,38 @@ impl App {
             .and_then(|draft| draft.providers.get(self.state.settings_provider_index))
     }
 
+    pub(super) fn current_provider_definition(&self) -> Option<&ProviderDefinition> {
+        let provider = self.current_provider()?;
+        self.state
+            .provider_definitions
+            .iter()
+            .find(|definition| definition.type_id == provider.type_id)
+    }
+
     fn current_provider_fields(&self) -> Vec<SettingsProviderField> {
-        match self
-            .current_provider()
-            .map(|provider| &provider.provider_type)
-        {
-            Some(ProviderType::OpenAiChatCompletions) => vec![
-                SettingsProviderField::Id,
-                SettingsProviderField::Type,
-                SettingsProviderField::BaseUrl,
-                SettingsProviderField::ApiKey,
-                SettingsProviderField::EnvVarApiKey,
-                SettingsProviderField::OnlyListedModels,
-            ],
-            None => Vec::new(),
+        let mut fields = vec![SettingsProviderField::Id, SettingsProviderField::TypeId];
+        if let Some(definition) = self.current_provider_definition() {
+            fields.extend(
+                definition
+                    .provider_fields
+                    .iter()
+                    .map(|field| SettingsProviderField::Value(field.key.clone())),
+            );
         }
+        fields
     }
 
     fn current_provider_field(&self) -> Option<SettingsProviderField> {
         self.current_provider_fields()
             .get(self.state.settings_provider_field_index)
-            .copied()
+            .cloned()
+    }
+
+    pub(super) fn current_provider_field_definition(&self, key: &str) -> Option<&FieldDefinition> {
+        self.current_provider_definition()?
+            .provider_fields
+            .iter()
+            .find(|field| field.key == key)
     }
 
     fn current_model_indices(&self) -> Vec<usize> {
@@ -1707,10 +1866,30 @@ impl App {
             .and_then(|draft| draft.models.get(index))
     }
 
+    fn current_model_fields(&self) -> Vec<SettingsModelField> {
+        let mut fields = vec![SettingsModelField::Id];
+        if let Some(definition) = self.current_provider_definition() {
+            fields.extend(
+                definition
+                    .model_fields
+                    .iter()
+                    .map(|field| SettingsModelField::Value(field.key.clone())),
+            );
+        }
+        fields
+    }
+
+    pub(super) fn current_model_field_definition(&self, key: &str) -> Option<&FieldDefinition> {
+        self.current_provider_definition()?
+            .model_fields
+            .iter()
+            .find(|field| field.key == key)
+    }
+
     fn current_model_field(&self) -> Option<SettingsModelField> {
-        SETTINGS_MODEL_FIELDS
+        self.current_model_fields()
             .get(self.state.settings_model_field_index)
-            .copied()
+            .cloned()
     }
 
     fn handle_submit(&mut self) {
@@ -1812,6 +1991,7 @@ impl App {
                 self.request(RuntimeRequest::ListModels);
             }
             "settings" => {
+                self.request(RuntimeRequest::ListProviderDefinitions);
                 self.request(RuntimeRequest::GetSettings);
             }
             "sessions" => {
@@ -2493,7 +2673,8 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     use agent_runtime::{
-        Event, Model, ModelSettings, ProviderSettings, ProviderType, Session, SettingsDocument,
+        Event, FieldDefinition, FieldValueEntry, FieldValueKind, Model, ModelSettings,
+        ProviderDefinition, ProviderSettings, Session, SettingsDocument, SettingsValue,
     };
     use crossbeam_channel::{Receiver, unbounded};
     use ratatui::{
@@ -2603,19 +2784,108 @@ mod tests {
         SettingsDocument {
             providers: vec![ProviderSettings {
                 id: String::from("openai-chat-completions"),
-                provider_type: ProviderType::OpenAiChatCompletions,
-                base_url: Some(String::from("https://api.openai.com/v1")),
-                api_key: None,
-                env_var_api_key: Some(String::from("OPENAI_API_KEY")),
-                only_listed_models: true,
+                type_id: String::from("openai-chat-completions"),
+                values: vec![
+                    FieldValueEntry {
+                        key: String::from("base_url"),
+                        value: SettingsValue::String(String::from("https://api.openai.com/v1")),
+                    },
+                    FieldValueEntry {
+                        key: String::from("env_var_api_key"),
+                        value: SettingsValue::String(String::from("OPENAI_API_KEY")),
+                    },
+                    FieldValueEntry {
+                        key: String::from("only_listed_models"),
+                        value: SettingsValue::Bool(true),
+                    },
+                ],
             }],
             models: vec![ModelSettings {
                 id: String::from("gpt-4o-mini"),
                 provider_id: String::from("openai-chat-completions"),
-                name: Some(String::from("GPT-4o Mini")),
-                max_context: Some(128_000),
+                values: vec![
+                    FieldValueEntry {
+                        key: String::from("name"),
+                        value: SettingsValue::String(String::from("GPT-4o Mini")),
+                    },
+                    FieldValueEntry {
+                        key: String::from("max_context"),
+                        value: SettingsValue::Integer(128_000),
+                    },
+                ],
             }],
         }
+    }
+
+    fn sample_provider_definitions() -> Vec<ProviderDefinition> {
+        vec![ProviderDefinition {
+            type_id: String::from("openai-chat-completions"),
+            display_name: String::from("OpenAI-compatible Chat Completions"),
+            protocol_family: String::from("openai-chat-completions"),
+            description: String::from("Test definition"),
+            provider_fields: vec![
+                FieldDefinition {
+                    key: String::from("base_url"),
+                    label: String::from("Base URL"),
+                    value_kind: FieldValueKind::Url,
+                    required: true,
+                    secret: false,
+                    help_text: None,
+                    default_value: Some(SettingsValue::String(String::from(
+                        "https://api.openai.com/v1",
+                    ))),
+                },
+                FieldDefinition {
+                    key: String::from("api_key"),
+                    label: String::from("Inline API Key"),
+                    value_kind: FieldValueKind::String,
+                    required: false,
+                    secret: true,
+                    help_text: None,
+                    default_value: None,
+                },
+                FieldDefinition {
+                    key: String::from("env_var_api_key"),
+                    label: String::from("Env Var"),
+                    value_kind: FieldValueKind::String,
+                    required: false,
+                    secret: false,
+                    help_text: None,
+                    default_value: Some(SettingsValue::String(String::from("OPENAI_API_KEY"))),
+                },
+                FieldDefinition {
+                    key: String::from("only_listed_models"),
+                    label: String::from("Only Listed Models"),
+                    value_kind: FieldValueKind::Boolean,
+                    required: false,
+                    secret: false,
+                    help_text: None,
+                    default_value: Some(SettingsValue::Bool(true)),
+                },
+            ],
+            model_fields: vec![
+                FieldDefinition {
+                    key: String::from("name"),
+                    label: String::from("Display Name"),
+                    value_kind: FieldValueKind::String,
+                    required: false,
+                    secret: false,
+                    help_text: None,
+                    default_value: None,
+                },
+                FieldDefinition {
+                    key: String::from("max_context"),
+                    label: String::from("Max Context"),
+                    value_kind: FieldValueKind::Integer,
+                    required: false,
+                    secret: false,
+                    help_text: None,
+                    default_value: None,
+                },
+            ],
+            supports_model_discovery: true,
+            default_provider_id_prefix: String::from("openai-chat-completions"),
+        }]
     }
 
     fn sample_sessions() -> Vec<Session> {
@@ -2676,6 +2946,7 @@ mod tests {
             config_loaded: true,
             status: String::from("Ready"),
             models_by_provider: sample_models(),
+            provider_definitions: sample_provider_definitions(),
             selected_provider_id: Some(String::from("openai-chat-completions")),
             selected_model_id: Some(String::from("gpt-4o-mini")),
             pending_tools: sample_pending_tools(),
@@ -3815,8 +4086,9 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.settings_errors =
             HashMap::from([(String::from("providers[0].id"), String::from("old error"))]);
-        harness.app.state.settings_editor =
-            Some(ActiveSettingsEditor::Model(SettingsModelField::Name));
+        harness.app.state.settings_editor = Some(ActiveSettingsEditor::Model(
+            SettingsModelField::Value(String::from("name")),
+        ));
         harness.app.state.settings_editor_input = String::from("stale");
         harness.app.state.settings_delete_armed = true;
 
@@ -4060,6 +4332,7 @@ mod tests {
     fn request_name(request: &RuntimeRequest) -> &'static str {
         match request {
             RuntimeRequest::ListModels => "ListModels",
+            RuntimeRequest::ListProviderDefinitions => "ListProviderDefinitions",
             RuntimeRequest::GetSettings => "GetSettings",
             RuntimeRequest::CreateSession => "CreateSession",
             RuntimeRequest::SendMessage { .. } => "SendMessage",

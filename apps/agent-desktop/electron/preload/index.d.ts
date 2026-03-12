@@ -2,6 +2,7 @@ import { ElectronAPI } from "@electron-toolkit/preload";
 import type {
 	Event,
 	Model,
+	ProviderDefinition,
 	Session,
 	SettingsDocument,
 	Message,
@@ -12,6 +13,7 @@ type EventHandler = (event: Event) => void;
 interface API {
 	initRuntime: (onEvent: EventHandler) => Promise<void>;
 	listModels: () => Promise<Record<string, Model[]>>;
+	listProviderDefinitions: () => Promise<ProviderDefinition[]>;
 	getSettings: () => Promise<SettingsDocument>;
 	saveSettings: (settings: SettingsDocument) => Promise<void>;
 	createSession: () => Promise<string>;

@@ -29,6 +29,12 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::Models(result));
                 }
+                RuntimeRequest::ListProviderDefinitions => {
+                    let result = rt
+                        .block_on(runtime.list_provider_definitions())
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::ProviderDefinitions(result));
+                }
                 RuntimeRequest::GetSettings => {
                     let result = rt
                         .block_on(runtime.get_settings())
@@ -138,6 +144,9 @@ fn respond_with_runtime_error(
 ) {
     let response = match req {
         RuntimeRequest::ListModels => RuntimeResponse::Models(Err(message.to_string())),
+        RuntimeRequest::ListProviderDefinitions => {
+            RuntimeResponse::ProviderDefinitions(Err(message.to_string()))
+        }
         RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(message.to_string())),
         RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
         RuntimeRequest::SendMessage { .. } => {

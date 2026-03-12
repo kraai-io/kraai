@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { electronApp, is, optimizer } from "@electron-toolkit/utils";
-import { AgentRuntime, type Event } from "agent-ts-bindings";
+import {
+	AgentRuntime,
+	type Event,
+	type ProviderDefinition,
+} from "agent-ts-bindings";
 import {
 	app,
 	BrowserWindow,
@@ -48,6 +52,14 @@ function setupIpcHandlers() {
 		if (!runtime) throw new Error("Runtime not initialized");
 		return await runtime.getSettings();
 	});
+
+	ipcMain.handle(
+		"agent:listProviderDefinitions",
+		async (): Promise<ProviderDefinition[]> => {
+			if (!runtime) throw new Error("Runtime not initialized");
+			return await runtime.listProviderDefinitions();
+		},
+	);
 
 	ipcMain.handle("agent:saveSettings", async (_, settings) => {
 		if (!runtime) throw new Error("Runtime not initialized");

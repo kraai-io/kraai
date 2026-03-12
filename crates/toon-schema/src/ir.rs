@@ -70,7 +70,10 @@ impl Range {
     }
 
     pub fn allows_missing(self) -> bool {
-        matches!(self, Self::ZeroToOne | Self::ZeroOrMore | Self::AtLeast(0) | Self::Bounded(0, _))
+        matches!(
+            self,
+            Self::ZeroToOne | Self::ZeroOrMore | Self::AtLeast(0) | Self::Bounded(0, _)
+        )
     }
 
     pub fn validate_len(self, len: usize) -> Result<(), String> {

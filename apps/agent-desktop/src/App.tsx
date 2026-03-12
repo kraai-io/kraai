@@ -1,6 +1,7 @@
 import type {
 	Model as BindingModel,
 	Event,
+	ProviderDefinition,
 	SettingsDocument,
 } from "agent-ts-bindings";
 import {
@@ -83,6 +84,7 @@ interface WorkspaceState {
 interface WindowAPI {
 	initRuntime: (callback: (event: Event) => void) => void;
 	listModels: () => Promise<Record<string, BindingModel[]>>;
+	listProviderDefinitions: () => Promise<ProviderDefinition[]>;
 	getSettings: () => Promise<SettingsDocument>;
 	saveSettings: (settings: SettingsDocument) => Promise<void>;
 	createSession: () => Promise<string>;

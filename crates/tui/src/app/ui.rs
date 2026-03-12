@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use agent_runtime::{ModelSettings, ProviderSettings, ProviderType};
+use agent_runtime::{FieldDefinition, ModelSettings, ProviderSettings};
 use base64::Engine;
 use color_eyre::eyre::Result;
 use ratatui::{
@@ -18,14 +18,8 @@ use crate::components::{ChatHistory, TextInput, VisibleChatView};
 use super::{
     ActiveSettingsEditor, AppState, CachedMessageRender, ChatCellPosition, ChatSelection,
     SettingsFocus, SettingsModelField, SettingsProviderField, ToolApprovalAction, ToolPhase,
-    UiMode, flatten_models_map, message_fingerprint,
+    UiMode, field_value_display, flatten_models_map, message_fingerprint,
 };
-
-pub(super) const SETTINGS_MODEL_FIELDS: [SettingsModelField; 3] = [
-    SettingsModelField::Id,
-    SettingsModelField::Name,
-    SettingsModelField::MaxContext,
-];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     if state.mode == UiMode::Chat && state.tool_phase == ToolPhase::Deciding {
@@ -312,69 +306,110 @@ pub(super) fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
     }
 }
 
-fn provider_type_label(provider_type: &ProviderType) -> &'static str {
-    match provider_type {
-        ProviderType::OpenAiChatCompletions => "OpenAI-compatible",
+fn settings_provider_field_label(state: &AppState, field: &SettingsProviderField) -> String {
+    match field {
+        SettingsProviderField::Id => String::from("Provider ID"),
+        SettingsProviderField::TypeId => String::from("Provider Type"),
+        SettingsProviderField::Value(key) => state
+            .settings_provider_field_definition(key)
+            .map(field_label)
+            .unwrap_or_else(|| key.clone()),
     }
 }
 
-fn settings_provider_field_label(field: SettingsProviderField) -> &'static str {
-    match field {
-        SettingsProviderField::Id => "Provider ID",
-        SettingsProviderField::Type => "Provider Type",
-        SettingsProviderField::BaseUrl => "Base URL",
-        SettingsProviderField::ApiKey => "Inline API Key",
-        SettingsProviderField::EnvVarApiKey => "Env Var",
-        SettingsProviderField::OnlyListedModels => "Only Listed Models",
-    }
+fn field_label(field: &FieldDefinition) -> String {
+    field.label.clone()
 }
 
 fn settings_provider_field_value(
+    state: &AppState,
     provider: &ProviderSettings,
-    field: SettingsProviderField,
+    field: &SettingsProviderField,
 ) -> String {
     match field {
         SettingsProviderField::Id => provider.id.clone(),
-        SettingsProviderField::Type => String::from(provider_type_label(&provider.provider_type)),
-        SettingsProviderField::BaseUrl => provider.base_url.clone().unwrap_or_default(),
-        SettingsProviderField::ApiKey => {
-            if provider
-                .api_key
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
-            {
-                String::from("••••••")
-            } else {
-                String::new()
-            }
-        }
-        SettingsProviderField::EnvVarApiKey => provider.env_var_api_key.clone().unwrap_or_default(),
-        SettingsProviderField::OnlyListedModels => {
-            if provider.only_listed_models {
-                String::from("yes")
-            } else {
-                String::from("no")
-            }
-        }
+        SettingsProviderField::TypeId => state
+            .settings_current_provider_definition()
+            .map(|definition| definition.display_name.clone())
+            .unwrap_or_else(|| provider.type_id.clone()),
+        SettingsProviderField::Value(key) => field_value_display(&provider.values, key),
     }
 }
 
-fn settings_model_field_label(field: SettingsModelField) -> &'static str {
+fn settings_model_field_label(state: &AppState, field: &SettingsModelField) -> String {
     match field {
-        SettingsModelField::Id => "Model ID",
-        SettingsModelField::Name => "Display Name",
-        SettingsModelField::MaxContext => "Max Context",
+        SettingsModelField::Id => String::from("Model ID"),
+        SettingsModelField::Value(key) => state
+            .settings_model_field_definition(key)
+            .map(field_label)
+            .unwrap_or_else(|| key.clone()),
     }
 }
 
-fn settings_model_field_value(model: &ModelSettings, field: SettingsModelField) -> String {
+trait SettingsUiStateExt {
+    fn settings_current_provider_definition(&self) -> Option<&agent_runtime::ProviderDefinition>;
+    fn settings_provider_field_definition(&self, key: &str) -> Option<&FieldDefinition>;
+    fn settings_model_field_definition(&self, key: &str) -> Option<&FieldDefinition>;
+    fn settings_current_provider_fields(&self) -> Vec<SettingsProviderField>;
+    fn settings_current_model_fields(&self) -> Vec<SettingsModelField>;
+}
+
+impl SettingsUiStateExt for AppState {
+    fn settings_current_provider_definition(&self) -> Option<&agent_runtime::ProviderDefinition> {
+        let provider = self
+            .settings_draft
+            .as_ref()
+            .and_then(|draft| draft.providers.get(self.settings_provider_index))?;
+        self.provider_definitions
+            .iter()
+            .find(|definition| definition.type_id == provider.type_id)
+    }
+
+    fn settings_provider_field_definition(&self, key: &str) -> Option<&FieldDefinition> {
+        self.settings_current_provider_definition()?
+            .provider_fields
+            .iter()
+            .find(|field| field.key == key)
+    }
+
+    fn settings_model_field_definition(&self, key: &str) -> Option<&FieldDefinition> {
+        self.settings_current_provider_definition()?
+            .model_fields
+            .iter()
+            .find(|field| field.key == key)
+    }
+
+    fn settings_current_provider_fields(&self) -> Vec<SettingsProviderField> {
+        let mut fields = vec![SettingsProviderField::Id, SettingsProviderField::TypeId];
+        if let Some(definition) = self.settings_current_provider_definition() {
+            fields.extend(
+                definition
+                    .provider_fields
+                    .iter()
+                    .map(|field| SettingsProviderField::Value(field.key.clone())),
+            );
+        }
+        fields
+    }
+
+    fn settings_current_model_fields(&self) -> Vec<SettingsModelField> {
+        let mut fields = vec![SettingsModelField::Id];
+        if let Some(definition) = self.settings_current_provider_definition() {
+            fields.extend(
+                definition
+                    .model_fields
+                    .iter()
+                    .map(|field| SettingsModelField::Value(field.key.clone())),
+            );
+        }
+        fields
+    }
+}
+
+fn settings_model_field_value(model: &ModelSettings, field: &SettingsModelField) -> String {
     match field {
         SettingsModelField::Id => model.id.clone(),
-        SettingsModelField::Name => model.name.clone().unwrap_or_default(),
-        SettingsModelField::MaxContext => model
-            .max_context
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
+        SettingsModelField::Value(key) => field_value_display(&model.values, key),
     }
 }
 
@@ -567,10 +602,10 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     ])
     .areas(inner);
 
-    let header = if let Some(editor) = state.settings_editor {
+    let header = if let Some(editor) = &state.settings_editor {
         let target = match editor {
-            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(field),
-            ActiveSettingsEditor::Model(field) => settings_model_field_label(field),
+            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(state, field),
+            ActiveSettingsEditor::Model(field) => settings_model_field_label(state, field),
         };
         vec![
             Line::styled(
@@ -643,41 +678,25 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         .as_ref()
         .and_then(|draft| draft.providers.get(state.settings_provider_index))
     {
-        let fields = state
-            .settings_draft
-            .as_ref()
-            .map(|_| match provider.provider_type {
-                ProviderType::OpenAiChatCompletions => vec![
-                    SettingsProviderField::Id,
-                    SettingsProviderField::Type,
-                    SettingsProviderField::BaseUrl,
-                    SettingsProviderField::ApiKey,
-                    SettingsProviderField::EnvVarApiKey,
-                    SettingsProviderField::OnlyListedModels,
-                ],
-            })
-            .unwrap_or_default();
+        let fields = state.settings_current_provider_fields();
         for (idx, field) in fields.iter().enumerate() {
             let selected = idx == state.settings_provider_field_index;
             let error_key = match field {
                 SettingsProviderField::Id => {
                     format!("providers[{}].id", state.settings_provider_index)
                 }
-                SettingsProviderField::BaseUrl => {
-                    format!("providers[{}].base_url", state.settings_provider_index)
+                SettingsProviderField::TypeId => {
+                    format!("providers[{}].type_id", state.settings_provider_index)
                 }
-                SettingsProviderField::ApiKey | SettingsProviderField::EnvVarApiKey => {
-                    format!("providers[{}].credentials", state.settings_provider_index)
-                }
-                SettingsProviderField::Type | SettingsProviderField::OnlyListedModels => {
-                    String::new()
+                SettingsProviderField::Value(key) => {
+                    format!("providers[{}].{}", state.settings_provider_index, key)
                 }
             };
             let mut line = format!(
                 "{} {:<18} {}",
                 if selected { ">" } else { " " },
-                settings_provider_field_label(*field),
-                settings_provider_field_value(provider, *field)
+                settings_provider_field_label(state, field),
+                settings_provider_field_value(state, provider, field)
             );
             if let Some(error) = state.settings_errors.get(&error_key)
                 && !error_key.is_empty()
@@ -762,18 +781,18 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
             .as_ref()
             .and_then(|draft| draft.models.get(model_index))
         {
-            for (idx, field) in SETTINGS_MODEL_FIELDS.iter().enumerate() {
+            let fields = state.settings_current_model_fields();
+            for (idx, field) in fields.iter().enumerate() {
                 let selected = idx == state.settings_model_field_index;
                 let error_key = match field {
                     SettingsModelField::Id => format!("models[{model_index}].id"),
-                    SettingsModelField::Name => String::new(),
-                    SettingsModelField::MaxContext => format!("models[{model_index}].max_context"),
+                    SettingsModelField::Value(key) => format!("models[{model_index}].{key}"),
                 };
                 let mut line = format!(
                     "{} {:<18} {}",
                     if selected { ">" } else { " " },
-                    settings_model_field_label(*field),
-                    settings_model_field_value(model, *field)
+                    settings_model_field_label(state, field),
+                    settings_model_field_value(model, field)
                 );
                 if let Some(error) = state.settings_errors.get(&error_key)
                     && !error_key.is_empty()
@@ -795,10 +814,10 @@ fn render_settings_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
 
     let footer_text = if state.settings_delete_armed {
         String::from("Delete armed: press x again to confirm")
-    } else if let Some(editor) = state.settings_editor {
+    } else if let Some(editor) = &state.settings_editor {
         let field = match editor {
-            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(field),
-            ActiveSettingsEditor::Model(field) => settings_model_field_label(field),
+            ActiveSettingsEditor::Provider(field) => settings_provider_field_label(state, field),
+            ActiveSettingsEditor::Model(field) => settings_model_field_label(state, field),
         };
         format!("Editing {field}: Enter=commit, Esc=cancel")
     } else {

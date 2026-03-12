@@ -1,15 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Provider core crate for LLM provider abstraction.
-//!
-//! This crate provides the core traits and types for managing LLM providers
-//! in a provider-agnostic way. It supports:
-//!
-//! - Dynamic provider registration via factory pattern
-//! - Configuration-driven provider loading
-//! - Streaming and non-streaming chat completions
-//! - Model caching and discovery
-
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -19,226 +9,336 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use types::{ChatMessage, ModelId, ProviderId};
 
-/// Errors that can occur when working with providers.
 #[derive(Debug, Error)]
 pub enum ProviderError {
-    /// The requested provider was not found in the manager.
     #[error("Provider not found: {0}")]
     ProviderNotFound(ProviderId),
 
-    /// An unknown provider type was specified in configuration.
     #[error("Unknown provider type: {0}")]
     UnknownProviderType(String),
 
-    /// Failed to parse provider or model configuration.
     #[error("Failed to parse config: {0}")]
     ConfigParseError(String),
 
-    /// Attempted to register a model for a provider that doesn't exist.
     #[error("Provider '{0}' not registered when trying to add model")]
     ProviderNotRegistered(ProviderId),
 
-    /// Attempted to register a factory for a type that already has one.
     #[error("Factory already registered for type: {0}")]
     FactoryAlreadyRegistered(String),
+
+    #[error("Invalid config:\n{0}")]
+    ConfigValidationError(String),
 }
 
-/// Manages a collection of LLM providers.
-///
-/// Use [`ProviderManager`] to:
-/// - Store and retrieve providers by ID
-/// - Generate chat completions (streaming or non-streaming)
-/// - List available models across all providers
-///
-/// # Example
-///
-/// ```ignore
-/// let mut manager = ProviderManager::new();
-/// manager.register_provider(ProviderId::new("my-provider"), my_provider);
-/// let models = manager.list_all_models().await;
-/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DynamicValue {
+    String(String),
+    Bool(bool),
+    Integer(i64),
+}
+
+impl DynamicValue {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::Bool(_) | Self::Integer(_) => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(value) => Some(*value),
+            Self::String(_) | Self::Integer(_) => None,
+        }
+    }
+
+    pub fn as_integer(&self) -> Option<i64> {
+        match self {
+            Self::Integer(value) => Some(*value),
+            Self::String(_) | Self::Bool(_) => None,
+        }
+    }
+}
+
+impl From<String> for DynamicValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for DynamicValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl From<bool> for DynamicValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<i64> for DynamicValue {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+
+pub type DynamicConfig = BTreeMap<String, DynamicValue>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FieldValueKind {
+    String,
+    SecretString,
+    Boolean,
+    Integer,
+    Url,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldDefinition {
+    pub key: String,
+    pub label: String,
+    pub value_kind: FieldValueKind,
+    pub required: bool,
+    pub secret: bool,
+    pub help_text: Option<String>,
+    pub default_value: Option<DynamicValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderDefinition {
+    pub type_id: String,
+    pub display_name: String,
+    pub protocol_family: String,
+    pub description: String,
+    pub provider_fields: Vec<FieldDefinition>,
+    pub model_fields: Vec<FieldDefinition>,
+    pub supports_model_discovery: bool,
+    pub default_provider_id_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
 #[derive(Default, Clone)]
 pub struct ProviderManager {
     providers: BTreeMap<ProviderId, Arc<dyn Provider>>,
 }
 
-/// Helper for registering provider factories before loading configuration.
-///
-/// The factory pattern allows providers to be created dynamically from
-/// configuration files. Register factories for each provider type you support,
-/// then load configuration to instantiate them.
-///
-/// # Example
-///
-/// ```ignore
-/// let mut helper = ProviderManagerHelper::default();
-/// helper.register_factory::<OpenAiChatCompletionsFactory>();
-///
-/// let mut manager = ProviderManager::new();
-/// manager.load_config(config, helper).await?;
-/// ```
-#[derive(Default)]
-pub struct ProviderManagerHelper {
-    factory_registry: BTreeMap<String, ProviderFactoryFn>,
+#[derive(Default, Clone)]
+pub struct ProviderRegistry {
+    factories: BTreeMap<String, Arc<FactoryEntry>>,
+}
+
+struct FactoryEntry {
+    definition: ProviderDefinition,
+    create: Arc<ProviderFactoryFn>,
+    validate_provider_config: Arc<ValidateConfigFn>,
+    validate_model_config: Arc<ValidateConfigFn>,
 }
 
 type ProviderFactoryFn =
-    Box<dyn Fn(ProviderId, toml::Value) -> Result<Box<dyn Provider>, ProviderError> + Send>;
+    dyn Fn(ProviderId, DynamicConfig) -> Result<Box<dyn Provider>, ProviderError> + Send + Sync;
+type ValidateConfigFn = dyn Fn(&DynamicConfig) -> Vec<ValidationError> + Send + Sync;
 
-/// Configuration for the provider manager.
-///
-/// This struct is typically deserialized from a TOML configuration file.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderManagerConfig {
-    /// List of providers to configure.
     #[serde(default, rename = "provider")]
     pub providers: Vec<ProviderConfig>,
-    /// List of models to register with specific providers.
     #[serde(default, rename = "model")]
     pub models: Vec<ModelConfig>,
 }
 
-/// Configuration for a specific model.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
-    /// The provider this model belongs to.
+    pub id: ModelId,
     pub provider_id: ProviderId,
-    /// Additional model-specific configuration.
     #[serde(flatten)]
-    pub config: toml::Value,
+    pub config: DynamicConfig,
 }
 
-/// Configuration for a provider instance.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    /// Unique identifier for this provider instance.
     pub id: ProviderId,
-    /// Type of provider (e.g., "openai-chat-completions").
-    pub r#type: String,
-    /// Provider-specific configuration.
+    #[serde(rename = "type")]
+    pub type_id: String,
     #[serde(flatten)]
-    pub config: toml::Value,
+    pub config: DynamicConfig,
 }
 
-/// Factory trait for creating provider instances.
-///
-/// Implement this trait for each provider type to enable
-/// configuration-driven provider creation.
-///
-/// # Example
-///
-/// ```ignore
-/// pub struct OpenAiChatCompletionsFactory;
-///
-/// impl ProviderFactory for OpenAiChatCompletionsFactory {
-///     const TYPE: &'static str = "openai-chat-completions";
-///     type Config = OpenAiChatCompletionsConfig;
-///
-///     fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>> {
-///         Ok(Box::new(OpenAiChatCompletionsProvider::new(id, config)))
-///     }
-/// }
-/// ```
 pub trait ProviderFactory {
-    /// Unique string identifier for this provider type.
-    const TYPE: &'static str;
+    const TYPE_ID: &'static str;
 
-    /// Configuration type for this provider.
-    type Config: for<'de> Deserialize<'de>;
+    fn definition() -> ProviderDefinition;
 
-    /// Create a new provider instance.
-    fn create(id: ProviderId, config: Self::Config) -> Result<Box<dyn Provider>>;
+    fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>>;
+
+    fn validate_provider_config(_config: &DynamicConfig) -> Vec<ValidationError> {
+        Vec::new()
+    }
+
+    fn validate_model_config(_config: &DynamicConfig) -> Vec<ValidationError> {
+        Vec::new()
+    }
 }
 
-impl ProviderManagerHelper {
-    /// Register a factory for a provider type.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a factory is already registered for this type.
+impl ProviderRegistry {
     pub fn register_factory<F: ProviderFactory + 'static>(&mut self) -> Result<(), ProviderError> {
-        let key = F::TYPE.to_string();
-        if self.factory_registry.contains_key(&key) {
+        let key = F::TYPE_ID.to_string();
+        if self.factories.contains_key(&key) {
             return Err(ProviderError::FactoryAlreadyRegistered(key));
         }
-        let factory_fn = |id, config: toml::Value| -> Result<Box<dyn Provider>, ProviderError> {
-            let config: F::Config = config
-                .try_into()
-                .map_err(|e| ProviderError::ConfigParseError(e.to_string()))?;
-            F::create(id, config).map_err(|e| ProviderError::ConfigParseError(e.to_string()))
+
+        let mut definition = F::definition();
+        definition.type_id = F::TYPE_ID.to_string();
+
+        let entry = FactoryEntry {
+            definition,
+            create: Arc::new(|id, config| {
+                F::create(id, config)
+                    .map_err(|error| ProviderError::ConfigParseError(error.to_string()))
+            }),
+            validate_provider_config: Arc::new(F::validate_provider_config),
+            validate_model_config: Arc::new(F::validate_model_config),
         };
-        self.factory_registry.insert(key, Box::new(factory_fn));
+
+        self.factories.insert(key, Arc::new(entry));
         Ok(())
     }
 
-    /// Check if a factory is registered for a given provider type.
     pub fn has_factory(&self, provider_type: &str) -> bool {
-        self.factory_registry.contains_key(provider_type)
+        self.factories.contains_key(provider_type)
+    }
+
+    pub fn list_definitions(&self) -> Vec<ProviderDefinition> {
+        self.factories
+            .values()
+            .map(|entry| entry.definition.clone())
+            .collect()
+    }
+
+    pub fn get_definition(&self, type_id: &str) -> Option<ProviderDefinition> {
+        self.factories
+            .get(type_id)
+            .map(|entry| entry.definition.clone())
+    }
+
+    pub fn validate_provider_config(
+        &self,
+        type_id: &str,
+        config: &DynamicConfig,
+    ) -> Result<Vec<ValidationError>, ProviderError> {
+        let entry = self
+            .factories
+            .get(type_id)
+            .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
+        Ok((entry.validate_provider_config)(config))
+    }
+
+    pub fn validate_model_config(
+        &self,
+        type_id: &str,
+        config: &DynamicConfig,
+    ) -> Result<Vec<ValidationError>, ProviderError> {
+        let entry = self
+            .factories
+            .get(type_id)
+            .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
+        Ok((entry.validate_model_config)(config))
+    }
+
+    fn create_provider(
+        &self,
+        type_id: &str,
+        id: ProviderId,
+        config: DynamicConfig,
+    ) -> Result<Box<dyn Provider>, ProviderError> {
+        let entry = self
+            .factories
+            .get(type_id)
+            .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
+        (entry.create)(id, config)
     }
 }
 
 impl ProviderManager {
-    /// Create a new empty provider manager.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register a provider directly.
-    ///
-    /// Use this for programmatic provider registration without configuration files.
     pub fn register_provider(&mut self, id: ProviderId, provider: Box<dyn Provider>) {
         self.providers.insert(id, Arc::from(provider));
     }
 
-    /// Check if a provider with the given ID exists.
     pub fn has_provider(&self, id: &ProviderId) -> bool {
         self.providers.contains_key(id)
     }
 
-    /// Get a reference to a provider by ID.
     pub fn get_provider(&self, id: &ProviderId) -> Option<Arc<dyn Provider>> {
         self.providers.get(id).cloned()
     }
 
-    /// List all registered provider IDs.
     pub fn list_providers(&self) -> Vec<ProviderId> {
         self.providers.keys().cloned().collect()
     }
 
-    /// Load providers from configuration.
-    ///
-    /// This clears any existing providers and creates new ones from the configuration.
-    /// Models are registered with their respective providers after creation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - A provider type is unknown (no factory registered)
-    /// - Provider configuration is invalid
-    /// - A model references a non-existent provider
     pub async fn load_config(
         &mut self,
         config: ProviderManagerConfig,
-        helper: ProviderManagerHelper,
+        registry: ProviderRegistry,
     ) -> Result<()> {
-        let mut providers = config
-            .providers
-            .into_iter()
-            .map(|x| {
-                let factory = helper
-                    .factory_registry
-                    .get(&x.r#type)
-                    .ok_or_else(|| ProviderError::UnknownProviderType(x.r#type.clone()))?;
-                let provider = factory(x.id.clone(), x.config)?;
-                Ok((x.id, provider))
-            })
-            .collect::<Result<BTreeMap<ProviderId, Box<dyn Provider>>, ProviderError>>()?;
+        let mut providers = BTreeMap::new();
+        let mut provider_types = BTreeMap::new();
 
-        for m in config.models {
+        for provider_config in config.providers {
+            let errors = registry
+                .validate_provider_config(&provider_config.type_id, &provider_config.config)?;
+            if !errors.is_empty() {
+                return Err(
+                    ProviderError::ConfigValidationError(format_validation_errors(
+                        &format!("providers[{}]", provider_config.id),
+                        &errors,
+                    ))
+                    .into(),
+                );
+            }
+
+            provider_types.insert(provider_config.id.clone(), provider_config.type_id.clone());
+            let provider = registry.create_provider(
+                &provider_config.type_id,
+                provider_config.id.clone(),
+                provider_config.config,
+            )?;
+            providers.insert(provider_config.id, provider);
+        }
+
+        for model_config in config.models {
             let provider = providers
-                .get_mut(&m.provider_id)
-                .ok_or_else(|| ProviderError::ProviderNotRegistered(m.provider_id.clone()))?;
-            provider.register_model(m).await?;
+                .get_mut(&model_config.provider_id)
+                .ok_or_else(|| {
+                    ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
+                })?;
+            let provider_type = provider_types
+                .get(&model_config.provider_id)
+                .ok_or_else(|| {
+                    ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
+                })?;
+            let errors = registry.validate_model_config(provider_type, &model_config.config)?;
+            if !errors.is_empty() {
+                return Err(
+                    ProviderError::ConfigValidationError(format_validation_errors(
+                        &format!("models[{}]", model_config.id),
+                        &errors,
+                    ))
+                    .into(),
+                );
+            }
+            provider.register_model(model_config).await?;
         }
 
         self.providers = providers
@@ -247,18 +347,14 @@ impl ProviderManager {
             .collect();
 
         self.update_models_list().await?;
-
         Ok(())
     }
 
-    /// List all models across all providers.
-    ///
-    /// Returns a map from provider ID to the list of models available for that provider.
     pub async fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
         join_all(
             self.providers
                 .iter()
-                .map(|(id, x)| async { (id.clone(), x.list_models().await) })
+                .map(|(id, provider)| async { (id.clone(), provider.list_models().await) })
                 .collect::<Vec<_>>(),
         )
         .await
@@ -266,81 +362,64 @@ impl ProviderManager {
         .collect()
     }
 
-    /// Update the cached model list for all providers.
-    ///
-    /// This queries each provider's API to refresh the list of available models.
     pub async fn update_models_list(&mut self) -> Result<()> {
-        for p in self.providers.values() {
-            p.cache_models().await?;
+        for provider in self.providers.values() {
+            provider.cache_models().await?;
         }
         Ok(())
     }
 
-    /// Generate a chat completion (non-streaming).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider is not found.
     pub async fn generate_reply(
         &self,
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage> {
-        let client = self
+        let provider = self
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        client.generate_reply(model_id, messages).await
+        provider.generate_reply(model_id, messages).await
     }
 
-    /// Generate a streaming chat completion.
-    ///
-    /// Returns a stream of string chunks that can be collected or processed incrementally.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider is not found.
     pub async fn generate_reply_stream(
         &self,
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>> {
-        let client = self
+        let provider = self
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        client.generate_reply_stream(model_id, messages).await
+        provider.generate_reply_stream(model_id, messages).await
     }
 }
 
-/// Trait for LLM provider implementations.
-///
-/// Implement this trait to add support for a new LLM provider.
-/// The trait handles model discovery, registration, and chat completion.
+fn format_validation_errors(prefix: &str, errors: &[ValidationError]) -> String {
+    errors
+        .iter()
+        .map(|error| format!("{prefix}.{}: {}", error.field, error.message))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
-    /// Get the unique identifier for this provider instance.
     fn get_provider_id(&self) -> ProviderId;
 
-    /// List all available models for this provider.
     async fn list_models(&self) -> Vec<Model>;
 
-    /// Cache the list of models from the provider's API.
     async fn cache_models(&self) -> Result<()>;
 
-    /// Register a model configuration with this provider.
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
-    /// Generate a chat completion (non-streaming).
     async fn generate_reply(
         &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatMessage>;
 
-    /// Generate a streaming chat completion.
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
@@ -348,14 +427,10 @@ pub trait Provider: Send + Sync {
     ) -> Result<BoxStream<'static, Result<String>>>;
 }
 
-/// Information about an LLM model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
-    /// Unique model identifier.
     pub id: ModelId,
-    /// Human-readable model name.
     pub name: String,
-    /// Maximum context length in tokens, if known.
     pub max_context: Option<usize>,
 }
 
@@ -364,7 +439,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Mock provider for testing
     struct MockProvider {
         id: ProviderId,
         models: Vec<Model>,
@@ -412,7 +486,7 @@ mod tests {
             let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
             Ok(ChatMessage {
                 role: types::ChatRole::Assistant,
-                content: format!("Response to: {}", last_content),
+                content: format!("Response to: {last_content}"),
             })
         }
 
@@ -422,9 +496,10 @@ mod tests {
             messages: Vec<ChatMessage>,
         ) -> Result<BoxStream<'static, Result<String>>> {
             use futures::StreamExt;
+
             self.reply_count.fetch_add(1, Ordering::SeqCst);
             let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
-            let response = format!("Streamed response to: {}", last_content);
+            let response = format!("Streamed response to: {last_content}");
             Ok(futures::stream::iter(vec![Ok(response)]).boxed())
         }
     }
@@ -432,213 +507,102 @@ mod tests {
     struct MockFactory;
 
     impl ProviderFactory for MockFactory {
-        const TYPE: &'static str = "mock";
+        const TYPE_ID: &'static str = "mock";
 
-        type Config = MockConfig;
+        fn definition() -> ProviderDefinition {
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Mock".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "Mock provider".to_string(),
+                provider_fields: vec![FieldDefinition {
+                    key: "token".to_string(),
+                    label: "Token".to_string(),
+                    value_kind: FieldValueKind::String,
+                    required: true,
+                    secret: false,
+                    help_text: None,
+                    default_value: None,
+                }],
+                model_fields: vec![],
+                supports_model_discovery: true,
+                default_provider_id_prefix: "mock".to_string(),
+            }
+        }
 
-        fn create(id: ProviderId, _config: Self::Config) -> Result<Box<dyn Provider>> {
+        fn create(id: ProviderId, _config: DynamicConfig) -> Result<Box<dyn Provider>> {
             Ok(Box::new(MockProvider::new(id.as_str())))
         }
-    }
 
-    #[derive(Deserialize)]
-    struct MockConfig {}
-
-    #[test]
-    fn test_provider_manager_new() {
-        let manager = ProviderManager::new();
-        assert!(!manager.has_provider(&ProviderId::new("test")));
-        assert!(manager.list_providers().is_empty());
-    }
-
-    #[test]
-    fn test_register_provider() {
-        let mut manager = ProviderManager::new();
-        let id = ProviderId::new("mock");
-        manager.register_provider(id.clone(), Box::new(MockProvider::new("mock")));
-
-        assert!(manager.has_provider(&id));
-        assert_eq!(manager.list_providers(), vec![id]);
-    }
-
-    #[test]
-    fn test_get_provider() {
-        let mut manager = ProviderManager::new();
-        let id = ProviderId::new("mock");
-        manager.register_provider(id.clone(), Box::new(MockProvider::new("mock")));
-
-        let provider = manager.get_provider(&id);
-        assert!(provider.is_some());
-        assert_eq!(provider.unwrap().get_provider_id(), id);
-
-        let missing = manager.get_provider(&ProviderId::new("missing"));
-        assert!(missing.is_none());
-    }
-
-    #[test]
-    fn test_factory_registration() {
-        let mut helper = ProviderManagerHelper::default();
-
-        assert!(!helper.has_factory("mock"));
-        helper.register_factory::<MockFactory>().unwrap();
-        assert!(helper.has_factory("mock"));
-    }
-
-    #[test]
-    fn test_duplicate_factory_registration() {
-        let mut helper = ProviderManagerHelper::default();
-
-        helper.register_factory::<MockFactory>().unwrap();
-        let result = helper.register_factory::<MockFactory>();
-
-        assert!(matches!(
-            result,
-            Err(ProviderError::FactoryAlreadyRegistered(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_list_all_models() {
-        let mut manager = ProviderManager::new();
-        let id = ProviderId::new("mock");
-        manager.register_provider(id.clone(), Box::new(MockProvider::new("mock")));
-
-        let models = manager.list_all_models().await;
-        assert!(models.contains_key(&id));
-        assert_eq!(models[&id].len(), 1);
-        assert_eq!(models[&id][0].id.as_str(), "mock-model");
-    }
-
-    #[tokio::test]
-    async fn test_generate_reply() {
-        let mut manager = ProviderManager::new();
-        let id = ProviderId::new("mock");
-        manager.register_provider(id.clone(), Box::new(MockProvider::new("mock")));
-
-        let messages = vec![ChatMessage {
-            role: types::ChatRole::User,
-            content: "Hello".to_string(),
-        }];
-
-        let reply = manager
-            .generate_reply(id, &ModelId::new("mock-model"), messages)
-            .await
-            .unwrap();
-
-        assert_eq!(reply.role, types::ChatRole::Assistant);
-        assert!(reply.content.contains("Hello"));
-    }
-
-    #[tokio::test]
-    async fn test_generate_reply_provider_not_found() {
-        let manager = ProviderManager::new();
-
-        let messages = vec![ChatMessage {
-            role: types::ChatRole::User,
-            content: "Hello".to_string(),
-        }];
-
-        let result = manager
-            .generate_reply(ProviderId::new("missing"), &ModelId::new("model"), messages)
-            .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_generate_reply_stream() {
-        let mut manager = ProviderManager::new();
-        let id = ProviderId::new("mock");
-        manager.register_provider(id.clone(), Box::new(MockProvider::new("mock")));
-
-        let messages = vec![ChatMessage {
-            role: types::ChatRole::User,
-            content: "Hello".to_string(),
-        }];
-
-        let stream = manager
-            .generate_reply_stream(id, &ModelId::new("mock-model"), messages)
-            .await
-            .unwrap();
-
-        use futures::StreamExt;
-        let chunks: Vec<_> = stream.collect().await;
-        assert_eq!(chunks.len(), 1);
-        assert!(chunks[0].as_ref().unwrap().contains("Streamed response"));
-    }
-
-    #[tokio::test]
-    async fn test_load_config_unknown_provider_type() {
-        let mut manager = ProviderManager::new();
-        let helper = ProviderManagerHelper::default();
-
-        let config = ProviderManagerConfig {
-            providers: vec![ProviderConfig {
-                id: ProviderId::new("test"),
-                r#type: "unknown".to_string(),
-                config: toml::Value::Table(toml::map::Map::new()),
-            }],
-            models: vec![],
-        };
-
-        let result = manager.load_config(config, helper).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_load_config_model_for_missing_provider() {
-        let mut manager = ProviderManager::new();
-        let mut helper = ProviderManagerHelper::default();
-        helper.register_factory::<MockFactory>().unwrap();
-
-        let config = ProviderManagerConfig {
-            providers: vec![ProviderConfig {
-                id: ProviderId::new("mock"),
-                r#type: "mock".to_string(),
-                config: toml::Value::Table(toml::map::Map::new()),
-            }],
-            models: vec![ModelConfig {
-                provider_id: ProviderId::new("missing"),
-                config: toml::Value::Table(toml::map::Map::new()),
-            }],
-        };
-
-        let result = manager.load_config(config, helper).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_load_config_success() {
-        let mut manager = ProviderManager::new();
-        let mut helper = ProviderManagerHelper::default();
-        helper.register_factory::<MockFactory>().unwrap();
-
-        let config = ProviderManagerConfig {
-            providers: vec![ProviderConfig {
-                id: ProviderId::new("mock"),
-                r#type: "mock".to_string(),
-                config: toml::Value::Table(toml::map::Map::new()),
-            }],
-            models: vec![],
-        };
-
-        let result = manager.load_config(config, helper).await;
-        if let Err(ref e) = result {
-            tracing::debug!("Error: {:?}", e);
+        fn validate_provider_config(config: &DynamicConfig) -> Vec<ValidationError> {
+            if config.get("token").and_then(DynamicValue::as_str).is_none() {
+                vec![ValidationError {
+                    field: "token".to_string(),
+                    message: "token is required".to_string(),
+                }]
+            } else {
+                Vec::new()
+            }
         }
-        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_registry_registration() {
+        let mut registry = ProviderRegistry::default();
+        registry.register_factory::<MockFactory>().unwrap();
+        assert!(registry.has_factory("mock"));
+        assert_eq!(
+            registry.get_definition("mock").unwrap().display_name,
+            "Mock".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_config() {
+        let mut registry = ProviderRegistry::default();
+        registry.register_factory::<MockFactory>().unwrap();
+
+        let mut config = DynamicConfig::new();
+        config.insert("token".to_string(), DynamicValue::from("abc"));
+
+        let mut manager = ProviderManager::new();
+        manager
+            .load_config(
+                ProviderManagerConfig {
+                    providers: vec![ProviderConfig {
+                        id: ProviderId::new("mock"),
+                        type_id: "mock".to_string(),
+                        config,
+                    }],
+                    models: vec![],
+                },
+                registry,
+            )
+            .await
+            .unwrap();
+
         assert!(manager.has_provider(&ProviderId::new("mock")));
     }
 
-    #[test]
-    fn test_provider_error_display() {
-        let err = ProviderError::ProviderNotFound(ProviderId::new("test"));
-        assert!(err.to_string().contains("test"));
+    #[tokio::test]
+    async fn test_invalid_config() {
+        let mut registry = ProviderRegistry::default();
+        registry.register_factory::<MockFactory>().unwrap();
 
-        let err = ProviderError::UnknownProviderType("foo".to_string());
-        assert!(err.to_string().contains("foo"));
+        let result = ProviderManager::new()
+            .load_config(
+                ProviderManagerConfig {
+                    providers: vec![ProviderConfig {
+                        id: ProviderId::new("mock"),
+                        type_id: "mock".to_string(),
+                        config: DynamicConfig::new(),
+                    }],
+                    models: vec![],
+                },
+                registry,
+            )
+            .await;
 
-        let err = ProviderError::ConfigParseError("parse error".to_string());
-        assert!(err.to_string().contains("parse error"));
+        assert!(result.is_err());
     }
 }

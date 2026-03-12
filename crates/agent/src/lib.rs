@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use persistence::{MessageStore, SessionMeta, SessionStore};
-use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderManagerHelper};
+use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use tokio::sync::RwLock;
 use tool_core::{ToolManager, toon_parser};
 use types::{
@@ -252,9 +252,9 @@ impl AgentManager {
     pub async fn set_providers(
         &mut self,
         config: ProviderManagerConfig,
-        helper: ProviderManagerHelper,
+        registry: ProviderRegistry,
     ) -> Result<()> {
-        self.providers.load_config(config, helper).await
+        self.providers.load_config(config, registry).await
     }
 
     pub async fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {

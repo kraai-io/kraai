@@ -2,6 +2,7 @@ import { electronAPI } from "@electron-toolkit/preload";
 import type {
 	Message,
 	Model,
+	ProviderDefinition,
 	Session,
 	SettingsDocument,
 	WorkspaceState,
@@ -74,6 +75,10 @@ const api = {
 
 	async getSettings(): Promise<SettingsDocument> {
 		return await ipcRenderer.invoke("agent:getSettings");
+	},
+
+	async listProviderDefinitions(): Promise<ProviderDefinition[]> {
+		return await ipcRenderer.invoke("agent:listProviderDefinitions");
 	},
 
 	async saveSettings(settings: SettingsDocument): Promise<void> {

@@ -49,5 +49,8 @@ fn example_rendering_matches_toon_format_for_quoted_strings() {
     .expect("encode");
 
     let expected_lines: Vec<String> = expected.lines().map(ToOwned::to_owned).collect();
-    assert_eq!(extract_first_example_lines(QuotedStrings::toon_schema()), expected_lines);
+    assert_eq!(
+        extract_first_example_lines(QuotedStrings::toon_schema()),
+        expected_lines
+    );
 }

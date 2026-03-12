@@ -139,50 +139,152 @@ impl From<agent_runtime::WorkspaceState> for WorkspaceState {
   }
 }
 
-/// Supported provider types for settings editing.
 #[napi(string_enum)]
 #[derive(Clone, Debug)]
-pub enum ProviderType {
-  OpenAiChatCompletions,
+pub enum FieldValueKind {
+  String,
+  SecretString,
+  Boolean,
+  Integer,
+  Url,
 }
 
-impl From<agent_runtime::ProviderType> for ProviderType {
-  fn from(value: agent_runtime::ProviderType) -> Self {
+impl From<agent_runtime::FieldValueKind> for FieldValueKind {
+  fn from(value: agent_runtime::FieldValueKind) -> Self {
     match value {
-      agent_runtime::ProviderType::OpenAiChatCompletions => ProviderType::OpenAiChatCompletions,
+      agent_runtime::FieldValueKind::String => FieldValueKind::String,
+      agent_runtime::FieldValueKind::SecretString => FieldValueKind::SecretString,
+      agent_runtime::FieldValueKind::Boolean => FieldValueKind::Boolean,
+      agent_runtime::FieldValueKind::Integer => FieldValueKind::Integer,
+      agent_runtime::FieldValueKind::Url => FieldValueKind::Url,
     }
   }
 }
 
-impl From<ProviderType> for agent_runtime::ProviderType {
-  fn from(value: ProviderType) -> Self {
-    match value {
-      ProviderType::OpenAiChatCompletions => agent_runtime::ProviderType::OpenAiChatCompletions,
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct FieldValueEntry {
+  pub key: String,
+  pub string_value: Option<String>,
+  pub bool_value: Option<bool>,
+  pub int_value: Option<i64>,
+}
+
+impl From<agent_runtime::FieldValueEntry> for FieldValueEntry {
+  fn from(value: agent_runtime::FieldValueEntry) -> Self {
+    let mut entry = FieldValueEntry {
+      key: value.key,
+      string_value: None,
+      bool_value: None,
+      int_value: None,
+    };
+    match value.value {
+      agent_runtime::SettingsValue::String(inner) => entry.string_value = Some(inner),
+      agent_runtime::SettingsValue::Bool(inner) => entry.bool_value = Some(inner),
+      agent_runtime::SettingsValue::Integer(inner) => entry.int_value = Some(inner),
+    }
+    entry
+  }
+}
+
+impl From<FieldValueEntry> for agent_runtime::FieldValueEntry {
+  fn from(value: FieldValueEntry) -> Self {
+    let converted = if let Some(inner) = value.string_value {
+      agent_runtime::SettingsValue::String(inner)
+    } else if let Some(inner) = value.bool_value {
+      agent_runtime::SettingsValue::Bool(inner)
+    } else if let Some(inner) = value.int_value {
+      agent_runtime::SettingsValue::Integer(inner)
+    } else {
+      agent_runtime::SettingsValue::String(String::new())
+    };
+    agent_runtime::FieldValueEntry {
+      key: value.key,
+      value: converted,
     }
   }
 }
 
-/// Provider settings exposed to TypeScript.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct FieldDefinition {
+  pub key: String,
+  pub label: String,
+  pub value_kind: FieldValueKind,
+  pub required: bool,
+  pub secret: bool,
+  pub help_text: Option<String>,
+  pub default_string_value: Option<String>,
+  pub default_bool_value: Option<bool>,
+  pub default_int_value: Option<i64>,
+}
+
+impl From<agent_runtime::FieldDefinition> for FieldDefinition {
+  fn from(value: agent_runtime::FieldDefinition) -> Self {
+    let mut field = FieldDefinition {
+      key: value.key,
+      label: value.label,
+      value_kind: value.value_kind.into(),
+      required: value.required,
+      secret: value.secret,
+      help_text: value.help_text,
+      default_string_value: None,
+      default_bool_value: None,
+      default_int_value: None,
+    };
+    if let Some(default_value) = value.default_value {
+      match default_value {
+        agent_runtime::SettingsValue::String(inner) => field.default_string_value = Some(inner),
+        agent_runtime::SettingsValue::Bool(inner) => field.default_bool_value = Some(inner),
+        agent_runtime::SettingsValue::Integer(inner) => field.default_int_value = Some(inner),
+      }
+    }
+    field
+  }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct ProviderDefinition {
+  pub type_id: String,
+  pub display_name: String,
+  pub protocol_family: String,
+  pub description: String,
+  pub provider_fields: Vec<FieldDefinition>,
+  pub model_fields: Vec<FieldDefinition>,
+  pub supports_model_discovery: bool,
+  pub default_provider_id_prefix: String,
+}
+
+impl From<agent_runtime::ProviderDefinition> for ProviderDefinition {
+  fn from(value: agent_runtime::ProviderDefinition) -> Self {
+    ProviderDefinition {
+      type_id: value.type_id,
+      display_name: value.display_name,
+      protocol_family: value.protocol_family,
+      description: value.description,
+      provider_fields: value.provider_fields.into_iter().map(Into::into).collect(),
+      model_fields: value.model_fields.into_iter().map(Into::into).collect(),
+      supports_model_discovery: value.supports_model_discovery,
+      default_provider_id_prefix: value.default_provider_id_prefix,
+    }
+  }
+}
+
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ProviderSettings {
   pub id: String,
-  pub provider_type: ProviderType,
-  pub base_url: Option<String>,
-  pub api_key: Option<String>,
-  pub env_var_api_key: Option<String>,
-  pub only_listed_models: bool,
+  pub type_id: String,
+  pub values: Vec<FieldValueEntry>,
 }
 
 impl From<agent_runtime::ProviderSettings> for ProviderSettings {
   fn from(value: agent_runtime::ProviderSettings) -> Self {
     ProviderSettings {
       id: value.id,
-      provider_type: value.provider_type.into(),
-      base_url: value.base_url,
-      api_key: value.api_key,
-      env_var_api_key: value.env_var_api_key,
-      only_listed_models: value.only_listed_models,
+      type_id: value.type_id,
+      values: value.values.into_iter().map(Into::into).collect(),
     }
   }
 }
@@ -191,11 +293,8 @@ impl From<ProviderSettings> for agent_runtime::ProviderSettings {
   fn from(value: ProviderSettings) -> Self {
     agent_runtime::ProviderSettings {
       id: value.id,
-      provider_type: value.provider_type.into(),
-      base_url: value.base_url,
-      api_key: value.api_key,
-      env_var_api_key: value.env_var_api_key,
-      only_listed_models: value.only_listed_models,
+      type_id: value.type_id,
+      values: value.values.into_iter().map(Into::into).collect(),
     }
   }
 }
@@ -206,8 +305,7 @@ impl From<ProviderSettings> for agent_runtime::ProviderSettings {
 pub struct ModelSettings {
   pub id: String,
   pub provider_id: String,
-  pub name: Option<String>,
-  pub max_context: Option<u32>,
+  pub values: Vec<FieldValueEntry>,
 }
 
 impl From<agent_runtime::ModelSettings> for ModelSettings {
@@ -215,8 +313,7 @@ impl From<agent_runtime::ModelSettings> for ModelSettings {
     ModelSettings {
       id: value.id,
       provider_id: value.provider_id,
-      name: value.name,
-      max_context: value.max_context,
+      values: value.values.into_iter().map(Into::into).collect(),
     }
   }
 }
@@ -226,8 +323,7 @@ impl From<ModelSettings> for agent_runtime::ModelSettings {
     agent_runtime::ModelSettings {
       id: value.id,
       provider_id: value.provider_id,
-      name: value.name,
-      max_context: value.max_context,
+      values: value.values.into_iter().map(Into::into).collect(),
     }
   }
 }
@@ -470,6 +566,16 @@ impl AgentRuntime {
           .map(|(provider_id, models)| (provider_id, models.into_iter().map(Into::into).collect()))
           .collect()
       })
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
+  pub async fn list_provider_definitions(&self) -> napi::Result<Vec<ProviderDefinition>> {
+    self
+      .handle
+      .list_provider_definitions()
+      .await
+      .map(|definitions| definitions.into_iter().map(Into::into).collect())
       .map_err(to_napi_error)
   }
 
