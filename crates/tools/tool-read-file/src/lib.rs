@@ -24,6 +24,7 @@ toon_tool! {
     examples: [
         { files: ["/path/to/file.txt"] },
         { files: ["/path/to/file.txt", "/path/to/another/file.md"] },
+        { files: ["/path/to/file.txt", "/path/to/another/file.md", "path/to/a/file/in/current/workspace"] },
     ]
 }
 
