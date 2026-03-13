@@ -13,6 +13,7 @@
       fileset = lib.fileset.unions [
         (craneLib.fileset.commonCargoSources ../.)
         (lib.fileset.maybeMissing ../crates/toon-schema/tests)
+        (lib.fileset.maybeMissing ../crates/agent/src/profiles)
       ];
     };
 
