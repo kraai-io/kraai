@@ -56,9 +56,11 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+ "tool-close-file",
  "tool-core",
  "tool-edit-file",
  "tool-list-files",
+ "tool-open-file",
  "tool-read-file",
  "tool-search-files",
  "tracing",
@@ -3763,6 +3765,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 
 [[package]]
+name = "tool-close-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tool-core",
+ "toon-schema",
+ "types",
+ "workspace-hack",
+]
+
+[[package]]
 name = "tool-core"
 version = "0.1.0"
 dependencies = [
@@ -3803,6 +3818,20 @@ dependencies = [
  "tokio",
  "tool-core",
  "toon-format",
+ "toon-schema",
+ "types",
+ "workspace-hack",
+]
+
+[[package]]
+name = "tool-open-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tool-core",
  "toon-schema",
  "types",
  "workspace-hack",

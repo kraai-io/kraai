@@ -2898,6 +2898,8 @@ impl AppState {
                 content: optimistic.content.clone(),
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
+                tool_state_snapshot: None,
+                tool_state_deltas: Vec::new(),
             });
         }
 
@@ -2909,6 +2911,8 @@ impl AppState {
                 content: optimistic.content.clone(),
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
+                tool_state_snapshot: None,
+                tool_state_deltas: Vec::new(),
             });
         }
 
@@ -3015,6 +3019,8 @@ mod tests {
             content: content.to_string(),
             status: MessageStatus::Complete,
             agent_profile_id: None,
+            tool_state_snapshot: None,
+            tool_state_deltas: Vec::new(),
         }
     }
 

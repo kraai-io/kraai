@@ -12,9 +12,11 @@ use provider_core::{
     DynamicConfig, ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig,
     ProviderRegistry,
 };
+use tool_close_file::CloseFileTool;
 use tool_core::{ToolContext, ToolManager, ToolOutput};
 use tool_edit_file::EditFileTool;
 use tool_list_files::ListFilesTool;
+use tool_open_file::OpenFileTool;
 use tool_read_file::ReadFileTool;
 use tool_search_files::SearchFilesTool;
 use types::{MessageId, ModelId, ProviderId};
@@ -682,8 +684,10 @@ impl RuntimeBuilder {
 
 fn build_default_tool_manager() -> ToolManager {
     let mut tools = ToolManager::new();
+    tools.register_tool(CloseFileTool);
     tools.register_tool(ReadFileTool);
     tools.register_tool(ListFilesTool);
+    tools.register_tool(OpenFileTool);
     tools.register_tool(SearchFilesTool);
     tools.register_tool(EditFileTool);
     tools
@@ -704,22 +708,25 @@ async fn execute_tool_requests(executions: Vec<ToolExecutionRequest>) -> Vec<typ
     let mut results = Vec::with_capacity(executions.len());
 
     for execution in executions {
-        let (output, permission_denied) = match execution.payload {
+        let (output, permission_denied, tool_state_deltas) = match execution.payload {
             ToolExecutionPayload::Denied => (
                 serde_json::json!({ "error": "Permission denied by user" }),
                 true,
+                Vec::new(),
             ),
             ToolExecutionPayload::Approved { prepared, config } => {
-                let output = match prepared
-                    .call(&ToolContext {
-                        global_config: &config,
-                    })
-                    .await
-                {
-                    ToolOutput::Success { data } => data,
-                    ToolOutput::Error { message } => serde_json::json!({ "error": message }),
+                let ctx = ToolContext {
+                    global_config: &config,
                 };
-                (output, false)
+                match prepared.call(&ctx).await {
+                    ToolOutput::Success { data } => {
+                        let deltas = prepared.successful_tool_state_deltas(&ctx);
+                        (data, false, deltas)
+                    }
+                    ToolOutput::Error { message } => {
+                        (serde_json::json!({ "error": message }), false, Vec::new())
+                    }
+                }
             }
         };
 
@@ -728,6 +735,7 @@ async fn execute_tool_requests(executions: Vec<ToolExecutionRequest>) -> Vec<typ
             tool_id: execution.tool_id,
             output,
             permission_denied,
+            tool_state_deltas,
         });
     }
 
@@ -2116,7 +2124,10 @@ mod tests {
             ToolCallAssessment {
                 risk: RiskLevel::UndoableWorkspaceWrite,
                 policy: ExecutionPolicy::AlwaysAsk,
-                reasons: vec![format!("blocking_tool requires approval for {:?}", args.value)],
+                reasons: vec![format!(
+                    "blocking_tool requires approval for {:?}",
+                    args.value
+                )],
             }
         }
 

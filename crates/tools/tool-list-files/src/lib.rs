@@ -170,7 +170,12 @@ mod tests {
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(list_args("."), &ToolContext { global_config: &config })
+            .call(
+                list_args("."),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -203,7 +208,12 @@ mod tests {
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(list_args("."), &ToolContext { global_config: &config })
+            .call(
+                list_args("."),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -224,7 +234,12 @@ mod tests {
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(list_args("missing"), &ToolContext { global_config: &config })
+            .call(
+                list_args("missing"),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -244,7 +259,12 @@ mod tests {
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(list_args("file.txt"), &ToolContext { global_config: &config })
+            .call(
+                list_args("file.txt"),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -262,7 +282,12 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(&list_args("."), &ToolContext { global_config: &config });
+        let assessment = tool.assess(
+            &list_args("."),
+            &ToolContext {
+                global_config: &config,
+            },
+        );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
         assert_eq!(
@@ -305,7 +330,12 @@ mod tests {
         );
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(&list_args(relative_path), &ToolContext { global_config: &config });
+        let assessment = tool.assess(
+            &list_args(relative_path),
+            &ToolContext {
+                global_config: &config,
+            },
+        );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 

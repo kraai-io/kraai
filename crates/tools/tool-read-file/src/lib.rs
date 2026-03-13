@@ -4,7 +4,9 @@ use std::io::Read;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{ToolContext, ToolOutput, TypedTool, resolve_tool_path};
+use tool_core::{
+    ToolContext, ToolOutput, TypedTool, format_text_with_line_numbers, resolve_tool_path,
+};
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
@@ -98,7 +100,7 @@ impl TypedTool for ReadFileTool {
                     ));
                 }
             }
-            files_out.push(format_file_with_line_numbers(&str));
+            files_out.push(format_text_with_line_numbers(&str));
         }
         let out = ReadFileToolOutput { files: files_out };
         ToolOutput::success(out)
@@ -109,15 +111,6 @@ impl TypedTool for ReadFileTool {
         let files_str = args.files.join(", ");
         format!("Read {} file(s): {}", count, files_str)
     }
-}
-
-fn format_file_with_line_numbers(contents: &str) -> String {
-    contents
-        .lines()
-        .enumerate()
-        .map(|(index, line)| format!("{}|{}", index + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
@@ -169,7 +162,12 @@ mod tests {
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(read_args(&["notes.txt"]), &ToolContext { global_config: &config })
+            .call(
+                read_args(&["notes.txt"]),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -193,7 +191,12 @@ mod tests {
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(read_args(&["a.txt", "b.txt"]), &ToolContext { global_config: &config })
+            .call(
+                read_args(&["a.txt", "b.txt"]),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -228,7 +231,12 @@ mod tests {
                 .to_string_lossy()
         );
         let output = tool
-            .call(read_args(&[outside_path]), &ToolContext { global_config: &config })
+            .call(
+                read_args(&[outside_path]),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -248,7 +256,12 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_paths_as_read_only");
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(&read_args(&["notes.txt"]), &ToolContext { global_config: &config });
+        let assessment = tool.assess(
+            &read_args(&["notes.txt"]),
+            &ToolContext {
+                global_config: &config,
+            },
+        );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
         assert_eq!(
@@ -272,7 +285,12 @@ mod tests {
                 .expect("outside dir name")
                 .to_string_lossy()
         );
-        let assessment = tool.assess(&read_args(&[relative_path]), &ToolContext { global_config: &config });
+        let assessment = tool.assess(
+            &read_args(&[relative_path]),
+            &ToolContext {
+                global_config: &config,
+            },
+        );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 

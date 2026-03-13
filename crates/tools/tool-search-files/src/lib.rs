@@ -240,7 +240,10 @@ mod tests {
         let _ = fs::remove_dir_all(path);
     }
 
-    fn search_args(query: impl Into<String>, path: Option<impl Into<String>>) -> SearchFilesToolArgs {
+    fn search_args(
+        query: impl Into<String>,
+        path: Option<impl Into<String>>,
+    ) -> SearchFilesToolArgs {
         SearchFilesToolArgs {
             query: query.into(),
             path: path.map(Into::into),
@@ -255,7 +258,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("needle", Option::<String>::None), &ToolContext { global_config: &config })
+            .call(
+                search_args("needle", Option::<String>::None),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -285,7 +293,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("fn\\s+hello\\(", Some("nested")), &ToolContext { global_config: &config })
+            .call(
+                search_args("fn\\s+hello\\(", Some("nested")),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -313,7 +326,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("one", Some("single.txt")), &ToolContext { global_config: &config })
+            .call(
+                search_args("one", Some("single.txt")),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -341,7 +359,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("needle", Option::<String>::None), &ToolContext { global_config: &config })
+            .call(
+                search_args("needle", Option::<String>::None),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -367,7 +390,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("needle", Some("missing")), &ToolContext { global_config: &config })
+            .call(
+                search_args("needle", Some("missing")),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -392,7 +420,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("needle-", Option::<String>::None), &ToolContext { global_config: &config })
+            .call(
+                search_args("needle-", Option::<String>::None),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {
@@ -454,7 +487,12 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(search_args("(", Option::<String>::None), &ToolContext { global_config: &config })
+            .call(
+                search_args("(", Option::<String>::None),
+                &ToolContext {
+                    global_config: &config,
+                },
+            )
             .await;
 
         match output {

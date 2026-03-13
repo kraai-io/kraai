@@ -1,0 +1,16 @@
+[package]
+edition.workspace = true
+name = "tool-open-file"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tool-core = { workspace = true }
+toon-schema = { workspace = true }
+types = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

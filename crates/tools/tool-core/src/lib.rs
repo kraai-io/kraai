@@ -11,7 +11,9 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolId};
+use types::{
+    ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolId, ToolStateDelta,
+};
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -74,6 +76,14 @@ pub trait TypedTool: Send + Sync + Clone + 'static {
         format!("{}: <typed args>", self.name())
     }
 
+    fn successful_tool_state_deltas(
+        &self,
+        _args: &Self::Args,
+        _ctx: &ToolContext<'_>,
+    ) -> Vec<ToolStateDelta> {
+        Vec::new()
+    }
+
     async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput;
 }
 
@@ -99,6 +109,8 @@ trait PreparedToolCallInner: Send + Sync {
 
     fn describe(&self) -> String;
 
+    fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta>;
+
     async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput;
 }
 
@@ -115,6 +127,10 @@ impl<T: TypedTool> PreparedToolCallInner for TypedPreparedToolCall<T> {
 
     fn describe(&self) -> String {
         self.tool.describe(&self.args)
+    }
+
+    fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta> {
+        self.tool.successful_tool_state_deltas(&self.args, ctx)
     }
 
     async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
@@ -144,6 +160,10 @@ impl PreparedToolCall {
 
     pub fn describe(&self) -> String {
         self.inner.describe()
+    }
+
+    pub fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta> {
+        self.inner.successful_tool_state_deltas(ctx)
     }
 
     pub async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
@@ -347,13 +367,22 @@ pub fn assess_write_path(
     }
 }
 
+pub fn format_text_with_line_numbers(contents: &str) -> String {
+    contents
+        .lines()
+        .enumerate()
+        .map(|(index, line)| format!("{}|{}", index + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use std::path::{Path, PathBuf};
 
     use async_trait::async_trait;
     use serde::ser::{Error as _, Serialize, Serializer};
@@ -363,7 +392,7 @@ mod tests {
 
     use super::{
         PreparedToolCall, ToolContext, ToolError, ToolManager, ToolOutput, TypedTool,
-        assess_read_path, assess_write_path, resolve_tool_path,
+        assess_read_path, assess_write_path, format_text_with_line_numbers, resolve_tool_path,
     };
 
     struct FailingSerialize;
@@ -419,6 +448,14 @@ mod tests {
             vec![String::from(
                 "Reads workspace file /tmp/workspace/src/lib.rs"
             )]
+        );
+    }
+
+    #[test]
+    fn format_text_with_line_numbers_uses_one_based_indices() {
+        assert_eq!(
+            format_text_with_line_numbers("alpha\nbeta\n"),
+            "1|alpha\n2|beta"
         );
     }
 

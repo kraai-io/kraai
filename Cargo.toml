@@ -6,9 +6,11 @@ members = [
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-openai-chat-completions",
   "crates/persistence",
+  "crates/tools/tool-close-file",
   "crates/tools/tool-core",
   "crates/tools/tool-edit-file",
   "crates/tools/tool-list-files",
+  "crates/tools/tool-open-file",
   "crates/tools/tool-read-file",
   "crates/tools/tool-search-files",
   "crates/toon-schema",
@@ -34,9 +36,11 @@ agent-runtime = { path = "crates/agent-runtime" }
 persistence = { path = "crates/persistence" }
 provider-core = { path = "crates/llm-providers/provider-core" }
 provider-openai-chat-completions = { path = "crates/llm-providers/provider-openai-chat-completions" }
+tool-close-file = { path = "crates/tools/tool-close-file" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-edit-file = { path = "crates/tools/tool-edit-file" }
 tool-list-files = { path = "crates/tools/tool-list-files" }
+tool-open-file = { path = "crates/tools/tool-open-file" }
 tool-read-file = { path = "crates/tools/tool-read-file" }
 tool-search-files = { path = "crates/tools/tool-search-files" }
 toon-schema = { path = "crates/toon-schema" }

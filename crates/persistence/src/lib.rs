@@ -485,6 +485,8 @@ mod tests {
             content: content.to_string(),
             status: MessageStatus::Complete,
             agent_profile_id: None,
+            tool_state_snapshot: None,
+            tool_state_deltas: Vec::new(),
         }
     }
 

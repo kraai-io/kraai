@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod profiles;
+mod tool_state;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -12,9 +13,10 @@ use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use tokio::sync::RwLock;
 use tool_core::{PreparedToolCall, ToolManager, toon_parser};
+use tool_state::{render_system_prompt as render_tool_state_prompt, resolve_snapshot_from_history};
 use types::{
     AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
-    ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
+    ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult, ToolStateSnapshot,
 };
 use ulid::Ulid;
 
@@ -363,6 +365,19 @@ impl AgentManager {
         Ok(())
     }
 
+    async fn persist_tool_state_snapshot(
+        &self,
+        message_id: &MessageId,
+        snapshot: ToolStateSnapshot,
+    ) -> Result<()> {
+        if let Some(mut message) = self.message_store.get(message_id).await? {
+            message.tool_state_snapshot = Some(snapshot);
+            self.message_store.save(&message).await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn prepare_start_stream(
         &mut self,
         session_id: &str,
@@ -372,7 +387,6 @@ impl AgentManager {
     ) -> Result<PendingStreamRequest> {
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
-        let system_prompt = self.build_system_prompt(&profile)?;
         {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             if state.active_turn_profile.is_some() {
@@ -409,6 +423,16 @@ impl AgentManager {
                 return Err(error);
             }
         };
+        let tool_state_snapshot = resolve_snapshot_from_history(&context);
+        if let Err(error) = self
+            .persist_tool_state_snapshot(&user_msg_id, tool_state_snapshot.clone())
+            .await
+        {
+            self.clear_active_turn(session_id);
+            return Err(error);
+        }
+        let system_prompt =
+            self.build_turn_system_prompt(&profile, &session.workspace_dir, &tool_state_snapshot)?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -470,6 +494,9 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
+        let tool_state_snapshot = resolve_snapshot_from_history(&context);
+        self.persist_tool_state_snapshot(&tip_id, tool_state_snapshot.clone())
+            .await?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -479,7 +506,8 @@ impl AgentManager {
             })
             .collect();
 
-        let system_prompt = self.build_system_prompt(&profile)?;
+        let system_prompt =
+            self.build_turn_system_prompt(&profile, &session.workspace_dir, &tool_state_snapshot)?;
         if !system_prompt.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -546,6 +574,27 @@ impl AgentManager {
         }
     }
 
+    fn build_turn_system_prompt(
+        &self,
+        profile: &AgentProfile,
+        workspace_dir: &Path,
+        tool_state_snapshot: &ToolStateSnapshot,
+    ) -> Result<String> {
+        let mut sections = Vec::new();
+
+        let base_system_prompt = self.build_system_prompt(profile)?;
+        if !base_system_prompt.is_empty() {
+            sections.push(base_system_prompt);
+        }
+
+        let tool_state_prompt = render_tool_state_prompt(tool_state_snapshot, workspace_dir);
+        if !tool_state_prompt.is_empty() {
+            sections.push(tool_state_prompt);
+        }
+
+        Ok(sections.join("\n\n"))
+    }
+
     fn current_turn_profile_id(&self, session_id: &str) -> Option<String> {
         self.session_states
             .get(session_id)
@@ -567,6 +616,26 @@ impl AgentManager {
         content: String,
         agent_profile_id: Option<String>,
     ) -> Result<MessageId> {
+        self.add_message_with_tool_state(
+            session_id,
+            role,
+            content,
+            agent_profile_id,
+            None,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn add_message_with_tool_state(
+        &mut self,
+        session_id: &str,
+        role: ChatRole,
+        content: String,
+        agent_profile_id: Option<String>,
+        tool_state_snapshot: Option<ToolStateSnapshot>,
+        tool_state_deltas: Vec<types::ToolStateDelta>,
+    ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
         let message_id = MessageId::new(Ulid::new());
@@ -587,6 +656,8 @@ impl AgentManager {
             content,
             status: MessageStatus::Complete,
             agent_profile_id,
+            tool_state_snapshot,
+            tool_state_deltas,
         };
 
         self.message_store.save(&message).await?;
@@ -624,6 +695,8 @@ impl AgentManager {
             content: String::new(),
             status: MessageStatus::Streaming { call_id },
             agent_profile_id,
+            tool_state_snapshot: None,
+            tool_state_deltas: Vec::new(),
         };
 
         let mut streaming = self.streaming_messages.write().await;
@@ -815,11 +888,9 @@ impl AgentManager {
                     continue;
                 }
             };
-            let assessment = prepared.assess(
-                &tool_core::ToolContext {
-                    global_config: &active_tool_config,
-                },
-            );
+            let assessment = prepared.assess(&tool_core::ToolContext {
+                global_config: &active_tool_config,
+            });
             let description = prepared.describe();
             let requires_confirmation =
                 !assessment.is_auto_approved(active_turn_profile.default_risk_level);
@@ -881,11 +952,13 @@ impl AgentManager {
                 "Failed to parse tool call:\n```\n{}\n```\nError: {}",
                 raw_content, error
             );
-            self.add_message(
+            self.add_message_with_tool_state(
                 session_id,
                 ChatRole::Tool,
                 content,
                 agent_profile_id.clone(),
+                None,
+                Vec::new(),
             )
             .await?;
         }
@@ -1053,11 +1126,13 @@ impl AgentManager {
                 result.permission_denied
             );
 
-            self.add_message(
+            self.add_message_with_tool_state(
                 session_id,
                 ChatRole::Tool,
                 content,
                 agent_profile_id.clone(),
+                None,
+                result.tool_state_deltas,
             )
             .await?;
         }
@@ -1108,9 +1183,13 @@ mod tests {
     use futures::stream::BoxStream;
     use provider_core::Provider;
     use serde::Deserialize;
+    use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tool_core::{ToolContext, ToolOutput, TypedTool};
-    use types::{ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus};
+    use types::{
+        ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus, ToolResult,
+        ToolStateDelta,
+    };
 
     struct MockProvider {
         id: ProviderId,
@@ -1212,7 +1291,9 @@ mod tests {
         );
 
         let mut tools = ToolManager::new();
+        tools.register_tool(MockTool { name: "close_file" });
         tools.register_tool(MockTool { name: "list_files" });
+        tools.register_tool(MockTool { name: "open_file" });
         tools.register_tool(MockTool {
             name: "search_files",
         });
@@ -1231,6 +1312,14 @@ mod tests {
 
     async fn cleanup_dir(data_dir: PathBuf) {
         let _ = tokio::fs::remove_dir_all(data_dir).await;
+    }
+
+    fn open_file_state_delta(path: &Path) -> ToolStateDelta {
+        ToolStateDelta {
+            namespace: String::from("opened_files"),
+            operation: String::from("open"),
+            payload: json!({ "path": path.display().to_string() }),
+        }
     }
 
     #[tokio::test]
@@ -1352,7 +1441,9 @@ mod tests {
         ));
         let manager_providers = ProviderManager::new();
         let mut tools = ToolManager::new();
+        tools.register_tool(MockTool { name: "close_file" });
         tools.register_tool(MockTool { name: "list_files" });
+        tools.register_tool(MockTool { name: "open_file" });
         tools.register_tool(MockTool {
             name: "search_files",
         });
@@ -1484,7 +1575,10 @@ mod tests {
                     },
                     prepared: manager
                         .tools
-                        .prepare_tool(&ToolId::new("list_files"), serde_json::json!({ "path": "." }))
+                        .prepare_tool(
+                            &ToolId::new("list_files"),
+                            serde_json::json!({ "path": "." }),
+                        )
                         .expect("prepare list_files tool"),
                     description: String::from("test"),
                     assessment: ToolCallAssessment {
@@ -1591,6 +1685,150 @@ mod tests {
 
         assert!(error.to_string().contains("No profile selected"));
 
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_open_file()
+    -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_dir = test_dir("open-file-start");
+        tokio::fs::create_dir_all(&workspace_dir).await?;
+        let file_path = workspace_dir.join("notes.txt");
+        let file_path_str = file_path.display().to_string();
+        tokio::fs::write(&file_path, "old contents\n").await?;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_dir.clone())
+            .await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+        manager
+            .add_message(&session_id, ChatRole::User, String::from("prior"), None)
+            .await?;
+        manager
+            .add_tool_results_to_history(
+                &session_id,
+                vec![ToolResult {
+                    call_id: CallId::new("open-call"),
+                    tool_id: ToolId::new("open_file"),
+                    output: json!({ "success": true, "path": file_path_str.clone() }),
+                    permission_denied: false,
+                    tool_state_deltas: vec![open_file_state_delta(&file_path)],
+                }],
+            )
+            .await?;
+        tokio::fs::write(&file_path, "new contents\nsecond line\n").await?;
+
+        let request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("follow up"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+
+        let history = manager.get_chat_history(&session_id).await?;
+        let user_message = history
+            .values()
+            .find(|message| message.role == ChatRole::User && message.content == "follow up")
+            .expect("new user message should exist");
+        let snapshot = user_message
+            .tool_state_snapshot
+            .as_ref()
+            .expect("user message should store tool state snapshot");
+        assert_eq!(
+            snapshot.entries["opened_files"]["paths"][0].as_str(),
+            Some(file_path_str.as_str())
+        );
+
+        let system_prompt = request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(system_prompt.content.contains("Opened Files"));
+        assert!(system_prompt.content.contains(file_path_str.as_str()));
+        assert!(system_prompt.content.contains("1|new contents"));
+        assert!(system_prompt.content.contains("2|second line"));
+
+        let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_dir = test_dir("open-file-continuation");
+        tokio::fs::create_dir_all(&workspace_dir).await?;
+        let file_path = workspace_dir.join("notes.txt");
+        let file_path_str = file_path.display().to_string();
+        tokio::fs::write(&file_path, "current\n").await?;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_dir.clone())
+            .await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+        manager
+            .add_message(&session_id, ChatRole::User, String::from("prior"), None)
+            .await?;
+        manager
+            .add_tool_results_to_history(
+                &session_id,
+                vec![ToolResult {
+                    call_id: CallId::new("open-call"),
+                    tool_id: ToolId::new("open_file"),
+                    output: json!({ "success": true, "path": file_path_str.clone() }),
+                    permission_denied: false,
+                    tool_state_deltas: vec![open_file_state_delta(&file_path)],
+                }],
+            )
+            .await?;
+
+        let session = manager.require_session(&session_id).await?;
+        let profile = manager.resolve_selected_profile(&session)?;
+        let state = manager.ensure_runtime_state(&session_id, &session.workspace_dir);
+        state.last_model = Some(ModelId::new("mock-model"));
+        state.last_provider = Some(ProviderId::new("mock"));
+        state.active_turn_profile = Some(profile);
+
+        let request = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist");
+
+        let history = manager.get_chat_history(&session_id).await?;
+        let tool_message = history
+            .values()
+            .find(|message| message.role == ChatRole::Tool && !message.tool_state_deltas.is_empty())
+            .expect("tool result message should exist");
+        let snapshot = tool_message
+            .tool_state_snapshot
+            .as_ref()
+            .expect("tool result message should store tool state snapshot");
+        assert_eq!(
+            snapshot.entries["opened_files"]["paths"][0].as_str(),
+            Some(file_path_str.as_str())
+        );
+
+        let system_prompt = request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(system_prompt.content.contains("1|current"));
+
+        let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
         cleanup_dir(data_dir).await;
         Ok(())
     }

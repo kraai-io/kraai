@@ -89,7 +89,9 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             description: String::from("Read-only planning and investigation agent"),
             system_prompt: include_str!("plan_code.md").trim().to_string(),
             tools: vec![
+                ToolId::new("close_file"),
                 ToolId::new("list_files"),
+                ToolId::new("open_file"),
                 ToolId::new("search_files"),
                 ToolId::new("read_files"),
             ],
@@ -102,7 +104,9 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             description: String::from("Implementation agent with workspace write access"),
             system_prompt: include_str!("build_code.md").trim().to_string(),
             tools: vec![
+                ToolId::new("close_file"),
                 ToolId::new("list_files"),
+                ToolId::new("open_file"),
                 ToolId::new("search_files"),
                 ToolId::new("read_files"),
                 ToolId::new("edit_file"),
@@ -230,10 +234,17 @@ mod tests {
     }
 
     fn available_tools() -> HashSet<String> {
-        ["list_files", "search_files", "read_files", "edit_file"]
-            .into_iter()
-            .map(String::from)
-            .collect()
+        [
+            "close_file",
+            "list_files",
+            "open_file",
+            "search_files",
+            "read_files",
+            "edit_file",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 
     #[test]

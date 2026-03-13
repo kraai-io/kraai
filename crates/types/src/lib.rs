@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -30,6 +30,10 @@ pub struct Message {
     pub status: MessageStatus,
     #[serde(default)]
     pub agent_profile_id: Option<String>,
+    #[serde(default)]
+    pub tool_state_snapshot: Option<ToolStateSnapshot>,
+    #[serde(default)]
+    pub tool_state_deltas: Vec<ToolStateDelta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -157,6 +161,21 @@ pub struct ToolResult {
     pub tool_id: ToolId,
     pub output: serde_json::Value,
     pub permission_denied: bool,
+    #[serde(default)]
+    pub tool_state_deltas: Vec<ToolStateDelta>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStateSnapshot {
+    #[serde(default)]
+    pub entries: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStateDelta {
+    pub namespace: String,
+    pub operation: String,
+    pub payload: serde_json::Value,
 }
 
 pub fn format_tool_result_message(
