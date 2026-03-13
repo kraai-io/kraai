@@ -12,7 +12,10 @@ use persistence::{MessageStore, SessionMeta, SessionStore};
 use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use tokio::sync::RwLock;
-use tool_core::{PreparedToolCall, ToolManager, toon_parser};
+use tool_core::{
+    PreparedToolCall, ToolManager,
+    toon_parser::{self, ParseFailure, ParseFailureKind},
+};
 use tool_state::{render_system_prompt as render_tool_state_prompt, resolve_snapshot_from_history};
 use types::{
     AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
@@ -840,7 +843,7 @@ impl AgentManager {
         &mut self,
         session_id: &str,
         content: &str,
-    ) -> Result<(Vec<DetectedToolCall>, Vec<(String, String)>)> {
+    ) -> Result<(Vec<DetectedToolCall>, Vec<ParseFailure>)> {
         let session = self.require_session(session_id).await?;
         let (active_tool_config, active_turn_profile, mut next_queue_order) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
@@ -869,7 +872,8 @@ impl AgentManager {
             let call_id = CallId::new(Ulid::new());
             let tool_id = ToolId::new(&parsed.tool_id);
             if !allowed_tools.contains(parsed.tool_id.as_str()) {
-                failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                failed_calls.push(ParseFailure {
+                    kind: ParseFailureKind::ToolCall,
                     raw_content: parsed.raw_content,
                     error: format!(
                         "Tool '{}' is not allowed by the active profile '{}'",
@@ -881,7 +885,8 @@ impl AgentManager {
             let prepared = match self.tools.prepare_tool(&tool_id, parsed.args.clone()) {
                 Ok(prepared) => prepared,
                 Err(error) => {
-                    failed_calls.push(tool_core::toon_parser::FailedToolCall {
+                    failed_calls.push(ParseFailure {
+                        kind: ParseFailureKind::ToolCall,
                         raw_content: parsed.raw_content,
                         error: error.to_string(),
                     });
@@ -933,25 +938,26 @@ impl AgentManager {
         state.pending_tool_calls.extend(pending_tool_calls);
         state.next_tool_queue_order = next_queue_order;
 
-        let failed_calls: Vec<(String, String)> = failed_calls
-            .into_iter()
-            .map(|failure| (failure.raw_content, failure.error))
-            .collect();
-
         Ok((detected_calls, failed_calls))
     }
 
-    pub async fn add_failed_tool_calls_to_history(
+    pub async fn add_parse_failures_to_history(
         &mut self,
         session_id: &str,
-        failed: Vec<(String, String)>,
+        failed: Vec<ParseFailure>,
     ) -> Result<()> {
         let agent_profile_id = self.current_turn_profile_id(session_id);
-        for (raw_content, error) in failed {
-            let content = format!(
-                "Failed to parse tool call:\n```\n{}\n```\nError: {}",
-                raw_content, error
-            );
+        for failure in failed {
+            let content = match failure.kind {
+                ParseFailureKind::ToolCall => format!(
+                    "Failed to parse tool call:\n```\n{}\n```\nError: {}",
+                    failure.raw_content, failure.error
+                ),
+                ParseFailureKind::ThinkingBlock => format!(
+                    "Failed to parse thinking block:\n```\n{}\n```\nError: {}",
+                    failure.raw_content, failure.error
+                ),
+            };
             self.add_message_with_tool_state(
                 session_id,
                 ChatRole::Tool,
@@ -981,7 +987,7 @@ impl AgentManager {
             .await?;
 
         if !failed.is_empty() {
-            self.add_failed_tool_calls_to_history(session_id, failed)
+            self.add_parse_failures_to_history(session_id, failed)
                 .await?;
         }
 

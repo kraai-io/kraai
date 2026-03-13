@@ -5,6 +5,9 @@ use toon_format::{ToonError, decode_default};
 
 static TOOL_CALL_BLOCK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
+static THINK_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)</?(?:think|thinking)\b[^>]*>").expect("valid think tag regex")
+});
 
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {
@@ -14,15 +17,22 @@ pub struct ParsedToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub struct FailedToolCall {
+pub struct ParseFailure {
+    pub kind: ParseFailureKind,
     pub raw_content: String,
     pub error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseFailureKind {
+    ToolCall,
+    ThinkingBlock,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParseResult {
     pub successful: Vec<ParsedToolCall>,
-    pub failed: Vec<FailedToolCall>,
+    pub failed: Vec<ParseFailure>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,13 +48,14 @@ pub enum ParseError {
 }
 
 pub fn parse_tool_calls(text: &str) -> ParseResult {
+    let (visible_text, mut failed) = strip_thinking_blocks(text);
     let mut successful = Vec::new();
-    let mut failed = Vec::new();
 
-    for raw in extract_tool_call_blocks(text) {
+    for raw in extract_tool_call_blocks(&visible_text) {
         match parse_single_tool_call(&raw) {
             Ok(parsed) => successful.push(parsed),
-            Err(e) => failed.push(FailedToolCall {
+            Err(e) => failed.push(ParseFailure {
+                kind: ParseFailureKind::ToolCall,
                 raw_content: raw,
                 error: e.to_string(),
             }),
@@ -52,6 +63,43 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
     }
 
     ParseResult { successful, failed }
+}
+
+fn strip_thinking_blocks(text: &str) -> (String, Vec<ParseFailure>) {
+    let mut visible = String::new();
+    let mut failures = Vec::new();
+    let mut cursor = 0usize;
+    let mut thinking_start = None;
+
+    for matched in THINK_TAG_RE.find_iter(text) {
+        let tag = matched.as_str();
+        let is_closing = tag.starts_with("</");
+
+        match (thinking_start, is_closing) {
+            (None, false) => {
+                visible.push_str(&text[cursor..matched.start()]);
+                thinking_start = Some(matched.start());
+                cursor = matched.end();
+            }
+            (Some(_), true) => {
+                thinking_start = None;
+                cursor = matched.end();
+            }
+            (None, true) | (Some(_), false) => {}
+        }
+    }
+
+    if let Some(start) = thinking_start {
+        failures.push(ParseFailure {
+            kind: ParseFailureKind::ThinkingBlock,
+            raw_content: text[start..].to_string(),
+            error: String::from("Missing closing </think> or </thinking> tag"),
+        });
+        return (visible, failures);
+    }
+
+    visible.push_str(&text[cursor..]);
+    (visible, failures)
 }
 
 fn extract_tool_call_blocks(text: &str) -> Vec<String> {
@@ -271,5 +319,118 @@ tool:
         assert!(result.successful.is_empty());
         assert_eq!(result.failed.len(), 1);
         assert_eq!(result.failed[0].raw_content, "");
+    }
+
+    #[test]
+    fn test_tool_call_inside_think_is_ignored() {
+        let text = r#"<think>
+<tool_call>
+tool: hidden_tool
+</tool_call>
+</think>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert!(result.failed.is_empty());
+    }
+
+    #[test]
+    fn test_tool_call_inside_thinking_with_attributes_is_ignored() {
+        let text = r#"<thinking class="chain">
+<tool_call>
+tool: hidden_tool
+</tool_call>
+</thinking>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert!(result.failed.is_empty());
+    }
+
+    #[test]
+    fn test_tool_calls_before_and_after_thinking_are_detected() {
+        let text = r#"<tool_call>
+tool: before_tool
+</tool_call>
+<think>
+<tool_call>
+tool: hidden_tool
+</tool_call>
+</think>
+<tool_call>
+tool: after_tool
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 2);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "before_tool");
+        assert_eq!(result.successful[1].tool_id, "after_tool");
+    }
+
+    #[test]
+    fn test_mixed_visible_and_thinking_tool_calls_only_returns_visible_call() {
+        let text = r#"before
+<tool_call>
+tool: visible_tool
+</tool_call>
+<think>
+<tool_call>
+tool: hidden_tool
+</tool_call>
+</think>"#;
+
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "visible_tool");
+    }
+
+    #[test]
+    fn test_unclosed_think_reports_thinking_block_failure() {
+        let text = r#"<think>
+<tool_call>
+tool: hidden_tool
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert!(result.successful.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].kind, ParseFailureKind::ThinkingBlock);
+        assert!(
+            result.failed[0]
+                .error
+                .contains("Missing closing </think> or </thinking> tag")
+        );
+    }
+
+    #[test]
+    fn test_stray_closing_think_does_not_suppress_visible_tool_calls() {
+        let text = r#"</think>
+<tool_call>
+tool: visible_tool
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "visible_tool");
+    }
+
+    #[test]
+    fn test_case_insensitive_thinking_tags_are_handled() {
+        let text = r#"<THINK>
+<tool_call>
+tool: hidden_tool
+</tool_call>
+</THINK>
+<tool_call>
+tool: visible_tool
+</tool_call>"#;
+
+        let result = parse_tool_calls(text);
+        assert_eq!(result.successful.len(), 1);
+        assert!(result.failed.is_empty());
+        assert_eq!(result.successful[0].tool_id, "visible_tool");
     }
 }
