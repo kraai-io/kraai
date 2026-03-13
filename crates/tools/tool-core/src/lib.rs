@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolId};
 
@@ -18,7 +18,7 @@ pub enum ToolError {
     #[error("Tool not found: {0}")]
     ToolNotFound(ToolId),
     #[error("{0}")]
-    Validation(String),
+    Preparation(String),
     #[error("Failed to serialize tool output: {0}")]
     OutputSerialization(#[from] serde_json::Error),
 }
@@ -52,6 +52,31 @@ pub struct ToolContext<'a> {
     pub global_config: &'a ToolCallGlobalConfig,
 }
 
+#[async_trait]
+pub trait TypedTool: Send + Sync + Clone + 'static {
+    type Args: DeserializeOwned + Send + Sync + Clone + 'static;
+
+    fn name(&self) -> &'static str;
+
+    fn schema(&self) -> &'static str;
+
+    fn assess(&self, _args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        ToolCallAssessment {
+            risk: RiskLevel::WriteOutsideWorkspace,
+            policy: ExecutionPolicy::AlwaysAsk,
+            reasons: vec![String::from(
+                "Tool does not define a custom autonomy policy",
+            )],
+        }
+    }
+
+    fn describe(&self, _args: &Self::Args) -> String {
+        format!("{}: <typed args>", self.name())
+    }
+
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolPath {
     path: PathBuf,
@@ -69,39 +94,114 @@ impl ResolvedToolPath {
 }
 
 #[async_trait]
-pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
+trait PreparedToolCallInner: Send + Sync {
+    fn assess(&self, ctx: &ToolContext<'_>) -> ToolCallAssessment;
 
+    fn describe(&self) -> String;
+
+    async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput;
+}
+
+struct TypedPreparedToolCall<T: TypedTool> {
+    tool: T,
+    args: T::Args,
+}
+
+#[async_trait]
+impl<T: TypedTool> PreparedToolCallInner for TypedPreparedToolCall<T> {
+    fn assess(&self, ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        self.tool.assess(&self.args, ctx)
+    }
+
+    fn describe(&self) -> String {
+        self.tool.describe(&self.args)
+    }
+
+    async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
+        self.tool.call(self.args.clone(), ctx).await
+    }
+}
+
+#[derive(Clone)]
+pub struct PreparedToolCall {
+    tool_id: ToolId,
+    args_json: serde_json::Value,
+    inner: Arc<dyn PreparedToolCallInner>,
+}
+
+impl PreparedToolCall {
+    pub fn tool_id(&self) -> &ToolId {
+        &self.tool_id
+    }
+
+    pub fn args_json(&self) -> &serde_json::Value {
+        &self.args_json
+    }
+
+    pub fn assess(&self, ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        self.inner.assess(ctx)
+    }
+
+    pub fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    pub async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
+        self.inner.call(ctx).await
+    }
+}
+
+trait ErasedTool: Send + Sync {
     fn schema(&self) -> &'static str;
 
-    fn validate(&self, _args: &serde_json::Value) -> Result<(), String> {
-        Ok(())
+    fn prepare(
+        &self,
+        tool_id: &ToolId,
+        args: serde_json::Value,
+    ) -> Result<PreparedToolCall, ToolError>;
+}
+
+struct TypedToolAdapter<T: TypedTool> {
+    tool: T,
+}
+
+impl<T: TypedTool> TypedToolAdapter<T> {
+    fn new(tool: T) -> Self {
+        Self { tool }
+    }
+}
+
+impl<T: TypedTool> ErasedTool for TypedToolAdapter<T> {
+    fn schema(&self) -> &'static str {
+        self.tool.schema()
     }
 
-    fn assess(&self, _args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        ToolCallAssessment {
-            risk: RiskLevel::WriteOutsideWorkspace,
-            policy: ExecutionPolicy::AlwaysAsk,
-            reasons: vec![String::from(
-                "Tool does not define a custom autonomy policy",
-            )],
-        }
-    }
+    fn prepare(
+        &self,
+        tool_id: &ToolId,
+        args: serde_json::Value,
+    ) -> Result<PreparedToolCall, ToolError> {
+        let parsed = serde_json::from_value::<T::Args>(args.clone()).map_err(|error| {
+            ToolError::Preparation(format!(
+                "Unable to validate {} arguments: {error}",
+                self.tool.name()
+            ))
+        })?;
 
-    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput;
-
-    async fn describe(&self, args: serde_json::Value) -> String {
-        format!(
-            "{}: {}",
-            self.name(),
-            serde_json::to_string(&args).unwrap_or_default()
-        )
+        Ok(PreparedToolCall {
+            tool_id: tool_id.clone(),
+            args_json: args,
+            inner: Arc::new(TypedPreparedToolCall {
+                tool: self.tool.clone(),
+                args: parsed,
+            }),
+        })
     }
 }
 
 #[derive(Default, Clone)]
 pub struct ToolManager {
-    tools: BTreeMap<ToolId, Arc<dyn Tool>>,
+    tools: BTreeMap<ToolId, Arc<dyn ErasedTool>>,
 }
 
 impl ToolManager {
@@ -109,17 +209,16 @@ impl ToolManager {
         Self::default()
     }
 
-    pub fn register_tool(&mut self, tool: impl Tool + 'static) {
+    pub fn register_tool<T>(&mut self, tool: T)
+    where
+        T: TypedTool,
+    {
         let id = ToolId::new(tool.name());
-        self.tools.insert(id, Arc::new(tool));
+        self.tools.insert(id, Arc::new(TypedToolAdapter::new(tool)));
     }
 
     pub fn has_tool(&self, id: &ToolId) -> bool {
         self.tools.contains_key(id)
-    }
-
-    pub fn get_tool(&self, id: &ToolId) -> Option<Arc<dyn Tool>> {
-        self.tools.get(id).cloned()
     }
 
     pub fn list_tools(&self) -> Vec<ToolId> {
@@ -149,50 +248,16 @@ impl ToolManager {
         Ok(sections.join("\n\n"))
     }
 
-    pub async fn call_tool(
+    pub fn prepare_tool(
         &self,
         id: &ToolId,
         args: serde_json::Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<ToolOutput, ToolError> {
+    ) -> Result<PreparedToolCall, ToolError> {
         let tool = self
             .tools
             .get(id)
             .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
-        Ok(tool.call(args, ctx).await)
-    }
-
-    pub fn assess_tool(
-        &self,
-        id: &ToolId,
-        args: &serde_json::Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<ToolCallAssessment, ToolError> {
-        let tool = self
-            .tools
-            .get(id)
-            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
-        Ok(tool.assess(args, ctx))
-    }
-
-    pub fn validate_tool(&self, id: &ToolId, args: &serde_json::Value) -> Result<(), ToolError> {
-        let tool = self
-            .tools
-            .get(id)
-            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
-        tool.validate(args).map_err(ToolError::Validation)
-    }
-
-    pub async fn describe_tool(
-        &self,
-        id: &ToolId,
-        args: serde_json::Value,
-    ) -> Result<String, ToolError> {
-        let tool = self
-            .tools
-            .get(id)
-            .ok_or_else(|| ToolError::ToolNotFound(id.clone()))?;
-        Ok(tool.describe(args).await)
+        tool.prepare(id, args)
     }
 }
 
@@ -284,12 +349,22 @@ pub fn assess_write_path(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::path::{Path, PathBuf};
 
+    use async_trait::async_trait;
     use serde::ser::{Error as _, Serialize, Serializer};
-    use types::{ExecutionPolicy, RiskLevel};
+    use serde::{Deserialize, Deserializer};
+    use serde_json::json;
+    use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig};
 
-    use super::{ToolOutput, assess_read_path, assess_write_path, resolve_tool_path};
+    use super::{
+        PreparedToolCall, ToolContext, ToolError, ToolManager, ToolOutput, TypedTool,
+        assess_read_path, assess_write_path, resolve_tool_path,
+    };
 
     struct FailingSerialize;
 
@@ -368,5 +443,158 @@ mod tests {
         );
         assert_eq!(outside.risk, RiskLevel::WriteOutsideWorkspace);
         assert_eq!(outside.policy, ExecutionPolicy::AlwaysAsk);
+    }
+
+    #[derive(Clone)]
+    struct SpyTool {
+        lifecycle_counter: Arc<AtomicUsize>,
+    }
+
+    #[derive(Clone)]
+    struct SpyArgs {
+        value: String,
+        parse_counter: Arc<AtomicUsize>,
+    }
+
+    impl<'de> Deserialize<'de> for SpyArgs {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            struct RawSpyArgs {
+                value: String,
+            }
+
+            static PARSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+            let raw = RawSpyArgs::deserialize(deserializer)?;
+            PARSE_COUNT.fetch_add(1, Ordering::SeqCst);
+
+            Ok(Self {
+                value: raw.value,
+                parse_counter: Arc::new(AtomicUsize::new(PARSE_COUNT.load(Ordering::SeqCst))),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl TypedTool for SpyTool {
+        type Args = SpyArgs;
+
+        fn name(&self) -> &'static str {
+            "spy_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "spy schema"
+        }
+
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            self.lifecycle_counter.fetch_add(1, Ordering::SeqCst);
+            ToolCallAssessment {
+                risk: RiskLevel::ReadOnlyWorkspace,
+                policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+                reasons: vec![format!(
+                    "assessed {} after {} parse(s)",
+                    args.value,
+                    args.parse_counter.load(Ordering::SeqCst)
+                )],
+            }
+        }
+
+        fn describe(&self, args: &Self::Args) -> String {
+            self.lifecycle_counter.fetch_add(1, Ordering::SeqCst);
+            format!(
+                "described {} after {} parse(s)",
+                args.value,
+                args.parse_counter.load(Ordering::SeqCst)
+            )
+        }
+
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+            self.lifecycle_counter.fetch_add(1, Ordering::SeqCst);
+            ToolOutput::success(json!({
+                "value": args.value,
+                "parse_count": args.parse_counter.load(Ordering::SeqCst),
+            }))
+        }
+    }
+
+    fn prepare_spy_tool() -> (PreparedToolCall, Arc<AtomicUsize>) {
+        let lifecycle_counter = Arc::new(AtomicUsize::new(0));
+        let mut manager = ToolManager::new();
+        manager.register_tool(SpyTool {
+            lifecycle_counter: lifecycle_counter.clone(),
+        });
+
+        let prepared = manager
+            .prepare_tool(&types::ToolId::new("spy_tool"), json!({ "value": "alpha" }))
+            .expect("prepare succeeds");
+
+        (prepared, lifecycle_counter)
+    }
+
+    #[test]
+    fn prepare_tool_returns_not_found_for_unknown_tool() {
+        let manager = ToolManager::new();
+        let error = match manager.prepare_tool(&types::ToolId::new("missing"), json!({})) {
+            Ok(_) => panic!("missing tool should fail"),
+            Err(error) => error,
+        };
+
+        match error {
+            ToolError::ToolNotFound(tool_id) => assert_eq!(tool_id.as_str(), "missing"),
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn prepare_tool_returns_preparation_error_for_invalid_args() {
+        let mut manager = ToolManager::new();
+        manager.register_tool(SpyTool {
+            lifecycle_counter: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let error = match manager.prepare_tool(&types::ToolId::new("spy_tool"), json!({})) {
+            Ok(_) => panic!("invalid args should fail"),
+            Err(error) => error,
+        };
+
+        match error {
+            ToolError::Preparation(message) => {
+                assert!(message.contains("Unable to validate spy_tool arguments"));
+                assert!(message.contains("value"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_tool_call_reuses_typed_args_across_lifecycle() {
+        let (prepared, lifecycle_counter) = prepare_spy_tool();
+        let config = ToolCallGlobalConfig {
+            workspace_dir: PathBuf::from("/tmp/workspace"),
+        };
+        let ctx = ToolContext {
+            global_config: &config,
+        };
+
+        assert_eq!(prepared.tool_id().as_str(), "spy_tool");
+        assert_eq!(prepared.args_json(), &json!({ "value": "alpha" }));
+        assert_eq!(prepared.describe(), "described alpha after 1 parse(s)");
+        assert_eq!(
+            prepared.assess(&ctx).reasons,
+            vec![String::from("assessed alpha after 1 parse(s)")]
+        );
+
+        match prepared.call(&ctx).await {
+            ToolOutput::Success { data } => {
+                assert_eq!(data, json!({ "value": "alpha", "parse_count": 1 }));
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        assert_eq!(lifecycle_counter.load(Ordering::SeqCst), 3);
     }
 }

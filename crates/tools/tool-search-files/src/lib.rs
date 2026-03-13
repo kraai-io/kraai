@@ -8,20 +8,21 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use serde::Serialize;
-use tool_core::{Tool, ToolContext, ToolOutput, assess_read_path, resolve_tool_path};
+use tool_core::{ToolContext, ToolOutput, TypedTool, assess_read_path, resolve_tool_path};
 use toon_schema::toon_tool;
-use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
+use types::ToolCallAssessment;
 
 const MAX_MATCHES: usize = 100;
 
+#[derive(Clone, Copy)]
 pub struct SearchFilesTool;
 
 toon_tool! {
     name: "search_files",
     description: "Search files recursively using ripgrep and return matching lines",
     types: {
-        #[derive(serde::Deserialize, serde::Serialize)]
-        struct SearchFilesToolArgs {
+        #[derive(Clone, serde::Deserialize, serde::Serialize)]
+        pub struct SearchFilesToolArgs {
             #[toon_schema(description = "Regex pattern to search for")]
             query: String,
 
@@ -61,7 +62,9 @@ struct SearchState {
 }
 
 #[async_trait]
-impl Tool for SearchFilesTool {
+impl TypedTool for SearchFilesTool {
+    type Args = SearchFilesToolArgs;
+
     fn name(&self) -> &'static str {
         SearchFilesToolArgs::tool_name()
     }
@@ -70,27 +73,8 @@ impl Tool for SearchFilesTool {
         SearchFilesToolArgs::toon_schema()
     }
 
-    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
-        serde_json::from_value::<SearchFilesToolArgs>(args.clone())
-            .map(|_| ())
-            .map_err(|error| format!("Unable to validate search_files arguments: {error}"))
-    }
-
-    fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        let parsed: SearchFilesToolArgs = match serde_json::from_value(args.clone()) {
-            Ok(args) => args,
-            Err(error) => {
-                return ToolCallAssessment {
-                    risk: RiskLevel::ReadOnlyOutsideWorkspace,
-                    policy: ExecutionPolicy::AlwaysAsk,
-                    reasons: vec![format!(
-                        "Unable to validate search_files arguments: {error}"
-                    )],
-                };
-            }
-        };
-
-        let raw_path = parsed.path.unwrap_or_else(|| String::from("."));
+    fn assess(&self, args: &Self::Args, ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        let raw_path = args.path.clone().unwrap_or_else(|| String::from("."));
         assess_read_path(
             &ctx.global_config.workspace_dir,
             &raw_path,
@@ -99,12 +83,7 @@ impl Tool for SearchFilesTool {
         )
     }
 
-    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
-        let args: SearchFilesToolArgs = match serde_json::from_value(args) {
-            Ok(args) => args,
-            Err(error) => return ToolOutput::error(format!("args error: {error}")),
-        };
-
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
         let raw_path = args.path.unwrap_or_else(|| String::from("."));
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &raw_path);
         let metadata = match std::fs::metadata(resolved.path()) {
@@ -155,14 +134,8 @@ impl Tool for SearchFilesTool {
         ToolOutput::success(output)
     }
 
-    async fn describe(&self, args: serde_json::Value) -> String {
-        let args: SearchFilesToolArgs =
-            serde_json::from_value(args).unwrap_or(SearchFilesToolArgs {
-                query: String::new(),
-                path: None,
-            });
-
-        let target = args.path.unwrap_or_else(|| String::from("."));
+    fn describe(&self, args: &Self::Args) -> String {
+        let target = args.path.clone().unwrap_or_else(|| String::from("."));
         format!("Search files in {} for {}", target, args.query)
     }
 }
@@ -239,11 +212,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use serde_json::json;
-    use tool_core::{Tool, ToolContext, ToolOutput};
+    use tool_core::{ToolContext, ToolOutput, TypedTool};
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
-    use super::{MAX_MATCHES, SearchFilesTool};
+    use super::{MAX_MATCHES, SearchFilesTool, SearchFilesToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
@@ -268,6 +240,13 @@ mod tests {
         let _ = fs::remove_dir_all(path);
     }
 
+    fn search_args(query: impl Into<String>, path: Option<impl Into<String>>) -> SearchFilesToolArgs {
+        SearchFilesToolArgs {
+            query: query.into(),
+            path: path.map(Into::into),
+        }
+    }
+
     #[tokio::test]
     async fn searches_workspace_root_when_path_is_omitted() {
         let workspace_dir = make_temp_dir("searches_workspace_root_when_path_is_omitted");
@@ -276,12 +255,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "needle" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("needle", Option::<String>::None), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -311,12 +285,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "fn\\s+hello\\(", "path": "nested" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("fn\\s+hello\\(", Some("nested")), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -344,12 +313,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "one", "path": "single.txt" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("one", Some("single.txt")), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -377,12 +341,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "needle" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("needle", Option::<String>::None), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -408,12 +367,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "needle", "path": "missing" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("needle", Some("missing")), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -438,12 +392,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "needle-" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("needle-", Option::<String>::None), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -465,7 +414,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
-            &json!({ "query": "needle" }),
+            &search_args("needle", Option::<String>::None),
             &ToolContext {
                 global_config: &config,
             },
@@ -487,7 +436,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
-            &json!({ "query": "needle", "path": outside_dir.to_string_lossy() }),
+            &search_args("needle", Some(outside_dir.to_string_lossy().to_string())),
             &ToolContext {
                 global_config: &config,
             },
@@ -505,12 +454,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "query": "(" }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(search_args("(", Option::<String>::None), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -537,7 +481,7 @@ mod tests {
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
-            &json!({ "query": "needle", "path": relative_path }),
+            &search_args("needle", Some(relative_path)),
             &ToolContext {
                 global_config: &config,
             },

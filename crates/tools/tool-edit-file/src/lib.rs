@@ -5,10 +5,11 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{Tool, ToolContext, ToolOutput, assess_write_path, resolve_tool_path};
+use tool_core::{ToolContext, ToolOutput, TypedTool, assess_write_path, resolve_tool_path};
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
+#[derive(Clone, Copy)]
 pub struct EditFileTool;
 
 toon_tool! {
@@ -23,8 +24,8 @@ toon_tool! {
             new_text: String,
         }
 
-        #[derive(serde::Deserialize, serde::Serialize)]
-        struct EditFileToolArgs {
+        #[derive(Clone, serde::Deserialize, serde::Serialize)]
+        pub struct EditFileToolArgs {
             #[toon_schema(description = "File path to edit or create")]
             path: String,
 
@@ -61,7 +62,9 @@ struct EditFileToolSuccess {
 }
 
 #[async_trait]
-impl Tool for EditFileTool {
+impl TypedTool for EditFileTool {
+    type Args = EditFileToolArgs;
+
     fn name(&self) -> &'static str {
         EditFileToolArgs::tool_name()
     }
@@ -70,33 +73,16 @@ impl Tool for EditFileTool {
         EditFileToolArgs::toon_schema()
     }
 
-    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
-        serde_json::from_value::<EditFileToolArgs>(args.clone())
-            .map(|_| ())
-            .map_err(|error| format!("Unable to validate edit_file arguments: {error}"))
-    }
-
-    fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        let parsed: EditFileToolArgs = match serde_json::from_value(args.clone()) {
-            Ok(args) => args,
-            Err(error) => {
-                return ToolCallAssessment {
-                    risk: RiskLevel::WriteOutsideWorkspace,
-                    policy: ExecutionPolicy::AlwaysAsk,
-                    reasons: vec![format!("Unable to validate edit_file arguments: {error}")],
-                };
-            }
-        };
-
+    fn assess(&self, args: &Self::Args, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let mut assessment = assess_write_path(
             &ctx.global_config.workspace_dir,
-            &parsed.path,
-            if parsed.create {
+            &args.path,
+            if args.create {
                 "Creates workspace file"
             } else {
                 "Edits workspace file"
             },
-            if parsed.create {
+            if args.create {
                 "Creates file outside workspace"
             } else {
                 "Edits file outside workspace"
@@ -108,12 +94,7 @@ impl Tool for EditFileTool {
         assessment
     }
 
-    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
-        let args: EditFileToolArgs = match serde_json::from_value(args) {
-            Ok(args) => args,
-            Err(error) => return ToolOutput::error(format!("args error: {error}")),
-        };
-
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
         let result = if args.create {
             create_file(resolved.path(), &args.edits)
@@ -127,13 +108,7 @@ impl Tool for EditFileTool {
         }
     }
 
-    async fn describe(&self, args: serde_json::Value) -> String {
-        let args: EditFileToolArgs = serde_json::from_value(args).unwrap_or(EditFileToolArgs {
-            path: String::new(),
-            create: false,
-            edits: Vec::new(),
-        });
-
+    fn describe(&self, args: &Self::Args) -> String {
         if args.create {
             format!(
                 "Create file {} with {} edit(s)",
@@ -244,11 +219,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
-    use tool_core::{Tool, ToolContext, ToolOutput};
+    use tool_core::{ToolContext, ToolOutput, TypedTool};
     use toon_format::decode_default;
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
-    use super::EditFileTool;
+    use super::{EditFileTool, EditFileToolArgs, EditOperation};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
@@ -273,6 +248,24 @@ mod tests {
         let _ = fs::remove_dir_all(path);
     }
 
+    fn edit_args(
+        path: impl Into<String>,
+        create: bool,
+        edits: &[(&str, &str)],
+    ) -> EditFileToolArgs {
+        EditFileToolArgs {
+            path: path.into(),
+            create,
+            edits: edits
+                .iter()
+                .map(|(old_text, new_text)| EditOperation {
+                    old_text: (*old_text).to_string(),
+                    new_text: (*new_text).to_string(),
+                })
+                .collect(),
+        }
+    }
+
     #[tokio::test]
     async fn edits_workspace_file_with_one_exact_replacement() {
         let workspace_dir = make_temp_dir("edits_workspace_file_with_one_exact_replacement");
@@ -283,10 +276,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "notes.txt",
-                    "edits": [{ "old_text": "beta", "new_text": "gamma" }]
-                }),
+                edit_args("notes.txt", false, &[("beta", "gamma")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -316,13 +306,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "notes.txt",
-                    "edits": [
-                        { "old_text": "alpha", "new_text": "one" },
-                        { "old_text": "gamma", "new_text": "three" }
-                    ]
-                }),
+                edit_args("notes.txt", false, &[("alpha", "one"), ("gamma", "three")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -351,10 +335,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "notes.txt",
-                    "edits": [{ "old_text": "missing", "new_text": "gamma" }]
-                }),
+                edit_args("notes.txt", false, &[("missing", "gamma")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -383,10 +364,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "notes.txt",
-                    "edits": [{ "old_text": "dup", "new_text": "unique" }]
-                }),
+                edit_args("notes.txt", false, &[("dup", "unique")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -412,13 +390,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "notes.txt",
-                    "edits": [
-                        { "old_text": "alpha", "new_text": "one" },
-                        { "old_text": "missing", "new_text": "two" }
-                    ]
-                }),
+                edit_args("notes.txt", false, &[("alpha", "one"), ("missing", "two")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -444,11 +416,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "created.txt",
-                    "create": true,
-                    "edits": [{ "old_text": "", "new_text": "hello\n" }]
-                }),
+                edit_args("created.txt", true, &[("", "hello\n")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -476,11 +444,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "created.txt",
-                    "create": true,
-                    "edits": [{ "old_text": "", "new_text": "hello\n" }]
-                }),
+                edit_args("created.txt", true, &[("", "hello\n")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -502,11 +466,7 @@ mod tests {
         let config = tool_config(&workspace_dir);
         let output = tool
             .call(
-                json!({
-                    "path": "missing/created.txt",
-                    "create": true,
-                    "edits": [{ "old_text": "", "new_text": "hello\n" }]
-                }),
+                edit_args("missing/created.txt", true, &[("", "hello\n")]),
                 &ToolContext {
                     global_config: &config,
                 },
@@ -530,10 +490,7 @@ mod tests {
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
-            &json!({
-                "path": "notes.txt",
-                "edits": [{ "old_text": "a", "new_text": "b" }]
-            }),
+            &edit_args("notes.txt", false, &[("a", "b")]),
             &ToolContext {
                 global_config: &config,
             },
@@ -556,13 +513,17 @@ mod tests {
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
         let assessment = tool.assess(
-            &json!({
-                "path": format!(
+            &edit_args(
+                format!(
                     "../{}/notes.txt",
-                    outside_dir.file_name().expect("outside dir name").to_string_lossy()
+                    outside_dir
+                        .file_name()
+                        .expect("outside dir name")
+                        .to_string_lossy()
                 ),
-                "edits": [{ "old_text": "a", "new_text": "b" }]
-            }),
+                false,
+                &[("a", "b")],
+            ),
             &ToolContext {
                 global_config: &config,
             },
@@ -578,24 +539,21 @@ mod tests {
     #[tokio::test]
     async fn describe_produces_readable_summary() {
         let tool = EditFileTool;
-        let description = tool
-            .describe(json!({
-                "path": "src/lib.rs",
-                "edits": [{ "old_text": "old", "new_text": "new" }]
-            }))
-            .await;
+        let description = tool.describe(&edit_args("src/lib.rs", false, &[("old", "new")]));
 
         assert_eq!(description, "Edit file src/lib.rs with 1 replacement(s)");
     }
 
     #[test]
     fn native_toon_edit_arguments_validate_successfully() {
-        let tool = EditFileTool;
         let args: serde_json::Value = decode_default(
             "path: notes.txt\ncreate: false\nedits[1]{old_text,new_text}:\n  beta,gamma",
         )
         .expect("decode native toon edit args");
-
-        tool.validate(&args).expect("validate native edit args");
+        let mut manager = tool_core::ToolManager::new();
+        manager.register_tool(EditFileTool);
+        manager
+            .prepare_tool(&types::ToolId::new("edit_file"), args)
+            .expect("validate native edit args");
     }
 }

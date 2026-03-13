@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent::{AgentManager, PendingStreamRequest, ToolExecutionRequest};
+use agent::{AgentManager, PendingStreamRequest, ToolExecutionPayload, ToolExecutionRequest};
 use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use persistence::SessionMeta;
 use provider_core::{
@@ -700,39 +700,34 @@ fn build_provider_registry() -> Result<ProviderRegistry> {
     Ok(registry)
 }
 
-async fn execute_tool_requests(
-    tools: &ToolManager,
-    executions: Vec<ToolExecutionRequest>,
-) -> Vec<types::ToolResult> {
+async fn execute_tool_requests(executions: Vec<ToolExecutionRequest>) -> Vec<types::ToolResult> {
     let mut results = Vec::with_capacity(executions.len());
 
     for execution in executions {
-        let output = if execution.permission_denied {
-            serde_json::json!({ "error": "Permission denied by user" })
-        } else if let (Some(args), Some(config)) = (execution.args, execution.config) {
-            match tools
-                .call_tool(
-                    &execution.tool_id,
-                    args,
-                    &ToolContext {
+        let (output, permission_denied) = match execution.payload {
+            ToolExecutionPayload::Denied => (
+                serde_json::json!({ "error": "Permission denied by user" }),
+                true,
+            ),
+            ToolExecutionPayload::Approved { prepared, config } => {
+                let output = match prepared
+                    .call(&ToolContext {
                         global_config: &config,
-                    },
-                )
-                .await
-            {
-                Ok(ToolOutput::Success { data }) => data,
-                Ok(ToolOutput::Error { message }) => serde_json::json!({ "error": message }),
-                Err(error) => serde_json::json!({ "error": error.to_string() }),
+                    })
+                    .await
+                {
+                    ToolOutput::Success { data } => data,
+                    ToolOutput::Error { message } => serde_json::json!({ "error": message }),
+                };
+                (output, false)
             }
-        } else {
-            serde_json::json!({ "error": "Tool execution metadata missing" })
         };
 
         results.push(types::ToolResult {
             call_id: execution.call_id,
             tool_id: execution.tool_id,
             output,
-            permission_denied: execution.permission_denied,
+            permission_denied,
         });
     }
 
@@ -1101,15 +1096,12 @@ impl RuntimeInner {
         let active_streams = self.active_streams.clone();
 
         tokio::spawn(async move {
-            let (tools, executions) = {
+            let executions = {
                 let mut agent = agent_manager.lock().await;
-                (
-                    agent.cloned_tool_manager(),
-                    agent.take_ready_tool_executions(&session_id),
-                )
+                agent.take_ready_tool_executions(&session_id)
             };
 
-            let results = execute_tool_requests(&tools, executions).await;
+            let results = execute_tool_requests(executions).await;
 
             for result in &results {
                 let success = result.output.get("error").is_none();
@@ -1960,7 +1952,8 @@ mod tests {
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
     use persistence::{FileMessageStore, FileSessionStore};
-    use tool_core::{Tool, ToolContext, ToolManager, ToolOutput};
+    use serde::Deserialize;
+    use tool_core::{ToolContext, ToolManager, ToolOutput, TypedTool};
     use tool_edit_file::EditFileTool;
     use types::{
         ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
@@ -1988,6 +1981,14 @@ mod tests {
             }
         }
     }
+
+    #[derive(Clone, Deserialize)]
+    struct ValueArgs {
+        value: String,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct NoopArgs {}
 
     struct ScriptedProvider {
         id: ProviderId,
@@ -2057,10 +2058,13 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
     struct ApprovalTool;
 
     #[async_trait]
-    impl Tool for ApprovalTool {
+    impl TypedTool for ApprovalTool {
+        type Args = ValueArgs;
+
         fn name(&self) -> &'static str {
             "mock_tool"
         }
@@ -2069,33 +2073,27 @@ mod tests {
             "mock_tool(value: string)"
         }
 
-        fn assess(&self, args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
             ToolCallAssessment {
                 risk: RiskLevel::UndoableWorkspaceWrite,
                 policy: ExecutionPolicy::AlwaysAsk,
-                reasons: vec![format!(
-                    "mock_tool requires approval for {:?}",
-                    args.get("value")
-                )],
+                reasons: vec![format!("mock_tool requires approval for {:?}", args.value)],
             }
         }
 
-        async fn call(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
             ToolOutput::success(serde_json::json!({
                 "tool": "mock_tool",
-                "value": args.get("value").cloned().unwrap_or(serde_json::Value::Null),
+                "value": args.value,
             }))
         }
 
-        async fn describe(&self, args: serde_json::Value) -> String {
-            let value = args
-                .get("value")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            format!("Mock tool for {value}")
+        fn describe(&self, args: &Self::Args) -> String {
+            format!("Mock tool for {}", args.value)
         }
     }
 
+    #[derive(Clone)]
     struct BlockingApprovalTool {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -2103,7 +2101,9 @@ mod tests {
     }
 
     #[async_trait]
-    impl Tool for BlockingApprovalTool {
+    impl TypedTool for BlockingApprovalTool {
+        type Args = ValueArgs;
+
         fn name(&self) -> &'static str {
             "blocking_tool"
         }
@@ -2112,18 +2112,15 @@ mod tests {
             "blocking_tool(value: string)"
         }
 
-        fn assess(&self, args: &serde_json::Value, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
             ToolCallAssessment {
                 risk: RiskLevel::UndoableWorkspaceWrite,
                 policy: ExecutionPolicy::AlwaysAsk,
-                reasons: vec![format!(
-                    "blocking_tool requires approval for {:?}",
-                    args.get("value")
-                )],
+                reasons: vec![format!("blocking_tool requires approval for {:?}", args.value)],
             }
         }
 
-        async fn call(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
             self.started.notify_waiters();
             self.release.notified().await;
 
@@ -2132,17 +2129,13 @@ mod tests {
             } else {
                 ToolOutput::success(serde_json::json!({
                     "tool": "blocking_tool",
-                    "value": args.get("value").cloned().unwrap_or(serde_json::Value::Null),
+                    "value": args.value,
                 }))
             }
         }
 
-        async fn describe(&self, args: serde_json::Value) -> String {
-            let value = args
-                .get("value")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            format!("Blocking tool for {value}")
+        fn describe(&self, args: &Self::Args) -> String {
+            format!("Blocking tool for {}", args.value)
         }
     }
 
@@ -2152,10 +2145,13 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
+    #[derive(Clone, Copy)]
     struct NoopTool;
 
     #[async_trait]
-    impl Tool for NoopTool {
+    impl TypedTool for NoopTool {
+        type Args = NoopArgs;
+
         fn name(&self) -> &'static str {
             "noop_tool"
         }
@@ -2164,7 +2160,7 @@ mod tests {
             "noop_tool()"
         }
 
-        async fn call(&self, _args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
             ToolOutput::success(serde_json::json!({ "ok": true }))
         }
     }

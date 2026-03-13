@@ -11,7 +11,7 @@ use persistence::{MessageStore, SessionMeta, SessionStore};
 use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 use provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use tokio::sync::RwLock;
-use tool_core::{ToolManager, toon_parser};
+use tool_core::{PreparedToolCall, ToolManager, toon_parser};
 use types::{
     AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
     ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult,
@@ -20,14 +20,28 @@ use ulid::Ulid;
 
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PendingToolCall {
     pub call: ToolCall,
+    pub prepared: PreparedToolCall,
     pub description: String,
     pub assessment: ToolCallAssessment,
     pub config: types::ToolCallGlobalConfig,
     pub status: PermissionStatus,
     pub queue_order: u64,
+}
+
+impl std::fmt::Debug for PendingToolCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingToolCall")
+            .field("call", &self.call)
+            .field("description", &self.description)
+            .field("assessment", &self.assessment)
+            .field("config", &self.config)
+            .field("status", &self.status)
+            .field("queue_order", &self.queue_order)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,13 +63,20 @@ pub struct PendingToolInfo {
     pub queue_order: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
+pub enum ToolExecutionPayload {
+    Approved {
+        prepared: PreparedToolCall,
+        config: types::ToolCallGlobalConfig,
+    },
+    Denied,
+}
+
+#[derive(Clone)]
 pub struct ToolExecutionRequest {
     pub call_id: CallId,
     pub tool_id: ToolId,
-    pub args: Option<serde_json::Value>,
-    pub config: Option<types::ToolCallGlobalConfig>,
-    pub permission_denied: bool,
+    pub payload: ToolExecutionPayload,
 }
 
 #[derive(Clone, Debug)]
@@ -73,7 +94,7 @@ pub struct CancelledStreamResult {
     pub persisted: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct SessionRuntimeState {
     active_tool_config: types::ToolCallGlobalConfig,
     pending_tool_config: Option<types::ToolCallGlobalConfig>,
@@ -784,35 +805,8 @@ impl AgentManager {
                 });
                 continue;
             }
-            if let Err(error) = self.tools.validate_tool(&tool_id, &parsed.args) {
-                failed_calls.push(tool_core::toon_parser::FailedToolCall {
-                    raw_content: parsed.raw_content,
-                    error: error.to_string(),
-                });
-                continue;
-            }
-            let assessment = match self.tools.assess_tool(
-                &tool_id,
-                &parsed.args,
-                &tool_core::ToolContext {
-                    global_config: &active_tool_config,
-                },
-            ) {
-                Ok(assessment) => assessment,
-                Err(error) => {
-                    failed_calls.push(tool_core::toon_parser::FailedToolCall {
-                        raw_content: parsed.raw_content.clone(),
-                        error: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let description = match self
-                .tools
-                .describe_tool(&tool_id, parsed.args.clone())
-                .await
-            {
-                Ok(description) => description,
+            let prepared = match self.tools.prepare_tool(&tool_id, parsed.args.clone()) {
+                Ok(prepared) => prepared,
                 Err(error) => {
                     failed_calls.push(tool_core::toon_parser::FailedToolCall {
                         raw_content: parsed.raw_content,
@@ -821,6 +815,12 @@ impl AgentManager {
                     continue;
                 }
             };
+            let assessment = prepared.assess(
+                &tool_core::ToolContext {
+                    global_config: &active_tool_config,
+                },
+            );
+            let description = prepared.describe();
             let requires_confirmation =
                 !assessment.is_auto_approved(active_turn_profile.default_risk_level);
 
@@ -834,6 +834,7 @@ impl AgentManager {
                 call_id.clone(),
                 PendingToolCall {
                     call,
+                    prepared,
                     description: description.clone(),
                     assessment: assessment.clone(),
                     config: active_tool_config.clone(),
@@ -1016,16 +1017,15 @@ impl AgentManager {
                 PermissionStatus::Approved => executions.push(ToolExecutionRequest {
                     call_id,
                     tool_id: pending.call.tool_id,
-                    args: Some(pending.call.args),
-                    config: Some(pending.config),
-                    permission_denied: false,
+                    payload: ToolExecutionPayload::Approved {
+                        prepared: pending.prepared,
+                        config: pending.config,
+                    },
                 }),
                 PermissionStatus::Denied => executions.push(ToolExecutionRequest {
                     call_id,
                     tool_id: pending.call.tool_id,
-                    args: None,
-                    config: None,
-                    permission_denied: true,
+                    payload: ToolExecutionPayload::Denied,
                 }),
             }
         }
@@ -1107,20 +1107,27 @@ mod tests {
     use color_eyre::eyre::Result;
     use futures::stream::BoxStream;
     use provider_core::Provider;
+    use serde::Deserialize;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tool_core::{Tool, ToolContext, ToolOutput};
+    use tool_core::{ToolContext, ToolOutput, TypedTool};
     use types::{ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus};
 
     struct MockProvider {
         id: ProviderId,
     }
 
+    #[derive(Clone, Deserialize)]
+    struct MockToolArgs {}
+
+    #[derive(Clone)]
     struct MockTool {
         name: &'static str,
     }
 
     #[async_trait]
-    impl Tool for MockTool {
+    impl TypedTool for MockTool {
+        type Args = MockToolArgs;
+
         fn name(&self) -> &'static str {
             self.name
         }
@@ -1129,7 +1136,7 @@ mod tests {
             "mock schema"
         }
 
-        async fn call(&self, _args: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
             ToolOutput::success(serde_json::json!({ "ok": true }))
         }
     }
@@ -1472,9 +1479,13 @@ mod tests {
                 PendingToolCall {
                     call: ToolCall {
                         call_id: call_id.clone(),
-                        tool_id: ToolId::new("mock_tool"),
-                        args: serde_json::json!({}),
+                        tool_id: ToolId::new("list_files"),
+                        args: serde_json::json!({ "path": "." }),
                     },
+                    prepared: manager
+                        .tools
+                        .prepare_tool(&ToolId::new("list_files"), serde_json::json!({ "path": "." }))
+                        .expect("prepare list_files tool"),
                     description: String::from("test"),
                     assessment: ToolCallAssessment {
                         risk: RiskLevel::ReadOnlyWorkspace,

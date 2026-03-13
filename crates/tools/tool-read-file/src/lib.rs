@@ -4,18 +4,19 @@ use std::io::Read;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{Tool, ToolContext, ToolOutput, resolve_tool_path};
+use tool_core::{ToolContext, ToolOutput, TypedTool, resolve_tool_path};
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 
+#[derive(Clone, Copy)]
 pub struct ReadFileTool;
 
 toon_tool! {
     name: "read_files",
     description: "Read files from the filesystem and return their contents with line numbers",
     types: {
-        #[derive(serde::Deserialize, serde::Serialize)]
-        struct ReadFileToolArgs {
+        #[derive(Clone, serde::Deserialize, serde::Serialize)]
+        pub struct ReadFileToolArgs {
             #[toon_schema(description = "List of file paths to read", min = 1)]
             files: Vec<String>,
         }
@@ -34,7 +35,9 @@ struct ReadFileToolOutput {
 }
 
 #[async_trait]
-impl Tool for ReadFileTool {
+impl TypedTool for ReadFileTool {
+    type Args = ReadFileToolArgs;
+
     fn name(&self) -> &'static str {
         ReadFileToolArgs::tool_name()
     }
@@ -43,28 +46,11 @@ impl Tool for ReadFileTool {
         ReadFileToolArgs::toon_schema()
     }
 
-    fn validate(&self, args: &serde_json::Value) -> Result<(), String> {
-        serde_json::from_value::<ReadFileToolArgs>(args.clone())
-            .map(|_| ())
-            .map_err(|error| format!("Unable to validate read_files arguments: {error}"))
-    }
-
-    fn assess(&self, args: &serde_json::Value, ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        let parsed: ReadFileToolArgs = match serde_json::from_value(args.clone()) {
-            Ok(args) => args,
-            Err(error) => {
-                return ToolCallAssessment {
-                    risk: RiskLevel::ReadOnlyOutsideWorkspace,
-                    policy: ExecutionPolicy::AlwaysAsk,
-                    reasons: vec![format!("Unable to validate read_files arguments: {error}")],
-                };
-            }
-        };
-
+    fn assess(&self, args: &Self::Args, ctx: &ToolContext<'_>) -> ToolCallAssessment {
         let mut reasons = Vec::new();
         let mut risk = RiskLevel::ReadOnlyWorkspace;
 
-        for file in &parsed.files {
+        for file in &args.files {
             let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, file);
             if resolved.is_within_workspace() {
                 reasons.push(format!(
@@ -87,13 +73,7 @@ impl Tool for ReadFileTool {
         }
     }
 
-    async fn call(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> ToolOutput {
-        let args: ReadFileToolArgs = match serde_json::from_value(args) {
-            Ok(x) => x,
-            Err(e) => {
-                return ToolOutput::error(format!("args error: {}", e));
-            }
-        };
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
         let mut files_out = vec![];
         for f in args.files {
             let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &f);
@@ -124,9 +104,7 @@ impl Tool for ReadFileTool {
         ToolOutput::success(out)
     }
 
-    async fn describe(&self, args: serde_json::Value) -> String {
-        let args: ReadFileToolArgs =
-            serde_json::from_value(args).unwrap_or(ReadFileToolArgs { files: vec![] });
+    fn describe(&self, args: &Self::Args) -> String {
         let count = args.files.len();
         let files_str = args.files.join(", ");
         format!("Read {} file(s): {}", count, files_str)
@@ -148,11 +126,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use serde_json::json;
-    use tool_core::{Tool, ToolContext, ToolOutput};
+    use tool_core::{ToolContext, ToolOutput, TypedTool};
     use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
 
-    use super::ReadFileTool;
+    use super::{ReadFileTool, ReadFileToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
@@ -177,6 +154,12 @@ mod tests {
         let _ = fs::remove_dir_all(path);
     }
 
+    fn read_args(files: &[impl AsRef<str>]) -> ReadFileToolArgs {
+        ReadFileToolArgs {
+            files: files.iter().map(|file| file.as_ref().to_string()).collect(),
+        }
+    }
+
     #[tokio::test]
     async fn reads_workspace_relative_paths_with_one_based_line_numbers() {
         let workspace_dir =
@@ -186,12 +169,7 @@ mod tests {
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "files": ["notes.txt"] }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(read_args(&["notes.txt"]), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -215,12 +193,7 @@ mod tests {
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
         let output = tool
-            .call(
-                json!({ "files": ["a.txt", "b.txt"] }),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(read_args(&["a.txt", "b.txt"]), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -247,11 +220,15 @@ mod tests {
 
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let outside_path = format!(
+            "../{}/outside.txt",
+            outside_dir
+                .file_name()
+                .expect("outside dir name")
+                .to_string_lossy()
+        );
         let output = tool
-            .call(
-                json!({ "files": [format!("../{}/outside.txt", outside_dir.file_name().expect("outside dir name").to_string_lossy())] }),
-                &ToolContext { global_config: &config },
-            )
+            .call(read_args(&[outside_path]), &ToolContext { global_config: &config })
             .await;
 
         match output {
@@ -271,12 +248,7 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_paths_as_read_only");
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(
-            &json!({ "files": ["notes.txt"] }),
-            &ToolContext {
-                global_config: &config,
-            },
-        );
+        let assessment = tool.assess(&read_args(&["notes.txt"]), &ToolContext { global_config: &config });
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
         assert_eq!(
@@ -293,10 +265,14 @@ mod tests {
         let outside_dir = make_temp_dir("read_file_assess_outside_target");
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(
-            &json!({ "files": [format!("../{}", outside_dir.file_name().expect("outside dir name").to_string_lossy())] }),
-            &ToolContext { global_config: &config },
+        let relative_path = format!(
+            "../{}",
+            outside_dir
+                .file_name()
+                .expect("outside dir name")
+                .to_string_lossy()
         );
+        let assessment = tool.assess(&read_args(&[relative_path]), &ToolContext { global_config: &config });
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
