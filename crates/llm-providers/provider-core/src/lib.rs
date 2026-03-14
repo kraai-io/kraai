@@ -189,22 +189,49 @@ pub trait ProviderFactory {
 
 impl ProviderRegistry {
     pub fn register_factory<F: ProviderFactory + 'static>(&mut self) -> Result<(), ProviderError> {
-        let key = F::TYPE_ID.to_string();
+        let mut definition = F::definition();
+        definition.type_id = F::TYPE_ID.to_string();
+
+        self.register_dynamic_factory(
+            F::TYPE_ID,
+            definition,
+            |id, config| {
+                F::create(id, config)
+                    .map_err(|error| ProviderError::ConfigParseError(error.to_string()))
+            },
+            F::validate_provider_config,
+            F::validate_model_config,
+        )
+    }
+
+    pub fn register_dynamic_factory<C, VP, VM>(
+        &mut self,
+        type_id: impl Into<String>,
+        mut definition: ProviderDefinition,
+        create: C,
+        validate_provider_config: VP,
+        validate_model_config: VM,
+    ) -> Result<(), ProviderError>
+    where
+        C: Fn(ProviderId, DynamicConfig) -> Result<Box<dyn Provider>, ProviderError>
+            + Send
+            + Sync
+            + 'static,
+        VP: Fn(&DynamicConfig) -> Vec<ValidationError> + Send + Sync + 'static,
+        VM: Fn(&DynamicConfig) -> Vec<ValidationError> + Send + Sync + 'static,
+    {
+        let key = type_id.into();
         if self.factories.contains_key(&key) {
             return Err(ProviderError::FactoryAlreadyRegistered(key));
         }
 
-        let mut definition = F::definition();
-        definition.type_id = F::TYPE_ID.to_string();
+        definition.type_id = key.clone();
 
         let entry = FactoryEntry {
             definition,
-            create: Arc::new(|id, config| {
-                F::create(id, config)
-                    .map_err(|error| ProviderError::ConfigParseError(error.to_string()))
-            }),
-            validate_provider_config: Arc::new(F::validate_provider_config),
-            validate_model_config: Arc::new(F::validate_model_config),
+            create: Arc::new(create),
+            validate_provider_config: Arc::new(validate_provider_config),
+            validate_model_config: Arc::new(validate_model_config),
         };
 
         self.factories.insert(key, Arc::new(entry));
@@ -555,6 +582,92 @@ mod tests {
             registry.get_definition("mock").unwrap().display_name,
             "Mock".to_string()
         );
+    }
+
+    #[test]
+    fn test_dynamic_registry_registration() {
+        let mut registry = ProviderRegistry::default();
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let create_count_for_factory = Arc::clone(&create_count);
+
+        registry
+            .register_dynamic_factory(
+                "dynamic-mock",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Dynamic Mock".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "Mock provider built from closures".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: true,
+                    default_provider_id_prefix: "dynamic-mock".to_string(),
+                },
+                move |id, _config| {
+                    create_count_for_factory.fetch_add(1, Ordering::SeqCst);
+                    Ok(Box::new(MockProvider::new(id.as_str())))
+                },
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
+
+        let provider = registry
+            .create_provider(
+                "dynamic-mock",
+                ProviderId::new("dynamic-mock"),
+                DynamicConfig::new(),
+            )
+            .unwrap();
+        assert_eq!(provider.get_provider_id(), ProviderId::new("dynamic-mock"));
+        assert_eq!(create_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_dynamic_registry_rejects_duplicates() {
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register_dynamic_factory(
+                "duplicate",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Duplicate".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "duplicate".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: false,
+                    default_provider_id_prefix: "duplicate".to_string(),
+                },
+                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
+
+        let error = registry
+            .register_dynamic_factory(
+                "duplicate",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Duplicate".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "duplicate".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: false,
+                    default_provider_id_prefix: "duplicate".to_string(),
+                },
+                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProviderError::FactoryAlreadyRegistered(provider_type) if provider_type == "duplicate"
+        ));
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use directories::BaseDirs;
+use persistence::agent_state_root;
 use serde::Deserialize;
 use types::{AgentProfileSource, AgentProfileSummary, AgentProfileWarning, RiskLevel, ToolId};
 
@@ -118,8 +118,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
 }
 
 fn global_profiles_path() -> Option<PathBuf> {
-    let base_dirs = BaseDirs::new()?;
-    Some(base_dirs.home_dir().join(".agent-desktop/agents.toml"))
+    agent_state_root().ok().map(|path| path.join("agents.toml"))
 }
 
 fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {
@@ -223,7 +222,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{AgentProfileSource, load_layer, resolve_profiles, workspace_profiles_path};
+    use super::{
+        AgentProfileSource, global_profiles_path, load_layer, resolve_profiles,
+        workspace_profiles_path,
+    };
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -258,6 +260,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(ids.contains(&"plan-code"));
         assert!(ids.contains(&"build-code"));
+    }
+
+    #[test]
+    fn global_profiles_live_under_agent_root() {
+        let path = global_profiles_path().expect("global profiles path");
+        assert!(path.ends_with(".agent/agents.toml"));
     }
 
     #[test]

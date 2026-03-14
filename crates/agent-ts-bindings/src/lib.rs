@@ -440,6 +440,80 @@ impl From<SettingsDocument> for agent_runtime::SettingsDocument {
   }
 }
 
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct PendingBrowserLogin {
+  pub auth_url: String,
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct PendingDeviceCodeLogin {
+  pub verification_url: String,
+  pub user_code: String,
+}
+
+#[napi(string_enum)]
+#[derive(Clone, Debug)]
+pub enum OpenAiCodexLoginState {
+  SignedOut,
+  BrowserPending,
+  DeviceCodePending,
+  Authenticated,
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct OpenAiCodexAuthStatus {
+  pub state: OpenAiCodexLoginState,
+  pub email: Option<String>,
+  pub plan_type: Option<String>,
+  pub account_id: Option<String>,
+  pub last_refresh_unix: Option<f64>,
+  pub error: Option<String>,
+  pub pending_browser_login: Option<PendingBrowserLogin>,
+  pub pending_device_code_login: Option<PendingDeviceCodeLogin>,
+}
+
+impl From<agent_runtime::OpenAiCodexAuthStatus> for OpenAiCodexAuthStatus {
+  fn from(value: agent_runtime::OpenAiCodexAuthStatus) -> Self {
+    let (state, pending_browser_login, pending_device_code_login) = match value.state {
+      agent_runtime::OpenAiCodexLoginState::SignedOut => {
+        (OpenAiCodexLoginState::SignedOut, None, None)
+      }
+      agent_runtime::OpenAiCodexLoginState::BrowserPending(pending) => (
+        OpenAiCodexLoginState::BrowserPending,
+        Some(PendingBrowserLogin {
+          auth_url: pending.auth_url,
+        }),
+        None,
+      ),
+      agent_runtime::OpenAiCodexLoginState::DeviceCodePending(pending) => (
+        OpenAiCodexLoginState::DeviceCodePending,
+        None,
+        Some(PendingDeviceCodeLogin {
+          verification_url: pending.verification_url,
+          user_code: pending.user_code,
+        }),
+      ),
+      agent_runtime::OpenAiCodexLoginState::Authenticated => {
+        (OpenAiCodexLoginState::Authenticated, None, None)
+      }
+    };
+
+    OpenAiCodexAuthStatus {
+      state,
+      email: value.email,
+      plan_type: value.plan_type,
+      account_id: value.account_id,
+      last_refresh_unix: value.last_refresh_unix.map(|value| value as f64),
+      error: value.error,
+      pending_browser_login,
+      pending_device_code_login,
+    }
+  }
+}
+
 impl From<agent_runtime::Session> for Session {
   fn from(s: agent_runtime::Session) -> Self {
     Session {
@@ -510,6 +584,9 @@ pub enum Event {
   },
   HistoryUpdated {
     session_id: String,
+  },
+  OpenAiCodexAuthUpdated {
+    status: OpenAiCodexAuthStatus,
   },
 }
 
@@ -596,6 +673,9 @@ impl From<agent_runtime::Event> for Event {
         Event::ContinuationFailed { session_id, error }
       }
       agent_runtime::Event::HistoryUpdated { session_id } => Event::HistoryUpdated { session_id },
+      agent_runtime::Event::OpenAiCodexAuthUpdated { status } => Event::OpenAiCodexAuthUpdated {
+        status: status.into(),
+      },
     }
   }
 }

@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use agent_runtime::{
     AgentProfileSummary, AgentProfileWarning, AgentProfilesState, Event, FieldDefinition,
-    FieldValueEntry, Model, ModelSettings, ProviderDefinition, ProviderSettings, RuntimeHandle,
-    Session, SettingsDocument, SettingsValue,
+    FieldValueEntry, Model, ModelSettings, OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
+    OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, ProviderDefinition, ProviderSettings,
+    RuntimeHandle, Session, SettingsDocument, SettingsValue,
 };
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
@@ -39,8 +40,8 @@ const SLASH_COMMANDS: [(&str, &str); 7] = [
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("new", "Start new chat"),
+    ("providers", "Open providers"),
     ("quit", "Exit the TUI"),
-    ("settings", "Open settings editor"),
     ("sessions", "Open sessions menu"),
 ];
 
@@ -79,9 +80,17 @@ enum UiMode {
     Chat,
     AgentMenu,
     ModelMenu,
-    SettingsMenu,
+    ProvidersMenu,
     SessionsMenu,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProvidersView {
+    List,
+    Connect,
+    Detail,
+    Advanced,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +131,45 @@ enum SettingsModelField {
 enum ActiveSettingsEditor {
     Provider(SettingsProviderField),
     Model(SettingsModelField),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderDetailAction {
+    BrowserLogin,
+    DeviceCodeLogin,
+    CancelLogin,
+    Logout,
+    Advanced,
+    RefreshModels,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProvidersAdvancedFocus {
+    ProviderFields,
+    Models,
+    ModelFields,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(super) enum ProviderAuthState {
+    #[default]
+    SignedOut,
+    BrowserPending,
+    DeviceCodePending,
+    Authenticated,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct ProviderAuthStatus {
+    state: ProviderAuthState,
+    email: Option<String>,
+    plan_type: Option<String>,
+    account_id: Option<String>,
+    last_refresh: Option<String>,
+    auth_url: Option<String>,
+    verification_url: Option<String>,
+    user_code: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +235,11 @@ enum RuntimeRequest {
     },
     ListProviderDefinitions,
     GetSettings,
+    GetOpenAiCodexAuthStatus,
+    StartOpenAiCodexBrowserLogin,
+    StartOpenAiCodexDeviceCodeLogin,
+    CancelOpenAiCodexLogin,
+    LogoutOpenAiCodexAuth,
     CreateSession,
     SetSessionProfile {
         session_id: String,
@@ -241,6 +294,11 @@ enum RuntimeResponse {
     },
     ProviderDefinitions(Result<Vec<ProviderDefinition>, String>),
     Settings(Result<SettingsDocument, String>),
+    OpenAiCodexAuthStatus(Result<ProviderAuthStatus, String>),
+    StartOpenAiCodexBrowserLogin(Result<ProviderAuthStatus, String>),
+    StartOpenAiCodexDeviceCodeLogin(Result<ProviderAuthStatus, String>),
+    CancelOpenAiCodexLogin(Result<ProviderAuthStatus, String>),
+    LogoutOpenAiCodexAuth(Result<ProviderAuthStatus, String>),
     CreateSession(Result<String, String>),
     SetSessionProfile {
         profile_id: String,
@@ -343,6 +401,11 @@ pub struct AppState {
     settings_editor: Option<ActiveSettingsEditor>,
     settings_editor_input: String,
     settings_delete_armed: bool,
+    providers_view: ProvidersView,
+    providers_advanced_focus: ProvidersAdvancedFocus,
+    connect_provider_search: String,
+    connect_provider_index: usize,
+    openai_codex_auth: ProviderAuthStatus,
     pending_submit: Option<PendingSubmit>,
     queued_submit_after_tools: Option<PendingSubmit>,
 }
@@ -400,6 +463,11 @@ impl Default for AppState {
             settings_editor: None,
             settings_editor_input: String::new(),
             settings_delete_armed: false,
+            providers_view: ProvidersView::List,
+            providers_advanced_focus: ProvidersAdvancedFocus::ProviderFields,
+            connect_provider_search: String::new(),
+            connect_provider_index: 0,
+            openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
             queued_submit_after_tools: None,
         }
@@ -745,6 +813,15 @@ impl App {
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
+            Event::OpenAiCodexAuthUpdated { status } => {
+                self.apply_openai_codex_auth_status(map_openai_codex_auth_status(status));
+                if self.state.mode == UiMode::ProvidersMenu
+                    && matches!(self.state.providers_view, ProvidersView::Detail)
+                    && pending_auth_target(&self.state.openai_codex_auth).is_none()
+                {
+                    self.state.status = String::from("OpenAI auth updated");
+                }
+            }
             Event::MessageComplete(_) => {}
             Event::ToolCallDetected {
                 session_id,
@@ -863,12 +940,28 @@ impl App {
                 self.state.settings_editor = None;
                 self.state.settings_editor_input.clear();
                 self.state.settings_delete_armed = false;
-                self.state.mode = UiMode::SettingsMenu;
-                self.state.status = String::from("Editing settings");
+                self.state.providers_view = ProvidersView::List;
+                self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
+                self.state.connect_provider_search.clear();
+                self.state.connect_provider_index = 0;
+                self.state.mode = UiMode::ProvidersMenu;
+                self.state.status = String::from("Providers loaded");
             }
             RuntimeResponse::Settings(Err(err)) => {
                 self.state.status = format!("Failed loading settings: {err}");
             }
+            RuntimeResponse::OpenAiCodexAuthStatus(result)
+            | RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
+            | RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result)
+            | RuntimeResponse::CancelOpenAiCodexLogin(result)
+            | RuntimeResponse::LogoutOpenAiCodexAuth(result) => match result {
+                Ok(status) => {
+                    self.apply_openai_codex_auth_status(status);
+                }
+                Err(err) => {
+                    self.state.status = format!("OpenAI auth failed: {err}");
+                }
+            },
             RuntimeResponse::CreateSession(Ok(session_id)) => {
                 let draft_profile_id = self.state.selected_profile_id.clone();
                 let pending_submit = self.state.pending_submit.take().map(|mut pending_submit| {
@@ -942,8 +1035,8 @@ impl App {
                 self.state.settings_delete_armed = false;
                 self.state.settings_editor = None;
                 self.state.settings_editor_input.clear();
-                self.state.mode = UiMode::Chat;
-                self.state.status = String::from("Settings saved");
+                self.state.status = String::from("Providers saved");
+                self.request(RuntimeRequest::ListModels);
             }
             RuntimeResponse::SaveSettings(Err(err)) => {
                 self.state.settings_errors = parse_settings_errors(&err);
@@ -1222,13 +1315,8 @@ impl App {
                 }
                 return;
             }
-            if self.state.mode == UiMode::SettingsMenu {
-                if self.state.settings_editor.take().is_some() {
-                    self.state.settings_editor_input.clear();
-                } else {
-                    self.state.mode = UiMode::Chat;
-                    self.state.status = String::from("Settings editor closed");
-                }
+            if self.state.mode == UiMode::ProvidersMenu {
+                self.handle_providers_escape();
                 return;
             }
             self.clear_chat_selection();
@@ -1241,7 +1329,7 @@ impl App {
             UiMode::Chat => self.handle_chat_key_event(key_event),
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
-            UiMode::SettingsMenu => self.handle_settings_key_event(key_event),
+            UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
             UiMode::Help => {
                 if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
@@ -1563,25 +1651,17 @@ impl App {
         }
     }
 
-    fn handle_settings_key_event(&mut self, key_event: KeyEvent) {
+    fn handle_providers_key_event(&mut self, key_event: KeyEvent) {
         if self.state.settings_editor.is_some() {
             self.handle_settings_editor_key_event(key_event);
             return;
         }
 
-        match key_event.code {
-            KeyCode::Tab => self.cycle_settings_focus(true),
-            KeyCode::BackTab => self.cycle_settings_focus(false),
-            KeyCode::Up => self.move_settings_selection(-1),
-            KeyCode::Down => self.move_settings_selection(1),
-            KeyCode::Left => self.adjust_settings_field(false),
-            KeyCode::Right => self.adjust_settings_field(true),
-            KeyCode::Enter => self.activate_settings_field(),
-            KeyCode::Char('a') => self.add_settings_item(),
-            KeyCode::Char('x') => self.delete_settings_item(),
-            KeyCode::Char('s') => self.save_settings_draft(),
-            KeyCode::Char(' ') => self.toggle_settings_field(),
-            _ => {}
+        match self.state.providers_view {
+            ProvidersView::List => self.handle_provider_list_key_event(key_event),
+            ProvidersView::Connect => self.handle_connect_provider_key_event(key_event),
+            ProvidersView::Detail => self.handle_provider_detail_key_event(key_event),
+            ProvidersView::Advanced => self.handle_advanced_provider_key_event(key_event),
         }
     }
 
@@ -1596,20 +1676,6 @@ impl App {
             }
             _ => {}
         }
-    }
-
-    fn cycle_settings_focus(&mut self, forward: bool) {
-        self.state.settings_delete_armed = false;
-        self.state.settings_focus = match (self.state.settings_focus, forward) {
-            (SettingsFocus::ProviderList, true) => SettingsFocus::ProviderForm,
-            (SettingsFocus::ProviderForm, true) => SettingsFocus::ModelList,
-            (SettingsFocus::ModelList, true) => SettingsFocus::ModelForm,
-            (SettingsFocus::ModelForm, true) => SettingsFocus::ProviderList,
-            (SettingsFocus::ProviderList, false) => SettingsFocus::ModelForm,
-            (SettingsFocus::ProviderForm, false) => SettingsFocus::ProviderList,
-            (SettingsFocus::ModelList, false) => SettingsFocus::ProviderForm,
-            (SettingsFocus::ModelForm, false) => SettingsFocus::ModelList,
-        };
     }
 
     fn move_settings_selection(&mut self, delta: isize) {
@@ -1687,6 +1753,7 @@ impl App {
         let Some(SettingsProviderField::Value(key)) = self.current_provider_field() else {
             return;
         };
+        let mut changed = false;
         if let Some(provider) = self
             .state
             .settings_draft
@@ -1703,11 +1770,16 @@ impl App {
                 })
                 .unwrap_or(false);
             set_field_value(&mut provider.values, &key, SettingsValue::Bool(!current));
+            changed = true;
+        }
+        if changed {
+            self.save_settings_draft();
         }
     }
 
     fn add_settings_item(&mut self) {
         self.state.settings_delete_armed = false;
+        let mut changed = false;
         match self.state.settings_focus {
             SettingsFocus::ProviderList | SettingsFocus::ProviderForm => {
                 if let Some(draft) = self.state.settings_draft.as_mut() {
@@ -1732,6 +1804,7 @@ impl App {
                     self.state.settings_provider_index = next_index;
                     self.state.settings_model_index = 0;
                     self.state.status = String::from("Added provider");
+                    changed = true;
                 }
             }
             SettingsFocus::ModelList | SettingsFocus::ModelForm => {
@@ -1755,8 +1828,12 @@ impl App {
                     });
                     self.state.settings_model_index = next_count;
                     self.state.status = String::from("Added model");
+                    changed = true;
                 }
             }
+        }
+        if changed {
+            self.save_settings_draft();
         }
     }
 
@@ -1768,6 +1845,7 @@ impl App {
         }
 
         self.state.settings_delete_armed = false;
+        let mut changed = false;
         match self.state.settings_focus {
             SettingsFocus::ProviderList | SettingsFocus::ProviderForm => {
                 let provider_id = self.current_provider().map(|provider| provider.id.clone());
@@ -1787,6 +1865,7 @@ impl App {
                         .min(draft.providers.len().saturating_sub(1));
                     self.state.settings_model_index = 0;
                     self.state.status = String::from("Deleted provider");
+                    changed = true;
                 }
             }
             SettingsFocus::ModelList | SettingsFocus::ModelForm => {
@@ -1802,8 +1881,12 @@ impl App {
                     self.state.settings_model_index =
                         self.state.settings_model_index.saturating_sub(1);
                     self.state.status = String::from("Deleted model");
+                    changed = true;
                 }
             }
+        }
+        if changed {
+            self.save_settings_draft();
         }
     }
 
@@ -1851,6 +1934,7 @@ impl App {
             return;
         };
         let value = self.state.settings_editor_input.trim().to_string();
+        let mut changed = false;
 
         match editor {
             ActiveSettingsEditor::Provider(field) => {
@@ -1873,6 +1957,7 @@ impl App {
                                     model.provider_id = value.clone();
                                 }
                             }
+                            changed = true;
                         }
                         SettingsProviderField::TypeId => {}
                         SettingsProviderField::Value(key) => {
@@ -1884,6 +1969,7 @@ impl App {
                             } else {
                                 clear_field_value(&mut provider.values, &key);
                             }
+                            changed = true;
                         }
                     }
                 }
@@ -1903,7 +1989,10 @@ impl App {
                         .and_then(|draft| draft.models.get_mut(global_index))
                 {
                     match field {
-                        SettingsModelField::Id => model.id = value,
+                        SettingsModelField::Id => {
+                            model.id = value;
+                            changed = true;
+                        }
                         SettingsModelField::Value(key) => {
                             if let Some(definition) = model_field_definition
                                 && let Some(next_value) =
@@ -1913,6 +2002,7 @@ impl App {
                             } else {
                                 clear_field_value(&mut model.values, &key);
                             }
+                            changed = true;
                         }
                     }
                 }
@@ -1920,6 +2010,9 @@ impl App {
         }
 
         self.state.settings_editor_input.clear();
+        if changed {
+            self.save_settings_draft();
+        }
     }
 
     fn cycle_provider_type(&mut self, forward: bool) {
@@ -1950,6 +2043,7 @@ impl App {
         if let Some(definition) = self.state.provider_definitions.get(next_index) {
             provider.type_id = definition.type_id.clone();
             provider.values = merge_values(&definition.provider_fields, &provider.values);
+            self.save_settings_draft();
         }
     }
 
@@ -2104,7 +2198,7 @@ impl App {
 
         if !command_popup_dismissed
             && let Some(command) = raw_input.strip_prefix('/')
-            && is_known_slash_command(command)
+            && (is_known_slash_command(command) || command.trim() == "settings")
         {
             self.handle_command(command.trim());
             return;
@@ -2188,8 +2282,17 @@ impl App {
                 }
             }
             "settings" => {
+                self.state.status = String::from("Unknown command: /settings. Use /providers");
+            }
+            "providers" => {
+                self.clear_chat_selection();
+                self.state.visible_chat_view = None;
+                self.state.mode = UiMode::ProvidersMenu;
+                self.state.providers_view = ProvidersView::List;
+                self.state.status = String::from("Loading providers");
                 self.request(RuntimeRequest::ListProviderDefinitions);
                 self.request(RuntimeRequest::GetSettings);
+                self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
             }
             "sessions" => {
                 self.clear_chat_selection();
@@ -2274,6 +2377,371 @@ impl App {
         flatten_models_map(&self.state.models_by_provider)
     }
 
+    fn handle_providers_escape(&mut self) {
+        if self.state.settings_editor.take().is_some() {
+            self.state.settings_editor_input.clear();
+            return;
+        }
+
+        match self.state.providers_view {
+            ProvidersView::List => {
+                self.state.mode = UiMode::Chat;
+                self.state.status = String::from("Providers closed");
+            }
+            ProvidersView::Connect => {
+                self.state.providers_view = ProvidersView::List;
+                self.state.connect_provider_search.clear();
+                self.state.connect_provider_index = 0;
+                self.state.status = String::from("Provider connection cancelled");
+            }
+            ProvidersView::Detail => {
+                self.state.providers_view = ProvidersView::List;
+                self.state.status = String::from("Back to providers");
+            }
+            ProvidersView::Advanced => {
+                self.state.providers_view = ProvidersView::Detail;
+                self.state.settings_delete_armed = false;
+                self.state.status = String::from("Back to provider detail");
+            }
+        }
+    }
+
+    fn handle_provider_list_key_event(&mut self, key_event: KeyEvent) {
+        let len = self
+            .state
+            .settings_draft
+            .as_ref()
+            .map_or(0, |draft| draft.providers.len());
+
+        match key_event.code {
+            KeyCode::Up => {
+                self.state.settings_provider_index =
+                    adjust_index(self.state.settings_provider_index, len, -1);
+                self.state.settings_model_index = 0;
+                self.state.settings_delete_armed = false;
+            }
+            KeyCode::Down => {
+                self.state.settings_provider_index =
+                    adjust_index(self.state.settings_provider_index, len, 1);
+                self.state.settings_model_index = 0;
+                self.state.settings_delete_armed = false;
+            }
+            KeyCode::Enter => {
+                if len == 0 {
+                    self.state.status = String::from("No providers configured");
+                    return;
+                }
+                self.state.providers_view = ProvidersView::Detail;
+                self.maybe_request_openai_auth_status();
+            }
+            KeyCode::Char('a') => {
+                self.state.providers_view = ProvidersView::Connect;
+                self.state.connect_provider_search.clear();
+                self.state.connect_provider_index = 0;
+                self.state.status = String::from("Connect a provider");
+            }
+            KeyCode::Char('d') => self.delete_selected_provider_from_list(),
+            KeyCode::Char('r') => {
+                self.request(RuntimeRequest::ListModels);
+                self.state.status = String::from("Refreshing provider models");
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_connect_provider_key_event(&mut self, key_event: KeyEvent) {
+        let len = self.filtered_provider_definitions().len();
+        match key_event.code {
+            KeyCode::Up => {
+                self.state.connect_provider_index =
+                    adjust_index(self.state.connect_provider_index, len, -1);
+            }
+            KeyCode::Down => {
+                self.state.connect_provider_index =
+                    adjust_index(self.state.connect_provider_index, len, 1);
+            }
+            KeyCode::Backspace => {
+                self.state.connect_provider_search.pop();
+                self.state.connect_provider_index = 0;
+            }
+            KeyCode::Char(c) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.state.connect_provider_search.push(c);
+                self.state.connect_provider_index = 0;
+            }
+            KeyCode::Enter => self.create_provider_from_connect_selection(),
+            _ => {}
+        }
+    }
+
+    fn handle_provider_detail_key_event(&mut self, key_event: KeyEvent) {
+        if matches!(key_event.code, KeyCode::Backspace) {
+            self.state.providers_view = ProvidersView::List;
+            self.state.status = String::from("Back to providers");
+            return;
+        }
+
+        match key_event.code {
+            KeyCode::Char('b') => self.execute_provider_detail_action(ProviderDetailAction::BrowserLogin),
+            KeyCode::Char('c') => self.execute_provider_detail_action(ProviderDetailAction::DeviceCodeLogin),
+            KeyCode::Char('x') => self.execute_provider_detail_action(ProviderDetailAction::CancelLogin),
+            KeyCode::Char('l') => self.execute_provider_detail_action(ProviderDetailAction::Logout),
+            KeyCode::Char('e') => self.execute_provider_detail_action(ProviderDetailAction::Advanced),
+            KeyCode::Char('r') => self.execute_provider_detail_action(ProviderDetailAction::RefreshModels),
+            KeyCode::Char('o') => self.retry_open_pending_auth_target(),
+            KeyCode::Char('y') => self.copy_pending_auth_value(),
+            _ => {}
+        }
+    }
+
+    fn handle_advanced_provider_key_event(&mut self, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Tab => self.cycle_advanced_focus(true),
+            KeyCode::BackTab => self.cycle_advanced_focus(false),
+            KeyCode::Up => self.move_advanced_selection(-1),
+            KeyCode::Down => self.move_advanced_selection(1),
+            KeyCode::Left => self.adjust_advanced_field(false),
+            KeyCode::Right => self.adjust_advanced_field(true),
+            KeyCode::Enter => self.activate_advanced_field(),
+            KeyCode::Char('a') => self.add_advanced_item(),
+            KeyCode::Char('d') => self.delete_advanced_item(),
+            KeyCode::Char(' ') => self.toggle_settings_field(),
+            KeyCode::Backspace => {
+                self.state.providers_view = ProvidersView::Detail;
+                self.state.status = String::from("Back to provider detail");
+            }
+            _ => {}
+        }
+    }
+
+    fn cycle_advanced_focus(&mut self, forward: bool) {
+        self.state.settings_delete_armed = false;
+        self.state.providers_advanced_focus = match (self.state.providers_advanced_focus, forward) {
+            (ProvidersAdvancedFocus::ProviderFields, true) => ProvidersAdvancedFocus::Models,
+            (ProvidersAdvancedFocus::Models, true) => ProvidersAdvancedFocus::ModelFields,
+            (ProvidersAdvancedFocus::ModelFields, true) => ProvidersAdvancedFocus::ProviderFields,
+            (ProvidersAdvancedFocus::ProviderFields, false) => ProvidersAdvancedFocus::ModelFields,
+            (ProvidersAdvancedFocus::Models, false) => ProvidersAdvancedFocus::ProviderFields,
+            (ProvidersAdvancedFocus::ModelFields, false) => ProvidersAdvancedFocus::Models,
+        };
+        self.sync_settings_focus_from_advanced();
+    }
+
+    fn sync_settings_focus_from_advanced(&mut self) {
+        self.state.settings_focus = match self.state.providers_advanced_focus {
+            ProvidersAdvancedFocus::ProviderFields => SettingsFocus::ProviderForm,
+            ProvidersAdvancedFocus::Models => SettingsFocus::ModelList,
+            ProvidersAdvancedFocus::ModelFields => SettingsFocus::ModelForm,
+        };
+    }
+
+    fn move_advanced_selection(&mut self, delta: isize) {
+        self.sync_settings_focus_from_advanced();
+        self.move_settings_selection(delta);
+    }
+
+    fn adjust_advanced_field(&mut self, forward: bool) {
+        self.sync_settings_focus_from_advanced();
+        self.adjust_settings_field(forward);
+    }
+
+    fn activate_advanced_field(&mut self) {
+        self.sync_settings_focus_from_advanced();
+        self.activate_settings_field();
+    }
+
+    fn add_advanced_item(&mut self) {
+        self.sync_settings_focus_from_advanced();
+        self.add_settings_item();
+    }
+
+    fn delete_advanced_item(&mut self) {
+        self.sync_settings_focus_from_advanced();
+        self.delete_settings_item();
+    }
+
+    fn delete_selected_provider_from_list(&mut self) {
+        self.state.settings_focus = SettingsFocus::ProviderList;
+        self.delete_settings_item();
+    }
+
+    fn filtered_provider_definitions(&self) -> Vec<&ProviderDefinition> {
+        let query = self.state.connect_provider_search.trim().to_ascii_lowercase();
+        let mut definitions: Vec<&ProviderDefinition> = self
+            .state
+            .provider_definitions
+            .iter()
+            .filter(|definition| {
+                query.is_empty()
+                    || definition.display_name.to_ascii_lowercase().contains(&query)
+                    || definition.type_id.to_ascii_lowercase().contains(&query)
+                    || definition.description.to_ascii_lowercase().contains(&query)
+            })
+            .collect();
+        definitions.sort_by(|left, right| {
+            provider_definition_rank(left)
+                .cmp(&provider_definition_rank(right))
+                .then_with(|| left.display_name.cmp(&right.display_name))
+                .then_with(|| left.type_id.cmp(&right.type_id))
+        });
+        definitions
+    }
+
+    fn create_provider_from_connect_selection(&mut self) {
+        let definitions = self.filtered_provider_definitions();
+        let Some((type_id, provider_fields, default_provider_id_prefix)) = definitions
+            .get(self.state.connect_provider_index)
+            .map(|definition| {
+                (
+                    definition.type_id.clone(),
+                    definition.provider_fields.clone(),
+                    definition.default_provider_id_prefix.clone(),
+                )
+            })
+        else {
+            self.state.status = String::from("No provider selected");
+            return;
+        };
+
+        let Some(draft) = self.state.settings_draft.as_mut() else {
+            self.state.status = String::from("Provider settings are not loaded yet");
+            return;
+        };
+
+        let next_provider_id = next_provider_id(&draft.providers, &default_provider_id_prefix);
+        draft.providers.push(ProviderSettings {
+            id: next_provider_id.clone(),
+            type_id,
+            values: default_values(&provider_fields),
+        });
+        self.state.settings_provider_index = draft.providers.len().saturating_sub(1);
+        self.state.settings_model_index = 0;
+        self.state.settings_provider_field_index = 0;
+        self.state.settings_model_field_index = 0;
+        self.state.providers_view = ProvidersView::Detail;
+        self.state.connect_provider_search.clear();
+        self.state.connect_provider_index = 0;
+        self.state.status = format!("Added provider: {next_provider_id}");
+        self.save_settings_draft();
+        self.maybe_request_openai_auth_status();
+    }
+
+    fn execute_provider_detail_action(&mut self, action: ProviderDetailAction) {
+        match action {
+            ProviderDetailAction::BrowserLogin => {
+                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                {
+                    self.request(RuntimeRequest::StartOpenAiCodexBrowserLogin);
+                    self.state.status = String::from("Starting OpenAI browser login");
+                }
+            }
+            ProviderDetailAction::DeviceCodeLogin => {
+                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                {
+                    self.request(RuntimeRequest::StartOpenAiCodexDeviceCodeLogin);
+                    self.state.status = String::from("Starting OpenAI device-code login");
+                }
+            }
+            ProviderDetailAction::CancelLogin => {
+                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                {
+                    self.request(RuntimeRequest::CancelOpenAiCodexLogin);
+                    self.state.status = String::from("Cancelling OpenAI login");
+                }
+            }
+            ProviderDetailAction::Logout => {
+                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                {
+                    self.request(RuntimeRequest::LogoutOpenAiCodexAuth);
+                    self.state.status = String::from("Logging out from OpenAI");
+                }
+            }
+            ProviderDetailAction::Advanced => {
+                self.state.providers_view = ProvidersView::Advanced;
+                self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
+                self.state.settings_focus = SettingsFocus::ProviderForm;
+                self.state.status = String::from("Advanced provider config");
+            }
+            ProviderDetailAction::RefreshModels => {
+                self.request(RuntimeRequest::ListModels);
+                self.state.status = String::from("Refreshing provider models");
+            }
+        }
+    }
+
+    fn maybe_request_openai_auth_status(&self) {
+        if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex") {
+            self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
+        }
+    }
+
+    fn apply_openai_codex_auth_status(&mut self, status: ProviderAuthStatus) {
+        let previous_target = pending_auth_target(&self.state.openai_codex_auth).map(str::to_owned);
+        let next_target = pending_auth_target(&status).map(str::to_owned);
+        let next_state = status.state;
+        self.state.openai_codex_auth = status;
+
+        if let Some(target) = next_target
+            && previous_target.as_deref() != Some(target.as_str())
+        {
+            self.state.status = match open_external_target(&target) {
+                Ok(()) => match next_state {
+                    ProviderAuthState::BrowserPending => {
+                        String::from("Opened browser for OpenAI sign-in. Press y to copy the URL.")
+                    }
+                    ProviderAuthState::DeviceCodePending => {
+                        String::from("Opened browser for OpenAI device sign-in. Press y to copy the code.")
+                    }
+                    ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {
+                        String::from("Opened browser")
+                    }
+                },
+                Err(err) => match next_state {
+                    ProviderAuthState::BrowserPending => {
+                        format!("Failed to open browser: {err}. Press y to copy the sign-in URL.")
+                    }
+                    ProviderAuthState::DeviceCodePending => {
+                        format!("Failed to open browser: {err}. Press y to copy the device code.")
+                    }
+                    ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {
+                        format!("Failed to open browser: {err}")
+                    }
+                },
+            };
+        }
+    }
+
+    fn retry_open_pending_auth_target(&mut self) {
+        let target = pending_auth_target(&self.state.openai_codex_auth).map(str::to_owned);
+
+        let Some(target) = target else {
+            self.state.status = String::from("No pending auth URL available");
+            return;
+        };
+
+        self.state.status = match open_external_target(&target) {
+            Ok(()) => String::from("Opened browser"),
+            Err(err) => format!("Failed to open browser: {err}"),
+        };
+    }
+
+    fn copy_pending_auth_value(&mut self) {
+        let value = match self.state.openai_codex_auth.state {
+            ProviderAuthState::BrowserPending => self.state.openai_codex_auth.auth_url.clone(),
+            ProviderAuthState::DeviceCodePending => self.state.openai_codex_auth.user_code.clone(),
+            ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => None,
+        };
+
+        let Some(value) = value else {
+            self.state.status = String::from("Nothing to copy");
+            return;
+        };
+
+        self.state.status = match self.copy_text_to_clipboard(&value) {
+            Ok(()) => String::from("Copied to clipboard"),
+            Err(err) => format!("Copy failed: {err}"),
+        };
+    }
+
     fn clear_chat_selection(&mut self) {
         self.state.selection = None;
     }
@@ -2347,6 +2815,30 @@ impl App {
 
         if copied {
             Ok(true)
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    fn copy_text_to_clipboard(&mut self, text: &str) -> Result<(), String> {
+        let mut errors = Vec::new();
+        let mut copied = false;
+
+        match copy_via_osc52(text) {
+            Ok(()) => copied = true,
+            Err(err) => errors.push(format!("terminal clipboard failed: {err}")),
+        }
+
+        match self.clipboard_mut() {
+            Ok(clipboard) => match clipboard.set_text(text.to_string()) {
+                Ok(()) => copied = true,
+                Err(err) => errors.push(format!("clipboard write failed: {err}")),
+            },
+            Err(err) => errors.push(err),
+        }
+
+        if copied {
+            Ok(())
         } else {
             Err(errors.join("; "))
         }
@@ -2850,6 +3342,87 @@ fn flatten_models_map(models_by_provider: &HashMap<String, Vec<Model>>) -> Vec<(
     flattened
 }
 
+pub(super) fn provider_definition_rank(definition: &ProviderDefinition) -> (u8, String, String) {
+    let display = definition.display_name.to_ascii_lowercase();
+    let type_id = definition.type_id.to_ascii_lowercase();
+    let rank = if display == "openai" || type_id == "openai-codex" {
+        0
+    } else if display.contains("openai") || type_id.contains("openai") {
+        1
+    } else {
+        2
+    };
+    (rank, display, type_id)
+}
+
+fn next_provider_id(providers: &[ProviderSettings], prefix: &str) -> String {
+    if !providers.iter().any(|provider| provider.id == prefix) {
+        return prefix.to_string();
+    }
+
+    let mut next_index = 2usize;
+    loop {
+        let candidate = format!("{prefix}-{next_index}");
+        if !providers.iter().any(|provider| provider.id == candidate) {
+            return candidate;
+        }
+        next_index += 1;
+    }
+}
+
+fn map_openai_codex_auth_status(status: RuntimeOpenAiCodexAuthStatus) -> ProviderAuthStatus {
+    let mut mapped = ProviderAuthStatus {
+        state: ProviderAuthState::SignedOut,
+        email: status.email,
+        plan_type: status.plan_type,
+        account_id: status.account_id,
+        last_refresh: status.last_refresh_unix.map(|value| value.to_string()),
+        auth_url: None,
+        verification_url: None,
+        user_code: None,
+        error: status.error,
+    };
+
+    mapped.state = match status.state {
+        RuntimeOpenAiCodexLoginState::SignedOut => ProviderAuthState::SignedOut,
+        RuntimeOpenAiCodexLoginState::BrowserPending(pending) => {
+            mapped.auth_url = Some(pending.auth_url);
+            ProviderAuthState::BrowserPending
+        }
+        RuntimeOpenAiCodexLoginState::DeviceCodePending(pending) => {
+            mapped.verification_url = Some(pending.verification_url);
+            mapped.user_code = Some(pending.user_code);
+            ProviderAuthState::DeviceCodePending
+        }
+        RuntimeOpenAiCodexLoginState::Authenticated => ProviderAuthState::Authenticated,
+    };
+
+    mapped
+}
+
+fn pending_auth_target(status: &ProviderAuthStatus) -> Option<&str> {
+    match status.state {
+        ProviderAuthState::BrowserPending => status.auth_url.as_deref(),
+        ProviderAuthState::DeviceCodePending => status.verification_url.as_deref(),
+        ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => None,
+    }
+}
+
+fn open_external_target(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let command = ("open", vec![target]);
+    #[cfg(target_os = "linux")]
+    let command = ("xdg-open", vec![target]);
+    #[cfg(target_os = "windows")]
+    let command = ("cmd", vec!["/C", "start", "", target]);
+
+    std::process::Command::new(command.0)
+        .args(command.1)
+        .spawn()
+        .map_err(|err| err.to_string())
+        .map(|_| ())
+}
+
 fn message_fingerprint(msg: &Message) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     msg.id.as_str().hash(&mut hasher);
@@ -2948,10 +3521,11 @@ mod tests {
 
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
-        OptimisticToolMessage, PendingSubmit, PendingTool, RuntimeRequest, RuntimeResponse,
-        SettingsFocus, SettingsModelField, SettingsProviderField, ToolPhase, UiMode,
-        default_agent_profiles, is_copy_shortcut, menu_scroll_offset, model_menu_next_index,
-        model_menu_previous_index, render_chat_selection_overlay, selection_text,
+        OptimisticToolMessage, PendingSubmit, PendingTool, ProviderAuthState, ProviderAuthStatus,
+        ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, SettingsModelField,
+        SettingsProviderField, ToolPhase, UiMode, default_agent_profiles, is_copy_shortcut,
+        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
+        render_chat_selection_overlay, selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -3078,74 +3652,105 @@ mod tests {
     }
 
     fn sample_provider_definitions() -> Vec<ProviderDefinition> {
-        vec![ProviderDefinition {
-            type_id: String::from("openai-chat-completions"),
-            display_name: String::from("OpenAI-compatible Chat Completions"),
-            protocol_family: String::from("openai-chat-completions"),
-            description: String::from("Test definition"),
-            provider_fields: vec![
-                FieldDefinition {
-                    key: String::from("base_url"),
-                    label: String::from("Base URL"),
-                    value_kind: FieldValueKind::Url,
-                    required: true,
-                    secret: false,
-                    help_text: None,
-                    default_value: Some(SettingsValue::String(String::from(
-                        "https://api.openai.com/v1",
-                    ))),
-                },
-                FieldDefinition {
-                    key: String::from("api_key"),
-                    label: String::from("Inline API Key"),
-                    value_kind: FieldValueKind::String,
-                    required: false,
-                    secret: true,
-                    help_text: None,
-                    default_value: None,
-                },
-                FieldDefinition {
-                    key: String::from("env_var_api_key"),
-                    label: String::from("Env Var"),
-                    value_kind: FieldValueKind::String,
-                    required: false,
-                    secret: false,
-                    help_text: None,
-                    default_value: Some(SettingsValue::String(String::from("OPENAI_API_KEY"))),
-                },
-                FieldDefinition {
-                    key: String::from("only_listed_models"),
-                    label: String::from("Only Listed Models"),
-                    value_kind: FieldValueKind::Boolean,
-                    required: false,
-                    secret: false,
-                    help_text: None,
-                    default_value: Some(SettingsValue::Bool(true)),
-                },
-            ],
-            model_fields: vec![
-                FieldDefinition {
-                    key: String::from("name"),
-                    label: String::from("Display Name"),
-                    value_kind: FieldValueKind::String,
-                    required: false,
-                    secret: false,
-                    help_text: None,
-                    default_value: None,
-                },
-                FieldDefinition {
-                    key: String::from("max_context"),
-                    label: String::from("Max Context"),
-                    value_kind: FieldValueKind::Integer,
-                    required: false,
-                    secret: false,
-                    help_text: None,
-                    default_value: None,
-                },
-            ],
-            supports_model_discovery: true,
-            default_provider_id_prefix: String::from("openai-chat-completions"),
-        }]
+        vec![
+            ProviderDefinition {
+                type_id: String::from("openai-codex"),
+                display_name: String::from("OpenAI Codex"),
+                protocol_family: String::from("openai-responses"),
+                description: String::from("ChatGPT subscription auth"),
+                provider_fields: vec![],
+                model_fields: vec![
+                    FieldDefinition {
+                        key: String::from("name"),
+                        label: String::from("Display Name"),
+                        value_kind: FieldValueKind::String,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: None,
+                    },
+                    FieldDefinition {
+                        key: String::from("max_context"),
+                        label: String::from("Max Context"),
+                        value_kind: FieldValueKind::Integer,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: None,
+                    },
+                ],
+                supports_model_discovery: true,
+                default_provider_id_prefix: String::from("openai-codex"),
+            },
+            ProviderDefinition {
+                type_id: String::from("openai-chat-completions"),
+                display_name: String::from("OpenAI-compatible Chat Completions"),
+                protocol_family: String::from("openai-chat-completions"),
+                description: String::from("Test definition"),
+                provider_fields: vec![
+                    FieldDefinition {
+                        key: String::from("base_url"),
+                        label: String::from("Base URL"),
+                        value_kind: FieldValueKind::Url,
+                        required: true,
+                        secret: false,
+                        help_text: None,
+                        default_value: Some(SettingsValue::String(String::from(
+                            "https://api.openai.com/v1",
+                        ))),
+                    },
+                    FieldDefinition {
+                        key: String::from("api_key"),
+                        label: String::from("Inline API Key"),
+                        value_kind: FieldValueKind::String,
+                        required: false,
+                        secret: true,
+                        help_text: None,
+                        default_value: None,
+                    },
+                    FieldDefinition {
+                        key: String::from("env_var_api_key"),
+                        label: String::from("Env Var"),
+                        value_kind: FieldValueKind::String,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: Some(SettingsValue::String(String::from("OPENAI_API_KEY"))),
+                    },
+                    FieldDefinition {
+                        key: String::from("only_listed_models"),
+                        label: String::from("Only Listed Models"),
+                        value_kind: FieldValueKind::Boolean,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: Some(SettingsValue::Bool(true)),
+                    },
+                ],
+                model_fields: vec![
+                    FieldDefinition {
+                        key: String::from("name"),
+                        label: String::from("Display Name"),
+                        value_kind: FieldValueKind::String,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: None,
+                    },
+                    FieldDefinition {
+                        key: String::from("max_context"),
+                        label: String::from("Max Context"),
+                        value_kind: FieldValueKind::Integer,
+                        required: false,
+                        secret: false,
+                        help_text: None,
+                        default_value: None,
+                    },
+                ],
+                supports_model_discovery: true,
+                default_provider_id_prefix: String::from("openai-chat-completions"),
+            },
+        ]
     }
 
     fn sample_sessions() -> Vec<Session> {
@@ -3419,9 +4024,8 @@ mod tests {
             r#"01: How should we test the TUI?
 04: Use render tests, interaction tests, and a small number of end-to-end sm
 05: oke tests.
-11:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
-12:  │> /settings  Open settings editor        │
-13:  │  /sessions  Open sessions menu          │
+12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
+13:  │> /sessions  Open sessions menu          │
 14: R└─────────────────────────────────────────┘completions/gpt-4o-mini | to
 16:  > /s"#,
         );
@@ -3453,47 +4057,112 @@ mod tests {
     }
 
     #[test]
-    fn renders_settings_menu_snapshot() {
+    fn renders_providers_list_snapshot() {
         let mut state = populated_state();
-        state.mode = UiMode::SettingsMenu;
-        state.settings_focus = SettingsFocus::ProviderForm;
-        state.settings_provider_field_index = 2;
-        state.settings_model_field_index = 2;
-        state.settings_errors = HashMap::from([
-            (
-                String::from("providers[0].base_url"),
-                String::from("must be a valid URL"),
-            ),
-            (
-                String::from("models[0].max_context"),
-                String::from("must be a positive integer"),
-            ),
-        ]);
+        state.mode = UiMode::ProvidersMenu;
+        state.providers_view = ProvidersView::List;
 
         let rendered = render_state_snapshot(&state, 100, 22);
 
         assert_snapshot(
             &rendered,
             r#"01: How should we test the TUI?
-02:      ┌/settings───────────────────────────────────────────────────────────────────────────────┐
-03:      │Settings Editor                                                                         │
-04: Use r│Tab=next pane, Enter=edit/toggle, a=add, x=delete, s=save, Esc=close                    │
-05:      │┌───────────────────┐┌─────────────────────┐┌───────────────────┐┌─────────────────────┐│
-06:      ││Providers          ││Provider Fields      ││Models             ││Model Fields         ││
-07:      ││> openai-chat-compl││  Provider ID        ││> gpt-4o-mini      ││  Model ID           ││
-08:      ││                   ││  Provider Type      ││                   ││  Display Name       ││
-09:      ││                   ││> Base URL           ││                   ││> Max Context        ││
-10:      ││                   ││  Inline API Key     ││                   ││                     ││
-11:      ││                   ││  Env Var            ││                   ││                     ││
-12:      ││                   ││  Only Listed Models ││                   ││                     ││
-13:      ││                   ││                     ││                   ││                     ││
-14:      │└───────────────────┘└─────────────────────┘└───────────────────┘└─────────────────────┘│
-15:      │┌──────────────────────────────────────────────────────────────────────────────────────┐│
-16:      ││Providers and models are shared with the desktop app                                  ││
-17:      │└──────────────────────────────────────────────────────────────────────────────────────┘│
-18: Ready└────────────────────────────────────────────────────────────────────────────────────────┘
+02:     ┌/providers───────────────────────────────────────────────────────────────────────────────┐
+03:     │Providers                                                                                │
+04: Use │Enter=open, a=connect, d=delete, r=refresh, Esc=close                                    │
+05:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
+06:     ││Configured providers                                                                   ││
+07:     ││> id=openai-chat-completions  OpenAI-compatible Chat Completions                       ││
+08:     ││type=openai-chat-completions  models=2                                                 ││
+09:     ││                                                                                       ││
+10:     ││                                                                                       ││
+11:     ││                                                                                       ││
+12:     ││                                                                                       ││
+13:     ││                                                                                       ││
+14:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
+15:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
+16:     ││One provider panel at a time                                                           ││
+17:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
+18: Read└─────────────────────────────────────────────────────────────────────────────────────────┘
 20:  >"#,
         );
+    }
+
+    #[test]
+    fn provider_detail_keeps_openai_actions_and_id_visible() {
+        let mut state = populated_state();
+        state.mode = UiMode::ProvidersMenu;
+        state.providers_view = ProvidersView::Detail;
+        state.settings_provider_index = 1;
+        state.settings_draft = Some(SettingsDocument {
+            providers: vec![
+                ProviderSettings {
+                    id: String::from("openai-chat-completions"),
+                    type_id: String::from("openai-chat-completions"),
+                    values: vec![],
+                },
+                ProviderSettings {
+                    id: String::from("openai"),
+                    type_id: String::from("openai-codex"),
+                    values: vec![],
+                },
+            ],
+            models: vec![],
+        });
+
+        let rendered = render_state_snapshot(&state, 100, 18);
+
+        assert!(rendered.contains("Provider: id=openai"));
+        assert!(rendered.contains("State: Signed out"));
+        assert!(rendered.contains("Actions"));
+        assert!(rendered.contains("b browser sign-in"));
+    }
+
+    #[test]
+    fn provider_detail_browser_pending_hides_raw_auth_url() {
+        let mut state = populated_state();
+        state.mode = UiMode::ProvidersMenu;
+        state.providers_view = ProvidersView::Detail;
+        state.settings_provider_index = 1;
+        state.settings_draft = Some(SettingsDocument {
+            providers: vec![
+                ProviderSettings {
+                    id: String::from("openai-chat-completions"),
+                    type_id: String::from("openai-chat-completions"),
+                    values: vec![],
+                },
+                ProviderSettings {
+                    id: String::from("openai"),
+                    type_id: String::from("openai-codex"),
+                    values: vec![],
+                },
+            ],
+            models: vec![],
+        });
+        state.openai_codex_auth = ProviderAuthStatus {
+            state: ProviderAuthState::BrowserPending,
+            auth_url: Some(String::from("https://auth.openai.com/oauth/authorize?example=1")),
+            ..ProviderAuthStatus::default()
+        };
+
+        let rendered = render_state_snapshot(&state, 120, 22);
+
+        assert!(rendered.contains("Browser should open automatically."));
+        assert!(rendered.contains("y copy sign-in URL  o open again  x cancel"));
+        assert!(!rendered.contains("https://auth.openai.com/oauth/authorize"));
+    }
+
+    #[test]
+    fn renders_connect_provider_snapshot() {
+        let mut state = populated_state();
+        state.mode = UiMode::ProvidersMenu;
+        state.providers_view = ProvidersView::Connect;
+
+        let rendered = render_state_snapshot(&state, 100, 22);
+
+        assert!(rendered.contains("/providers"));
+        assert!(rendered.contains("Connect a provider"));
+        assert!(rendered.contains("OpenAI"));
     }
 
     #[test]
@@ -3562,9 +4231,9 @@ mod tests {
 06:               │/agent     Open agent selector           │
 07:               │/help      Open this help menu           │
 08:               │/model     Open model selector           │
-09:               │/settings  Open settings editor          │
-10:               │/sessions  Open sessions menu            │
-11:               │/new       Start a new chat              │
+09:               │/new       Start a new chat              │
+10:               │/providers Open providers                │
+11:               │/sessions  Open sessions menu            │
 12:               └─────────────────────────────────────────┘
 14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  >"#,
@@ -4029,22 +4698,24 @@ mod tests {
     }
 
     #[test]
-    fn escape_closes_settings_editor_before_closing_settings_menu() {
+    fn escape_closes_providers_editor_before_leaving_advanced_view() {
         let mut harness = test_harness();
-        harness.app.state.mode = UiMode::SettingsMenu;
+        harness.app.state.mode = UiMode::ProvidersMenu;
+        harness.app.state.providers_view = ProvidersView::Advanced;
+        harness.app.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
         harness.app.state.settings_draft = Some(sample_settings());
         harness.app.state.settings_editor =
             Some(ActiveSettingsEditor::Provider(SettingsProviderField::Id));
         harness.app.state.settings_editor_input = String::from("draft-openai");
 
         harness.app.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(harness.app.state.mode, UiMode::SettingsMenu);
+        assert_eq!(harness.app.state.mode, UiMode::ProvidersMenu);
         assert_eq!(harness.app.state.settings_editor, None);
         assert!(harness.app.state.settings_editor_input.is_empty());
 
         harness.app.handle_key_event(key(KeyCode::Esc));
-        assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert_eq!(harness.app.state.status, "Settings editor closed");
+        assert_eq!(harness.app.state.providers_view, ProvidersView::Detail);
+        assert_eq!(harness.app.state.status, "Back to provider detail");
     }
 
     #[test]
@@ -4217,46 +4888,15 @@ mod tests {
     }
 
     #[test]
-    fn escape_then_typing_full_command_submits_message() {
+    fn settings_command_redirects_to_providers() {
         let mut harness = test_harness();
-        harness.app.state.config_loaded = true;
-        harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
-        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
-        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
-        harness.app.state.input = String::from("/s");
-        harness.app.state.input_cursor = harness.app.state.input.len();
+        harness.app.handle_command("settings");
 
-        harness.app.handle_key_event(key(KeyCode::Esc));
-        for ch in "ettings".chars() {
-            harness.app.handle_key_event(key(KeyCode::Char(ch)));
-        }
-        harness.app.handle_key_event(key(KeyCode::Enter));
-
-        assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert!(harness.app.state.is_streaming);
-        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
         assert_eq!(
-            harness.app.state.optimistic_messages[0].content,
-            "/settings"
+            harness.app.state.status,
+            "Unknown command: /settings. Use /providers"
         );
-
-        let requests = harness.drain_requests();
-        assert_eq!(requests.len(), 1);
-        match &requests[0] {
-            RuntimeRequest::SendMessage {
-                session_id,
-                message,
-                model_id,
-                provider_id,
-            } => {
-                assert_eq!(session_id, "sess-2");
-                assert_eq!(message, "/settings");
-                assert_eq!(model_id, "gpt-4o-mini");
-                assert_eq!(provider_id, "openai-chat-completions");
-            }
-            other => panic!("unexpected request: {}", request_name(other)),
-        }
+        assert!(harness.drain_requests().is_empty());
     }
 
     #[test]
@@ -4290,7 +4930,7 @@ mod tests {
     #[test]
     fn settings_save_error_populates_field_errors() {
         let mut harness = test_harness();
-        harness.app.state.mode = UiMode::SettingsMenu;
+        harness.app.state.mode = UiMode::ProvidersMenu;
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SaveSettings(Err(String::from(
@@ -4440,12 +5080,93 @@ mod tests {
             .app
             .handle_runtime_response(RuntimeResponse::Settings(Ok(sample_settings())));
 
-        assert_eq!(harness.app.state.mode, UiMode::SettingsMenu);
-        assert_eq!(harness.app.state.status, "Editing settings");
+        assert_eq!(harness.app.state.mode, UiMode::ProvidersMenu);
+        assert_eq!(harness.app.state.providers_view, ProvidersView::List);
+        assert_eq!(harness.app.state.status, "Providers loaded");
         assert!(harness.app.state.settings_errors.is_empty());
         assert_eq!(harness.app.state.settings_editor, None);
         assert!(harness.app.state.settings_editor_input.is_empty());
         assert!(!harness.app.state.settings_delete_armed);
+    }
+
+    #[test]
+    fn providers_command_requests_settings_definitions_and_auth_status() {
+        let mut harness = test_harness();
+
+        harness.app.handle_command("providers");
+
+        assert_eq!(harness.app.state.mode, UiMode::ProvidersMenu);
+        assert_eq!(harness.app.state.providers_view, ProvidersView::List);
+        let requests = harness.drain_requests();
+        assert_eq!(requests.len(), 3);
+        assert!(matches!(requests[0], RuntimeRequest::ListProviderDefinitions));
+        assert!(matches!(requests[1], RuntimeRequest::GetSettings));
+        assert!(matches!(requests[2], RuntimeRequest::GetOpenAiCodexAuthStatus));
+    }
+
+    #[test]
+    fn connect_provider_autosaves_new_provider() {
+        let mut harness = test_harness();
+        harness.app.state.settings_draft = Some(sample_settings());
+        harness.app.state.provider_definitions = sample_provider_definitions();
+        harness.app.state.mode = UiMode::ProvidersMenu;
+        harness.app.state.providers_view = ProvidersView::Connect;
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::SaveSettings { settings }
+                if settings.providers.iter().any(|provider| provider.type_id == "openai-codex")
+        )));
+    }
+
+    #[test]
+    fn provider_field_commit_autosaves_settings() {
+        let mut harness = test_harness();
+        harness.app.state.settings_draft = Some(sample_settings());
+        harness.app.state.provider_definitions = sample_provider_definitions();
+        harness.app.state.mode = UiMode::ProvidersMenu;
+        harness.app.state.providers_view = ProvidersView::Advanced;
+        harness.app.state.settings_editor = Some(ActiveSettingsEditor::Provider(
+            SettingsProviderField::Id,
+        ));
+        harness.app.state.settings_editor_input = String::from("renamed-provider");
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            RuntimeRequest::SaveSettings { settings }
+                if settings.providers.iter().any(|provider| provider.id == "renamed-provider")
+        )));
+    }
+
+    #[test]
+    fn auth_updated_event_refreshes_openai_status() {
+        let mut harness = test_harness();
+
+        harness.app.handle_runtime_event(Event::OpenAiCodexAuthUpdated {
+            status: agent_runtime::OpenAiCodexAuthStatus {
+                state: agent_runtime::OpenAiCodexLoginState::Authenticated,
+                email: Some(String::from("dev@example.com")),
+                plan_type: Some(String::from("Pro")),
+                account_id: Some(String::from("acct_123")),
+                last_refresh_unix: Some(42),
+                error: None,
+            },
+        });
+
+        assert_eq!(
+            harness.app.state.openai_codex_auth.state,
+            ProviderAuthState::Authenticated
+        );
+        assert_eq!(
+            harness.app.state.openai_codex_auth.plan_type.as_deref(),
+            Some("Pro")
+        );
     }
 
     #[test]
@@ -4679,6 +5400,13 @@ mod tests {
             RuntimeRequest::ListAgentProfiles { .. } => "ListAgentProfiles",
             RuntimeRequest::ListProviderDefinitions => "ListProviderDefinitions",
             RuntimeRequest::GetSettings => "GetSettings",
+            RuntimeRequest::GetOpenAiCodexAuthStatus => "GetOpenAiCodexAuthStatus",
+            RuntimeRequest::StartOpenAiCodexBrowserLogin => "StartOpenAiCodexBrowserLogin",
+            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
+                "StartOpenAiCodexDeviceCodeLogin"
+            }
+            RuntimeRequest::CancelOpenAiCodexLogin => "CancelOpenAiCodexLogin",
+            RuntimeRequest::LogoutOpenAiCodexAuth => "LogoutOpenAiCodexAuth",
             RuntimeRequest::CreateSession => "CreateSession",
             RuntimeRequest::SetSessionProfile { .. } => "SetSessionProfile",
             RuntimeRequest::SendMessage { .. } => "SendMessage",

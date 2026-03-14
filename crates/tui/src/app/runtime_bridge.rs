@@ -1,7 +1,10 @@
-use agent_runtime::RuntimeHandle;
+use agent_runtime::{
+    OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
+    OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, RuntimeHandle,
+};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
-use super::{RuntimeRequest, RuntimeResponse};
+use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
 
 pub(super) fn spawn_runtime_bridge(
     runtime: RuntimeHandle,
@@ -40,6 +43,57 @@ pub(super) fn spawn_runtime_bridge(
                         .block_on(runtime.get_settings())
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::Settings(result));
+                }
+                RuntimeRequest::GetOpenAiCodexAuthStatus => {
+                    let result = rt
+                        .block_on(runtime.get_openai_codex_auth_status())
+                        .map(map_openai_codex_auth_status)
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::OpenAiCodexAuthStatus(result));
+                }
+                RuntimeRequest::StartOpenAiCodexBrowserLogin => {
+                    let result = rt
+                        .block_on(runtime.start_openai_codex_browser_login())
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| {
+                            rt.block_on(runtime.get_openai_codex_auth_status())
+                                .map(map_openai_codex_auth_status)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = res_tx.send(RuntimeResponse::StartOpenAiCodexBrowserLogin(result));
+                }
+                RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
+                    let result = rt
+                        .block_on(runtime.start_openai_codex_device_code_login())
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| {
+                            rt.block_on(runtime.get_openai_codex_auth_status())
+                                .map(map_openai_codex_auth_status)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = res_tx.send(RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result));
+                }
+                RuntimeRequest::CancelOpenAiCodexLogin => {
+                    let result = rt
+                        .block_on(runtime.cancel_openai_codex_login())
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| {
+                            rt.block_on(runtime.get_openai_codex_auth_status())
+                                .map(map_openai_codex_auth_status)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = res_tx.send(RuntimeResponse::CancelOpenAiCodexLogin(result));
+                }
+                RuntimeRequest::LogoutOpenAiCodexAuth => {
+                    let result = rt
+                        .block_on(runtime.logout_openai_codex_auth())
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| {
+                            rt.block_on(runtime.get_openai_codex_auth_status())
+                                .map(map_openai_codex_auth_status)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = res_tx.send(RuntimeResponse::LogoutOpenAiCodexAuth(result));
                 }
                 RuntimeRequest::ListAgentProfiles { session_id } => {
                     let result = rt
@@ -163,6 +217,21 @@ fn respond_with_runtime_error(
             RuntimeResponse::ProviderDefinitions(Err(message.to_string()))
         }
         RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(message.to_string())),
+        RuntimeRequest::GetOpenAiCodexAuthStatus => {
+            RuntimeResponse::OpenAiCodexAuthStatus(Err(message.to_string()))
+        }
+        RuntimeRequest::StartOpenAiCodexBrowserLogin => {
+            RuntimeResponse::StartOpenAiCodexBrowserLogin(Err(message.to_string()))
+        }
+        RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
+            RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(Err(message.to_string()))
+        }
+        RuntimeRequest::CancelOpenAiCodexLogin => {
+            RuntimeResponse::CancelOpenAiCodexLogin(Err(message.to_string()))
+        }
+        RuntimeRequest::LogoutOpenAiCodexAuth => {
+            RuntimeResponse::LogoutOpenAiCodexAuth(Err(message.to_string()))
+        }
         RuntimeRequest::ListAgentProfiles { session_id } => RuntimeResponse::AgentProfiles {
             session_id,
             result: Err(message.to_string()),
@@ -218,4 +287,34 @@ fn respond_with_runtime_error(
     };
 
     let _ = res_tx.send(response);
+}
+
+fn map_openai_codex_auth_status(status: RuntimeOpenAiCodexAuthStatus) -> ProviderAuthStatus {
+    let mut mapped = ProviderAuthStatus {
+        state: ProviderAuthState::SignedOut,
+        email: status.email,
+        plan_type: status.plan_type,
+        account_id: status.account_id,
+        last_refresh: status.last_refresh_unix.map(|value| value.to_string()),
+        auth_url: None,
+        verification_url: None,
+        user_code: None,
+        error: status.error,
+    };
+
+    mapped.state = match status.state {
+        RuntimeOpenAiCodexLoginState::SignedOut => ProviderAuthState::SignedOut,
+        RuntimeOpenAiCodexLoginState::BrowserPending(pending) => {
+            mapped.auth_url = Some(pending.auth_url);
+            ProviderAuthState::BrowserPending
+        }
+        RuntimeOpenAiCodexLoginState::DeviceCodePending(pending) => {
+            mapped.verification_url = Some(pending.verification_url);
+            mapped.user_code = Some(pending.user_code);
+            ProviderAuthState::DeviceCodePending
+        }
+        RuntimeOpenAiCodexLoginState::Authenticated => ProviderAuthState::Authenticated,
+    };
+
+    mapped
 }

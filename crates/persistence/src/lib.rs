@@ -388,9 +388,14 @@ impl SessionStore for FileSessionStore {
 }
 
 /// Get the data directory for the application
-pub fn get_data_dir() -> Result<PathBuf> {
+pub fn agent_state_root() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new().context("Failed to determine home directory")?;
-    Ok(base_dirs.home_dir().join(".agent-desktop/data"))
+    Ok(base_dirs.home_dir().join(".agent"))
+}
+
+/// Get the data directory for the application
+pub fn get_data_dir() -> Result<PathBuf> {
+    Ok(agent_state_root()?.join("data"))
 }
 
 impl FileSessionStore {
@@ -442,6 +447,15 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use types::{ChatRole, MessageStatus};
     use ulid::Ulid;
+
+    #[test]
+    fn data_dir_uses_agent_root() {
+        let root = agent_state_root().expect("agent root");
+        let data_dir = get_data_dir().expect("data dir");
+
+        assert_eq!(data_dir, root.join("data"));
+        assert!(data_dir.ends_with(".agent/data"));
+    }
 
     fn test_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()

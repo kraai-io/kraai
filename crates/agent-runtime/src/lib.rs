@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent::{AgentManager, PendingStreamRequest, ToolExecutionPayload, ToolExecutionRequest};
-use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
-use persistence::SessionMeta;
+use color_eyre::eyre::{Context, Result, eyre};
+use persistence::{SessionMeta, agent_state_root};
 use provider_core::{
     DynamicConfig, ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig,
     ProviderRegistry,
@@ -23,6 +23,10 @@ use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
+use provider_openai_codex::{
+    OpenAiCodexAuthController, OpenAiCodexAuthStatus as ProviderOpenAiCodexAuthStatus,
+    OpenAiCodexFactory, OpenAiCodexLoginState as ProviderOpenAiCodexLoginState,
+};
 use provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
@@ -91,6 +95,35 @@ pub struct PendingToolInfo {
 pub struct WorkspaceState {
     pub workspace_dir: String,
     pub applies_next_chat: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingBrowserLogin {
+    pub auth_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingDeviceCodeLogin {
+    pub verification_url: String,
+    pub user_code: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenAiCodexLoginState {
+    SignedOut,
+    BrowserPending(PendingBrowserLogin),
+    DeviceCodePending(PendingDeviceCodeLogin),
+    Authenticated,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenAiCodexAuthStatus {
+    pub state: OpenAiCodexLoginState,
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+    pub account_id: Option<String>,
+    pub last_refresh_unix: Option<u64>,
+    pub error: Option<String>,
 }
 
 /// Editable provider settings shared across clients.
@@ -197,6 +230,9 @@ pub enum Event {
     /// Chat history was updated
     HistoryUpdated {
         session_id: String,
+    },
+    OpenAiCodexAuthUpdated {
+        status: OpenAiCodexAuthStatus,
     },
 }
 
@@ -305,6 +341,21 @@ enum Command {
     },
     ExecuteApprovedTools {
         session_id: String,
+    },
+    GetOpenAiCodexAuthStatus {
+        response: oneshot::Sender<OpenAiCodexAuthStatus>,
+    },
+    StartOpenAiCodexBrowserLogin {
+        response: oneshot::Sender<()>,
+    },
+    StartOpenAiCodexDeviceCodeLogin {
+        response: oneshot::Sender<()>,
+    },
+    CancelOpenAiCodexLogin {
+        response: oneshot::Sender<()>,
+    },
+    LogoutOpenAiCodexAuth {
+        response: oneshot::Sender<()>,
     },
 }
 
@@ -541,6 +592,46 @@ impl RuntimeHandle {
             .await?;
         Ok(())
     }
+
+    pub async fn get_openai_codex_auth_status(&self) -> Result<OpenAiCodexAuthStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetOpenAiCodexAuthStatus { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn start_openai_codex_browser_login(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::StartOpenAiCodexBrowserLogin { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn start_openai_codex_device_code_login(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::StartOpenAiCodexDeviceCodeLogin { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn cancel_openai_codex_login(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::CancelOpenAiCodexLogin { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn logout_openai_codex_auth(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::LogoutOpenAiCodexAuth { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
 }
 
 // ============================================================================
@@ -611,7 +702,10 @@ impl RuntimeBuilder {
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
         let tools = build_default_tool_manager();
-        let registry = build_provider_registry()?;
+        let openai_codex_auth = Arc::new(
+            OpenAiCodexAuthController::new().wrap_err("Failed to initialize OpenAI auth")?,
+        );
+        let registry = build_provider_registry(openai_codex_auth.clone())?;
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
@@ -627,6 +721,7 @@ impl RuntimeBuilder {
             agent_manager,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            openai_codex_auth,
         };
 
         runtime.run(command_rx).await;
@@ -640,10 +735,7 @@ impl RuntimeBuilder {
 
         INIT.call_once(|| {
             let result = (|| -> Result<()> {
-                let log_dir = directories::BaseDirs::new()
-                    .context("Failed to find user directories")?
-                    .home_dir()
-                    .join(".agent-desktop/logs");
+                let log_dir = agent_state_root()?.join("logs");
 
                 std::fs::create_dir_all(&log_dir).wrap_err_with(|| {
                     format!("Failed to create log directory {}", log_dir.display())
@@ -693,13 +785,29 @@ fn build_default_tool_manager() -> ToolManager {
     tools
 }
 
-fn build_provider_registry() -> Result<ProviderRegistry> {
+fn build_provider_registry(
+    openai_codex_auth: Arc<OpenAiCodexAuthController>,
+) -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry
         .register_factory::<OpenAiChatCompletionsFactory>()
         .map_err(|error| eyre!(error.to_string()))?;
     registry
         .register_factory::<OpenAiFactory>()
+        .map_err(|error| eyre!(error.to_string()))?;
+    let openai_codex_factory = OpenAiCodexFactory::new(openai_codex_auth);
+    registry
+        .register_dynamic_factory(
+            OpenAiCodexFactory::TYPE_ID,
+            OpenAiCodexFactory::definition(),
+            move |id, config| {
+                openai_codex_factory
+                    .create(id, config)
+                    .map_err(|error| provider_core::ProviderError::ConfigParseError(error.to_string()))
+            },
+            OpenAiCodexFactory::validate_provider_config,
+            OpenAiCodexFactory::validate_model_config,
+        )
         .map_err(|error| eyre!(error.to_string()))?;
     Ok(registry)
 }
@@ -753,6 +861,7 @@ struct RuntimeInner {
     agent_manager: Arc<Mutex<AgentManager>>,
     provider_registry: ProviderRegistry,
     active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    openai_codex_auth: Arc<OpenAiCodexAuthController>,
 }
 
 #[derive(Clone, Debug)]
@@ -782,6 +891,7 @@ impl RuntimeInner {
         tracing::info!("Starting event loop");
 
         self.spawn_config_watcher();
+        self.spawn_openai_auth_forwarder();
         if let Err(e) = self.load_providers_config().await {
             self.send_error(format!("Failed to load config: {}", e));
         } else {
@@ -796,6 +906,18 @@ impl RuntimeInner {
         }
 
         tracing::info!("Event loop terminated");
+    }
+
+    fn spawn_openai_auth_forwarder(&self) {
+        let mut updates = self.openai_codex_auth.subscribe();
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            while let Ok(status) = updates.recv().await {
+                runtime.send_event(Event::OpenAiCodexAuthUpdated {
+                    status: map_openai_codex_auth_status(status),
+                });
+            }
+        });
     }
 
     async fn handle_command(&self, command: Command) -> Result<()> {
@@ -1063,6 +1185,42 @@ impl RuntimeInner {
 
             Command::ExecuteApprovedTools { session_id } => {
                 self.handle_execute_tools(session_id).await;
+            }
+
+            Command::GetOpenAiCodexAuthStatus { response } => {
+                response
+                    .send(map_openai_codex_auth_status(
+                        self.openai_codex_auth.get_status().await,
+                    ))
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::StartOpenAiCodexBrowserLogin { response } => {
+                self.openai_codex_auth.start_browser_login().await?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::StartOpenAiCodexDeviceCodeLogin { response } => {
+                self.openai_codex_auth.start_device_code_login().await?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::CancelOpenAiCodexLogin { response } => {
+                self.openai_codex_auth.cancel_login().await?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::LogoutOpenAiCodexAuth { response } => {
+                self.openai_codex_auth.logout().await?;
+                response
+                    .send(())
+                    .map_err(|_| eyre!("Failed to send response"))?;
             }
         }
 
@@ -1633,6 +1791,13 @@ impl RuntimeInner {
                     return;
                 }
             };
+            if let Err(error) = std::fs::create_dir_all(&config_dir) {
+                callback.on_event(Event::Error(format!(
+                    "Failed to create config directory {}: {error}",
+                    config_dir.display()
+                )));
+                return;
+            }
 
             let (tx, rx) = std::sync::mpsc::channel();
             let mut watcher = match notify::recommended_watcher(tx) {
@@ -1674,14 +1839,15 @@ impl RuntimeInner {
 
     async fn load_providers_config(&self) -> Result<()> {
         let config_loc = settings_path()?;
-
-        if !config_loc.exists() {
-            return Err(eyre!("Config file doesn't exist at {:?}", config_loc));
-        }
-
-        let config_slice = tokio::fs::read(&config_loc).await?;
-        let config: ProviderManagerConfig =
-            toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
+        let config = if !config_loc.exists() {
+            ProviderManagerConfig {
+                providers: Vec::new(),
+                models: Vec::new(),
+            }
+        } else {
+            let config_slice = tokio::fs::read(&config_loc).await?;
+            toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?
+        };
 
         self.agent_manager
             .lock()
@@ -1721,10 +1887,36 @@ fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
 }
 
 fn settings_path() -> Result<std::path::PathBuf> {
-    Ok(directories::BaseDirs::new()
-        .context("Failed to find user directories")?
-        .home_dir()
-        .join(".agent-desktop/providers.toml"))
+    Ok(agent_state_root()?.join("providers.toml"))
+}
+
+fn map_openai_codex_auth_status(
+    status: ProviderOpenAiCodexAuthStatus,
+) -> OpenAiCodexAuthStatus {
+    let state = match status.state {
+        ProviderOpenAiCodexLoginState::SignedOut => OpenAiCodexLoginState::SignedOut,
+        ProviderOpenAiCodexLoginState::BrowserPending(pending) => {
+            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                auth_url: pending.auth_url,
+            })
+        }
+        ProviderOpenAiCodexLoginState::DeviceCodePending(pending) => {
+            OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+                verification_url: pending.verification_url,
+                user_code: pending.user_code,
+            })
+        }
+        ProviderOpenAiCodexLoginState::Authenticated => OpenAiCodexLoginState::Authenticated,
+    };
+
+    OpenAiCodexAuthStatus {
+        state,
+        email: status.email,
+        plan_type: status.plan_type,
+        account_id: status.account_id,
+        last_refresh_unix: status.last_refresh_unix,
+        error: status.error,
+    }
 }
 
 fn read_settings_document(
@@ -2354,12 +2546,16 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 command_tx: command_tx.clone(),
             };
 
+            let openai_codex_auth =
+                Arc::new(OpenAiCodexAuthController::new().expect("openai auth controller"));
             let runtime = RuntimeInner {
                 event_callback: Arc::new(events.clone()),
                 command_tx,
                 agent_manager,
-                provider_registry: build_provider_registry().expect("provider registry"),
+                provider_registry: build_provider_registry(openai_codex_auth.clone())
+                    .expect("provider registry"),
                 active_streams: Arc::new(Mutex::new(HashMap::new())),
+                openai_codex_auth,
             };
 
             let runtime_task = tokio::spawn(async move {
