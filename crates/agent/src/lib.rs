@@ -434,8 +434,12 @@ impl AgentManager {
             self.clear_active_turn(session_id);
             return Err(error);
         }
-        let system_prompt =
-            self.build_turn_system_prompt(&profile, &session.workspace_dir, &tool_state_snapshot)?;
+        let system_prompt = self.build_turn_system_prompt(
+            session_id,
+            &profile,
+            &session.workspace_dir,
+            &tool_state_snapshot,
+        )?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -509,8 +513,12 @@ impl AgentManager {
             })
             .collect();
 
-        let system_prompt =
-            self.build_turn_system_prompt(&profile, &session.workspace_dir, &tool_state_snapshot)?;
+        let system_prompt = self.build_turn_system_prompt(
+            session_id,
+            &profile,
+            &session.workspace_dir,
+            &tool_state_snapshot,
+        )?;
         if !system_prompt.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -579,6 +587,7 @@ impl AgentManager {
 
     fn build_turn_system_prompt(
         &self,
+        session_id: &str,
         profile: &AgentProfile,
         workspace_dir: &Path,
         tool_state_snapshot: &ToolStateSnapshot,
@@ -595,7 +604,29 @@ impl AgentManager {
             sections.push(tool_state_prompt);
         }
 
-        Ok(sections.join("\n\n"))
+        let system_prompt = sections.join("\n\n");
+        #[cfg(debug_assertions)]
+        {
+            if system_prompt.is_empty() {
+                tracing::info!(
+                    session_id = session_id,
+                    profile_id = %profile.id,
+                    "Compiled turn system prompt is empty"
+                );
+            } else {
+                tracing::info!(
+                    session_id = session_id,
+                    profile_id = %profile.id,
+                    "Compiled turn system prompt:\n{}",
+                    system_prompt
+                );
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        let _ = (session_id, profile, &system_prompt);
+
+        Ok(system_prompt)
     }
 
     fn current_turn_profile_id(&self, session_id: &str) -> Option<String> {
