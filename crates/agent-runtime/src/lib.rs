@@ -1266,6 +1266,16 @@ impl RuntimeInner {
                 let mut agent = agent_manager.lock().await;
                 agent.take_ready_tool_executions(&session_id)
             };
+            let executed_source_message_ids: Vec<_> = executions
+                .iter()
+                .map(|execution| execution.source_message_id.clone())
+                .collect();
+            let mut completed_source_message_ids = Vec::new();
+            for execution in &executions {
+                if !completed_source_message_ids.contains(&execution.source_message_id) {
+                    completed_source_message_ids.push(execution.source_message_id.clone());
+                }
+            }
 
             let results = execute_tool_requests(executions).await;
 
@@ -1289,6 +1299,7 @@ impl RuntimeInner {
                 let _ = agent
                     .add_tool_results_to_history(&session_id, results)
                     .await;
+                agent.finish_tool_executions(&session_id, &executed_source_message_ids);
             }
 
             tracing::debug!("Emitting HistoryUpdated event after tool results");
@@ -1296,15 +1307,23 @@ impl RuntimeInner {
                 session_id: session_id.clone(),
             });
 
-            let has_pending_tools = { agent_manager.lock().await.has_pending_tools(&session_id) };
-            if !has_pending_tools {
-                // Start continuation stream
+            for source_message_id in completed_source_message_ids {
+                let has_pending_tools = {
+                    agent_manager
+                        .lock()
+                        .await
+                        .has_unfinished_tools_for_message(&session_id, &source_message_id)
+                };
+                if has_pending_tools {
+                    continue;
+                }
+
                 Self::start_continuation(
-                    session_id,
-                    agent_manager,
-                    event_callback,
-                    command_tx,
-                    active_streams,
+                    session_id.clone(),
+                    agent_manager.clone(),
+                    event_callback.clone(),
+                    command_tx.clone(),
+                    active_streams.clone(),
                 )
                 .await;
             }
@@ -1400,6 +1419,7 @@ impl RuntimeInner {
                             });
                             Self::process_completed_stream_output(
                                 completed_session,
+                                request_message_id,
                                 content,
                                 agent_manager,
                                 event_callback,
@@ -1515,6 +1535,7 @@ impl RuntimeInner {
                         });
                         Self::process_completed_stream_output(
                             completed_session,
+                            request_message_id,
                             content,
                             agent_manager,
                             event_callback,
@@ -1626,6 +1647,7 @@ impl RuntimeInner {
 
     async fn process_completed_stream_output(
         completed_session: String,
+        source_message_id: MessageId,
         content: String,
         agent_manager: Arc<Mutex<AgentManager>>,
         event_callback: Arc<dyn EventCallback>,
@@ -1635,7 +1657,7 @@ impl RuntimeInner {
         let (tool_calls, failed) = {
             let mut agent = agent_manager.lock().await;
             match agent
-                .parse_tool_calls_from_content(&completed_session, &content)
+                .parse_tool_calls_from_content(&completed_session, &source_message_id, &content)
                 .await
             {
                 Ok(result) => result,
@@ -2291,6 +2313,44 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct AutonomousTool;
+
+    #[async_trait]
+    impl TypedTool for AutonomousTool {
+        type Args = ValueArgs;
+
+        fn name(&self) -> &'static str {
+            "auto_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "auto_tool(value: string)"
+        }
+
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            ToolCallAssessment {
+                risk: RiskLevel::ReadOnlyWorkspace,
+                policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+                reasons: vec![format!(
+                    "auto_tool can run autonomously for {:?}",
+                    args.value
+                )],
+            }
+        }
+
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+            ToolOutput::success(serde_json::json!({
+                "tool": "auto_tool",
+                "value": args.value,
+            }))
+        }
+
+        fn describe(&self, args: &Self::Args) -> String {
+            format!("Autonomous tool for {}", args.value)
+        }
+    }
+
     #[derive(Clone)]
     struct BlockingApprovalTool {
         started: Arc<tokio::sync::Notify>,
@@ -2337,6 +2397,87 @@ mod tests {
 
         fn describe(&self, args: &Self::Args) -> String {
             format!("Blocking tool for {}", args.value)
+        }
+    }
+
+    #[derive(Clone)]
+    struct BatchBlockingApprovalTool {
+        started: Arc<tokio::sync::Notify>,
+        ready: Arc<tokio::sync::Barrier>,
+    }
+
+    #[async_trait]
+    impl TypedTool for BatchBlockingApprovalTool {
+        type Args = ValueArgs;
+
+        fn name(&self) -> &'static str {
+            "batch_blocking_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "batch_blocking_tool(value: string)"
+        }
+
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            ToolCallAssessment {
+                risk: RiskLevel::UndoableWorkspaceWrite,
+                policy: ExecutionPolicy::AlwaysAsk,
+                reasons: vec![format!(
+                    "batch_blocking_tool requires approval for {:?}",
+                    args.value
+                )],
+            }
+        }
+
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+            self.started.notify_waiters();
+            self.ready.wait().await;
+            if args.value == "beta" {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            ToolOutput::success(serde_json::json!({
+                "tool": "batch_blocking_tool",
+                "value": args.value,
+            }))
+        }
+
+        fn describe(&self, args: &Self::Args) -> String {
+            format!("Batch blocking tool for {}", args.value)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct FailingApprovalTool;
+
+    #[async_trait]
+    impl TypedTool for FailingApprovalTool {
+        type Args = ValueArgs;
+
+        fn name(&self) -> &'static str {
+            "failing_tool"
+        }
+
+        fn schema(&self) -> &'static str {
+            "failing_tool(value: string)"
+        }
+
+        fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+            ToolCallAssessment {
+                risk: RiskLevel::UndoableWorkspaceWrite,
+                policy: ExecutionPolicy::AlwaysAsk,
+                reasons: vec![format!(
+                    "failing_tool requires approval for {:?}",
+                    args.value
+                )],
+            }
+        }
+
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+            ToolOutput::error(String::from("tool exploded"))
+        }
+
+        fn describe(&self, args: &Self::Args) -> String {
+            format!("Failing tool for {}", args.value)
         }
     }
 
@@ -2480,6 +2621,7 @@ mod tests {
 
             let mut tools = ToolManager::new();
             tools.register_tool(ApprovalTool);
+            tools.register_tool(AutonomousTool);
             configure_tools(&mut tools);
 
             Self::new_with_parts(providers, tools).await
@@ -2605,6 +2747,77 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 )
             })
             .expect("stream complete event should exist")
+    }
+
+    fn stream_start_count(events: &[Event], session_id: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::StreamStart {
+                        session_id: event_session,
+                        ..
+                    } if event_session == session_id
+                )
+            })
+            .count()
+    }
+
+    fn stream_complete_count(events: &[Event], session_id: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::StreamComplete {
+                        session_id: event_session,
+                        ..
+                    } if event_session == session_id
+                )
+            })
+            .count()
+    }
+
+    fn continuation_failed_count(events: &[Event], session_id: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::ContinuationFailed {
+                        session_id: event_session,
+                        ..
+                    } if event_session == session_id
+                )
+            })
+            .count()
+    }
+
+    fn call_id_for_queue_order(
+        events: &[Event],
+        session_id: &str,
+        tool_id: &str,
+        queue_order: u64,
+    ) -> String {
+        events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    call_id,
+                    tool_id: event_tool_id,
+                    queue_order: event_queue_order,
+                    ..
+                } if event_session == session_id
+                    && event_tool_id == tool_id
+                    && *event_queue_order == queue_order =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .expect("tool call id should exist")
     }
 
     #[tokio::test]
@@ -2877,6 +3090,796 @@ value: alpha\n\
                 .values()
                 .any(|message| message.content == "continuation complete")
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_waits_for_all_tools_from_one_message_across_split_executions()
+    -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ])
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("run two tools"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("two tool detections", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolCallDetected {
+                                session_id: event_session,
+                                tool_id,
+                                ..
+                            } if event_session == &session_id && tool_id == "mock_tool"
+                        )
+                    })
+                    .count()
+                    == 2
+            })
+            .await;
+
+        let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
+        let second_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), first_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("first tool result without continuation", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &first_call_id
+                            && tool_id == "mock_tool"
+                            && !denied
+                    )
+                })
+            })
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events_after_first = harness.events.snapshot();
+        assert_eq!(stream_start_count(&events_after_first, &session_id), 1);
+        assert_eq!(stream_complete_count(&events_after_first, &session_id), 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), second_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("second tool result and single continuation", |events| {
+                let second_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &second_call_id
+                            && tool_id == "mock_tool"
+                            && !denied
+                    )
+                });
+                second_result_ready && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let final_events = harness.events.snapshot();
+        assert_eq!(stream_start_count(&final_events, &session_id), 2);
+        assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+        assert_eq!(continuation_failed_count(&final_events, &session_id), 0);
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "continuation complete")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn overlapping_execute_requests_wait_for_in_flight_tools_from_the_same_message()
+    -> Result<()> {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let ready = Arc::new(tokio::sync::Barrier::new(2));
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![
+                vec![ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: batch_blocking_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: batch_blocking_tool\n\
+value: beta\n\
+</tool_call>",
+                )],
+                vec![ScriptedChunk::plain("continuation complete")],
+            ],
+            {
+                let started = started.clone();
+                let ready = ready.clone();
+                move |tools| {
+                    tools.register_tool(BatchBlockingApprovalTool { started, ready });
+                }
+            },
+        )
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("run overlapping executes"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("two blocking tool detections", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolCallDetected {
+                                session_id: event_session,
+                                tool_id,
+                                ..
+                            } if event_session == &session_id && tool_id == "batch_blocking_tool"
+                        )
+                    })
+                    .count()
+                    == 2
+            })
+            .await;
+
+        let first_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "batch_blocking_tool", 0);
+        let second_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "batch_blocking_tool", 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), first_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+        started.notified().await;
+        harness
+            .handle
+            .approve_tool(session_id.clone(), second_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("first overlapping tool result", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &first_call_id
+                            && tool_id == "batch_blocking_tool"
+                            && !denied
+                    )
+                })
+            })
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events_after_first = harness.events.snapshot();
+        assert_eq!(stream_start_count(&events_after_first, &session_id), 1);
+        assert_eq!(stream_complete_count(&events_after_first, &session_id), 1);
+
+        harness
+            .events
+            .wait_for("both blocking results and one continuation", |events| {
+                let result_count = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolResultReady {
+                                session_id: event_session,
+                                tool_id,
+                                denied,
+                                ..
+                            } if event_session == &session_id
+                                && tool_id == "batch_blocking_tool"
+                                && !denied
+                        )
+                    })
+                    .count();
+                result_count == 2 && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let final_events = harness.events.snapshot();
+        assert_eq!(stream_start_count(&final_events, &session_id), 2);
+        assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+        assert_eq!(continuation_failed_count(&final_events, &session_id), 0);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_approved_and_manual_tools_share_one_continuation_boundary() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: auto_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ])
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("run mixed tools"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("auto result plus manual detection", |events| {
+                let auto_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "auto_tool"
+                            && *success
+                            && !denied
+                    )
+                });
+                let manual_detected = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id: event_session,
+                            tool_id,
+                            ..
+                        } if event_session == &session_id && tool_id == "mock_tool"
+                    )
+                });
+                auto_result_ready && manual_detected
+            })
+            .await;
+
+        let manual_call_id = call_id_for_queue_order(&events, &session_id, "mock_tool", 1);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events_after_auto = harness.events.snapshot();
+        assert_eq!(stream_start_count(&events_after_auto, &session_id), 1);
+        assert_eq!(stream_complete_count(&events_after_auto, &session_id), 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), manual_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("manual result and continuation", |events| {
+                let manual_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &manual_call_id
+                            && tool_id == "mock_tool"
+                            && !denied
+                    )
+                });
+                manual_result_ready && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let final_events = harness.events.snapshot();
+        assert_eq!(stream_start_count(&final_events, &session_id), 2);
+        assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn denied_and_approved_tools_finish_before_single_continuation_starts() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ])
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("run approve and deny"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("two tool detections for mixed decision batch", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolCallDetected {
+                                session_id: event_session,
+                                tool_id,
+                                ..
+                            } if event_session == &session_id && tool_id == "mock_tool"
+                        )
+                    })
+                    .count()
+                    == 2
+            })
+            .await;
+
+        let denied_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
+        let approved_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 1);
+
+        harness
+            .handle
+            .deny_tool(session_id.clone(), denied_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .approve_tool(session_id.clone(), approved_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("mixed decision tool results and continuation", |events| {
+                let denied_result = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &denied_call_id
+                            && tool_id == "mock_tool"
+                            && *denied
+                    )
+                });
+                let approved_result = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &approved_call_id
+                            && tool_id == "mock_tool"
+                            && !denied
+                    )
+                });
+                denied_result && approved_result && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let final_events = harness.events.snapshot();
+        let continuation_start_index = final_events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| match event {
+                Event::StreamStart {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id => Some(index),
+                _ => None,
+            })
+            .nth(1)
+            .expect("continuation stream should start once");
+        let denied_result_index = final_events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::ToolResultReady {
+                        session_id: event_session,
+                        call_id,
+                        denied,
+                        ..
+                    } if event_session == &session_id
+                        && call_id == &denied_call_id
+                        && *denied
+                )
+            })
+            .expect("denied tool result should exist");
+        let approved_result_index = final_events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::ToolResultReady {
+                        session_id: event_session,
+                        call_id,
+                        denied,
+                        ..
+                    } if event_session == &session_id
+                        && call_id == &approved_call_id
+                        && !denied
+                )
+            })
+            .expect("approved tool result should exist");
+
+        assert!(denied_result_index < continuation_start_index);
+        assert!(approved_result_index < continuation_start_index);
+        assert_eq!(stream_start_count(&final_events, &session_id), 2);
+        assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiple_tools_executed_together_start_only_one_continuation() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ])
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("approve all tools"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("two tool detections for single execution", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolCallDetected {
+                                session_id: event_session,
+                                tool_id,
+                                ..
+                            } if event_session == &session_id && tool_id == "mock_tool"
+                        )
+                    })
+                    .count()
+                    == 2
+            })
+            .await;
+
+        let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
+        let second_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), first_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .approve_tool(session_id.clone(), second_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("single continuation after one execution batch", |events| {
+                let first_result = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            ..
+                        } if event_session == &session_id && call_id == &first_call_id
+                    )
+                });
+                let second_result = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            ..
+                        } if event_session == &session_id && call_id == &second_call_id
+                    )
+                });
+                first_result && second_result && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let final_events = harness.events.snapshot();
+        assert_eq!(stream_start_count(&final_events, &session_id), 2);
+        assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_failure_still_happens_once_after_all_results_in_a_tool_batch()
+    -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: failing_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: failing_tool\n\
+value: beta\n\
+</tool_call>",
+            )]],
+            |tools| {
+                tools.register_tool(FailingApprovalTool);
+            },
+        )
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("run failing tools"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("two failing tool detections", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolCallDetected {
+                                session_id: event_session,
+                                tool_id,
+                                ..
+                            } if event_session == &session_id && tool_id == "failing_tool"
+                        )
+                    })
+                    .count()
+                    == 2
+            })
+            .await;
+
+        let first_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "failing_tool", 0);
+        let second_call_id =
+            call_id_for_queue_order(&detection_events, &session_id, "failing_tool", 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), first_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .approve_tool(session_id.clone(), second_call_id.clone())
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for(
+                "tool failures followed by one continuation failure",
+                |events| {
+                    let result_count = events
+                        .iter()
+                        .filter(|event| {
+                            matches!(
+                                event,
+                                Event::ToolResultReady {
+                                    session_id: event_session,
+                                    tool_id,
+                                    success,
+                                    denied,
+                                    ..
+                                } if event_session == &session_id
+                                    && tool_id == "failing_tool"
+                                    && !success
+                                    && !denied
+                            )
+                        })
+                        .count();
+                    result_count == 2 && continuation_failed_count(events, &session_id) == 1
+                },
+            )
+            .await;
+
+        let final_events = harness.events.snapshot();
+        let continuation_failed_index = final_events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::ContinuationFailed {
+                        session_id: event_session,
+                        ..
+                    } if event_session == &session_id
+                )
+            })
+            .expect("continuation failure should exist");
+        let last_result_index = final_events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| match event {
+                Event::ToolResultReady {
+                    session_id: event_session,
+                    tool_id,
+                    success,
+                    denied,
+                    ..
+                } if event_session == &session_id
+                    && tool_id == "failing_tool"
+                    && !success
+                    && !denied =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            })
+            .next_back()
+            .expect("failing tool results should exist");
+
+        assert!(last_result_index < continuation_failed_index);
+        assert_eq!(continuation_failed_count(&final_events, &session_id), 1);
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        let failed_result_count = history
+            .values()
+            .filter(|message| {
+                message
+                    .content
+                    .contains("Tool 'failing_tool' result:\n{\n  \"error\": \"tool exploded\"\n}")
+            })
+            .count();
+        assert_eq!(failed_result_count, 2);
 
         harness.shutdown().await;
         Ok(())

@@ -28,6 +28,7 @@ const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
 #[derive(Clone)]
 pub struct PendingToolCall {
     pub call: ToolCall,
+    pub source_message_id: MessageId,
     pub prepared: PreparedToolCall,
     pub description: String,
     pub assessment: ToolCallAssessment,
@@ -40,6 +41,7 @@ impl std::fmt::Debug for PendingToolCall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingToolCall")
             .field("call", &self.call)
+            .field("source_message_id", &self.source_message_id)
             .field("description", &self.description)
             .field("assessment", &self.assessment)
             .field("config", &self.config)
@@ -81,6 +83,7 @@ pub enum ToolExecutionPayload {
 pub struct ToolExecutionRequest {
     pub call_id: CallId,
     pub tool_id: ToolId,
+    pub source_message_id: MessageId,
     pub payload: ToolExecutionPayload,
 }
 
@@ -104,6 +107,7 @@ struct SessionRuntimeState {
     active_tool_config: types::ToolCallGlobalConfig,
     pending_tool_config: Option<types::ToolCallGlobalConfig>,
     pending_tool_calls: HashMap<CallId, PendingToolCall>,
+    in_flight_tool_calls: HashMap<MessageId, usize>,
     next_tool_queue_order: u64,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
@@ -116,6 +120,7 @@ impl SessionRuntimeState {
             active_tool_config: types::ToolCallGlobalConfig { workspace_dir },
             pending_tool_config: None,
             pending_tool_calls: HashMap::new(),
+            in_flight_tool_calls: HashMap::new(),
             next_tool_queue_order: 0,
             last_model: None,
             last_provider: None,
@@ -161,6 +166,7 @@ pub struct AgentManager {
 pub struct DetectedToolCall {
     pub call_id: CallId,
     pub tool_id: String,
+    pub source_message_id: MessageId,
     pub description: String,
     pub assessment: ToolCallAssessment,
     pub requires_confirmation: bool,
@@ -873,6 +879,7 @@ impl AgentManager {
     pub async fn parse_tool_calls_from_content(
         &mut self,
         session_id: &str,
+        source_message_id: &MessageId,
         content: &str,
     ) -> Result<(Vec<DetectedToolCall>, Vec<ParseFailure>)> {
         let session = self.require_session(session_id).await?;
@@ -941,6 +948,7 @@ impl AgentManager {
                 call_id.clone(),
                 PendingToolCall {
                     call,
+                    source_message_id: source_message_id.clone(),
                     prepared,
                     description: description.clone(),
                     assessment: assessment.clone(),
@@ -957,6 +965,7 @@ impl AgentManager {
             detected_calls.push(DetectedToolCall {
                 call_id,
                 tool_id: parsed.tool_id,
+                source_message_id: source_message_id.clone(),
                 description,
                 assessment,
                 requires_confirmation,
@@ -1014,7 +1023,7 @@ impl AgentManager {
         };
 
         let (detected, failed) = self
-            .parse_tool_calls_from_content(session_id, &message.content)
+            .parse_tool_calls_from_content(session_id, message_id, &message.content)
             .await?;
 
         if !failed.is_empty() {
@@ -1121,12 +1130,17 @@ impl AgentManager {
             let Some(pending) = state.pending_tool_calls.remove(&call_id) else {
                 continue;
             };
+            *state
+                .in_flight_tool_calls
+                .entry(pending.source_message_id.clone())
+                .or_default() += 1;
 
             match pending.status {
                 PermissionStatus::Pending => {}
                 PermissionStatus::Approved => executions.push(ToolExecutionRequest {
                     call_id,
                     tool_id: pending.call.tool_id,
+                    source_message_id: pending.source_message_id,
                     payload: ToolExecutionPayload::Approved {
                         prepared: pending.prepared,
                         config: pending.config,
@@ -1135,12 +1149,32 @@ impl AgentManager {
                 PermissionStatus::Denied => executions.push(ToolExecutionRequest {
                     call_id,
                     tool_id: pending.call.tool_id,
+                    source_message_id: pending.source_message_id,
                     payload: ToolExecutionPayload::Denied,
                 }),
             }
         }
 
         executions
+    }
+
+    pub fn finish_tool_executions(&mut self, session_id: &str, source_message_ids: &[MessageId]) {
+        let Some(state) = self.session_states.get_mut(session_id) else {
+            return;
+        };
+
+        for source_message_id in source_message_ids {
+            let mut should_remove = false;
+            if let Some(in_flight) = state.in_flight_tool_calls.get_mut(source_message_id) {
+                if *in_flight > 0 {
+                    *in_flight -= 1;
+                }
+                should_remove = *in_flight == 0;
+            }
+            if should_remove {
+                state.in_flight_tool_calls.remove(source_message_id);
+            }
+        }
     }
 
     pub async fn add_tool_results_to_history(
@@ -1180,6 +1214,23 @@ impl AgentManager {
         self.session_states
             .get(session_id)
             .is_some_and(|state| !state.pending_tool_calls.is_empty())
+    }
+
+    pub fn has_unfinished_tools_for_message(
+        &self,
+        session_id: &str,
+        source_message_id: &MessageId,
+    ) -> bool {
+        self.session_states.get(session_id).is_some_and(|state| {
+            state
+                .pending_tool_calls
+                .values()
+                .any(|pending| &pending.source_message_id == source_message_id)
+                || state
+                    .in_flight_tool_calls
+                    .get(source_message_id)
+                    .is_some_and(|in_flight| *in_flight > 0)
+        })
     }
 
     pub fn get_pending_tool_args(
@@ -1610,6 +1661,7 @@ mod tests {
                         tool_id: ToolId::new("list_files"),
                         args: serde_json::json!({ "path": "." }),
                     },
+                    source_message_id: MessageId::new("msg-a"),
                     prepared: manager
                         .tools
                         .prepare_tool(
