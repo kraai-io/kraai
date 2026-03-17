@@ -17,10 +17,9 @@ use crate::components::{ChatHistory, TextInput, VisibleChatView};
 
 use super::{
     ActiveSettingsEditor, AppState, CachedMessageRender, ChatCellPosition, ChatSelection,
-    ProviderAuthState, ProvidersAdvancedFocus, ProvidersView,
-    SettingsModelField, SettingsProviderField, ToolApprovalAction, ToolPhase,
-    UiMode, field_value_display, flatten_models_map, message_fingerprint,
-    provider_definition_rank,
+    ProviderAuthState, ProvidersAdvancedFocus, ProvidersView, SettingsModelField,
+    SettingsProviderField, ToolApprovalAction, ToolPhase, UiMode, field_value_display,
+    flatten_models_map, message_fingerprint, provider_definition_rank,
 };
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
@@ -732,7 +731,10 @@ fn providers_header_lines(state: &AppState) -> Vec<Line<'static>> {
                 ]
             } else {
                 vec![
-                    Line::styled("Provider detail", Style::default().add_modifier(Modifier::BOLD)),
+                    Line::styled(
+                        "Provider detail",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Line::raw("b/c/x/l/e/r shortcuts, y=copy, o=open, Esc=back"),
                 ]
             }
@@ -764,7 +766,9 @@ fn providers_footer_text(state: &AppState) -> String {
         ProvidersView::List => String::from("One provider panel at a time"),
         ProvidersView::Connect => String::from("Flat list. Type to filter."),
         ProvidersView::Detail => state.status.clone(),
-        ProvidersView::Advanced => String::from("Advanced config edits provider fields and model overrides"),
+        ProvidersView::Advanced => {
+            String::from("Advanced config edits provider fields and model overrides")
+        }
     }
 }
 
@@ -819,9 +823,16 @@ fn render_connect_provider_view(state: &AppState, area: Rect, buf: &mut Buffer) 
     let selected_idx = state
         .connect_provider_index
         .min(definitions.len().saturating_sub(1));
-    let scroll_offset = menu_scroll_offset(selected_idx, definitions.len().saturating_add(1), visible_lines);
+    let scroll_offset = menu_scroll_offset(
+        selected_idx,
+        definitions.len().saturating_add(1),
+        visible_lines,
+    );
 
-    let mut lines = vec![Line::raw(format!("Search {}", state.connect_provider_search))];
+    let mut lines = vec![Line::raw(format!(
+        "Search {}",
+        state.connect_provider_search
+    ))];
     if definitions.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::raw("No providers match the search"));
@@ -873,28 +884,40 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
         } else {
             5
         };
-        let [details_area, actions_area] = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(actions_height),
-        ])
-        .areas(area);
+        let [details_area, actions_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(actions_height)]).areas(area);
 
-        let model_count = state.models_by_provider.get(&provider.id).map_or(0, Vec::len);
+        let model_count = state
+            .models_by_provider
+            .get(&provider.id)
+            .map_or(0, Vec::len);
 
         if provider.type_id == "openai-codex" {
             let mut details_lines = vec![
                 Line::raw(format!("State: {}", openai_auth_badge(state))),
                 Line::raw(format!(
                     "Email: {}",
-                    state.openai_codex_auth.email.as_deref().unwrap_or("unknown")
+                    state
+                        .openai_codex_auth
+                        .email
+                        .as_deref()
+                        .unwrap_or("unknown")
                 )),
                 Line::raw(format!(
                     "Plan: {}",
-                    state.openai_codex_auth.plan_type.as_deref().unwrap_or("unknown")
+                    state
+                        .openai_codex_auth
+                        .plan_type
+                        .as_deref()
+                        .unwrap_or("unknown")
                 )),
                 Line::raw(format!(
                     "Account: {}",
-                    state.openai_codex_auth.account_id.as_deref().unwrap_or("unknown")
+                    state
+                        .openai_codex_auth
+                        .account_id
+                        .as_deref()
+                        .unwrap_or("unknown")
                 )),
                 Line::raw(format!(
                     "Last refresh: {}",
@@ -951,7 +974,9 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
                     lines.push(Line::raw("y copy sign-in URL  o open again  x cancel"));
                 }
                 ProviderAuthState::DeviceCodePending => {
-                    lines.push(Line::raw("Browser should open the verification page automatically."));
+                    lines.push(Line::raw(
+                        "Browser should open the verification page automatically.",
+                    ));
                     lines.push(Line::raw("y copy device code  o open again  x cancel"));
                 }
                 ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {}
@@ -989,10 +1014,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
 
     match state.providers_advanced_focus {
         ProvidersAdvancedFocus::ProviderFields => {
-            let mut lines = vec![Line::styled(
-                "Provider fields",
-                pane_style(true),
-            )];
+            let mut lines = vec![Line::styled("Provider fields", pane_style(true))];
             if let Some(provider) = state
                 .settings_draft
                 .as_ref()
@@ -1073,7 +1095,9 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                         let selected = idx == state.settings_model_field_index;
                         let error_key = match field {
                             SettingsModelField::Id => format!("models[{model_index}].id"),
-                            SettingsModelField::Value(key) => format!("models[{model_index}].{key}"),
+                            SettingsModelField::Value(key) => {
+                                format!("models[{model_index}].{key}")
+                            }
                         };
                         let mut line = format!(
                             "{} {:<18} {}",
@@ -1105,7 +1129,10 @@ fn filtered_provider_definitions(state: &AppState) -> Vec<&agent_runtime::Provid
         .iter()
         .filter(|definition| {
             query.is_empty()
-                || definition.display_name.to_ascii_lowercase().contains(&query)
+                || definition
+                    .display_name
+                    .to_ascii_lowercase()
+                    .contains(&query)
                 || definition.type_id.to_ascii_lowercase().contains(&query)
                 || definition.description.to_ascii_lowercase().contains(&query)
         })

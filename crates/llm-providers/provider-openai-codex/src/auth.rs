@@ -308,9 +308,7 @@ impl OpenAiCodexAuthController {
         {
             let mut guard = self.inner.state.lock().await;
             guard.pending = Some(PendingLogin {
-                state: OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
-                    auth_url,
-                }),
+                state: OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
                 abort_handle,
             });
             guard.error = None;
@@ -385,7 +383,9 @@ impl OpenAiCodexAuthController {
         let needs_refresh = {
             let guard = self.inner.state.lock().await;
             match &guard.auth {
-                Some(auth) if auth.last_refresh_unix + TOKEN_REFRESH_INTERVAL_SECS <= unix_now() => {
+                Some(auth)
+                    if auth.last_refresh_unix + TOKEN_REFRESH_INTERVAL_SECS <= unix_now() =>
+                {
                     Some(auth.tokens.account_id.clone())
                 }
                 Some(auth) => {
@@ -451,7 +451,9 @@ impl OpenAiCodexAuthController {
 
         let id_token = refresh.id_token.unwrap_or(old_auth.tokens.id_token);
         let access_token = refresh.access_token.unwrap_or(old_auth.tokens.access_token);
-        let refresh_token = refresh.refresh_token.unwrap_or(old_auth.tokens.refresh_token);
+        let refresh_token = refresh
+            .refresh_token
+            .unwrap_or(old_auth.tokens.refresh_token);
         let claims = parse_id_token_claims(&id_token)?;
         let account_id = claims
             .account_id
@@ -465,7 +467,9 @@ impl OpenAiCodexAuthController {
         {
             self.clear_auth_with_error(String::from("OpenAI account changed. Use /providers."))
                 .await?;
-            return Err(io::Error::other("OpenAI account changed during token refresh"));
+            return Err(io::Error::other(
+                "OpenAI account changed during token refresh",
+            ));
         }
 
         let stored = StoredAuth {
@@ -578,8 +582,8 @@ impl OpenAiCodexAuthController {
                 continue;
             }
 
-            let url = url::Url::parse(&format!("http://localhost{path}"))
-                .map_err(io::Error::other)?;
+            let url =
+                url::Url::parse(&format!("http://localhost{path}")).map_err(io::Error::other)?;
             let state = url
                 .query_pairs()
                 .find(|(key, _)| key == "state")
@@ -594,8 +598,12 @@ impl OpenAiCodexAuthController {
                 .map(|(_, value)| value.to_string());
 
             if let Some(error) = error {
-                write_http_response(&mut stream, "OpenAI sign-in failed. You can return to the TUI.", true)
-                    .await?;
+                write_http_response(
+                    &mut stream,
+                    "OpenAI sign-in failed. You can return to the TUI.",
+                    true,
+                )
+                .await?;
                 return Err(io::Error::other(error));
             }
 
@@ -624,7 +632,10 @@ impl OpenAiCodexAuthController {
         let response = self
             .inner
             .client
-            .post(format!("{}/api/accounts/deviceauth/usercode", self.inner.config.issuer))
+            .post(format!(
+                "{}/api/accounts/deviceauth/usercode",
+                self.inner.config.issuer
+            ))
             .json(&DeviceCodeRequest {
                 client_id: &self.inner.config.client_id,
             })
@@ -667,7 +678,10 @@ impl OpenAiCodexAuthController {
             let response = self
                 .inner
                 .client
-                .post(format!("{}/api/accounts/deviceauth/token", self.inner.config.issuer))
+                .post(format!(
+                    "{}/api/accounts/deviceauth/token",
+                    self.inner.config.issuer
+                ))
                 .json(&DeviceCodePollRequest {
                     device_auth_id: &device_auth_id,
                     user_code: &user_code,
@@ -762,7 +776,6 @@ impl OpenAiCodexAuthController {
     }
 }
 
-
 struct DeviceCodeResponseData {
     device_auth_id: String,
     user_code: String,
@@ -774,11 +787,16 @@ fn status_from_state(state: &ControllerState) -> OpenAiCodexAuthStatus {
         if let Some(pending) = &state.pending {
             (
                 pending.state.clone(),
-                state.auth.as_ref().and_then(|auth| auth.claims.email.clone()),
-                state.auth
+                state
+                    .auth
+                    .as_ref()
+                    .and_then(|auth| auth.claims.email.clone()),
+                state
+                    .auth
                     .as_ref()
                     .and_then(|auth| auth.claims.plan_type.clone()),
-                state.auth
+                state
+                    .auth
                     .as_ref()
                     .map(|auth| auth.tokens.account_id.clone())
                     .or_else(|| {
@@ -798,13 +816,7 @@ fn status_from_state(state: &ControllerState) -> OpenAiCodexAuthStatus {
                 Some(auth.last_refresh_unix),
             )
         } else {
-            (
-                OpenAiCodexLoginState::SignedOut,
-                None,
-                None,
-                None,
-                None,
-            )
+            (OpenAiCodexLoginState::SignedOut, None, None, None, None)
         };
 
     OpenAiCodexAuthStatus {
@@ -826,7 +838,9 @@ fn parse_id_token_claims(token: &str) -> io::Result<IdTokenClaims> {
         .decode(payload)
         .map_err(io::Error::other)?;
     let claims = serde_json::from_slice::<RootClaims>(&bytes).map_err(io::Error::other)?;
-    let email = claims.email.or_else(|| claims.profile.and_then(|profile| profile.email));
+    let email = claims
+        .email
+        .or_else(|| claims.profile.and_then(|profile| profile.email));
     let (plan_type, account_id) = match claims.auth {
         Some(auth) => (
             auth.chatgpt_plan_type
@@ -985,9 +999,8 @@ async fn write_http_response(
     message: &str,
     close: bool,
 ) -> io::Result<()> {
-    let body = format!(
-        "<html><body><pre style=\"font-family: monospace\">{message}</pre></body></html>"
-    );
+    let body =
+        format!("<html><body><pre style=\"font-family: monospace\">{message}</pre></body></html>");
     let connection = if close { "close" } else { "keep-alive" };
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{}",
@@ -1048,12 +1061,8 @@ mod tests {
 
     #[test]
     fn id_token_claims_extract_email_plan_and_account_id() {
-        let claims = parse_id_token_claims(&fake_jwt(
-            "user@example.com",
-            "pro",
-            "workspace_123",
-        ))
-        .unwrap();
+        let claims =
+            parse_id_token_claims(&fake_jwt("user@example.com", "pro", "workspace_123")).unwrap();
 
         assert_eq!(claims.email.as_deref(), Some("user@example.com"));
         assert_eq!(claims.plan_type.as_deref(), Some("Pro"));
@@ -1085,13 +1094,15 @@ mod tests {
 
     #[tokio::test]
     async fn missing_auth_file_reports_signed_out_status() {
-        let controller =
-            OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
-                temp_auth_path(),
-            ))
-            .unwrap();
+        let controller = OpenAiCodexAuthController::new_with_options(
+            OpenAiCodexAuthControllerOptions::new(temp_auth_path()),
+        )
+        .unwrap();
 
-        assert_eq!(controller.get_status().await.state, OpenAiCodexLoginState::SignedOut);
+        assert_eq!(
+            controller.get_status().await.state,
+            OpenAiCodexLoginState::SignedOut
+        );
     }
 
     #[test]

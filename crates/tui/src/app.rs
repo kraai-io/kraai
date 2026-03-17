@@ -2481,12 +2481,22 @@ impl App {
         }
 
         match key_event.code {
-            KeyCode::Char('b') => self.execute_provider_detail_action(ProviderDetailAction::BrowserLogin),
-            KeyCode::Char('c') => self.execute_provider_detail_action(ProviderDetailAction::DeviceCodeLogin),
-            KeyCode::Char('x') => self.execute_provider_detail_action(ProviderDetailAction::CancelLogin),
+            KeyCode::Char('b') => {
+                self.execute_provider_detail_action(ProviderDetailAction::BrowserLogin)
+            }
+            KeyCode::Char('c') => {
+                self.execute_provider_detail_action(ProviderDetailAction::DeviceCodeLogin)
+            }
+            KeyCode::Char('x') => {
+                self.execute_provider_detail_action(ProviderDetailAction::CancelLogin)
+            }
             KeyCode::Char('l') => self.execute_provider_detail_action(ProviderDetailAction::Logout),
-            KeyCode::Char('e') => self.execute_provider_detail_action(ProviderDetailAction::Advanced),
-            KeyCode::Char('r') => self.execute_provider_detail_action(ProviderDetailAction::RefreshModels),
+            KeyCode::Char('e') => {
+                self.execute_provider_detail_action(ProviderDetailAction::Advanced)
+            }
+            KeyCode::Char('r') => {
+                self.execute_provider_detail_action(ProviderDetailAction::RefreshModels)
+            }
             KeyCode::Char('o') => self.retry_open_pending_auth_target(),
             KeyCode::Char('y') => self.copy_pending_auth_value(),
             _ => {}
@@ -2565,14 +2575,21 @@ impl App {
     }
 
     fn filtered_provider_definitions(&self) -> Vec<&ProviderDefinition> {
-        let query = self.state.connect_provider_search.trim().to_ascii_lowercase();
+        let query = self
+            .state
+            .connect_provider_search
+            .trim()
+            .to_ascii_lowercase();
         let mut definitions: Vec<&ProviderDefinition> = self
             .state
             .provider_definitions
             .iter()
             .filter(|definition| {
                 query.is_empty()
-                    || definition.display_name.to_ascii_lowercase().contains(&query)
+                    || definition
+                        .display_name
+                        .to_ascii_lowercase()
+                        .contains(&query)
                     || definition.type_id.to_ascii_lowercase().contains(&query)
                     || definition.description.to_ascii_lowercase().contains(&query)
             })
@@ -2628,28 +2645,36 @@ impl App {
     fn execute_provider_detail_action(&mut self, action: ProviderDetailAction) {
         match action {
             ProviderDetailAction::BrowserLogin => {
-                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                if self
+                    .current_provider()
+                    .is_some_and(|provider| provider.type_id == "openai-codex")
                 {
                     self.request(RuntimeRequest::StartOpenAiCodexBrowserLogin);
                     self.state.status = String::from("Starting OpenAI browser login");
                 }
             }
             ProviderDetailAction::DeviceCodeLogin => {
-                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                if self
+                    .current_provider()
+                    .is_some_and(|provider| provider.type_id == "openai-codex")
                 {
                     self.request(RuntimeRequest::StartOpenAiCodexDeviceCodeLogin);
                     self.state.status = String::from("Starting OpenAI device-code login");
                 }
             }
             ProviderDetailAction::CancelLogin => {
-                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                if self
+                    .current_provider()
+                    .is_some_and(|provider| provider.type_id == "openai-codex")
                 {
                     self.request(RuntimeRequest::CancelOpenAiCodexLogin);
                     self.state.status = String::from("Cancelling OpenAI login");
                 }
             }
             ProviderDetailAction::Logout => {
-                if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex")
+                if self
+                    .current_provider()
+                    .is_some_and(|provider| provider.type_id == "openai-codex")
                 {
                     self.request(RuntimeRequest::LogoutOpenAiCodexAuth);
                     self.state.status = String::from("Logging out from OpenAI");
@@ -2669,7 +2694,10 @@ impl App {
     }
 
     fn maybe_request_openai_auth_status(&self) {
-        if self.current_provider().is_some_and(|provider| provider.type_id == "openai-codex") {
+        if self
+            .current_provider()
+            .is_some_and(|provider| provider.type_id == "openai-codex")
+        {
             self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
         }
     }
@@ -2688,9 +2716,9 @@ impl App {
                     ProviderAuthState::BrowserPending => {
                         String::from("Opened browser for OpenAI sign-in. Press y to copy the URL.")
                     }
-                    ProviderAuthState::DeviceCodePending => {
-                        String::from("Opened browser for OpenAI device sign-in. Press y to copy the code.")
-                    }
+                    ProviderAuthState::DeviceCodePending => String::from(
+                        "Opened browser for OpenAI device sign-in. Press y to copy the code.",
+                    ),
                     ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {
                         String::from("Opened browser")
                     }
@@ -4141,7 +4169,9 @@ mod tests {
         });
         state.openai_codex_auth = ProviderAuthStatus {
             state: ProviderAuthState::BrowserPending,
-            auth_url: Some(String::from("https://auth.openai.com/oauth/authorize?example=1")),
+            auth_url: Some(String::from(
+                "https://auth.openai.com/oauth/authorize?example=1",
+            )),
             ..ProviderAuthStatus::default()
         };
 
@@ -5099,9 +5129,15 @@ mod tests {
         assert_eq!(harness.app.state.providers_view, ProvidersView::List);
         let requests = harness.drain_requests();
         assert_eq!(requests.len(), 3);
-        assert!(matches!(requests[0], RuntimeRequest::ListProviderDefinitions));
+        assert!(matches!(
+            requests[0],
+            RuntimeRequest::ListProviderDefinitions
+        ));
         assert!(matches!(requests[1], RuntimeRequest::GetSettings));
-        assert!(matches!(requests[2], RuntimeRequest::GetOpenAiCodexAuthStatus));
+        assert!(matches!(
+            requests[2],
+            RuntimeRequest::GetOpenAiCodexAuthStatus
+        ));
     }
 
     #[test]
@@ -5129,9 +5165,8 @@ mod tests {
         harness.app.state.provider_definitions = sample_provider_definitions();
         harness.app.state.mode = UiMode::ProvidersMenu;
         harness.app.state.providers_view = ProvidersView::Advanced;
-        harness.app.state.settings_editor = Some(ActiveSettingsEditor::Provider(
-            SettingsProviderField::Id,
-        ));
+        harness.app.state.settings_editor =
+            Some(ActiveSettingsEditor::Provider(SettingsProviderField::Id));
         harness.app.state.settings_editor_input = String::from("renamed-provider");
 
         harness.app.handle_key_event(key(KeyCode::Enter));
@@ -5148,16 +5183,18 @@ mod tests {
     fn auth_updated_event_refreshes_openai_status() {
         let mut harness = test_harness();
 
-        harness.app.handle_runtime_event(Event::OpenAiCodexAuthUpdated {
-            status: agent_runtime::OpenAiCodexAuthStatus {
-                state: agent_runtime::OpenAiCodexLoginState::Authenticated,
-                email: Some(String::from("dev@example.com")),
-                plan_type: Some(String::from("Pro")),
-                account_id: Some(String::from("acct_123")),
-                last_refresh_unix: Some(42),
-                error: None,
-            },
-        });
+        harness
+            .app
+            .handle_runtime_event(Event::OpenAiCodexAuthUpdated {
+                status: agent_runtime::OpenAiCodexAuthStatus {
+                    state: agent_runtime::OpenAiCodexLoginState::Authenticated,
+                    email: Some(String::from("dev@example.com")),
+                    plan_type: Some(String::from("Pro")),
+                    account_id: Some(String::from("acct_123")),
+                    last_refresh_unix: Some(42),
+                    error: None,
+                },
+            });
 
         assert_eq!(
             harness.app.state.openai_codex_auth.state,
@@ -5402,9 +5439,7 @@ mod tests {
             RuntimeRequest::GetSettings => "GetSettings",
             RuntimeRequest::GetOpenAiCodexAuthStatus => "GetOpenAiCodexAuthStatus",
             RuntimeRequest::StartOpenAiCodexBrowserLogin => "StartOpenAiCodexBrowserLogin",
-            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
-                "StartOpenAiCodexDeviceCodeLogin"
-            }
+            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => "StartOpenAiCodexDeviceCodeLogin",
             RuntimeRequest::CancelOpenAiCodexLogin => "CancelOpenAiCodexLogin",
             RuntimeRequest::LogoutOpenAiCodexAuth => "LogoutOpenAiCodexAuth",
             RuntimeRequest::CreateSession => "CreateSession",

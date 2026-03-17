@@ -4,8 +4,8 @@ members = [
   "crates/agent-runtime",
   "crates/agent-ts-bindings",
   "crates/llm-providers/provider-core",
-  "crates/llm-providers/provider-openai-codex",
   "crates/llm-providers/provider-openai-chat-completions",
+  "crates/llm-providers/provider-openai-codex",
   "crates/persistence",
   "crates/tools/tool-close-file",
   "crates/tools/tool-core",
@@ -36,8 +36,8 @@ agent = { path = "crates/agent" }
 agent-runtime = { path = "crates/agent-runtime" }
 persistence = { path = "crates/persistence" }
 provider-core = { path = "crates/llm-providers/provider-core" }
-provider-openai-codex = { path = "crates/llm-providers/provider-openai-codex" }
 provider-openai-chat-completions = { path = "crates/llm-providers/provider-openai-chat-completions" }
+provider-openai-codex = { path = "crates/llm-providers/provider-openai-codex" }
 tool-close-file = { path = "crates/tools/tool-close-file" }
 tool-core = { path = "crates/tools/tool-core" }
 tool-edit-file = { path = "crates/tools/tool-edit-file" }
@@ -72,6 +72,7 @@ napi-derive = "3.5.2"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
+rand = "0.9.2"
 ratatui = { version = "0.30.0", features = [
   "all-widgets",
   "macros",
@@ -80,7 +81,6 @@ ratatui = { version = "0.30.0", features = [
 ] }
 regex = "1.12.3"
 reqwest = { features = ["json", "stream"], version = "0.13.2" }
-rand = "0.9.2"
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.149"
 sha2 = "0.10.9"

@@ -42,8 +42,7 @@ const GENERAL_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
 const GPT_5_2_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     CatalogReasoningEffort {
         effort: "low",
-        description:
-            "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+        description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
     },
     CatalogReasoningEffort {
         effort: "medium",
@@ -77,8 +76,7 @@ const GPT_5_1_CODEX_REASONING_EFFORTS: [CatalogReasoningEffort; 3] = [
 const GPT_5_1_REASONING_EFFORTS: [CatalogReasoningEffort; 3] = [
     CatalogReasoningEffort {
         effort: "low",
-        description:
-            "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+        description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
     },
     CatalogReasoningEffort {
         effort: "medium",
@@ -97,8 +95,7 @@ const GPT_5_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     },
     CatalogReasoningEffort {
         effort: "low",
-        description:
-            "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+        description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
     },
     CatalogReasoningEffort {
         effort: "medium",

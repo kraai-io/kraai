@@ -13,9 +13,7 @@ use tracing::{error, warn};
 use types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 
 use crate::auth::{OpenAiCodexAuthController, RequestAuth};
-use crate::catalog::{
-    CatalogModel, all_catalog_models, title_case_effort, visible_catalog_models,
-};
+use crate::catalog::{CatalogModel, all_catalog_models, title_case_effort, visible_catalog_models};
 use crate::messages::normalize_chat_messages;
 use crate::wire::{
     ListModelEntry, ListModelsResponse, ResponsesOutput, ResponsesReasoning, ResponsesRequest,
@@ -219,7 +217,9 @@ impl Provider for OpenAiCodexProvider {
         model_id: &ModelId,
         messages: Vec<ProviderChatMessage>,
     ) -> Result<BoxStream<'static, Result<String>>> {
-        let response = self.send_responses_request(model_id, messages, true).await?;
+        let response = self
+            .send_responses_request(model_id, messages, true)
+            .await?;
         let stream = crate::sse::stream_sse_data(response)
             .filter_map(|event| async move {
                 match event {
@@ -267,7 +267,9 @@ impl OpenAiCodexProvider {
             .header("OpenAI-Client-Originator", CODEX_ORIGINATOR)
     }
 
-    async fn fetch_remote_model_availability(&self) -> Result<BTreeMap<String, RemoteModelMetadata>> {
+    async fn fetch_remote_model_availability(
+        &self,
+    ) -> Result<BTreeMap<String, RemoteModelMetadata>> {
         let response = self
             .send_with_retry("list models", |auth| {
                 self.authenticated_get(CHATGPT_MODELS_ENDPOINT, auth)
@@ -283,15 +285,7 @@ impl OpenAiCodexProvider {
                      id,
                      title,
                      max_context,
-                 }| {
-                    (
-                        id,
-                        RemoteModelMetadata {
-                            title,
-                            max_context,
-                        },
-                    )
-                },
+                 }| { (id, RemoteModelMetadata { title, max_context }) },
             )
             .collect())
     }
@@ -335,10 +329,7 @@ impl OpenAiCodexProvider {
             .supported_reasoning_efforts
             .iter()
             .map(|effort| {
-                let variant_id = ModelId::new(format!(
-                    "{}-{}",
-                    catalog_model.slug, effort.effort
-                ));
+                let variant_id = ModelId::new(format!("{}-{}", catalog_model.slug, effort.effort));
                 let variant_config = self.model_configs.get(&variant_id);
                 let base_config = self
                     .model_configs
@@ -431,7 +422,9 @@ fn resolve_request_model(model_id: &ModelId) -> Result<ResolvedRequestModel> {
 fn resolve_catalog_model(raw_model: &str) -> Result<Option<ResolvedCatalogModel<'static>>> {
     let matched = all_catalog_models()
         .iter()
-        .filter(|model| raw_model == model.slug || raw_model.starts_with(&format!("{}-", model.slug)))
+        .filter(|model| {
+            raw_model == model.slug || raw_model.starts_with(&format!("{}-", model.slug))
+        })
         .max_by_key(|model| model.slug.len());
 
     let Some(catalog_model) = matched else {
@@ -615,9 +608,11 @@ mod tests {
         let error = resolve_request_model(&ModelId::new("gpt-5.2-codex-minimal"))
             .expect_err("unsupported effort should fail");
 
-        assert!(error
-            .to_string()
-            .contains("unsupported reasoning effort 'minimal'"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported reasoning effort 'minimal'")
+        );
     }
 
     #[test]

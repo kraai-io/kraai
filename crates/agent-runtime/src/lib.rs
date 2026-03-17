@@ -23,11 +23,11 @@ use types::{MessageId, ModelId, ProviderId};
 
 use futures::StreamExt;
 use notify::{RecursiveMode, Watcher};
+use provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use provider_openai_codex::{
     OpenAiCodexAuthController, OpenAiCodexAuthStatus as ProviderOpenAiCodexAuthStatus,
     OpenAiCodexFactory, OpenAiCodexLoginState as ProviderOpenAiCodexLoginState,
 };
-use provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
 
@@ -801,9 +801,9 @@ fn build_provider_registry(
             OpenAiCodexFactory::TYPE_ID,
             OpenAiCodexFactory::definition(),
             move |id, config| {
-                openai_codex_factory
-                    .create(id, config)
-                    .map_err(|error| provider_core::ProviderError::ConfigParseError(error.to_string()))
+                openai_codex_factory.create(id, config).map_err(|error| {
+                    provider_core::ProviderError::ConfigParseError(error.to_string())
+                })
             },
             OpenAiCodexFactory::validate_provider_config,
             OpenAiCodexFactory::validate_model_config,
@@ -1890,9 +1890,7 @@ fn settings_path() -> Result<std::path::PathBuf> {
     Ok(agent_state_root()?.join("providers.toml"))
 }
 
-fn map_openai_codex_auth_status(
-    status: ProviderOpenAiCodexAuthStatus,
-) -> OpenAiCodexAuthStatus {
+fn map_openai_codex_auth_status(status: ProviderOpenAiCodexAuthStatus) -> OpenAiCodexAuthStatus {
     let state = match status.state {
         ProviderOpenAiCodexLoginState::SignedOut => OpenAiCodexLoginState::SignedOut,
         ProviderOpenAiCodexLoginState::BrowserPending(pending) => {
