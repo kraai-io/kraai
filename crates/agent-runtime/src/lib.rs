@@ -4954,8 +4954,8 @@ edits[1]{old_text,new_text}:
 tool: edit_file
 path: src/lib.rs
 create: false
-edits[1]{old_text,new_text}:
-  old,new
+edits[1]{start_line,end_line,old_text,new_text}:
+  1,1,old,new
 </tool_call>"#,
                 )],
                 vec![ScriptedChunk::plain("continuation complete")],
