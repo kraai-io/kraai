@@ -1,8 +1,11 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tool_core::format_text_with_line_numbers;
+use tool_core::{
+    FILE_READS_NAMESPACE, FILE_READS_OPERATION_REFRESH, format_text_with_line_numbers,
+    read_text_path,
+};
 use types::{Message, ToolStateDelta, ToolStateSnapshot};
 
 pub const OPENED_FILES_NAMESPACE: &str = "opened_files";
@@ -13,6 +16,12 @@ const OPENED_FILES_OPERATION_CLOSE: &str = "close";
 struct OpenedFilesState {
     #[serde(default)]
     paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct FileReadsState {
+    #[serde(default)]
+    by_path: BTreeMap<String, String>,
 }
 
 pub fn resolve_snapshot_from_history(history: &[Message]) -> ToolStateSnapshot {
@@ -35,24 +44,37 @@ pub fn resolve_snapshot_from_history(history: &[Message]) -> ToolStateSnapshot {
     snapshot
 }
 
-pub fn render_system_prompt(snapshot: &ToolStateSnapshot, _workspace_dir: &Path) -> String {
+pub fn refresh_and_render_system_prompt(
+    snapshot: &mut ToolStateSnapshot,
+    _workspace_dir: &Path,
+) -> String {
     let opened_files = opened_files_from_snapshot(snapshot);
     if opened_files.paths.is_empty() {
         return String::new();
     }
 
+    let mut file_reads = file_reads_from_snapshot(snapshot);
     let mut sections = vec![String::from(
         "Opened Files\nThese files are pinned into context for this turn. Their contents below are the current on-disk versions. Do not call read_files for these paths unless you need a separate explicit read result.",
     )];
 
     for path in opened_files.paths {
-        let rendered_contents = match std::fs::read_to_string(&path) {
-            Ok(contents) => format_text_with_line_numbers(&contents),
-            Err(error) => format!("[unavailable: {error}]"),
+        let rendered_contents = match read_text_path(Path::new(&path)) {
+            Ok(read) => {
+                file_reads
+                    .by_path
+                    .insert(path.clone(), read.sha256().to_string());
+                format_text_with_line_numbers(read.contents())
+            }
+            Err(error) => {
+                file_reads.by_path.remove(&path);
+                format!("[unavailable: {error}]")
+            }
         };
         sections.push(format!("File: {path}\n```text\n{rendered_contents}\n```"));
     }
 
+    write_file_reads_to_snapshot(snapshot, file_reads);
     sections.join("\n\n")
 }
 
@@ -63,6 +85,25 @@ fn opened_files_from_snapshot(snapshot: &ToolStateSnapshot) -> OpenedFilesState 
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
+}
+
+fn file_reads_from_snapshot(snapshot: &ToolStateSnapshot) -> FileReadsState {
+    snapshot
+        .entries
+        .get(FILE_READS_NAMESPACE)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn write_file_reads_to_snapshot(snapshot: &mut ToolStateSnapshot, state: FileReadsState) {
+    if state.by_path.is_empty() {
+        snapshot.entries.remove(FILE_READS_NAMESPACE);
+    } else {
+        snapshot
+            .entries
+            .insert(String::from(FILE_READS_NAMESPACE), json!(state));
+    }
 }
 
 #[cfg(test)]
@@ -85,52 +126,82 @@ fn close_file_delta(path: String) -> ToolStateDelta {
 
 fn apply_deltas(snapshot: &mut ToolStateSnapshot, deltas: &[ToolStateDelta]) {
     for delta in deltas {
-        if delta.namespace != OPENED_FILES_NAMESPACE {
-            continue;
-        }
-
-        let path = delta
-            .payload
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-        let Some(path) = path else {
-            continue;
-        };
-
-        let mut state = opened_files_from_snapshot(snapshot);
-        match delta.operation.as_str() {
-            OPENED_FILES_OPERATION_OPEN => {
-                if !state.paths.iter().any(|existing| existing == &path) {
-                    state.paths.push(path);
-                }
-            }
-            OPENED_FILES_OPERATION_CLOSE => {
-                state.paths.retain(|existing| existing != &path);
-            }
-            _ => continue,
-        }
-
-        if state.paths.is_empty() {
-            snapshot.entries.remove(OPENED_FILES_NAMESPACE);
-        } else {
-            snapshot
-                .entries
-                .insert(String::from(OPENED_FILES_NAMESPACE), json!(state));
+        match delta.namespace.as_str() {
+            OPENED_FILES_NAMESPACE => apply_opened_file_delta(snapshot, delta),
+            FILE_READS_NAMESPACE => apply_file_read_delta(snapshot, delta),
+            _ => {}
         }
     }
+}
+
+fn apply_opened_file_delta(snapshot: &mut ToolStateSnapshot, delta: &ToolStateDelta) {
+    let path = delta
+        .payload
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let Some(path) = path else {
+        return;
+    };
+
+    let mut state = opened_files_from_snapshot(snapshot);
+    match delta.operation.as_str() {
+        OPENED_FILES_OPERATION_OPEN => {
+            if !state.paths.iter().any(|existing| existing == &path) {
+                state.paths.push(path);
+            }
+        }
+        OPENED_FILES_OPERATION_CLOSE => {
+            state.paths.retain(|existing| existing != &path);
+        }
+        _ => return,
+    }
+
+    if state.paths.is_empty() {
+        snapshot.entries.remove(OPENED_FILES_NAMESPACE);
+    } else {
+        snapshot
+            .entries
+            .insert(String::from(OPENED_FILES_NAMESPACE), json!(state));
+    }
+}
+
+fn apply_file_read_delta(snapshot: &mut ToolStateSnapshot, delta: &ToolStateDelta) {
+    if delta.operation != FILE_READS_OPERATION_REFRESH {
+        return;
+    }
+
+    let path = delta
+        .payload
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let sha256 = delta
+        .payload
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let (Some(path), Some(sha256)) = (path, sha256) else {
+        return;
+    };
+
+    let mut state = file_reads_from_snapshot(snapshot);
+    state.by_path.insert(path, sha256);
+    write_file_reads_to_snapshot(snapshot, state);
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     use serde_json::json;
+    use tool_core::file_read_sha256;
     use types::{ChatRole, Message, MessageId, MessageStatus};
 
     use super::{
         close_file_delta, open_file_delta, opened_files_from_snapshot,
-        resolve_snapshot_from_history,
+        refresh_and_render_system_prompt, resolve_snapshot_from_history,
     };
 
     fn message(id: &str) -> Message {
@@ -167,5 +238,24 @@ mod tests {
         let opened = opened_files_from_snapshot(&snapshot);
 
         assert_eq!(opened.paths, vec![String::from("/tmp/b.rs")]);
+    }
+
+    #[test]
+    fn refresh_opened_files_updates_file_read_hashes() {
+        let path = std::env::temp_dir().join(format!("tool-state-refresh-{}", std::process::id()));
+        std::fs::write(&path, "alpha\nbeta\n").expect("write temp file");
+
+        let mut snapshot = types::ToolStateSnapshot {
+            entries: BTreeMap::from([(
+                String::from("opened_files"),
+                json!({ "paths": [path.display().to_string()] }),
+            )]),
+        };
+
+        let prompt = refresh_and_render_system_prompt(&mut snapshot, Path::new("/tmp"));
+        assert!(prompt.contains("1|alpha"));
+        assert!(file_read_sha256(&snapshot, &path).is_some());
+
+        let _ = std::fs::remove_file(path);
     }
 }

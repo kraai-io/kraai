@@ -8,7 +8,7 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use serde::Serialize;
-use tool_core::{ToolContext, ToolOutput, TypedTool, assess_read_path, resolve_tool_path};
+use tool_core::{ToolCallResult, ToolContext, TypedTool, assess_read_path, resolve_tool_path};
 use toon_schema::toon_tool;
 use types::ToolCallAssessment;
 
@@ -83,13 +83,13 @@ impl TypedTool for SearchFilesTool {
         )
     }
 
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
         let raw_path = args.path.unwrap_or_else(|| String::from("."));
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &raw_path);
         let metadata = match std::fs::metadata(resolved.path()) {
             Ok(metadata) => metadata,
             Err(error) => {
-                return ToolOutput::error(format!(
+                return ToolCallResult::error(format!(
                     "unable to access search path {}: {}",
                     resolved.path().display(),
                     error
@@ -99,7 +99,7 @@ impl TypedTool for SearchFilesTool {
 
         let matcher = match RegexMatcher::new(&args.query) {
             Ok(matcher) => matcher,
-            Err(error) => return ToolOutput::error(format!("invalid regex: {error}")),
+            Err(error) => return ToolCallResult::error(format!("invalid regex: {error}")),
         };
 
         let mut state = SearchState::default();
@@ -109,14 +109,14 @@ impl TypedTool for SearchFilesTool {
         } else if metadata.is_dir() {
             search_directory(resolved.path(), &matcher, &mut state)
         } else {
-            return ToolOutput::error(format!(
+            return ToolCallResult::error(format!(
                 "path is neither a file nor a directory: {}",
                 resolved.path().display()
             ));
         };
 
         if let Err(error) = search_result {
-            return ToolOutput::error(format!(
+            return ToolCallResult::error(format!(
                 "unable to search path {}: {}",
                 resolved.path().display(),
                 error
@@ -131,7 +131,7 @@ impl TypedTool for SearchFilesTool {
             truncated: state.truncated,
         };
 
-        ToolOutput::success(output)
+        ToolCallResult::success(output)
     }
 
     fn describe(&self, args: &Self::Args) -> String {
@@ -213,13 +213,23 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use tool_core::{ToolContext, ToolOutput, TypedTool};
-    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
+    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{MAX_MATCHES, SearchFilesTool, SearchFilesToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
             workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
+
+    fn tool_context<'a>(
+        config: &'a ToolCallGlobalConfig,
+        snapshot: &'a ToolStateSnapshot,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            global_config: config,
+            tool_state_snapshot: snapshot,
         }
     }
 
@@ -257,16 +267,15 @@ mod tests {
 
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("needle", Option::<String>::None),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), 1);
@@ -292,16 +301,15 @@ mod tests {
 
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("fn\\s+hello\\(", Some("nested")),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), 1);
@@ -325,16 +333,15 @@ mod tests {
 
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("one", Some("single.txt")),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), 1);
@@ -358,16 +365,15 @@ mod tests {
 
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("needle", Option::<String>::None),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), 1);
@@ -389,16 +395,15 @@ mod tests {
         let workspace_dir = make_temp_dir("returns_error_for_missing_path");
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("needle", Some("missing")),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Error { message } => {
                 assert!(message.contains("unable to access search path"));
             }
@@ -419,16 +424,15 @@ mod tests {
 
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("needle-", Option::<String>::None),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), MAX_MATCHES);
@@ -446,11 +450,10 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let assessment = tool.assess(
             &search_args("needle", Option::<String>::None),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
@@ -468,11 +471,10 @@ mod tests {
         let outside_dir = make_temp_dir("assess_outside_target");
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let assessment = tool.assess(
             &search_args("needle", Some(outside_dir.to_string_lossy().to_string())),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
@@ -486,16 +488,15 @@ mod tests {
         let workspace_dir = make_temp_dir("returns_error_for_invalid_regex");
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 search_args("(", Option::<String>::None),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Error { message } => {
                 assert!(message.contains("invalid regex"));
             }
@@ -518,11 +519,10 @@ mod tests {
         );
         let tool = SearchFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let assessment = tool.assess(
             &search_args("needle", Some(relative_path)),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);

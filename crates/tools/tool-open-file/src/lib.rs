@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{ToolContext, ToolOutput, TypedTool, assess_read_path, resolve_tool_path};
+use tool_core::{
+    ToolCallResult, ToolContext, TypedTool, assess_read_path, file_read_refresh_delta,
+    read_text_file,
+};
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolStateDelta};
 
@@ -58,39 +61,26 @@ impl TypedTool for OpenFileTool {
         assessment
     }
 
-    fn successful_tool_state_deltas(
-        &self,
-        args: &Self::Args,
-        ctx: &ToolContext<'_>,
-    ) -> Vec<ToolStateDelta> {
-        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
-        vec![ToolStateDelta {
-            namespace: String::from(OPENED_FILES_NAMESPACE),
-            operation: String::from(OPEN_OPERATION),
-            payload: serde_json::json!({ "path": resolved.path().display().to_string() }),
-        }]
-    }
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
+        let read = match read_text_file(&ctx.global_config.workspace_dir, &args.path) {
+            Ok(read) => read,
+            Err(error) => return ToolCallResult::error(error),
+        };
 
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
-        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
-        let path = resolved.path();
-
-        if !path.exists() {
-            return ToolOutput::error(format!("file does not exist: {}", path.display()));
-        }
-        if path.is_dir() {
-            return ToolOutput::error(format!("path is a directory: {}", path.display()));
-        }
-
-        match std::fs::read_to_string(path) {
-            Ok(_) => ToolOutput::success(OpenFileToolOutput {
+        ToolCallResult::success_with_deltas(
+            OpenFileToolOutput {
                 success: true,
-                path: path.display().to_string(),
-            }),
-            Err(error) => {
-                ToolOutput::error(format!("unable to read file {}: {}", path.display(), error))
-            }
-        }
+                path: read.path().display().to_string(),
+            },
+            vec![
+                ToolStateDelta {
+                    namespace: String::from(OPENED_FILES_NAMESPACE),
+                    operation: String::from(OPEN_OPERATION),
+                    payload: serde_json::json!({ "path": read.path().display().to_string() }),
+                },
+                file_read_refresh_delta(read.path(), read.sha256()),
+            ],
+        )
     }
 
     fn describe(&self, args: &Self::Args) -> String {
@@ -104,14 +94,24 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use tool_core::{ToolContext, ToolOutput, TypedTool};
-    use types::{RiskLevel, ToolCallGlobalConfig};
+    use tool_core::{FILE_READS_NAMESPACE, ToolContext, ToolOutput, TypedTool};
+    use types::{RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{OpenFileTool, OpenFileToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
             workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
+
+    fn tool_context<'a>(
+        config: &'a ToolCallGlobalConfig,
+        snapshot: &'a ToolStateSnapshot,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            global_config: config,
+            tool_state_snapshot: snapshot,
         }
     }
 
@@ -139,9 +139,8 @@ mod tests {
 
         let tool = OpenFileTool;
         let config = tool_config(&workspace_dir);
-        let ctx = ToolContext {
-            global_config: &config,
-        };
+        let snapshot = ToolStateSnapshot::default();
+        let ctx = tool_context(&config, &snapshot);
         let args = OpenFileToolArgs {
             path: String::from("notes.txt"),
         };
@@ -150,7 +149,7 @@ mod tests {
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
 
         let output = tool.call(args.clone(), &ctx).await;
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let expected_path = workspace_dir.join("notes.txt").display().to_string();
                 assert_eq!(data["path"].as_str(), Some(expected_path.as_str()));
@@ -158,9 +157,9 @@ mod tests {
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
 
-        let deltas = tool.successful_tool_state_deltas(&args, &ctx);
-        assert_eq!(deltas.len(), 1);
-        assert_eq!(deltas[0].operation, "open");
+        assert_eq!(output.tool_state_deltas.len(), 2);
+        assert_eq!(output.tool_state_deltas[0].operation, "open");
+        assert_eq!(output.tool_state_deltas[1].namespace, FILE_READS_NAMESPACE);
 
         cleanup_temp_dir(&workspace_dir);
     }

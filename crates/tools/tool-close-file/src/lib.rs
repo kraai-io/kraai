@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{ToolContext, ToolOutput, TypedTool, assess_read_path, resolve_tool_path};
+use tool_core::{ToolCallResult, ToolContext, TypedTool, assess_read_path, resolve_tool_path};
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolStateDelta};
 
@@ -58,25 +58,19 @@ impl TypedTool for CloseFileTool {
         assessment
     }
 
-    fn successful_tool_state_deltas(
-        &self,
-        args: &Self::Args,
-        ctx: &ToolContext<'_>,
-    ) -> Vec<ToolStateDelta> {
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
-        vec![ToolStateDelta {
-            namespace: String::from(OPENED_FILES_NAMESPACE),
-            operation: String::from(CLOSE_OPERATION),
-            payload: serde_json::json!({ "path": resolved.path().display().to_string() }),
-        }]
-    }
-
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
-        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
-        ToolOutput::success(CloseFileToolOutput {
-            success: true,
-            path: resolved.path().display().to_string(),
-        })
+        ToolCallResult::success_with_deltas(
+            CloseFileToolOutput {
+                success: true,
+                path: resolved.path().display().to_string(),
+            },
+            vec![ToolStateDelta {
+                namespace: String::from(OPENED_FILES_NAMESPACE),
+                operation: String::from(CLOSE_OPERATION),
+                payload: serde_json::json!({ "path": resolved.path().display().to_string() }),
+            }],
+        )
     }
 
     fn describe(&self, args: &Self::Args) -> String {
@@ -89,7 +83,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use tool_core::{ToolContext, TypedTool};
-    use types::{RiskLevel, ToolCallGlobalConfig};
+    use types::{RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{CloseFileTool, CloseFileToolArgs};
 
@@ -99,13 +93,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn closes_missing_file_and_emits_delta() {
+    #[tokio::test]
+    async fn closes_missing_file_and_emits_delta() {
         let tool = CloseFileTool;
         let workspace_dir = PathBuf::from("/tmp/workspace");
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let ctx = ToolContext {
             global_config: &config,
+            tool_state_snapshot: &snapshot,
         };
         let args = CloseFileToolArgs {
             path: String::from("missing.txt"),
@@ -114,8 +110,8 @@ mod tests {
         let assessment = tool.assess(&args, &ctx);
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
 
-        let deltas = tool.successful_tool_state_deltas(&args, &ctx);
-        assert_eq!(deltas.len(), 1);
-        assert_eq!(deltas[0].operation, "close");
+        let output = tool.call(args, &ctx).await;
+        assert_eq!(output.tool_state_deltas.len(), 1);
+        assert_eq!(output.tool_state_deltas[0].operation, "close");
     }
 }

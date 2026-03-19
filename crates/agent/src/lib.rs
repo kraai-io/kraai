@@ -16,7 +16,9 @@ use tool_core::{
     PreparedToolCall, ToolManager,
     toon_parser::{self, ParseFailure, ParseFailureKind},
 };
-use tool_state::{render_system_prompt as render_tool_state_prompt, resolve_snapshot_from_history};
+use tool_state::{
+    refresh_and_render_system_prompt as render_tool_state_prompt, resolve_snapshot_from_history,
+};
 use types::{
     AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
     ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult, ToolStateSnapshot,
@@ -33,6 +35,7 @@ pub struct PendingToolCall {
     pub description: String,
     pub assessment: ToolCallAssessment,
     pub config: types::ToolCallGlobalConfig,
+    pub tool_state_snapshot: ToolStateSnapshot,
     pub status: PermissionStatus,
     pub queue_order: u64,
 }
@@ -45,6 +48,7 @@ impl std::fmt::Debug for PendingToolCall {
             .field("description", &self.description)
             .field("assessment", &self.assessment)
             .field("config", &self.config)
+            .field("tool_state_snapshot", &self.tool_state_snapshot)
             .field("status", &self.status)
             .field("queue_order", &self.queue_order)
             .finish()
@@ -75,6 +79,7 @@ pub enum ToolExecutionPayload {
     Approved {
         prepared: PreparedToolCall,
         config: types::ToolCallGlobalConfig,
+        tool_state_snapshot: ToolStateSnapshot,
     },
     Denied,
 }
@@ -112,6 +117,7 @@ struct SessionRuntimeState {
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
     active_turn_profile: Option<AgentProfile>,
+    active_turn_tool_state_snapshot: Option<ToolStateSnapshot>,
 }
 
 impl SessionRuntimeState {
@@ -125,6 +131,7 @@ impl SessionRuntimeState {
             last_model: None,
             last_provider: None,
             active_turn_profile: None,
+            active_turn_tool_state_snapshot: None,
         }
     }
 
@@ -432,7 +439,16 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let tool_state_snapshot = resolve_snapshot_from_history(&context);
+        let mut tool_state_snapshot = resolve_snapshot_from_history(&context);
+        let system_prompt = self.build_turn_system_prompt(
+            session_id,
+            &profile,
+            &session.workspace_dir,
+            &mut tool_state_snapshot,
+        )?;
+        if let Some(state) = self.session_states.get_mut(session_id) {
+            state.active_turn_tool_state_snapshot = Some(tool_state_snapshot.clone());
+        }
         if let Err(error) = self
             .persist_tool_state_snapshot(&user_msg_id, tool_state_snapshot.clone())
             .await
@@ -440,12 +456,6 @@ impl AgentManager {
             self.clear_active_turn(session_id);
             return Err(error);
         }
-        let system_prompt = self.build_turn_system_prompt(
-            session_id,
-            &profile,
-            &session.workspace_dir,
-            &tool_state_snapshot,
-        )?;
 
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
@@ -507,7 +517,16 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
-        let tool_state_snapshot = resolve_snapshot_from_history(&context);
+        let mut tool_state_snapshot = resolve_snapshot_from_history(&context);
+        let system_prompt = self.build_turn_system_prompt(
+            session_id,
+            &profile,
+            &session.workspace_dir,
+            &mut tool_state_snapshot,
+        )?;
+        if let Some(state) = self.session_states.get_mut(session_id) {
+            state.active_turn_tool_state_snapshot = Some(tool_state_snapshot.clone());
+        }
         self.persist_tool_state_snapshot(&tip_id, tool_state_snapshot.clone())
             .await?;
 
@@ -519,12 +538,6 @@ impl AgentManager {
             })
             .collect();
 
-        let system_prompt = self.build_turn_system_prompt(
-            session_id,
-            &profile,
-            &session.workspace_dir,
-            &tool_state_snapshot,
-        )?;
         if !system_prompt.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -596,7 +609,7 @@ impl AgentManager {
         session_id: &str,
         profile: &AgentProfile,
         workspace_dir: &Path,
-        tool_state_snapshot: &ToolStateSnapshot,
+        tool_state_snapshot: &mut ToolStateSnapshot,
     ) -> Result<String> {
         let mut sections = Vec::new();
 
@@ -883,14 +896,24 @@ impl AgentManager {
         content: &str,
     ) -> Result<(Vec<DetectedToolCall>, Vec<ParseFailure>)> {
         let session = self.require_session(session_id).await?;
-        let (active_tool_config, active_turn_profile, mut next_queue_order) = {
+        let (
+            active_tool_config,
+            active_turn_profile,
+            active_turn_tool_state_snapshot,
+            mut next_queue_order,
+        ) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             let Some(active_turn_profile) = state.active_turn_profile.clone() else {
                 return Ok((Vec::new(), Vec::new()));
             };
+            let active_turn_tool_state_snapshot = state
+                .active_turn_tool_state_snapshot
+                .clone()
+                .unwrap_or_default();
             (
                 state.active_tool_config.clone(),
                 active_turn_profile,
+                active_turn_tool_state_snapshot,
                 state.next_tool_queue_order,
             )
         };
@@ -933,6 +956,7 @@ impl AgentManager {
             };
             let assessment = prepared.assess(&tool_core::ToolContext {
                 global_config: &active_tool_config,
+                tool_state_snapshot: &active_turn_tool_state_snapshot,
             });
             let description = prepared.describe();
             let requires_confirmation =
@@ -953,6 +977,7 @@ impl AgentManager {
                     description: description.clone(),
                     assessment: assessment.clone(),
                     config: active_tool_config.clone(),
+                    tool_state_snapshot: active_turn_tool_state_snapshot.clone(),
                     status: if requires_confirmation {
                         PermissionStatus::Pending
                     } else {
@@ -1093,6 +1118,7 @@ impl AgentManager {
     pub fn clear_active_turn(&mut self, session_id: &str) {
         if let Some(state) = self.session_states.get_mut(session_id) {
             state.active_turn_profile = None;
+            state.active_turn_tool_state_snapshot = None;
         }
     }
 
@@ -1144,6 +1170,7 @@ impl AgentManager {
                     payload: ToolExecutionPayload::Approved {
                         prepared: pending.prepared,
                         config: pending.config,
+                        tool_state_snapshot: pending.tool_state_snapshot,
                     },
                 }),
                 PermissionStatus::Denied => executions.push(ToolExecutionRequest {
@@ -1273,7 +1300,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tool_core::{ToolContext, ToolOutput, TypedTool};
+    use tool_core::{ToolCallResult, ToolContext, TypedTool};
     use types::{
         ChatMessage as ProviderChatMessage, ExecutionPolicy, MessageStatus, ToolResult,
         ToolStateDelta,
@@ -1303,8 +1330,8 @@ mod tests {
             "mock schema"
         }
 
-        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
-            ToolOutput::success(serde_json::json!({ "ok": true }))
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+            ToolCallResult::success(serde_json::json!({ "ok": true }))
         }
     }
 
@@ -1678,6 +1705,7 @@ mod tests {
                     config: types::ToolCallGlobalConfig {
                         workspace_dir: PathBuf::from("/tmp/workspace-a"),
                     },
+                    tool_state_snapshot: ToolStateSnapshot::default(),
                     status: PermissionStatus::Pending,
                     queue_order: 0,
                 },
@@ -1834,6 +1862,11 @@ mod tests {
             snapshot.entries["opened_files"]["paths"][0].as_str(),
             Some(file_path_str.as_str())
         );
+        assert!(
+            snapshot.entries["file_reads"]["by_path"][file_path_str.as_str()]
+                .as_str()
+                .is_some()
+        );
 
         let system_prompt = request
             .provider_messages
@@ -1907,6 +1940,11 @@ mod tests {
         assert_eq!(
             snapshot.entries["opened_files"]["paths"][0].as_str(),
             Some(file_path_str.as_str())
+        );
+        assert!(
+            snapshot.entries["file_reads"]["by_path"][file_path_str.as_str()]
+                .as_str()
+                .is_some()
         );
 
         let system_prompt = request

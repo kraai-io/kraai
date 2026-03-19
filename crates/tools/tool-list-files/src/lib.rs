@@ -4,7 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tool_core::{ToolContext, ToolOutput, TypedTool, assess_read_path, resolve_tool_path};
+use tool_core::{ToolCallResult, ToolContext, TypedTool, assess_read_path, resolve_tool_path};
 use toon_schema::toon_tool;
 use types::ToolCallAssessment;
 
@@ -62,12 +62,12 @@ impl TypedTool for ListFilesTool {
         )
     }
 
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
         let metadata = match std::fs::metadata(resolved.path()) {
             Ok(metadata) => metadata,
             Err(error) => {
-                return ToolOutput::error(format!(
+                return ToolCallResult::error(format!(
                     "unable to access directory {}: {}",
                     resolved.path().display(),
                     error
@@ -76,7 +76,7 @@ impl TypedTool for ListFilesTool {
         };
 
         if !metadata.is_dir() {
-            return ToolOutput::error(format!(
+            return ToolCallResult::error(format!(
                 "path is not a directory: {}",
                 resolved.path().display()
             ));
@@ -85,7 +85,7 @@ impl TypedTool for ListFilesTool {
         let entries = match read_entries(resolved.path()) {
             Ok(entries) => entries,
             Err(error) => {
-                return ToolOutput::error(format!(
+                return ToolCallResult::error(format!(
                     "unable to list directory {}: {}",
                     resolved.path().display(),
                     error
@@ -93,7 +93,7 @@ impl TypedTool for ListFilesTool {
             }
         };
 
-        ToolOutput::success(ListFilesToolOutput {
+        ToolCallResult::success(ListFilesToolOutput {
             path: resolved.path().display().to_string(),
             entries,
         })
@@ -129,13 +129,23 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use tool_core::{ToolContext, ToolOutput, TypedTool};
-    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
+    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{ListFilesTool, ListFilesToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
             workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
+
+    fn tool_context<'a>(
+        config: &'a ToolCallGlobalConfig,
+        snapshot: &'a ToolStateSnapshot,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            global_config: config,
+            tool_state_snapshot: snapshot,
         }
     }
 
@@ -169,16 +179,12 @@ mod tests {
 
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
-            .call(
-                list_args("."),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(list_args("."), &tool_context(&config, &snapshot))
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let entries = data["entries"].as_array().expect("entries array");
                 let names = entries
@@ -207,16 +213,12 @@ mod tests {
 
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
-            .call(
-                list_args("."),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(list_args("."), &tool_context(&config, &snapshot))
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let entries = data["entries"].as_array().expect("entries array");
                 assert_eq!(entries.len(), 1);
@@ -233,16 +235,12 @@ mod tests {
         let workspace_dir = make_temp_dir("returns_error_for_missing_directory");
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
-            .call(
-                list_args("missing"),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(list_args("missing"), &tool_context(&config, &snapshot))
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Error { message } => {
                 assert!(message.contains("unable to access directory"));
             }
@@ -258,16 +256,12 @@ mod tests {
         fs::write(workspace_dir.join("file.txt"), "file").expect("write file");
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
-            .call(
-                list_args("file.txt"),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(list_args("file.txt"), &tool_context(&config, &snapshot))
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Error { message } => {
                 assert!(message.contains("path is not a directory"));
             }
@@ -282,12 +276,8 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(
-            &list_args("."),
-            &ToolContext {
-                global_config: &config,
-            },
-        );
+        let snapshot = ToolStateSnapshot::default();
+        let assessment = tool.assess(&list_args("."), &tool_context(&config, &snapshot));
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
         assert_eq!(
@@ -304,11 +294,10 @@ mod tests {
         let outside_dir = make_temp_dir("assess_outside_target");
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let assessment = tool.assess(
             &list_args(outside_dir.to_string_lossy().to_string()),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
@@ -330,12 +319,8 @@ mod tests {
         );
         let tool = ListFilesTool;
         let config = tool_config(&workspace_dir);
-        let assessment = tool.assess(
-            &list_args(relative_path),
-            &ToolContext {
-                global_config: &config,
-            },
-        );
+        let snapshot = ToolStateSnapshot::default();
+        let assessment = tool.assess(&list_args(relative_path), &tool_context(&config, &snapshot));
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 

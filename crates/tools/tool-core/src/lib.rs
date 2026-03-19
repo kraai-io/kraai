@@ -4,16 +4,23 @@ pub mod toon_parser;
 
 use std::{
     collections::BTreeMap,
+    fmt::Write as _,
+    fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use types::{
     ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolId, ToolStateDelta,
+    ToolStateSnapshot,
 };
+
+pub const FILE_READS_NAMESPACE: &str = "file_reads";
+pub const FILE_READS_OPERATION_REFRESH: &str = "refresh";
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -50,8 +57,42 @@ impl ToolOutput {
     }
 }
 
+pub struct ToolCallResult {
+    pub output: ToolOutput,
+    pub tool_state_deltas: Vec<ToolStateDelta>,
+}
+
+impl ToolCallResult {
+    pub fn error(message: String) -> Self {
+        Self {
+            output: ToolOutput::error(message),
+            tool_state_deltas: Vec::new(),
+        }
+    }
+
+    pub fn success<D: Serialize>(data: D) -> Self {
+        Self::success_with_deltas(data, Vec::new())
+    }
+
+    pub fn success_with_deltas<D: Serialize>(
+        data: D,
+        tool_state_deltas: Vec<ToolStateDelta>,
+    ) -> Self {
+        let output = ToolOutput::success(data);
+        let tool_state_deltas = match output {
+            ToolOutput::Success { .. } => tool_state_deltas,
+            ToolOutput::Error { .. } => Vec::new(),
+        };
+        Self {
+            output,
+            tool_state_deltas,
+        }
+    }
+}
+
 pub struct ToolContext<'a> {
     pub global_config: &'a ToolCallGlobalConfig,
+    pub tool_state_snapshot: &'a ToolStateSnapshot,
 }
 
 #[async_trait]
@@ -76,15 +117,7 @@ pub trait TypedTool: Send + Sync + Clone + 'static {
         format!("{}: <typed args>", self.name())
     }
 
-    fn successful_tool_state_deltas(
-        &self,
-        _args: &Self::Args,
-        _ctx: &ToolContext<'_>,
-    ) -> Vec<ToolStateDelta> {
-        Vec::new()
-    }
-
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput;
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,15 +136,40 @@ impl ResolvedToolPath {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextFileRead {
+    path: PathBuf,
+    contents: String,
+    sha256: String,
+}
+
+impl TextFileRead {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct FileReadsState {
+    #[serde(default)]
+    by_path: BTreeMap<String, String>,
+}
+
 #[async_trait]
 trait PreparedToolCallInner: Send + Sync {
     fn assess(&self, ctx: &ToolContext<'_>) -> ToolCallAssessment;
 
     fn describe(&self) -> String;
 
-    fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta>;
-
-    async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput;
+    async fn call(&self, ctx: &ToolContext<'_>) -> ToolCallResult;
 }
 
 struct TypedPreparedToolCall<T: TypedTool> {
@@ -129,11 +187,7 @@ impl<T: TypedTool> PreparedToolCallInner for TypedPreparedToolCall<T> {
         self.tool.describe(&self.args)
     }
 
-    fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta> {
-        self.tool.successful_tool_state_deltas(&self.args, ctx)
-    }
-
-    async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
+    async fn call(&self, ctx: &ToolContext<'_>) -> ToolCallResult {
         self.tool.call(self.args.clone(), ctx).await
     }
 }
@@ -162,11 +216,7 @@ impl PreparedToolCall {
         self.inner.describe()
     }
 
-    pub fn successful_tool_state_deltas(&self, ctx: &ToolContext<'_>) -> Vec<ToolStateDelta> {
-        self.inner.successful_tool_state_deltas(ctx)
-    }
-
-    pub async fn call(&self, ctx: &ToolContext<'_>) -> ToolOutput {
+    pub async fn call(&self, ctx: &ToolContext<'_>) -> ToolCallResult {
         self.inner.call(ctx).await
     }
 }
@@ -319,6 +369,30 @@ pub fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> ResolvedToolP
     }
 }
 
+pub fn read_text_file(workspace_root: &Path, raw_path: &str) -> Result<TextFileRead, String> {
+    let resolved = resolve_tool_path(workspace_root, raw_path);
+    read_text_path(resolved.path())
+}
+
+pub fn read_text_path(path: &Path) -> Result<TextFileRead, String> {
+    if !path.exists() {
+        return Err(format!("file does not exist: {}", path.display()));
+    }
+    if path.is_dir() {
+        return Err(format!("path is a directory: {}", path.display()));
+    }
+
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("unable to read file {}: {}", path.display(), error))?;
+    let sha256 = sha256_hex(contents.as_bytes());
+
+    Ok(TextFileRead {
+        path: path.to_path_buf(),
+        contents,
+        sha256,
+    })
+}
+
 pub fn assess_read_path(
     workspace_root: &Path,
     raw_path: &str,
@@ -376,6 +450,35 @@ pub fn format_text_with_line_numbers(contents: &str) -> String {
         .join("\n")
 }
 
+pub fn file_read_refresh_delta(path: &Path, sha256: &str) -> ToolStateDelta {
+    ToolStateDelta {
+        namespace: String::from(FILE_READS_NAMESPACE),
+        operation: String::from(FILE_READS_OPERATION_REFRESH),
+        payload: serde_json::json!({
+            "path": path.display().to_string(),
+            "sha256": sha256,
+        }),
+    }
+}
+
+pub fn file_read_sha256(snapshot: &ToolStateSnapshot, path: &Path) -> Option<String> {
+    snapshot
+        .entries
+        .get(FILE_READS_NAMESPACE)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<FileReadsState>(value).ok())
+        .and_then(|state| state.by_path.get(&path.display().to_string()).cloned())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -388,11 +491,14 @@ mod tests {
     use serde::ser::{Error as _, Serialize, Serializer};
     use serde::{Deserialize, Deserializer};
     use serde_json::json;
-    use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig};
+    use types::{
+        ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolCallGlobalConfig, ToolStateSnapshot,
+    };
 
     use super::{
-        PreparedToolCall, ToolContext, ToolError, ToolManager, ToolOutput, TypedTool,
-        assess_read_path, assess_write_path, format_text_with_line_numbers, resolve_tool_path,
+        PreparedToolCall, ToolCallResult, ToolContext, ToolError, ToolManager, ToolOutput,
+        TypedTool, assess_read_path, assess_write_path, format_text_with_line_numbers,
+        read_text_path, resolve_tool_path,
     };
 
     struct FailingSerialize;
@@ -408,15 +514,16 @@ mod tests {
 
     #[test]
     fn tool_output_success_falls_back_to_error_on_serialize_failure() {
-        let output = ToolOutput::success(FailingSerialize);
+        let result = ToolCallResult::success(FailingSerialize);
 
-        match output {
+        match result.output {
             ToolOutput::Error { message } => {
                 assert!(message.contains("failed to serialize tool output"));
                 assert!(message.contains("intentional failure"));
             }
             ToolOutput::Success { .. } => panic!("expected tool serialization failure"),
         }
+        assert!(result.tool_state_deltas.is_empty());
     }
 
     #[test]
@@ -549,9 +656,9 @@ mod tests {
             )
         }
 
-        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
             self.lifecycle_counter.fetch_add(1, Ordering::SeqCst);
-            ToolOutput::success(json!({
+            ToolCallResult::success(json!({
                 "value": args.value,
                 "parse_count": args.parse_counter.load(Ordering::SeqCst),
             }))
@@ -613,8 +720,10 @@ mod tests {
         let config = ToolCallGlobalConfig {
             workspace_dir: PathBuf::from("/tmp/workspace"),
         };
+        let snapshot = ToolStateSnapshot::default();
         let ctx = ToolContext {
             global_config: &config,
+            tool_state_snapshot: &snapshot,
         };
 
         assert_eq!(prepared.tool_id().as_str(), "spy_tool");
@@ -625,7 +734,7 @@ mod tests {
             vec![String::from("assessed alpha after 1 parse(s)")]
         );
 
-        match prepared.call(&ctx).await {
+        match prepared.call(&ctx).await.output {
             ToolOutput::Success { data } => {
                 assert_eq!(data, json!({ "value": "alpha", "parse_count": 1 }));
             }
@@ -633,5 +742,15 @@ mod tests {
         }
 
         assert_eq!(lifecycle_counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn read_text_path_rejects_missing_and_directory_paths() {
+        let missing = Path::new("/tmp/tool-core-definitely-missing");
+        let error = read_text_path(missing).expect_err("missing path should fail");
+        assert!(error.contains("file does not exist"));
+
+        let error = read_text_path(Path::new("/tmp")).expect_err("directory should fail");
+        assert!(error.contains("path is a directory"));
     }
 }

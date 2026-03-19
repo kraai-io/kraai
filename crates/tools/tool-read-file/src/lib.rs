@@ -1,11 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::io::Read;
-
 use async_trait::async_trait;
 use serde::Serialize;
 use tool_core::{
-    ToolContext, ToolOutput, TypedTool, format_text_with_line_numbers, resolve_tool_path,
+    ToolCallResult, ToolContext, TypedTool, file_read_refresh_delta, format_text_with_line_numbers,
+    read_text_file, resolve_tool_path,
 };
 use toon_schema::toon_tool;
 use types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
@@ -75,35 +74,21 @@ impl TypedTool for ReadFileTool {
         }
     }
 
-    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolOutput {
-        let mut files_out = vec![];
-        for f in args.files {
-            let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &f);
-            let mut file = match std::fs::File::open(resolved.path()) {
-                Ok(f) => f,
-                Err(e) => {
-                    return ToolOutput::error(format!(
-                        "unable to open file {}: {}",
-                        resolved.path().display(),
-                        e
-                    ));
-                }
+    async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
+        let mut files_out = Vec::with_capacity(args.files.len());
+        let mut tool_state_deltas = Vec::with_capacity(args.files.len());
+
+        for file in args.files {
+            let read = match read_text_file(&ctx.global_config.workspace_dir, &file) {
+                Ok(read) => read,
+                Err(error) => return ToolCallResult::error(error),
             };
-            let mut str = String::new();
-            match file.read_to_string(&mut str) {
-                Ok(_) => {}
-                Err(e) => {
-                    return ToolOutput::error(format!(
-                        "unable to read file {}: {}",
-                        resolved.path().display(),
-                        e
-                    ));
-                }
-            }
-            files_out.push(format_text_with_line_numbers(&str));
+            files_out.push(format_text_with_line_numbers(read.contents()));
+            tool_state_deltas.push(file_read_refresh_delta(read.path(), read.sha256()));
         }
+
         let out = ReadFileToolOutput { files: files_out };
-        ToolOutput::success(out)
+        ToolCallResult::success_with_deltas(out, tool_state_deltas)
     }
 
     fn describe(&self, args: &Self::Args) -> String {
@@ -119,14 +104,24 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use tool_core::{ToolContext, ToolOutput, TypedTool};
-    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig};
+    use tool_core::{FILE_READS_NAMESPACE, ToolContext, ToolOutput, TypedTool};
+    use types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{ReadFileTool, ReadFileToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
         ToolCallGlobalConfig {
             workspace_dir: workspace_dir.to_path_buf(),
+        }
+    }
+
+    fn tool_context<'a>(
+        config: &'a ToolCallGlobalConfig,
+        snapshot: &'a ToolStateSnapshot,
+    ) -> ToolContext<'a> {
+        ToolContext {
+            global_config: config,
+            tool_state_snapshot: snapshot,
         }
     }
 
@@ -161,16 +156,12 @@ mod tests {
 
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
-            .call(
-                read_args(&["notes.txt"]),
-                &ToolContext {
-                    global_config: &config,
-                },
-            )
+            .call(read_args(&["notes.txt"]), &tool_context(&config, &snapshot))
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let files = data["files"].as_array().expect("files array");
                 assert_eq!(files.len(), 1);
@@ -178,6 +169,8 @@ mod tests {
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
+        assert_eq!(output.tool_state_deltas.len(), 1);
+        assert_eq!(output.tool_state_deltas[0].namespace, FILE_READS_NAMESPACE);
 
         cleanup_temp_dir(&workspace_dir);
     }
@@ -190,16 +183,15 @@ mod tests {
 
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 read_args(&["a.txt", "b.txt"]),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let files = data["files"].as_array().expect("files array");
                 let contents = files
@@ -210,6 +202,7 @@ mod tests {
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
+        assert_eq!(output.tool_state_deltas.len(), 2);
 
         cleanup_temp_dir(&workspace_dir);
     }
@@ -223,6 +216,7 @@ mod tests {
 
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let outside_path = format!(
             "../{}/outside.txt",
             outside_dir
@@ -233,13 +227,11 @@ mod tests {
         let output = tool
             .call(
                 read_args(&[outside_path]),
-                &ToolContext {
-                    global_config: &config,
-                },
+                &tool_context(&config, &snapshot),
             )
             .await;
 
-        match output {
+        match output.output {
             ToolOutput::Success { data } => {
                 let files = data["files"].as_array().expect("files array");
                 assert_eq!(files[0].as_str(), Some("1|external"));
@@ -256,11 +248,10 @@ mod tests {
         let workspace_dir = make_temp_dir("assess_marks_workspace_paths_as_read_only");
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let assessment = tool.assess(
             &read_args(&["notes.txt"]),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
@@ -278,6 +269,7 @@ mod tests {
         let outside_dir = make_temp_dir("read_file_assess_outside_target");
         let tool = ReadFileTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
         let relative_path = format!(
             "../{}",
             outside_dir
@@ -287,14 +279,41 @@ mod tests {
         );
         let assessment = tool.assess(
             &read_args(&[relative_path]),
-            &ToolContext {
-                global_config: &config,
-            },
+            &tool_context(&config, &snapshot),
         );
 
         assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
 
         cleanup_temp_dir(&workspace_dir);
         cleanup_temp_dir(&outside_dir);
+    }
+
+    #[tokio::test]
+    async fn missing_file_error_matches_open_file_behavior() {
+        let workspace_dir = make_temp_dir("missing_file_error_matches_open_file_behavior");
+        let tool = ReadFileTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let output = tool
+            .call(
+                read_args(&["missing.txt"]),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Error { message } => {
+                assert_eq!(
+                    message,
+                    format!(
+                        "file does not exist: {}",
+                        workspace_dir.join("missing.txt").display()
+                    )
+                );
+            }
+            ToolOutput::Success { .. } => panic!("expected error"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
     }
 }

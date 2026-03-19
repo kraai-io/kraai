@@ -822,15 +822,18 @@ async fn execute_tool_requests(executions: Vec<ToolExecutionRequest>) -> Vec<typ
                 true,
                 Vec::new(),
             ),
-            ToolExecutionPayload::Approved { prepared, config } => {
+            ToolExecutionPayload::Approved {
+                prepared,
+                config,
+                tool_state_snapshot,
+            } => {
                 let ctx = ToolContext {
                     global_config: &config,
+                    tool_state_snapshot: &tool_state_snapshot,
                 };
-                match prepared.call(&ctx).await {
-                    ToolOutput::Success { data } => {
-                        let deltas = prepared.successful_tool_state_deltas(&ctx);
-                        (data, false, deltas)
-                    }
+                let result = prepared.call(&ctx).await;
+                match result.output {
+                    ToolOutput::Success { data } => (data, false, result.tool_state_deltas),
                     ToolOutput::Error { message } => {
                         (serde_json::json!({ "error": message }), false, Vec::new())
                     }
@@ -2173,8 +2176,10 @@ mod tests {
     use futures::stream::{self, BoxStream};
     use persistence::{FileMessageStore, FileSessionStore};
     use serde::Deserialize;
-    use tool_core::{ToolContext, ToolManager, ToolOutput, TypedTool};
+    use tool_core::{ToolCallResult, ToolContext, ToolManager, TypedTool};
     use tool_edit_file::EditFileTool;
+    use tool_open_file::OpenFileTool;
+    use tool_read_file::ReadFileTool;
     use types::{
         ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
         ToolCallAssessment,
@@ -2301,8 +2306,8 @@ mod tests {
             }
         }
 
-        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
-            ToolOutput::success(serde_json::json!({
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+            ToolCallResult::success(serde_json::json!({
                 "tool": "mock_tool",
                 "value": args.value,
             }))
@@ -2339,8 +2344,8 @@ mod tests {
             }
         }
 
-        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
-            ToolOutput::success(serde_json::json!({
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+            ToolCallResult::success(serde_json::json!({
                 "tool": "auto_tool",
                 "value": args.value,
             }))
@@ -2381,14 +2386,14 @@ mod tests {
             }
         }
 
-        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
             self.started.notify_waiters();
             self.release.notified().await;
 
             if let Some(message) = &self.fail_message {
-                ToolOutput::error(message.clone())
+                ToolCallResult::error(message.clone())
             } else {
-                ToolOutput::success(serde_json::json!({
+                ToolCallResult::success(serde_json::json!({
                     "tool": "blocking_tool",
                     "value": args.value,
                 }))
@@ -2429,13 +2434,13 @@ mod tests {
             }
         }
 
-        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
+        async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
             self.started.notify_waiters();
             self.ready.wait().await;
             if args.value == "beta" {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
-            ToolOutput::success(serde_json::json!({
+            ToolCallResult::success(serde_json::json!({
                 "tool": "batch_blocking_tool",
                 "value": args.value,
             }))
@@ -2472,8 +2477,8 @@ mod tests {
             }
         }
 
-        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
-            ToolOutput::error(String::from("tool exploded"))
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+            ToolCallResult::error(String::from("tool exploded"))
         }
 
         fn describe(&self, args: &Self::Args) -> String {
@@ -2502,8 +2507,8 @@ mod tests {
             "noop_tool()"
         }
 
-        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolOutput {
-            ToolOutput::success(serde_json::json!({ "ok": true }))
+        async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+            ToolCallResult::success(serde_json::json!({ "ok": true }))
         }
     }
 
@@ -4951,6 +4956,13 @@ edits[1]{old_text,new_text}:
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
+tool: read_files
+files[1]: src/lib.rs
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("first continuation complete")],
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
 tool: edit_file
 path: src/lib.rs
 create: false
@@ -4958,9 +4970,10 @@ edits[1]{start_line,end_line,old_text,new_text}:
   1,1,old,new
 </tool_call>"#,
                 )],
-                vec![ScriptedChunk::plain("continuation complete")],
+                vec![ScriptedChunk::plain("second continuation complete")],
             ],
             |tools| {
+                tools.register_tool(ReadFileTool);
                 tools.register_tool(EditFileTool);
             },
         )
@@ -4971,6 +4984,33 @@ edits[1]{start_line,end_line,old_text,new_text}:
         tokio::fs::write(workspace_src.join("lib.rs"), "old").await?;
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("read file"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("read_files continuation", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count()
+                    >= 2
+            })
+            .await;
+
         harness
             .handle
             .send_message(
@@ -5067,12 +5107,355 @@ edits[1]{start_line,end_line,old_text,new_text}:
         assert!(
             history
                 .values()
-                .any(|message| message.content == "continuation complete")
+                .any(|message| message.content == "second continuation complete")
         );
         assert_eq!(
             tokio::fs::read_to_string(workspace_src.join("lib.rs")).await?,
             "new"
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batched_read_files_does_not_unlock_same_turn_edit_file() -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
+tool: read_files
+files[1]: src/lib.rs
+</tool_call>
+
+<tool_call>
+tool: edit_file
+path: src/lib.rs
+create: false
+edits[1]{start_line,end_line,old_text,new_text}:
+  1,1,old,new
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("continuation complete")],
+            ],
+            |tools| {
+                tools.register_tool(ReadFileTool);
+                tools.register_tool(EditFileTool);
+            },
+        )
+        .await;
+
+        let workspace_src = harness.data_dir.join("workspace").join("src");
+        tokio::fs::create_dir_all(&workspace_src).await?;
+        let file_path = workspace_src.join("lib.rs");
+        tokio::fs::write(&file_path, "old").await?;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("read then edit"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("batched read/edit tool results", |events| {
+                let read_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "read_files"
+                            && *success
+                            && !denied
+                    )
+                });
+                let edit_failed = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "edit_file"
+                            && !*success
+                            && !denied
+                    )
+                });
+                read_ready && edit_failed
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history.values().any(|message| {
+            message
+                .content
+                .contains("edit_file requires the current file contents to be read first")
+        }));
+        assert_eq!(tokio::fs::read_to_string(&file_path).await?, "old");
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_file_refresh_allows_next_turn_edit_without_explicit_reread() -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
+tool: open_file
+path: src/lib.rs
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("first continuation complete")],
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
+tool: edit_file
+path: src/lib.rs
+create: false
+edits[1]{start_line,end_line,old_text,new_text}:
+  1,1,updated,rewritten
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("second continuation complete")],
+            ],
+            |tools| {
+                tools.register_tool(OpenFileTool);
+                tools.register_tool(EditFileTool);
+            },
+        )
+        .await;
+
+        let workspace_src = harness.data_dir.join("workspace").join("src");
+        tokio::fs::create_dir_all(&workspace_src).await?;
+        let file_path = workspace_src.join("lib.rs");
+        tokio::fs::write(&file_path, "initial").await?;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("open the file"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("open_file continuation", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count()
+                    >= 2
+            })
+            .await;
+
+        tokio::fs::write(&file_path, "updated").await?;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("edit the open file"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("second turn edit succeeds", |events| {
+                let edit_succeeded = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "edit_file"
+                            && *success
+                            && !denied
+                    )
+                });
+                let stream_completions = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                edit_succeeded && stream_completions >= 4
+            })
+            .await;
+
+        assert_eq!(tokio::fs::read_to_string(&file_path).await?, "rewritten");
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn second_same_turn_edit_fails_after_first_changes_file() -> Result<()> {
+        let harness = RuntimeTestHarness::new_with_tools(
+            vec![
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
+tool: open_file
+path: src/lib.rs
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("first continuation complete")],
+                vec![ScriptedChunk::plain(
+                    r#"<tool_call>
+tool: edit_file
+path: src/lib.rs
+create: false
+edits[1]{start_line,end_line,old_text,new_text}:
+  1,1,old,new
+</tool_call>
+
+<tool_call>
+tool: edit_file
+path: src/lib.rs
+create: false
+edits[1]{start_line,end_line,old_text,new_text}:
+  1,1,new,newer
+</tool_call>"#,
+                )],
+                vec![ScriptedChunk::plain("second continuation complete")],
+            ],
+            |tools| {
+                tools.register_tool(OpenFileTool);
+                tools.register_tool(EditFileTool);
+            },
+        )
+        .await;
+
+        let workspace_src = harness.data_dir.join("workspace").join("src");
+        tokio::fs::create_dir_all(&workspace_src).await?;
+        let file_path = workspace_src.join("lib.rs");
+        tokio::fs::write(&file_path, "old").await?;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("open the file"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("open_file before double edit", |events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count()
+                    >= 2
+            })
+            .await;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("double edit"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("double edit results", |events| {
+                let successes = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolResultReady {
+                                session_id: event_session,
+                                tool_id,
+                                success,
+                                denied,
+                                ..
+                            } if event_session == &session_id
+                                && tool_id == "edit_file"
+                                && *success
+                                && !denied
+                        )
+                    })
+                    .count();
+                let failures = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::ToolResultReady {
+                                session_id: event_session,
+                                tool_id,
+                                success,
+                                denied,
+                                ..
+                            } if event_session == &session_id
+                                && tool_id == "edit_file"
+                                && !*success
+                                && !denied
+                        )
+                    })
+                    .count();
+                let stream_completions = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete { session_id: event_session, .. }
+                                if event_session == &session_id
+                        )
+                    })
+                    .count();
+                successes >= 1 && failures >= 1 && stream_completions >= 4
+            })
+            .await;
+
+        assert_eq!(tokio::fs::read_to_string(&file_path).await?, "new");
 
         harness.shutdown().await;
         Ok(())
