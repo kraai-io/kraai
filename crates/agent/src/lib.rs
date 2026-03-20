@@ -1122,6 +1122,12 @@ impl AgentManager {
         }
     }
 
+    pub fn is_turn_active(&self, session_id: &str) -> bool {
+        self.session_states
+            .get(session_id)
+            .is_some_and(|state| state.active_turn_profile.is_some())
+    }
+
     pub async fn streaming_session_ids(&self) -> HashSet<String> {
         self.streaming_messages
             .read()

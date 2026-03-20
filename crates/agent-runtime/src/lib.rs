@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::all)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -294,6 +294,9 @@ enum Command {
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
+    },
+    StartQueuedMessages {
+        session_id: String,
     },
     LoadConfig,
     LoadSession {
@@ -721,6 +724,7 @@ impl RuntimeBuilder {
             agent_manager,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            queued_messages: Arc::new(Mutex::new(HashMap::new())),
             openai_codex_auth,
         };
 
@@ -864,6 +868,7 @@ struct RuntimeInner {
     agent_manager: Arc<Mutex<AgentManager>>,
     provider_registry: ProviderRegistry,
     active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     openai_codex_auth: Arc<OpenAiCodexAuthController>,
 }
 
@@ -871,6 +876,22 @@ struct RuntimeInner {
 struct ActiveStream {
     message_id: MessageId,
     abort_handle: AbortHandle,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedMessage {
+    message: String,
+    model_id: ModelId,
+    provider_id: ProviderId,
+}
+
+#[derive(Clone)]
+struct RuntimeServices {
+    event_callback: Arc<dyn EventCallback>,
+    command_tx: mpsc::Sender<Command>,
+    agent_manager: Arc<Mutex<AgentManager>>,
+    active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
 }
 
 #[derive(Debug)]
@@ -1018,6 +1039,10 @@ impl RuntimeInner {
                     .await;
             }
 
+            Command::StartQueuedMessages { session_id } => {
+                self.handle_start_queued_messages(session_id).await;
+            }
+
             Command::LoadSession {
                 session_id,
                 response,
@@ -1055,6 +1080,7 @@ impl RuntimeInner {
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
+                self.queued_messages.lock().await.remove(&session_id);
                 self.agent_manager
                     .lock()
                     .await
@@ -1237,6 +1263,30 @@ impl RuntimeInner {
         model_id: ModelId,
         provider_id: ProviderId,
     ) {
+        let has_queued_messages = {
+            let queued = self.queued_messages.lock().await;
+            queued
+                .get(&session_id)
+                .is_some_and(|queue| !queue.is_empty())
+        };
+        let is_turn_active = {
+            let agent = self.agent_manager.lock().await;
+            agent.is_turn_active(&session_id)
+        };
+        if is_turn_active || has_queued_messages {
+            self.enqueue_message(
+                &session_id,
+                QueuedMessage {
+                    message,
+                    model_id,
+                    provider_id,
+                },
+            )
+            .await;
+            Self::schedule_queue_drain(&session_id, self.command_tx.clone()).await;
+            return;
+        }
+
         let stream_request = {
             let mut agent = self.agent_manager.lock().await;
             match agent
@@ -1252,10 +1302,81 @@ impl RuntimeInner {
         };
 
         let Some((providers, request)) = stream_request else {
+            Self::schedule_queue_drain(&session_id, self.command_tx.clone()).await;
             return;
         };
 
         self.spawn_stream_task(session_id, providers, request).await;
+    }
+
+    async fn enqueue_message(&self, session_id: &str, queued_message: QueuedMessage) {
+        let mut queued = self.queued_messages.lock().await;
+        queued
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back(queued_message);
+    }
+
+    async fn handle_start_queued_messages(&self, session_id: String) {
+        let is_turn_active = {
+            let agent = self.agent_manager.lock().await;
+            agent.is_turn_active(&session_id)
+        };
+        if is_turn_active {
+            return;
+        }
+
+        loop {
+            let next_message = {
+                let mut queued = self.queued_messages.lock().await;
+                let Some(queue) = queued.get_mut(&session_id) else {
+                    return;
+                };
+                let next = queue.pop_front();
+                if queue.is_empty() {
+                    queued.remove(&session_id);
+                }
+                next
+            };
+
+            let Some(next_message) = next_message else {
+                return;
+            };
+
+            let stream_request = {
+                let mut agent = self.agent_manager.lock().await;
+                match agent
+                    .prepare_start_stream(
+                        &session_id,
+                        next_message.message,
+                        next_message.model_id,
+                        next_message.provider_id,
+                    )
+                    .await
+                {
+                    Ok(result) => Some((agent.cloned_provider_manager(), result)),
+                    Err(error) => {
+                        self.send_event(Event::Error(error.to_string()));
+                        None
+                    }
+                }
+            };
+
+            let Some((providers, request)) = stream_request else {
+                continue;
+            };
+
+            self.spawn_stream_task(session_id, providers, request).await;
+            return;
+        }
+    }
+
+    async fn schedule_queue_drain(session_id: &str, command_tx: mpsc::Sender<Command>) {
+        let _ = command_tx
+            .send(Command::StartQueuedMessages {
+                session_id: session_id.to_string(),
+            })
+            .await;
     }
 
     async fn handle_execute_tools(&self, session_id: String) {
@@ -1263,6 +1384,14 @@ impl RuntimeInner {
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
         let active_streams = self.active_streams.clone();
+        let queued_messages = self.queued_messages.clone();
+        let services = RuntimeServices {
+            event_callback: event_callback.clone(),
+            command_tx: command_tx.clone(),
+            agent_manager: agent_manager.clone(),
+            active_streams: active_streams.clone(),
+            queued_messages: queued_messages.clone(),
+        };
 
         tokio::spawn(async move {
             let executions = {
@@ -1299,9 +1428,20 @@ impl RuntimeInner {
             // Add results to history
             {
                 let mut agent = agent_manager.lock().await;
-                let _ = agent
-                    .add_tool_results_to_history(&session_id, results)
-                    .await;
+                if let Err(error) = agent.add_tool_results_to_history(&session_id, results).await {
+                    agent.clear_active_turn(&session_id);
+                    drop(agent);
+                    event_callback.on_event(Event::Error(error.to_string()));
+                    event_callback.on_event(Event::ContinuationFailed {
+                        session_id: session_id.clone(),
+                        error: error.to_string(),
+                    });
+                    event_callback.on_event(Event::HistoryUpdated {
+                        session_id: session_id.clone(),
+                    });
+                    Self::schedule_queue_drain(&session_id, command_tx.clone()).await;
+                    return;
+                }
                 agent.finish_tool_executions(&session_id, &executed_source_message_ids);
             }
 
@@ -1323,10 +1463,7 @@ impl RuntimeInner {
 
                 Self::start_continuation(
                     session_id.clone(),
-                    agent_manager.clone(),
-                    event_callback.clone(),
-                    command_tx.clone(),
-                    active_streams.clone(),
+                    services.clone(),
                 )
                 .await;
             }
@@ -1335,12 +1472,14 @@ impl RuntimeInner {
 
     fn start_continuation(
         session_id: String,
-        agent_manager: Arc<Mutex<AgentManager>>,
-        event_callback: Arc<dyn EventCallback>,
-        command_tx: mpsc::Sender<Command>,
-        active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+        services: RuntimeServices,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
+            let agent_manager = services.agent_manager.clone();
+            let event_callback = services.event_callback.clone();
+            let command_tx = services.command_tx.clone();
+            let active_streams = services.active_streams.clone();
+            let queued_messages = services.queued_messages.clone();
             let continuation = {
                 let mut agent = agent_manager.lock().await;
                 match agent.prepare_continuation_stream(&session_id).await {
@@ -1362,6 +1501,7 @@ impl RuntimeInner {
                         let mut agent = agent_manager.lock().await;
                         agent.clear_active_turn(&session_id);
                     }
+                    Self::schedule_queue_drain(&session_id, command_tx.clone()).await;
                     event_callback.on_event(Event::HistoryUpdated {
                         session_id: session_id.clone(),
                     });
@@ -1424,10 +1564,13 @@ impl RuntimeInner {
                                 completed_session,
                                 request_message_id,
                                 content,
-                                agent_manager,
-                                event_callback,
-                                command_tx,
-                                task_active_streams,
+                                RuntimeServices {
+                                    event_callback: event_callback.clone(),
+                                    command_tx: command_tx.clone(),
+                                    agent_manager: agent_manager.clone(),
+                                    active_streams: task_active_streams.clone(),
+                                    queued_messages: queued_messages.clone(),
+                                },
                             )
                             .await;
                         }
@@ -1437,6 +1580,11 @@ impl RuntimeInner {
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
                                 agent.clear_active_turn(&request_session_id);
                             }
+                            Self::schedule_queue_drain(
+                                &request_session_id,
+                                command_tx.clone(),
+                            )
+                            .await;
                             event_callback.on_event(Event::HistoryUpdated {
                                 session_id: request_session_id.clone(),
                             });
@@ -1451,6 +1599,11 @@ impl RuntimeInner {
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
                                 agent.clear_active_turn(&request_session_id);
                             }
+                            Self::schedule_queue_drain(
+                                &request_session_id,
+                                command_tx.clone(),
+                            )
+                            .await;
                             tracing::error!("Continuation stream error: {}", error);
                             event_callback.on_event(Event::StreamError {
                                 session_id: request_session_id,
@@ -1487,6 +1640,7 @@ impl RuntimeInner {
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
         let active_streams = self.active_streams.clone();
+        let queued_messages = self.queued_messages.clone();
         let msg_id = request.message_id.clone();
         let start_gate = Arc::new(tokio::sync::Notify::new());
         let request_session_id = session_id.clone();
@@ -1540,10 +1694,13 @@ impl RuntimeInner {
                             completed_session,
                             request_message_id,
                             content,
-                            agent_manager,
-                            event_callback,
-                            command_tx,
-                            task_active_streams,
+                            RuntimeServices {
+                                event_callback: event_callback.clone(),
+                                command_tx: command_tx.clone(),
+                                agent_manager: agent_manager.clone(),
+                                active_streams: task_active_streams.clone(),
+                                queued_messages: queued_messages.clone(),
+                            },
                         )
                         .await;
                     }
@@ -1553,6 +1710,7 @@ impl RuntimeInner {
                             let _ = agent.abort_streaming_message(&request_message_id).await;
                             agent.clear_active_turn(&request_session_id);
                         }
+                        Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
                         event_callback.on_event(Event::Error(error));
                     }
                     StreamDriveResult::FailedDuringStream { error } => {
@@ -1561,6 +1719,7 @@ impl RuntimeInner {
                             let _ = agent.abort_streaming_message(&request_message_id).await;
                             agent.clear_active_turn(&request_session_id);
                         }
+                        Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
                         event_callback.on_event(Event::StreamError {
                             session_id: request_session_id,
                             message_id: request_message_id.to_string(),
@@ -1652,11 +1811,11 @@ impl RuntimeInner {
         completed_session: String,
         source_message_id: MessageId,
         content: String,
-        agent_manager: Arc<Mutex<AgentManager>>,
-        event_callback: Arc<dyn EventCallback>,
-        command_tx: mpsc::Sender<Command>,
-        active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+        services: RuntimeServices,
     ) {
+        let agent_manager = services.agent_manager.clone();
+        let event_callback = services.event_callback.clone();
+        let command_tx = services.command_tx.clone();
         let (tool_calls, failed) = {
             let mut agent = agent_manager.lock().await;
             match agent
@@ -1665,6 +1824,14 @@ impl RuntimeInner {
             {
                 Ok(result) => result,
                 Err(error) => {
+                    {
+                        let mut agent = agent_manager.lock().await;
+                        agent.clear_active_turn(&completed_session);
+                    }
+                    Self::schedule_queue_drain(&completed_session, command_tx.clone()).await;
+                    event_callback.on_event(Event::HistoryUpdated {
+                        session_id: completed_session,
+                    });
                     event_callback.on_event(Event::Error(error.to_string()));
                     return;
                 }
@@ -1688,14 +1855,7 @@ impl RuntimeInner {
             event_callback.on_event(Event::HistoryUpdated {
                 session_id: completed_session.clone(),
             });
-            Self::start_continuation(
-                completed_session,
-                agent_manager,
-                event_callback,
-                command_tx,
-                active_streams,
-            )
-            .await;
+            Self::start_continuation(completed_session, services).await;
             return;
         }
 
@@ -1743,6 +1903,7 @@ impl RuntimeInner {
                 let mut agent = agent_manager.lock().await;
                 agent.clear_active_turn(&completed_session);
             }
+            Self::schedule_queue_drain(&completed_session, command_tx).await;
             event_callback.on_event(Event::HistoryUpdated {
                 session_id: completed_session,
             });
@@ -1794,6 +1955,7 @@ impl RuntimeInner {
         self.send_event(Event::HistoryUpdated {
             session_id: cancelled_stream.session_id,
         });
+        Self::schedule_queue_drain(&session_id, self.command_tx.clone()).await;
         Ok(true)
     }
 
@@ -2700,6 +2862,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 provider_registry: build_provider_registry(openai_codex_auth.clone())
                     .expect("provider registry"),
                 active_streams: Arc::new(Mutex::new(HashMap::new())),
+                queued_messages: Arc::new(Mutex::new(HashMap::new())),
                 openai_codex_auth,
             };
 
@@ -4558,6 +4721,112 @@ value: alpha\n\
     }
 
     #[tokio::test]
+    async fn queued_messages_wait_for_tool_batch_completion_before_draining() -> Result<()> {
+        let harness = RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "before tool\n\
+<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+            vec![ScriptedChunk::plain("queued second reply")],
+            vec![ScriptedChunk::plain("queued third reply")],
+        ])
+        .await;
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let detection_events = harness
+            .events
+            .wait_for("tool detection", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id: event_session,
+                            tool_id,
+                            ..
+                        } if event_session == &session_id && tool_id == "mock_tool"
+                    )
+                })
+            })
+            .await;
+
+        let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("second message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("third message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events_before_tools = harness.events.snapshot();
+        assert_eq!(stream_start_count(&events_before_tools, &session_id), 1);
+
+        harness
+            .handle
+            .approve_tool(session_id.clone(), first_call_id)
+            .await?;
+        harness
+            .handle
+            .execute_approved_tools(session_id.clone())
+            .await?;
+
+        harness
+            .events
+            .wait_for("drain queued messages", |events| {
+                stream_complete_count(events, &session_id) >= 4
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "continuation complete")
+        );
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "queued second reply")
+        );
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "queued third reply")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn repeated_malformed_tool_calls_continue_without_deadlocking() -> Result<()> {
         let harness = RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
@@ -5099,7 +5368,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
                         )
                     })
                     .count();
-                tool_result_ready && stream_completions >= 2
+                tool_result_ready && stream_completions >= 4
             })
             .await;
 

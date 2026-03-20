@@ -188,6 +188,9 @@ struct PendingTool {
 struct OptimisticMessage {
     local_id: String,
     content: String,
+    content_key: String,
+    occurrence: usize,
+    is_queued: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -407,7 +410,6 @@ pub struct AppState {
     connect_provider_index: usize,
     openai_codex_auth: ProviderAuthStatus,
     pending_submit: Option<PendingSubmit>,
-    queued_submit_after_tools: Option<PendingSubmit>,
 }
 
 impl Default for AppState {
@@ -469,7 +471,6 @@ impl Default for AppState {
             connect_provider_index: 0,
             openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
-            queued_submit_after_tools: None,
         }
     }
 }
@@ -989,6 +990,7 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
+                        false,
                     );
                 }
             }
@@ -1016,6 +1018,7 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
+                        false,
                     );
                 }
             }
@@ -1027,6 +1030,11 @@ impl App {
             }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
+                if !self.state.optimistic_messages.is_empty() {
+                    self.state.optimistic_messages.remove(0);
+                    self.update_queued_status();
+                    self.invalidate_chat_cache();
+                }
                 self.state.is_streaming = false;
                 self.state.status = format!("Send failed: {err}");
             }
@@ -2153,46 +2161,7 @@ impl App {
         if raw_input.is_empty() {
             return;
         }
-        if self.state.tool_phase == ToolPhase::ExecutingBatch {
-            if self.state.queued_submit_after_tools.is_some() {
-                self.state.status = String::from(
-                    "Tool execution in progress. One queued message is already pending.",
-                );
-                return;
-            }
-            let Some(provider_id) = self.state.selected_provider_id.clone() else {
-                self.state.status = String::from("No provider selected. Use /model");
-                return;
-            };
-            let Some(model_id) = self.state.selected_model_id.clone() else {
-                self.state.status = String::from("No model selected. Use /model");
-                return;
-            };
-            if self.state.selected_profile_id.is_none() {
-                self.state.status = String::from("No agent selected. Use /agent");
-                return;
-            }
-            let Some(session_id) = self.state.current_session_id.clone() else {
-                self.state.status = String::from("No active session for queued message");
-                return;
-            };
-            self.state.input.clear();
-            self.state.input_cursor = 0;
-            self.state.queued_submit_after_tools = Some(PendingSubmit {
-                session_id: Some(session_id),
-                message: raw_input,
-                model_id,
-                provider_id,
-            });
-            self.state.status = String::from("Tool execution in progress. Message queued.");
-            return;
-        }
-        if self.state.is_streaming {
-            self.state.status = String::from("Stream in progress. Press Esc to cancel.");
-            return;
-        }
-        self.state.input.clear();
-        self.state.input_cursor = 0;
+
         let command_popup_dismissed = self.state.command_popup_dismissed;
         self.state.command_popup_dismissed = false;
 
@@ -2203,6 +2172,9 @@ impl App {
             self.handle_command(command.trim());
             return;
         }
+
+        self.state.input.clear();
+        self.state.input_cursor = 0;
 
         if !self.state.config_loaded {
             self.state.status = String::from("Config not loaded yet");
@@ -2222,8 +2194,12 @@ impl App {
             return;
         }
 
+        let is_queueing = self.state.is_streaming
+            || self.state.tool_phase == ToolPhase::ExecutingBatch
+            || !self.state.pending_tools.is_empty();
+
         if let Some(session_id) = self.state.current_session_id.clone() {
-            self.dispatch_send_message(session_id, raw_input, model_id, provider_id);
+            self.dispatch_send_message(session_id, raw_input, model_id, provider_id, is_queueing);
             return;
         }
 
@@ -3082,29 +3058,6 @@ impl App {
     fn finish_tool_batch_execution(&mut self) {
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
-        self.dispatch_queued_submit_after_tools();
-    }
-
-    fn dispatch_queued_submit_after_tools(&mut self) {
-        let Some(pending_submit) = self.state.queued_submit_after_tools.take() else {
-            return;
-        };
-        if self.state.is_streaming
-            || self.state.tool_phase != ToolPhase::Idle
-            || !self.state.pending_tools.is_empty()
-        {
-            self.state.queued_submit_after_tools = Some(pending_submit);
-            return;
-        }
-
-        if let Some(session_id) = pending_submit.session_id {
-            self.dispatch_send_message(
-                session_id,
-                pending_submit.message,
-                pending_submit.model_id,
-                pending_submit.provider_id,
-            );
-        }
     }
 
     fn request_sync(&self) {
@@ -3158,7 +3111,6 @@ impl App {
         self.state.auto_scroll = true;
         self.state.scroll = 0;
         self.state.status = status.to_string();
-        self.state.queued_submit_after_tools = None;
         self.invalidate_chat_cache();
         self.clamp_chat_scroll();
     }
@@ -3174,15 +3126,32 @@ impl App {
         message: String,
         model_id: String,
         provider_id: String,
+        is_queued: bool,
     ) {
+        let content_key = message.trim().to_string();
+        let visible_count = self.visible_user_message_count(&content_key);
+        let optimistic_same_count = self
+            .state
+            .optimistic_messages
+            .iter()
+            .filter(|optimistic| optimistic.content_key == content_key)
+            .count();
+
         self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
         self.state.optimistic_messages.push(OptimisticMessage {
             local_id: format!("local-user-{}", self.state.optimistic_seq),
             content: message.clone(),
+            content_key,
+            occurrence: visible_count + optimistic_same_count + 1,
+            is_queued,
         });
 
-        self.state.is_streaming = true;
-        self.state.status = format!("Sending with {provider_id}/{model_id}");
+        if is_queued {
+            self.update_queued_status();
+        } else {
+            self.state.is_streaming = true;
+            self.state.status = format!("Sending with {provider_id}/{model_id}");
+        }
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
         self.invalidate_chat_cache();
@@ -3225,18 +3194,37 @@ impl App {
         }
 
         self.state.optimistic_messages.retain(|optimistic| {
-            let key = optimistic.content.trim().to_string();
-            match seen_users.get_mut(&key) {
-                Some(count) if *count > 0 => {
-                    *count -= 1;
-                    false
-                }
-                _ => true,
-            }
+            seen_users
+                .get(&optimistic.content_key)
+                .is_none_or(|count| *count < optimistic.occurrence)
         });
 
         if self.state.optimistic_messages.len() != before_len {
+            self.update_queued_status();
             self.invalidate_chat_cache();
+        }
+    }
+
+    fn visible_user_message_count(&self, content_key: &str) -> usize {
+        build_tip_chain(&self.state.chat_history, self.state.current_tip_id.as_deref())
+            .into_iter()
+            .filter(|message| message.role == ChatRole::User)
+            .filter(|message| message.content.trim() == content_key)
+            .count()
+    }
+
+    fn update_queued_status(&mut self) {
+        let queued_count = self
+            .state
+            .optimistic_messages
+            .iter()
+            .filter(|message| message.is_queued)
+            .count();
+
+        if queued_count > 0 {
+            self.state.status = format!("Queued message ({queued_count} queued)");
+        } else if self.state.status.starts_with("Queued message (") {
+            self.state.status = String::from("Queued messages sent");
         }
     }
 
@@ -3492,11 +3480,16 @@ impl AppState {
                 .collect();
 
         for optimistic in &self.optimistic_messages {
+            let content = if optimistic.is_queued {
+                format!("{} [queued]", optimistic.content)
+            } else {
+                optimistic.content.clone()
+            };
             rendered_messages.push(Message {
                 id: MessageId::new(optimistic.local_id.clone()),
                 parent_id: None,
                 role: ChatRole::User,
-                content: optimistic.content.clone(),
+                content,
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
                 tool_state_snapshot: None,
@@ -4833,25 +4826,44 @@ mod tests {
     }
 
     #[test]
-    fn submit_while_streaming_keeps_draft_and_requests_no_send() {
+    fn submit_while_streaming_queues_message_and_requests_send() {
         let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
         harness.app.state.is_streaming = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
         harness.app.state.input = String::from("keep this draft");
         harness.app.state.input_cursor = harness.app.state.input.len();
 
         harness.app.handle_key_event(key(KeyCode::Enter));
 
-        assert_eq!(harness.app.state.input, "keep this draft");
-        assert_eq!(
-            harness.app.state.status,
-            "Stream in progress. Press Esc to cancel."
-        );
-        assert!(harness.drain_requests().is_empty());
+        assert!(harness.app.state.input.is_empty());
+        assert_eq!(harness.app.state.status, "Queued message (1 queued)");
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(harness.app.state.optimistic_messages[0].content, "keep this draft");
+        assert!(harness.app.state.optimistic_messages[0].is_queued);
+
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::SendMessage {
+                session_id,
+                message,
+                model_id,
+                provider_id,
+            }] if session_id == "sess-2"
+                && message == "keep this draft"
+                && model_id == "gpt-4o-mini"
+                && provider_id == "openai-chat-completions"
+        ));
     }
 
     #[test]
     fn submit_during_tool_execution_queues_message() {
         let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
         harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
@@ -4863,58 +4875,86 @@ mod tests {
         harness.app.handle_key_event(key(KeyCode::Enter));
 
         assert!(harness.app.state.input.is_empty());
-        assert_eq!(
-            harness
-                .app
-                .state
-                .queued_submit_after_tools
-                .as_ref()
-                .map(|submit| submit.message.as_str()),
-            Some("queue this")
-        );
-        assert_eq!(
-            harness.app.state.status,
-            "Tool execution in progress. Message queued."
-        );
-        assert!(harness.drain_requests().is_empty());
-    }
-
-    #[test]
-    fn stream_complete_after_tool_batch_dispatches_queued_message() {
-        let mut harness = test_harness();
-        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
-        harness.app.state.current_session_id = Some(String::from("sess-2"));
-        harness.app.state.pending_tools.clear();
-        harness.app.state.queued_submit_after_tools = Some(PendingSubmit {
-            session_id: Some(String::from("sess-2")),
-            message: String::from("queued follow-up"),
-            model_id: String::from("gpt-4o-mini"),
-            provider_id: String::from("openai-chat-completions"),
-        });
-        harness.app.state.is_streaming = true;
-
-        harness.app.handle_runtime_event(Event::StreamComplete {
-            session_id: String::from("sess-2"),
-            message_id: String::from("msg-1"),
-        });
-
-        assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
-        assert!(harness.app.state.is_streaming);
-        assert!(harness.app.state.queued_submit_after_tools.is_none());
+        assert_eq!(harness.app.state.status, "Queued message (1 queued)");
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+        assert_eq!(harness.app.state.optimistic_messages[0].content, "queue this");
+        assert!(harness.app.state.optimistic_messages[0].is_queued);
 
         let requests = harness.drain_requests();
-        assert!(requests.iter().any(|request| matches!(
-            request,
-            RuntimeRequest::SendMessage {
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::SendMessage {
                 session_id,
                 message,
                 model_id,
                 provider_id,
-            } if session_id == "sess-2"
-                && message == "queued follow-up"
+            }] if session_id == "sess-2"
+                && message == "queue this"
                 && model_id == "gpt-4o-mini"
                 && provider_id == "openai-chat-completions"
-        )));
+        ));
+    }
+
+    #[test]
+    fn submit_while_streaming_allows_unbounded_queued_messages() {
+        let mut harness = test_harness();
+        harness.app.state.config_loaded = true;
+        harness.app.state.is_streaming = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.current_tip_id = Some(String::from("a1"));
+        harness.app.state.chat_history = BTreeMap::from([(
+            MessageId::new("a1"),
+            Message {
+                id: MessageId::new("a1"),
+                parent_id: None,
+                role: ChatRole::Assistant,
+                content: String::from("streaming reply"),
+                status: MessageStatus::Streaming {
+                    call_id: types::CallId::new("call-1"),
+                },
+                agent_profile_id: Some(String::from("plan-code")),
+                tool_state_snapshot: None,
+                tool_state_deltas: Vec::new(),
+            },
+        )]);
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+
+        for idx in 0..3 {
+            let text = format!("queued message {idx}");
+            harness.app.state.input = text.clone();
+            harness.app.state.input_cursor = text.len();
+            harness.app.handle_key_event(key(KeyCode::Enter));
+        }
+
+        assert_eq!(harness.app.state.optimistic_messages.len(), 3);
+        assert!(
+            harness
+                .app
+                .state
+                .optimistic_messages
+                .iter()
+                .all(|message| message.is_queued)
+        );
+        let rendered = harness.app.state.rendered_messages();
+        assert_eq!(rendered[0].role, ChatRole::Assistant);
+        assert!(matches!(rendered[0].status, MessageStatus::Streaming { .. }));
+        assert_eq!(rendered[1].role, ChatRole::User);
+        assert!(rendered[1].content.contains("[queued]"));
+        assert!(rendered
+            .iter()
+            .filter(|message| message.content.contains("[queued]"))
+            .count()
+            >= 3);
+        assert!(harness.app.state.is_streaming);
+
+        let requests = harness.drain_requests();
+        let send_count = requests
+            .iter()
+            .filter(|request| matches!(request, RuntimeRequest::SendMessage { .. }))
+            .count();
+        assert_eq!(send_count, 3);
     }
 
     #[test]
@@ -4999,6 +5039,9 @@ mod tests {
             .push(OptimisticMessage {
                 local_id: String::from("local-user-1"),
                 content: String::from("hello world"),
+                content_key: String::from("hello world"),
+                occurrence: 1,
+                is_queued: false,
             });
 
         harness
@@ -5013,6 +5056,86 @@ mod tests {
 
         assert!(harness.app.state.optimistic_messages.is_empty());
         assert_eq!(harness.app.state.chat_history.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_optimistic_messages_keeps_duplicate_content_until_occurrence_matches() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-1"));
+        harness.app.state.current_tip_id = Some(String::from("m1"));
+        harness.app.state.chat_history = BTreeMap::from([(
+            MessageId::new("m1"),
+            message("m1", None, ChatRole::User, "hello"),
+        )]);
+        harness
+            .app
+            .state
+            .optimistic_messages
+            .push(OptimisticMessage {
+                local_id: String::from("local-user-1"),
+                content: String::from("hello"),
+                content_key: String::from("hello"),
+                occurrence: 2,
+                is_queued: true,
+            });
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([(
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello"),
+                )])),
+            });
+
+        assert_eq!(harness.app.state.optimistic_messages.len(), 1);
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([
+                    (MessageId::new("m1"), message("m1", None, ChatRole::User, "hello")),
+                    (
+                        MessageId::new("m2"),
+                        message("m2", Some("m1"), ChatRole::User, "hello"),
+                    ),
+                ])),
+            });
+
+        assert!(harness.app.state.optimistic_messages.is_empty());
+    }
+
+    #[test]
+    fn queued_status_updates_after_reconciliation() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-1"));
+        harness.app.state.status = String::from("Queued message (1 queued)");
+        harness
+            .app
+            .state
+            .optimistic_messages
+            .push(OptimisticMessage {
+                local_id: String::from("local-user-1"),
+                content: String::from("hello world"),
+                content_key: String::from("hello world"),
+                occurrence: 1,
+                is_queued: true,
+            });
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::ChatHistory {
+                session_id: String::from("sess-1"),
+                result: Ok(BTreeMap::from([(
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello world"),
+                )])),
+            });
+
+        assert!(harness.app.state.optimistic_messages.is_empty());
+        assert_eq!(harness.app.state.status, "Queued messages sent");
     }
 
     #[test]
