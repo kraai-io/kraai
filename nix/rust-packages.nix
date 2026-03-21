@@ -46,21 +46,9 @@
         doCheck = false;
       };
 
-    fileSetForCrate = crate:
-      lib.fileset.toSource {
-        root = ../.;
-        fileset = lib.fileset.unions [
-          ../Cargo.toml
-          ../Cargo.lock
-          (craneLib.fileset.commonCargoSources ../crates)
-          (craneLib.fileset.commonCargoSources crate)
-        ];
-      };
-
     tui = craneLib.buildPackage (individualCrateArgs ../crates/tui
       // {
         cargoExtraArgs = "-p tui";
-        src = fileSetForCrate ../crates/tui;
       });
   in {
     packages = {
