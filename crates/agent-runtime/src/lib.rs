@@ -1428,7 +1428,10 @@ impl RuntimeInner {
             // Add results to history
             {
                 let mut agent = agent_manager.lock().await;
-                if let Err(error) = agent.add_tool_results_to_history(&session_id, results).await {
+                if let Err(error) = agent
+                    .add_tool_results_to_history(&session_id, results)
+                    .await
+                {
                     agent.clear_active_turn(&session_id);
                     drop(agent);
                     event_callback.on_event(Event::Error(error.to_string()));
@@ -1461,11 +1464,7 @@ impl RuntimeInner {
                     continue;
                 }
 
-                Self::start_continuation(
-                    session_id.clone(),
-                    services.clone(),
-                )
-                .await;
+                Self::start_continuation(session_id.clone(), services.clone()).await;
             }
         });
     }
@@ -1580,11 +1579,8 @@ impl RuntimeInner {
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
                                 agent.clear_active_turn(&request_session_id);
                             }
-                            Self::schedule_queue_drain(
-                                &request_session_id,
-                                command_tx.clone(),
-                            )
-                            .await;
+                            Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                .await;
                             event_callback.on_event(Event::HistoryUpdated {
                                 session_id: request_session_id.clone(),
                             });
@@ -1599,11 +1595,8 @@ impl RuntimeInner {
                                 let _ = agent.abort_streaming_message(&request_message_id).await;
                                 agent.clear_active_turn(&request_session_id);
                             }
-                            Self::schedule_queue_drain(
-                                &request_session_id,
-                                command_tx.clone(),
-                            )
-                            .await;
+                            Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                .await;
                             tracing::error!("Continuation stream error: {}", error);
                             event_callback.on_event(Event::StreamError {
                                 session_id: request_session_id,

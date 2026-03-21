@@ -3206,11 +3206,14 @@ impl App {
     }
 
     fn visible_user_message_count(&self, content_key: &str) -> usize {
-        build_tip_chain(&self.state.chat_history, self.state.current_tip_id.as_deref())
-            .into_iter()
-            .filter(|message| message.role == ChatRole::User)
-            .filter(|message| message.content.trim() == content_key)
-            .count()
+        build_tip_chain(
+            &self.state.chat_history,
+            self.state.current_tip_id.as_deref(),
+        )
+        .into_iter()
+        .filter(|message| message.role == ChatRole::User)
+        .filter(|message| message.content.trim() == content_key)
+        .count()
     }
 
     fn update_queued_status(&mut self) {
@@ -4842,7 +4845,10 @@ mod tests {
         assert!(harness.app.state.input.is_empty());
         assert_eq!(harness.app.state.status, "Queued message (1 queued)");
         assert_eq!(harness.app.state.optimistic_messages.len(), 1);
-        assert_eq!(harness.app.state.optimistic_messages[0].content, "keep this draft");
+        assert_eq!(
+            harness.app.state.optimistic_messages[0].content,
+            "keep this draft"
+        );
         assert!(harness.app.state.optimistic_messages[0].is_queued);
 
         let requests = harness.drain_requests();
@@ -4877,7 +4883,10 @@ mod tests {
         assert!(harness.app.state.input.is_empty());
         assert_eq!(harness.app.state.status, "Queued message (1 queued)");
         assert_eq!(harness.app.state.optimistic_messages.len(), 1);
-        assert_eq!(harness.app.state.optimistic_messages[0].content, "queue this");
+        assert_eq!(
+            harness.app.state.optimistic_messages[0].content,
+            "queue this"
+        );
         assert!(harness.app.state.optimistic_messages[0].is_queued);
 
         let requests = harness.drain_requests();
@@ -4939,14 +4948,19 @@ mod tests {
         );
         let rendered = harness.app.state.rendered_messages();
         assert_eq!(rendered[0].role, ChatRole::Assistant);
-        assert!(matches!(rendered[0].status, MessageStatus::Streaming { .. }));
+        assert!(matches!(
+            rendered[0].status,
+            MessageStatus::Streaming { .. }
+        ));
         assert_eq!(rendered[1].role, ChatRole::User);
         assert!(rendered[1].content.contains("[queued]"));
-        assert!(rendered
-            .iter()
-            .filter(|message| message.content.contains("[queued]"))
-            .count()
-            >= 3);
+        assert!(
+            rendered
+                .iter()
+                .filter(|message| message.content.contains("[queued]"))
+                .count()
+                >= 3
+        );
         assert!(harness.app.state.is_streaming);
 
         let requests = harness.drain_requests();
@@ -5096,7 +5110,10 @@ mod tests {
             .handle_runtime_response(RuntimeResponse::ChatHistory {
                 session_id: String::from("sess-1"),
                 result: Ok(BTreeMap::from([
-                    (MessageId::new("m1"), message("m1", None, ChatRole::User, "hello")),
+                    (
+                        MessageId::new("m1"),
+                        message("m1", None, ChatRole::User, "hello"),
+                    ),
                     (
                         MessageId::new("m2"),
                         message("m2", Some("m1"), ChatRole::User, "hello"),
