@@ -22,8 +22,10 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
-    crane = {
-      url = "github:ipetkov/crane";
+    crate2nix = {
+      url = "github:nix-community/crate2nix";
+      inputs.flake-parts.follows = "flake-parts";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-parts = {

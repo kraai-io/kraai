@@ -9,6 +9,7 @@
       settings.excludes = [
         "apps/agent-desktop/src/styles/globals.css"
         "crates/workspace-hack/Cargo.toml"
+        "Cargo.nix"
       ];
 
       programs.alejandra.enable = true;

@@ -2,54 +2,93 @@
   perSystem = {
     lib,
     pkgs,
+    system,
     ...
   }: let
-    craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p:
-      p.rust-bin.stable.latest.default.override {
-        extensions = ["llvm-tools-preview"];
-      });
+    rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+      extensions = ["llvm-tools-preview"];
+    };
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
-        (craneLib.fileset.commonCargoSources ../.)
-        (lib.fileset.maybeMissing ../crates/toon-schema/tests)
-        (lib.fileset.maybeMissing ../crates/agent/src/profiles)
+        ../.config
+        ../Cargo.lock
+        ../Cargo.toml
+        ../crates
+        ../deny.toml
       ];
     };
 
-    commonArgs = {
+    # cargoNix = pkgs.callPackage ../Cargo.nix {
+    #   buildRustCrateForPkgs = pkgs:
+    #     pkgs.buildRustCrate.override {
+    #       cargo = rustToolchain;
+    #       rustc = rustToolchain;
+    #     };
+    # };
+
+    generatedCargoNix = inputs.crate2nix.tools.${system}.generatedCargoNix {
+      name = "agent-checks";
       inherit src;
-      pname = "agent";
-      version = "0.0.0";
-      strictDeps = true;
-      nativeBuildInputs = with pkgs; [
-        pkg-config
-      ];
-      buildInputs = with pkgs; [
-        openssl
-      ];
     };
 
-    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+    cargoNix = pkgs.callPackage generatedCargoNix {
+      buildRustCrateForPkgs = pkgs:
+        pkgs.buildRustCrate.override {
+          cargo = rustToolchain;
+          rustc = rustToolchain;
+        };
+    };
 
-    individualCrateArgs = crate:
-      commonArgs
-      // {
-        inherit cargoArtifacts;
-        inherit
-          (craneLib.crateNameFromCargoToml {
-            src = craneLib.cleanCargoSource crate;
-          })
-          version
-          pname
-          ;
-        doCheck = false;
+    mkCargoCheck = {
+      name,
+      command,
+      nativeBuildInputs ? [],
+      buildInputs ? [],
+      env ? {},
+    }:
+      pkgs.stdenv.mkDerivation {
+        pname = name;
+        version = "0.0.0";
+        inherit src;
+        strictDeps = true;
+        nativeBuildInputs =
+          [
+            rustToolchain
+            pkgs.pkg-config
+          ]
+          ++ nativeBuildInputs;
+        buildInputs =
+          [
+            pkgs.openssl
+          ]
+          ++ buildInputs;
+        buildPhase = let
+          exportEnv = lib.concatLines (
+            lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") env
+          );
+        in ''
+          export HOME="$TMPDIR/home"
+          mkdir -p "$HOME"
+          export CARGO_HOME="$TMPDIR/cargo-home"
+          mkdir -p "$CARGO_HOME"
+          cp "${generatedCargoNix}/cargo/config" "$CARGO_HOME/config.toml"
+          export CARGO_TARGET_DIR="$TMPDIR/target"
+          export CARGO_TERM_COLOR=always
+
+          ${exportEnv}
+
+          runHook preBuild
+          cd "${generatedCargoNix}/crate"
+          ${command}
+          runHook postBuild
+        '';
+        installPhase = ''
+          mkdir -p "$out"
+        '';
       };
 
-    tui = craneLib.buildPackage (individualCrateArgs ../crates/tui
-      // {
-        cargoExtraArgs = "-p tui";
-      });
+    tui = cargoNix.workspaceMembers.tui.build;
   in {
     packages = {
       inherit tui;
@@ -59,72 +98,53 @@
     checks = {
       inherit tui;
 
-      clippy = craneLib.cargoClippy (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-          cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-        }
-      );
-
-      doc = craneLib.cargoDoc (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-          env.RUSTDOCFLAGS = "--deny warnings";
-        }
-      );
-
-      audit = craneLib.cargoAudit {
-        inherit src;
-        inherit (inputs) advisory-db;
-        pname = "agent";
-        version = "0.0.0";
+      clippy = mkCargoCheck {
+        name = "clippy";
+        command = ''
+          cargo clippy --workspace --all-targets -- --deny warnings
+        '';
       };
 
-      deny = craneLib.cargoDeny {
-        inherit src;
-        pname = "agent";
-        version = "0.0.0";
+      doc = mkCargoCheck {
+        name = "doc";
+        env.RUSTDOCFLAGS = "--deny warnings";
+        command = ''
+          cargo doc --workspace --no-deps
+        '';
       };
 
-      nextest = craneLib.cargoNextest (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-          partitions = 1;
-          partitionType = "count";
-          cargoNextestPartitionsExtraArgs = "--no-tests=pass";
-        }
-      );
+      audit = mkCargoCheck {
+        name = "audit";
+        nativeBuildInputs = [pkgs.cargo-audit];
+        command = ''
+          cargo audit --db ${inputs.advisory-db} --no-fetch
+        '';
+      };
 
-      llvm-cov = craneLib.cargoLlvmCov (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-          cargoLlvmCovCommand = "nextest";
-          nativeBuildInputs = [
-            pkgs.cargo-nextest
-          ];
-        }
-      );
+      deny = mkCargoCheck {
+        name = "deny";
+        nativeBuildInputs = [pkgs.cargo-deny];
+        command = ''
+          cargo deny check bans licenses sources
+        '';
+      };
 
-      hakari = craneLib.mkCargoDerivation {
-        inherit src;
-        pname = "hakari";
-        version = "0.0.0";
-        cargoArtifacts = null;
-        doInstallCargoArtifacts = false;
+      nextest = mkCargoCheck {
+        name = "nextest";
+        nativeBuildInputs = [pkgs.cargo-nextest];
+        command = ''
+          cargo nextest run --workspace --no-tests=pass
+        '';
+      };
 
-        buildPhaseCargoCommand = ''
+      hakari = mkCargoCheck {
+        name = "hakari";
+        nativeBuildInputs = [pkgs.cargo-hakari];
+        command = ''
           cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
           cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
           cargo hakari verify
         '';
-
-        nativeBuildInputs = [
-          pkgs.cargo-hakari
-        ];
       };
     };
   };

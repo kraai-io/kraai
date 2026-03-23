@@ -29,7 +29,7 @@ serde_json = { version = "1.0.149", features = ["preserve_order"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_generics"] }
 time = { version = "0.3.47", features = ["formatting", "local-offset", "parsing"] }
 tracing = { version = "0.1.44" }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [build-dependencies]
 aho-corasick = { version = "1.1.4" }
@@ -49,7 +49,7 @@ smallvec = { version = "1.15.1", default-features = false, features = ["const_ge
 syn = { version = "2.0.117", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 time = { version = "0.3.47", features = ["formatting", "local-offset", "parsing"] }
 tracing = { version = "0.1.44" }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
@@ -69,7 +69,7 @@ smallvec = { version = "1.15.1", default-features = false, features = ["const_ne
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
-cc = { version = "1.2.56", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.57", default-features = false, features = ["parallel"] }
 crossterm = { version = "0.29.0", features = ["serde"] }
 futures-channel = { version = "0.3.32", features = ["sink"] }
 futures-core = { version = "0.3.32" }

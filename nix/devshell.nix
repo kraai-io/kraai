@@ -18,6 +18,7 @@
           cargo-audit
           cargo-deny
           cargo-hakari
+          crate2nix
           cargo-nextest
           cargo-llvm-cov
           cargo-geiger
