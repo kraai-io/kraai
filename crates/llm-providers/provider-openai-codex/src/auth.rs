@@ -909,16 +909,43 @@ fn persist_auth_file(path: &Path, auth: &StoredAuth) -> io::Result<()> {
         last_refresh: auth.last_refresh_unix,
     })
     .map_err(io::Error::other)?;
-    std::fs::write(path, payload)?;
+    let temp_path = temp_auth_write_path(path);
+    std::fs::write(&temp_path, payload)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let permissions = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, permissions)?;
+        std::fs::set_permissions(&temp_path, permissions)?;
     }
 
+    rename_auth_file(&temp_path, path)?;
+
     Ok(())
+}
+
+fn temp_auth_write_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "auth.json".to_string());
+    let mut random_bytes = [0u8; 8];
+    rand::rng().fill_bytes(&mut random_bytes);
+    let suffix = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes);
+    path.with_file_name(format!(".{file_name}.{suffix}.tmp"))
+}
+
+#[cfg(not(windows))]
+fn rename_auth_file(source: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn rename_auth_file(source: &Path, destination: &Path) -> io::Result<()> {
+    if destination.exists() {
+        std::fs::remove_file(destination)?;
+    }
+    std::fs::rename(source, destination)
 }
 
 fn delete_auth_file(path: &Path) -> io::Result<()> {
@@ -1119,5 +1146,76 @@ mod tests {
         assert!(auth_url.contains("id_token_add_organizations=true"));
         assert!(auth_url.contains("codex_cli_simplified_flow=true"));
         assert!(auth_url.contains("originator=codex_cli_rs"));
+    }
+
+    fn stored_auth(
+        email: &str,
+        plan_type: &str,
+        account_id: &str,
+        last_refresh_unix: u64,
+    ) -> StoredAuth {
+        StoredAuth {
+            tokens: StoredTokens {
+                id_token: fake_jwt(email, plan_type, account_id),
+                access_token: format!("access-{account_id}"),
+                refresh_token: format!("refresh-{account_id}"),
+                account_id: account_id.to_string(),
+            },
+            claims: IdTokenClaims {
+                email: Some(email.to_string()),
+                plan_type: Some(normalize_plan_type(plan_type)),
+                account_id: Some(account_id.to_string()),
+            },
+            last_refresh_unix,
+        }
+    }
+
+    #[test]
+    fn persisted_auth_file_round_trips() {
+        let path = temp_auth_path();
+        let auth = stored_auth("user@example.com", "pro", "workspace_123", 42);
+
+        persist_auth_file(&path, &auth).unwrap();
+
+        let loaded = load_auth_file(&path).unwrap().unwrap();
+        assert_eq!(loaded.tokens.account_id, "workspace_123");
+        assert_eq!(loaded.claims.email.as_deref(), Some("user@example.com"));
+        assert_eq!(loaded.claims.plan_type.as_deref(), Some("Pro"));
+        assert_eq!(loaded.last_refresh_unix, 42);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn persisted_auth_file_overwrites_without_leaving_temp_files() {
+        let path = temp_auth_path();
+
+        persist_auth_file(
+            &path,
+            &stored_auth("first@example.com", "plus", "workspace_old", 1),
+        )
+        .unwrap();
+        persist_auth_file(
+            &path,
+            &stored_auth("second@example.com", "team", "workspace_new", 2),
+        )
+        .unwrap();
+
+        let loaded = load_auth_file(&path).unwrap().unwrap();
+        assert_eq!(loaded.tokens.account_id, "workspace_new");
+        assert_eq!(loaded.claims.email.as_deref(), Some("second@example.com"));
+        assert_eq!(loaded.claims.plan_type.as_deref(), Some("Team"));
+        assert_eq!(loaded.last_refresh_unix, 2);
+
+        let temp_files = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path() != path)
+            .collect::<Vec<_>>();
+        assert!(temp_files.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
