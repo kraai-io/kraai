@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use color_eyre::eyre::{Context, ContextCompat, Result};
+use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -321,6 +321,14 @@ impl FileSessionStore {
             for (id, e) in &errors {
                 tracing::error!("Failed to delete orphaned message {}: {}", id, e);
             }
+            let detail = errors
+                .into_iter()
+                .map(|(id, error)| format!("{id}: {error}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(eyre!(
+                "Failed to delete orphaned messages after session removal: {detail}"
+            ));
         }
 
         Ok(())
@@ -631,6 +639,36 @@ mod tests {
                     .collect();
 
                 assert_eq!(ordered_ids, vec!["new", "mid", "old"]);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn delete_surfaces_orphan_cleanup_failures() {
+        with_test_store(
+            "delete-orphan-failure",
+            |message_store, session_store, data_dir| async move {
+                let orphan = message("orphan", None, "orphan");
+                message_store.save(&orphan).await.unwrap();
+                session_store
+                    .save(&session("drop", Some(&orphan.id), 1))
+                    .await
+                    .unwrap();
+
+                let orphan_path = data_dir
+                    .join("messages")
+                    .join(format!("{}.json", orphan.id));
+                fs::remove_file(&orphan_path).await.unwrap();
+                fs::create_dir(&orphan_path).await.unwrap();
+
+                let err = session_store.delete("drop").await.unwrap_err();
+                assert!(
+                    err.to_string()
+                        .contains("Failed to delete orphaned messages after session removal")
+                );
+
+                fs::remove_dir_all(&orphan_path).await.unwrap();
             },
         )
         .await;
