@@ -5,13 +5,11 @@ update-rust-deps:
     cargo upgrade
     cargo update
     cargo hakari generate
-    just generate-cargo-nix
 
 update-rust-deps-full:
     cargo upgrade --incompatible
     cargo update
     cargo hakari generate
-    just generate-cargo-nix
 
 clean:
     cargo clean
@@ -29,9 +27,6 @@ build-bindings-debug:
 
 test-bindings:
     cd crates/agent-ts-bindings && pnpm test
-
-generate-cargo-nix:
-    crate2nix generate
 
 clean-bindings:
     cd crates/agent-ts-bindings && pnpm clean

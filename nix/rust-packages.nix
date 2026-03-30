@@ -19,14 +19,6 @@
       ];
     };
 
-    # cargoNix = pkgs.callPackage ../Cargo.nix {
-    #   buildRustCrateForPkgs = pkgs:
-    #     pkgs.buildRustCrate.override {
-    #       cargo = rustToolchain;
-    #       rustc = rustToolchain;
-    #     };
-    # };
-
     generatedCargoNix = inputs.crate2nix.tools.${system}.generatedCargoNix {
       name = "agent-checks";
       inherit src;

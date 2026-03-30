@@ -49,7 +49,7 @@ toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
 
 arboard = "3.6.1"
-async-openai = { version = "0.33.1", features = [
+async-openai = { version = "0.34.0", features = [
   "byot",
   "chat-completion",
   "model",
@@ -66,9 +66,9 @@ grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
 ignore = "0.4.25"
 llm-toolkit = "0.63.0"
-napi = { version = "3.8.3", features = ["async", "tokio_rt"] }
+napi = { version = "3.8.4", features = ["async", "tokio_rt"] }
 napi-build = "2.3.1"
-napi-derive = "3.5.2"
+napi-derive = "3.5.3"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
@@ -83,14 +83,14 @@ regex = "1.12.3"
 reqwest = { features = ["json", "stream"], version = "0.13.2" }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.149"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 syn = { version = "2.0.117", features = ["derive", "full"] }
 tachyonfx = "0.25.0"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.50.0" }
-toml = "1.0.7"
-toon-format = "0.4.4"
+toml = "1.1.0"
+toon-format = "0.4.5"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
