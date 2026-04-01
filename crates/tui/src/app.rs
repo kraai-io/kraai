@@ -4027,9 +4027,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use render tests, interaction tests, and a small number of end-to-end sm
-05: oke tests.
+            r#"01:  > How should we test the TUI?
+04:  • Use render tests, interaction tests, and a small number of end-to-end
+05:     smoke tests.
 14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
 16:  > Add tests for the settings menu"#,
         );
@@ -4045,9 +4045,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use render tests, interaction tests, and a small number of end-to-end sm
-05: oke tests.
+            r#"01:  > How should we test the TUI?
+04:  • Use render tests, interaction tests, and a small number of end-to-end
+05:     smoke tests.
 12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
 13:  │> /sessions  Open sessions menu          │
 14: R└─────────────────────────────────────────┘completions/gpt-4o-mini | to
@@ -4065,9 +4065,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use rende┌/model──────────────────────────────────────────────┐to-end sm
-05: oke tests│Select model (Enter to choose, Esc to close)        │
+            r#"01:  > How should we test the TUI?
+04:  • Use re┌/model──────────────────────────────────────────────┐nd-to-end
+05:     smoke│Select model (Enter to choose, Esc to close)        │
 06:          │  openai-chat-completions / GPT-4.1 Mini            │
 07:          │> openai-chat-completions / GPT-4o Mini (current)   │
 08:          │                                                    │
@@ -4090,10 +4090,10 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
+            r#"01:  > How should we test the TUI?
 02:     ┌/providers───────────────────────────────────────────────────────────────────────────────┐
 03:     │Providers                                                                                │
-04: Use │Enter=open, a=connect, d=delete, r=refresh, Esc=close                                    │
+04:  • U│Enter=open, a=connect, d=delete, r=refresh, Esc=close                                    │
 05:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
 06:     ││Configured providers                                                                   ││
 07:     ││> id=openai-chat-completions  OpenAI-compatible Chat Completions                       ││
@@ -4201,9 +4201,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use ren┌/sessions──────────────────────────────────────────────┐o-end sm
-05: oke tes│Sessions (Enter=load/new, x=delete, Esc=close)         │
+            r#"01:  > How should we test the TUI?
+04:  • Use ┌/sessions──────────────────────────────────────────────┐d-to-end
+05:     smo│Sessions (Enter=load/new, x=delete, Esc=close)         │
 06:        │  Start new chat                                       │
 07:        │  Refactor ideas [approval] [streaming]                │
 08:        │> Testing plan (current)                               │
@@ -4225,9 +4225,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use render tests, interaction tests, and a small number of end-to-end smoke test
-05: s.
+            r#"01:  > How should we test the TUI?
+04:  • Use render tests, interaction tests, and a small number of end-to-end smoke t
+05:    ests.
 09: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | tools=2 |
 10:   Permission required ─────────────────────────────────────────────────────────┐
 11:   Patch the app module                                                         │
@@ -4251,9 +4251,9 @@ mod tests {
 
         assert_snapshot(
             &rendered,
-            r#"01: How should we test the TUI?
-04: Use render tes┌/help────────────────────────────────────┐f end-to-end sm
-05: oke tests.    │Slash Commands                           │
+            r#"01:  > How should we test the TUI?
+04:  • Use render ┌/help────────────────────────────────────┐r of end-to-end
+05:     smoke test│Slash Commands                           │
 06:               │/agent     Open agent selector           │
 07:               │/help      Open this help menu           │
 08:               │/model     Open model selector           │

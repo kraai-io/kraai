@@ -35,6 +35,7 @@ static FENCE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*```([A-Za-z0-9_-]+)?\s*$").expect("valid regex"));
 static TOOL_CALL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
+const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
     messages: &'a [&'a Message],
@@ -489,8 +490,10 @@ impl<'a> ChatHistory<'a> {
             found_tool_call = true;
 
             let before = &content[cursor..full_match.start()];
-            let mut before_lines = Self::render_markdown_message(before, width, normal_style);
-            lines.append(&mut before_lines);
+            if !before.is_empty() {
+                let mut before_lines = Self::render_markdown_message(before, width, normal_style);
+                lines.append(&mut before_lines);
+            }
 
             if let Some(raw_toon) = caps.get(1).map(|m| m.as_str()) {
                 if let Some(mut card_lines) = Self::render_tool_call_card(raw_toon, width) {
@@ -515,8 +518,10 @@ impl<'a> ChatHistory<'a> {
             lines.append(&mut parsed);
         } else {
             let tail = &content[cursor..];
-            let mut parsed = Self::render_markdown_message(tail, width, normal_style);
-            lines.append(&mut parsed);
+            if !tail.is_empty() {
+                let mut parsed = Self::render_markdown_message(tail, width, normal_style);
+                lines.append(&mut parsed);
+            }
         }
 
         if lines.is_empty() {
@@ -560,12 +565,62 @@ impl<'a> ChatHistory<'a> {
         text
     }
 
+    fn gutter_prefix(marker: Option<char>) -> String {
+        match marker {
+            Some(marker) => format!(" {marker} "),
+            None => "   ".to_string(),
+        }
+    }
+
+    fn line_prefix_style(line: &RenderedLine) -> Style {
+        match line.spans.first() {
+            Some(span) => span.style,
+            None => match line.bg {
+                Some(bg) => Style::default().bg(bg),
+                None => Style::default(),
+            },
+        }
+    }
+
+    fn add_message_gutter(lines: Vec<RenderedLine>, marker: char) -> Vec<RenderedLine> {
+        if lines.is_empty() {
+            return lines;
+        }
+
+        let marker_idx = lines
+            .iter()
+            .position(|line| !Self::line_text(line).is_empty())
+            .unwrap_or(0);
+
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(idx, mut line)| {
+                let prefix = if idx == marker_idx {
+                    Self::gutter_prefix(Some(marker))
+                } else {
+                    Self::gutter_prefix(None)
+                };
+                let prefix_style = Self::line_prefix_style(&line);
+                line.spans.insert(
+                    0,
+                    RenderedSpan {
+                        text: prefix,
+                        style: prefix_style,
+                    },
+                );
+                line
+            })
+            .collect()
+    }
+
     pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
         let width = width as usize;
         if msg.role == ChatRole::System {
             return Vec::new();
         }
 
+        let content_width = width.saturating_sub(MESSAGE_GUTTER_WIDTH);
         match msg.role {
             ChatRole::User => {
                 let user_style = Style::default()
@@ -574,26 +629,31 @@ impl<'a> ChatHistory<'a> {
 
                 let mut lines = vec![Self::single_span_line(String::new(), user_style)];
 
-                for line in Self::wrap_with_prefix(&msg.content, width, "", "") {
+                for line in Self::wrap_with_prefix(&msg.content, content_width, "", "") {
                     lines.push(Self::single_span_line(line, user_style));
                 }
 
                 lines.push(Self::single_span_line(String::new(), user_style));
-                lines
+                Self::add_message_gutter(lines, '>')
             }
-            ChatRole::Assistant => Self::render_assistant_message(&msg.content, width),
+            ChatRole::Assistant => Self::add_message_gutter(
+                Self::render_assistant_message(&msg.content, content_width),
+                '•',
+            ),
             ChatRole::Tool => {
                 if !Self::should_render_tool_message(&msg.content) {
                     Vec::new()
                 } else {
                     let mut lines = Vec::new();
-                    for line in Self::wrap_with_prefix(&msg.content, width, "tool: ", "      ") {
+                    for line in
+                        Self::wrap_with_prefix(&msg.content, content_width, "tool: ", "      ")
+                    {
                         lines.push(Self::single_span_line(
                             line,
                             Style::default().fg(Color::Yellow),
                         ));
                     }
-                    lines
+                    Self::add_message_gutter(lines, '•')
                 }
             }
             ChatRole::System => Vec::new(),
@@ -838,7 +898,7 @@ mod tests {
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(ChatHistory::line_text(&lines[0]), "visible");
+        assert_eq!(ChatHistory::line_text(&lines[0]), " • visible");
     }
 
     #[test]
@@ -853,11 +913,11 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| *line == "read_file"));
+        assert!(rendered.iter().any(|line| *line == " • read_file"));
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("files[1]: /tmp/a.txt"))
+                .any(|line| line.contains("   files[1]: /tmp/a.txt"))
         );
         assert!(rendered.iter().any(|line| line.contains("max_size: 10")));
         assert!(!rendered.iter().any(|line| line.contains("<tool_call>")));
@@ -875,9 +935,9 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| *line == "before"));
-        assert!(rendered.iter().any(|line| *line == "read_file"));
-        assert!(rendered.iter().any(|line| *line == "after"));
+        assert!(rendered.iter().any(|line| *line == " • before"));
+        assert!(rendered.iter().any(|line| *line == "   read_file"));
+        assert!(rendered.iter().any(|line| *line == "   after"));
     }
 
     #[test]
@@ -892,7 +952,7 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.contains("<tool_call>")));
+        assert!(rendered.iter().any(|line| line.contains(" • <tool_call>")));
     }
     #[test]
     fn hides_successful_tool_messages() {
@@ -923,7 +983,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("tool: Tool 'read_file' result:"))
+                .any(|line| line.contains(" • tool: Tool 'read_file' result:"))
         );
         assert!(
             rendered
@@ -944,16 +1004,16 @@ mod tests {
     }
 
     #[test]
-    fn renders_user_messages_without_prefix() {
+    fn renders_user_messages_with_gutter_indicator() {
         let user = message("1", ChatRole::User, "hello");
         let refs = [&user];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(40);
 
         assert_eq!(lines.len(), 3);
-        assert_eq!(ChatHistory::line_text(&lines[0]), "");
-        assert_eq!(ChatHistory::line_text(&lines[1]), "hello");
-        assert_eq!(ChatHistory::line_text(&lines[2]), "");
+        assert_eq!(ChatHistory::line_text(&lines[0]), "   ");
+        assert_eq!(ChatHistory::line_text(&lines[1]), " > hello");
+        assert_eq!(ChatHistory::line_text(&lines[2]), "   ");
     }
 
     #[test]
@@ -968,15 +1028,15 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| *line == "Title"));
-        assert!(rendered.iter().any(|line| *line == "• one"));
+        assert!(rendered.iter().any(|line| *line == " • Title"));
+        assert!(rendered.iter().any(|line| *line == "   • one"));
         assert!(
             rendered
                 .iter()
-                .any(|line| *line == "1. two (https://example.com)")
+                .any(|line| *line == "   1. two (https://example.com)")
         );
-        assert!(rendered.iter().any(|line| *line == "│ quote"));
-        assert!(rendered.iter().any(|line| *line == "inline"));
+        assert!(rendered.iter().any(|line| *line == "   │ quote"));
+        assert!(rendered.iter().any(|line| *line == "   inline"));
     }
 
     #[test]
@@ -987,8 +1047,8 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| *line == "[code: rust]"));
-        assert!(rendered.iter().any(|line| *line == "  fn main() {}"));
+        assert!(rendered.iter().any(|line| *line == " • [code: rust]"));
+        assert!(rendered.iter().any(|line| *line == "     fn main() {}"));
     }
 
     #[test]
@@ -999,12 +1059,38 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(ChatHistory::line_text(&lines[0]), "alpha beta gamma");
+        assert_eq!(ChatHistory::line_text(&lines[0]), " • alpha beta gamma");
 
         let has_colored_inline_code = lines[0]
             .spans
             .iter()
             .any(|span| span.text == "beta" && span.style.fg == Some(Color::Rgb(255, 180, 90)));
         assert!(has_colored_inline_code);
+    }
+
+    #[test]
+    fn wraps_assistant_messages_with_single_first_line_indicator() {
+        let assistant = message("1", ChatRole::Assistant, "abcdefghijk");
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(8);
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec![" • abcde", "   fghij", "   k"]);
+    }
+
+    #[test]
+    fn skips_leading_blank_line_before_assistant_tool_call() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
+
+        assert_eq!(rendered.first().map(String::as_str), Some(" • read_file"));
     }
 }
