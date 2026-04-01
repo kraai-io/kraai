@@ -28,9 +28,9 @@ mod ui;
 
 use self::runtime_bridge::spawn_runtime_bridge;
 use self::ui::{
-    active_command_prefix, adjust_index, bottom_panel_height, copy_via_osc52, is_copy_shortcut,
-    is_known_slash_command, model_menu_next_index, model_menu_previous_index,
-    parse_settings_errors, selection_text, slash_command_matches,
+    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
+    copy_via_osc52, is_copy_shortcut, is_known_slash_command, model_menu_next_index,
+    model_menu_previous_index, parse_settings_errors, selection_text, slash_command_matches,
 };
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
@@ -349,9 +349,11 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
     state: AppState,
     last_stream_refresh: Option<Instant>,
+    last_statusline_animation_tick: Option<Instant>,
 }
 
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 
 pub struct AppState {
     exit: bool,
@@ -373,6 +375,7 @@ pub struct AppState {
     mode: UiMode,
     status: String,
     is_streaming: bool,
+    statusline_animation_frame: usize,
     models_by_provider: HashMap<String, Vec<Model>>,
     agent_profiles: Vec<AgentProfileSummary>,
     agent_profile_warnings: Vec<AgentProfileWarning>,
@@ -434,6 +437,7 @@ impl Default for AppState {
             mode: UiMode::Chat,
             status: String::from("Type /help for commands"),
             is_streaming: false,
+            statusline_animation_frame: 0,
             models_by_provider: HashMap::new(),
             agent_profiles: default_agent_profiles(),
             agent_profile_warnings: Vec::new(),
@@ -622,6 +626,7 @@ impl App {
             clipboard: None,
             state: AppState::default(),
             last_stream_refresh: None,
+            last_statusline_animation_tick: None,
         }
     }
 
@@ -631,10 +636,13 @@ impl App {
             needs_redraw |= self.process_events();
             let event_timeout = if needs_redraw {
                 std::time::Duration::from_millis(0)
+            } else if self.state.is_streaming {
+                STATUSLINE_ANIMATION_INTERVAL
             } else {
                 std::time::Duration::from_millis(100)
             };
             needs_redraw |= self.handle_events(event_timeout)?;
+            needs_redraw |= self.advance_statusline_animation(Instant::now());
 
             if !needs_redraw {
                 continue;
@@ -713,6 +721,31 @@ impl App {
         changed
     }
 
+    fn advance_statusline_animation(&mut self, now: Instant) -> bool {
+        if !self.state.is_streaming {
+            self.last_statusline_animation_tick = None;
+            if self.state.statusline_animation_frame != 0 {
+                self.state.statusline_animation_frame = 0;
+                return true;
+            }
+            return false;
+        }
+
+        let Some(last_tick) = self.last_statusline_animation_tick else {
+            self.last_statusline_animation_tick = Some(now);
+            return false;
+        };
+
+        if now.duration_since(last_tick) < STATUSLINE_ANIMATION_INTERVAL {
+            return false;
+        }
+
+        self.last_statusline_animation_tick = Some(now);
+        self.state.statusline_animation_frame =
+            (self.state.statusline_animation_frame + 1) % STATUSLINE_STREAMING_FRAMES.len();
+        true
+    }
+
     fn handle_runtime_event(&mut self, event: Event) {
         match event {
             Event::ConfigLoaded => {
@@ -730,6 +763,8 @@ impl App {
                     return;
                 }
                 self.state.is_streaming = true;
+                self.state.statusline_animation_frame = 0;
+                self.last_statusline_animation_tick = None;
                 self.last_stream_refresh = None;
                 self.request(RuntimeRequest::GetCurrentTip { session_id });
             }
@@ -752,6 +787,8 @@ impl App {
             Event::StreamComplete { session_id, .. } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.statusline_animation_frame = 0;
+                    self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -767,6 +804,8 @@ impl App {
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.statusline_animation_frame = 0;
+                    self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
                     self.state.status = format!("Stream error: {error}");
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -780,6 +819,8 @@ impl App {
             Event::StreamCancelled { session_id, .. } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.statusline_animation_frame = 0;
+                    self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
@@ -794,6 +835,8 @@ impl App {
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.statusline_animation_frame = 0;
+                    self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
@@ -3108,6 +3151,8 @@ impl App {
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
         self.state.is_streaming = false;
+        self.state.statusline_animation_frame = 0;
+        self.last_statusline_animation_tick = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
         self.state.status = status.to_string();
@@ -3150,6 +3195,8 @@ impl App {
             self.update_queued_status();
         } else {
             self.state.is_streaming = true;
+            self.state.statusline_animation_frame = 0;
+            self.last_statusline_animation_tick = None;
             self.state.status = format!("Sending with {provider_id}/{model_id}");
         }
         self.state.auto_scroll = true;
@@ -3524,6 +3571,7 @@ fn is_ctrl_c(key_event: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
+    use std::time::Instant;
 
     use agent_runtime::{
         AgentProfileSummary, Event, FieldDefinition, FieldValueEntry, FieldValueKind, Model,
@@ -3546,10 +3594,11 @@ mod tests {
     use super::{
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
         OptimisticToolMessage, PendingSubmit, PendingTool, ProviderAuthState, ProviderAuthStatus,
-        ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, SettingsModelField,
-        SettingsProviderField, ToolPhase, UiMode, default_agent_profiles, is_copy_shortcut,
-        menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
-        render_chat_selection_overlay, selection_text,
+        ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse,
+        STATUSLINE_ANIMATION_INTERVAL, SettingsModelField, SettingsProviderField, ToolPhase,
+        UiMode, default_agent_profiles, is_copy_shortcut, menu_scroll_offset,
+        model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
+        selection_text,
     };
     use crate::components::VisibleChatView;
 
@@ -3571,6 +3620,7 @@ mod tests {
                 clipboard: None,
                 state: AppState::default(),
                 last_stream_refresh: None,
+                last_statusline_animation_tick: None,
             },
             requests_rx,
         }
@@ -4030,9 +4080,51 @@ mod tests {
             r#"01:  > How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end
 05:     smoke tests.
-14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 16:  > Add tests for the settings menu"#,
         );
+    }
+
+    #[test]
+    fn renders_cancelled_statusline_snapshot() {
+        let mut state = populated_state();
+        state.status = String::from("Stream cancelled");
+
+        let rendered = render_state_snapshot(&state, 80, 18);
+
+        assert!(rendered.contains(
+            "cancelled · openai-chat-completions/GPT-4o Mini · Plan Code · Stream cancelled"
+        ));
+    }
+
+    #[test]
+    fn statusline_animation_advances_while_streaming() {
+        let mut harness = test_harness();
+        let start = Instant::now();
+        harness.app.state.is_streaming = true;
+
+        assert!(!harness.app.advance_statusline_animation(start));
+        assert_eq!(harness.app.state.statusline_animation_frame, 0);
+
+        assert!(
+            harness
+                .app
+                .advance_statusline_animation(start + STATUSLINE_ANIMATION_INTERVAL)
+        );
+        assert_eq!(harness.app.state.statusline_animation_frame, 1);
+    }
+
+    #[test]
+    fn statusline_animation_resets_when_streaming_stops() {
+        let mut harness = test_harness();
+        harness.app.state.is_streaming = true;
+        harness.app.state.statusline_animation_frame = 3;
+        harness.app.last_statusline_animation_tick = Some(Instant::now());
+        harness.app.state.is_streaming = false;
+
+        assert!(harness.app.advance_statusline_animation(Instant::now()));
+        assert_eq!(harness.app.state.statusline_animation_frame, 0);
+        assert!(harness.app.last_statusline_animation_tick.is_none());
     }
 
     #[test]
@@ -4050,7 +4142,7 @@ mod tests {
 05:     smoke tests.
 12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
 13:  │> /sessions  Open sessions menu          │
-14: R└─────────────────────────────────────────┘completions/gpt-4o-mini | to
+14: i└─────────────────────────────────────────┘ Plan Code · Ready
 16:  > /s"#,
         );
     }
@@ -4075,7 +4167,7 @@ mod tests {
 10:          │                                                    │
 11:          │                                                    │
 12:          └────────────────────────────────────────────────────┘
-14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 16:  >"#,
         );
     }
@@ -4107,7 +4199,7 @@ mod tests {
 15:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
 16:     ││One provider panel at a time                                                           ││
 17:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
-18: Read└─────────────────────────────────────────────────────────────────────────────────────────┘
+18: idle└─────────────────────────────────────────────────────────────────────────────────────────┘
 20:  >"#,
         );
     }
@@ -4211,7 +4303,7 @@ mod tests {
 10:        │                                                       │
 11:        │                                                       │
 12:        └───────────────────────────────────────────────────────┘
-14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 16:  >"#,
         );
     }
@@ -4228,7 +4320,7 @@ mod tests {
             r#"01:  > How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end smoke t
 05:    ests.
-09: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | tools=2 |
+09: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 10:   Permission required ─────────────────────────────────────────────────────────┐
 11:   Patch the app module                                                         │
 12:   tool: write_file  risk: undoable_workspace_write                             │
@@ -4261,7 +4353,7 @@ mod tests {
 10:               │/providers Open providers                │
 11:               │/sessions  Open sessions menu            │
 12:               └─────────────────────────────────────────┘
-14: Ready | agent=plan-code | model=openai-chat-completions/gpt-4o-mini | to
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 16:  >"#,
         );
     }

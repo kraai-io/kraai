@@ -22,6 +22,8 @@ use super::{
     flatten_models_map, message_fingerprint, provider_definition_rank,
 };
 
+pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     if state.mode == UiMode::Chat && state.tool_phase == ToolPhase::Deciding {
         10.min(area.height.saturating_sub(1).max(3))
@@ -58,28 +60,7 @@ impl Widget for &AppState {
         }
         render_chat_selection_overlay(self.visible_chat_view.as_ref(), self.selection, buf);
 
-        let selected_model = self
-            .selected_provider_id
-            .as_ref()
-            .zip(self.selected_model_id.as_ref())
-            .map(|(p, m)| format!("{p}/{m}"))
-            .unwrap_or_else(|| String::from("none"));
-        let selected_agent = self
-            .selected_profile_id
-            .clone()
-            .unwrap_or_else(|| String::from("none"));
-        let stream_state = if self.is_streaming {
-            "streaming"
-        } else {
-            "idle"
-        };
-        let pending_tools = self.pending_tools.len();
-        let status_line = format!(
-            "{} | agent={} | model={} | tools={} | {}",
-            self.status, selected_agent, selected_model, pending_tools, stream_state
-        );
-
-        Paragraph::new(Line::raw(status_line))
+        Paragraph::new(statusline_line(self))
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
 
@@ -101,6 +82,78 @@ impl Widget for &AppState {
             UiMode::Chat => {}
         }
     }
+}
+
+fn statusline_line(state: &AppState) -> Line<'static> {
+    let separator = Span::styled(" · ", Style::default().fg(Color::DarkGray));
+
+    Line::from(vec![
+        Span::styled(
+            statusline_activity_label(state),
+            Style::default().fg(statusline_activity_color(state)),
+        ),
+        separator.clone(),
+        Span::raw(statusline_model_label(state)),
+        separator.clone(),
+        Span::raw(statusline_agent_label(state)),
+        separator,
+        Span::raw(state.status.clone()),
+    ])
+}
+
+fn statusline_activity_label(state: &AppState) -> String {
+    if state.is_streaming {
+        return STATUSLINE_STREAMING_FRAMES
+            [state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len()]
+        .to_string();
+    }
+
+    if state.status == "Stream cancelled" {
+        return String::from("cancelled");
+    }
+
+    String::from("idle")
+}
+
+fn statusline_activity_color(state: &AppState) -> Color {
+    if state.is_streaming {
+        Color::Cyan
+    } else if state.status == "Stream cancelled" {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    }
+}
+
+fn statusline_model_label(state: &AppState) -> String {
+    let Some(provider_id) = state.selected_provider_id.as_deref() else {
+        return String::from("none");
+    };
+    let Some(model_id) = state.selected_model_id.as_deref() else {
+        return String::from("none");
+    };
+
+    let model_name = state
+        .models_by_provider
+        .get(provider_id)
+        .and_then(|models| models.iter().find(|model| model.id == model_id))
+        .map(|model| model.name.as_str())
+        .unwrap_or(model_id);
+
+    format!("{provider_id}/{model_name}")
+}
+
+fn statusline_agent_label(state: &AppState) -> String {
+    let Some(profile_id) = state.selected_profile_id.as_deref() else {
+        return String::from("none");
+    };
+
+    state
+        .agent_profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .map(|profile| profile.display_name.clone())
+        .unwrap_or_else(|| profile_id.to_string())
 }
 
 impl AppState {
