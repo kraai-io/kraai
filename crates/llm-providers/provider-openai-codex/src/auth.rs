@@ -1059,6 +1059,40 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ulid::Ulid;
 
+    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            if display.contains("No CA certificates were loaded from the system")
+                || debug.contains("No CA certificates were loaded from the system")
+                || display == "builder error"
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
+    fn test_client_or_skip() -> Option<Client> {
+        match Client::builder().build() {
+            Ok(client) => Some(client),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected reqwest client build error: {error}"),
+        }
+    }
+
+    fn auth_controller_or_skip() -> Option<OpenAiCodexAuthController> {
+        match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+            temp_auth_path(),
+        )) {
+            Ok(controller) => Some(controller),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected auth controller init error: {error}"),
+        }
+    }
+
     fn temp_auth_path() -> PathBuf {
         std::env::temp_dir()
             .join(format!("agent-openai-codex-{}", Ulid::new()))
@@ -1102,7 +1136,10 @@ mod tests {
             access_token: "access-token".to_string(),
             account_id: "workspace_123".to_string(),
         };
-        let request = Client::new()
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
+        let request = client
             .get("https://example.com")
             .bearer_auth(&auth.access_token)
             .header("ChatGPT-Account-Id", &auth.account_id)
@@ -1121,10 +1158,9 @@ mod tests {
 
     #[tokio::test]
     async fn missing_auth_file_reports_signed_out_status() {
-        let controller = OpenAiCodexAuthController::new_with_options(
-            OpenAiCodexAuthControllerOptions::new(temp_auth_path()),
-        )
-        .unwrap();
+        let Some(controller) = auth_controller_or_skip() else {
+            return;
+        };
 
         assert_eq!(
             controller.get_status().await.state,

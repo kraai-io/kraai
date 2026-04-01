@@ -530,23 +530,48 @@ mod tests {
     use provider_core::DynamicConfig;
     use ulid::Ulid;
 
-    fn auth_controller() -> OpenAiCodexAuthController {
-        OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            if display.contains("No CA certificates were loaded from the system")
+                || debug.contains("No CA certificates were loaded from the system")
+                || display == "builder error"
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
+    fn auth_controller() -> Option<OpenAiCodexAuthController> {
+        match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
             std::env::temp_dir()
                 .join(format!("provider-openai-codex-{}", Ulid::new()))
                 .join("auth.json"),
-        ))
-        .unwrap()
+        )) {
+            Ok(controller) => Some(controller),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected auth controller init error: {error}"),
+        }
     }
 
-    fn provider() -> OpenAiCodexProvider {
-        OpenAiCodexProvider {
+    fn provider() -> Option<OpenAiCodexProvider> {
+        let auth = auth_controller()?;
+        let client = match Client::builder().build() {
+            Ok(client) => client,
+            Err(error) if is_missing_system_ca_error(&error) => return None,
+            Err(error) => panic!("unexpected reqwest client build error: {error}"),
+        };
+        Some(OpenAiCodexProvider {
             id: ProviderId::new("openai"),
-            auth: Arc::new(auth_controller()),
-            client: Client::new(),
+            auth: Arc::new(auth),
+            client,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
-        }
+        })
     }
 
     #[test]
@@ -561,7 +586,10 @@ mod tests {
 
     #[test]
     fn factory_create_uses_fixed_codex_endpoints() {
-        let factory = OpenAiCodexFactory::new(Arc::new(auth_controller()));
+        let Some(auth_controller) = auth_controller() else {
+            return;
+        };
+        let factory = OpenAiCodexFactory::new(Arc::new(auth_controller));
         let provider = factory
             .create(ProviderId::new("openai"), DynamicConfig::new())
             .unwrap();
@@ -617,7 +645,10 @@ mod tests {
 
     #[test]
     fn discovered_models_expand_visible_catalog_entries_into_variants() {
-        let discovered = provider().discovered_models(None);
+        let Some(provider) = provider() else {
+            return;
+        };
+        let discovered = provider.discovered_models(None);
         let ids = discovered
             .into_iter()
             .map(|model| model.id.to_string())
@@ -632,7 +663,9 @@ mod tests {
 
     #[test]
     fn discovered_models_intersect_remote_availability() {
-        let provider = provider();
+        let Some(provider) = provider() else {
+            return;
+        };
         let remote = BTreeMap::from([(
             "gpt-5.2-codex".to_string(),
             RemoteModelMetadata {
@@ -653,7 +686,9 @@ mod tests {
 
     #[test]
     fn discovered_models_fall_back_when_remote_matches_nothing() {
-        let provider = provider();
+        let Some(provider) = provider() else {
+            return;
+        };
         let remote = BTreeMap::from([(
             "totally-different-model".to_string(),
             RemoteModelMetadata {

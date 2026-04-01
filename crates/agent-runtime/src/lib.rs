@@ -2340,6 +2340,31 @@ mod tests {
         ToolCallAssessment,
     };
 
+    macro_rules! runtime_harness_or_skip {
+        ($expr:expr) => {
+            match $expr.await {
+                Some(harness) => harness,
+                None => return Ok(()),
+            }
+        };
+    }
+
+    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            if display.contains("No CA certificates were loaded from the system")
+                || debug.contains("No CA certificates were loaded from the system")
+                || display == "builder error"
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
     #[derive(Clone, Debug)]
     struct ScriptedChunk {
         text: String,
@@ -2762,11 +2787,14 @@ mod tests {
     }
 
     impl RuntimeTestHarness {
-        async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Self {
+        async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
             Self::new_with_tools(scripts, |_| {}).await
         }
 
-        async fn new_with_tools<F>(scripts: Vec<Vec<ScriptedChunk>>, configure_tools: F) -> Self
+        async fn new_with_tools<F>(
+            scripts: Vec<Vec<ScriptedChunk>>,
+            configure_tools: F,
+        ) -> Option<Self>
         where
             F: FnOnce(&mut ToolManager),
         {
@@ -2787,7 +2815,10 @@ mod tests {
             Self::new_with_parts(providers, tools).await
         }
 
-        async fn new_with_parts(providers: ProviderManager, mut tools: ToolManager) -> Self {
+        async fn new_with_parts(
+            providers: ProviderManager,
+            mut tools: ToolManager,
+        ) -> Option<Self> {
             if tools.list_tools().is_empty() {
                 tools.register_tool(ApprovalTool);
             }
@@ -2846,8 +2877,11 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 command_tx: command_tx.clone(),
             };
 
-            let openai_codex_auth =
-                Arc::new(OpenAiCodexAuthController::new().expect("openai auth controller"));
+            let openai_codex_auth = match OpenAiCodexAuthController::new() {
+                Ok(controller) => Arc::new(controller),
+                Err(error) if is_missing_system_ca_error(&error) => return None,
+                Err(error) => panic!("unexpected openai auth controller init error: {error}"),
+            };
             let runtime = RuntimeInner {
                 event_callback: Arc::new(events.clone()),
                 command_tx,
@@ -2868,12 +2902,12 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 }
             });
 
-            Self {
+            Some(Self {
                 handle,
                 events,
                 runtime_task,
                 data_dir,
-            }
+            })
         }
 
         async fn shutdown(self) {
@@ -2984,14 +3018,13 @@ default_risk_level = \"undoable_workspace_write\"\n"
     #[tokio::test]
     async fn background_session_stream_continues_after_switch() -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![
                 ScriptedChunk::plain("session-a chunk 1 "),
                 ScriptedChunk::gated("session-a chunk 2", gate.clone()),
             ],
             vec![ScriptedChunk::plain("session-b complete")],
-        ])
-        .await;
+        ]));
 
         let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3102,7 +3135,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
 
     #[tokio::test]
     async fn background_session_tool_approval_and_continuation_work_after_switch() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![
                 ScriptedChunk::plain("before tool\n"),
                 ScriptedChunk::plain(
@@ -3114,8 +3147,7 @@ value: alpha\n\
             ],
             vec![ScriptedChunk::plain("session-b reply")],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3259,7 +3291,7 @@ value: alpha\n\
     #[tokio::test]
     async fn continuation_waits_for_all_tools_from_one_message_across_split_executions()
     -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: mock_tool\n\
@@ -3271,8 +3303,7 @@ value: beta\n\
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3396,7 +3427,7 @@ value: beta\n\
     -> Result<()> {
         let started = Arc::new(tokio::sync::Notify::new());
         let ready = Arc::new(tokio::sync::Barrier::new(2));
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     "<tool_call>\n\
@@ -3417,8 +3448,7 @@ value: beta\n\
                     tools.register_tool(BatchBlockingApprovalTool { started, ready });
                 }
             },
-        )
-        .await;
+        ));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3534,7 +3564,7 @@ value: beta\n\
 
     #[tokio::test]
     async fn auto_approved_and_manual_tools_share_one_continuation_boundary() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: auto_tool\n\
@@ -3546,8 +3576,7 @@ value: beta\n\
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3640,7 +3669,7 @@ value: beta\n\
 
     #[tokio::test]
     async fn denied_and_approved_tools_finish_before_single_continuation_starts() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: mock_tool\n\
@@ -3652,8 +3681,7 @@ value: beta\n\
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3798,7 +3826,7 @@ value: beta\n\
 
     #[tokio::test]
     async fn multiple_tools_executed_together_start_only_one_continuation() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: mock_tool\n\
@@ -3810,8 +3838,7 @@ value: beta\n\
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -3899,7 +3926,7 @@ value: beta\n\
     #[tokio::test]
     async fn continuation_failure_still_happens_once_after_all_results_in_a_tool_batch()
     -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: failing_tool\n\
@@ -3913,8 +3940,7 @@ value: beta\n\
             |tools| {
                 tools.register_tool(FailingApprovalTool);
             },
-        )
-        .await;
+        ));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4050,7 +4076,7 @@ value: beta\n\
     async fn session_operations_remain_responsive_while_tool_executes() -> Result<()> {
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![vec![
                 ScriptedChunk::plain("before tool\n"),
                 ScriptedChunk::plain(
@@ -4071,8 +4097,7 @@ value: alpha\n\
                     });
                 }
             },
-        )
-        .await;
+        ));
 
         let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4170,7 +4195,7 @@ value: alpha\n\
     async fn failed_tool_result_is_persisted_before_continuation_failure() -> Result<()> {
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![vec![
                 ScriptedChunk::plain("before tool\n"),
                 ScriptedChunk::plain(
@@ -4191,8 +4216,7 @@ value: alpha\n\
                     });
                 }
             },
-        )
-        .await;
+        ));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4305,7 +4329,10 @@ value: alpha\n\
             }),
         );
 
-        let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_parts(
+            providers,
+            ToolManager::new(),
+        ));
         let session_a = create_session_with_profile(&harness.handle, "test-profile").await?;
         let session_b = create_session_with_profile(&harness.handle, "test-profile").await?;
 
@@ -4358,11 +4385,10 @@ value: alpha\n\
     #[tokio::test]
     async fn cancel_stream_persists_partial_message_as_complete() -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new(vec![vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![
             ScriptedChunk::plain("partial "),
             ScriptedChunk::gated("more text", gate),
-        ]])
-        .await;
+        ]]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4444,7 +4470,10 @@ value: alpha\n\
             }),
         );
 
-        let harness = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await;
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_parts(
+            providers,
+            ToolManager::new(),
+        ));
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
             .handle
@@ -4488,7 +4517,7 @@ value: alpha\n\
     #[tokio::test]
     async fn cancel_stream_prevents_tool_detection() -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new(vec![vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![
             ScriptedChunk::plain("before tool\n"),
             ScriptedChunk::gated(
                 "<tool_call>\n\
@@ -4497,8 +4526,7 @@ value: alpha\n\
 </tool_call>",
                 gate,
             ),
-        ]])
-        .await;
+        ]]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4548,14 +4576,13 @@ value: alpha\n\
     #[tokio::test]
     async fn cancel_stream_frees_session_for_next_send() -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![
                 ScriptedChunk::plain("partial "),
                 ScriptedChunk::gated("blocked", gate),
             ],
             vec![ScriptedChunk::plain("second reply")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4645,11 +4672,10 @@ value: alpha\n\
     async fn list_sessions_marks_streaming_session_while_active_and_clears_after_cancel()
     -> Result<()> {
         let gate = Arc::new(tokio::sync::Notify::new());
-        let harness = RuntimeTestHarness::new(vec![vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![
             ScriptedChunk::plain("partial "),
             ScriptedChunk::gated("blocked", gate),
-        ]])
-        .await;
+        ]]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4715,7 +4741,7 @@ value: alpha\n\
 
     #[tokio::test]
     async fn queued_messages_wait_for_tool_batch_completion_before_draining() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "before tool\n\
 <tool_call>\n\
@@ -4726,8 +4752,7 @@ value: alpha\n\
             vec![ScriptedChunk::plain("continuation complete")],
             vec![ScriptedChunk::plain("queued second reply")],
             vec![ScriptedChunk::plain("queued third reply")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
 
@@ -4821,7 +4846,7 @@ value: alpha\n\
 
     #[tokio::test]
     async fn repeated_malformed_tool_calls_continue_without_deadlocking() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<tool_call>\n\
 tool: edit_file\n\
@@ -4840,8 +4865,7 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("second continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
 
@@ -4947,15 +4971,15 @@ edits: [{\"old_text\":\"rust = \\\"1.90.0\\\"\",\"new_text\":\"rust = \\\"1.91.0
 
     #[tokio::test]
     async fn thinking_wrapped_tool_call_does_not_emit_tool_detection() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
-            "<think>\n\
+        let harness =
+            runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
+                "<think>\n\
 <tool_call>\n\
 tool: mock_tool\n\
 value: alpha\n\
 </tool_call>\n\
 </think>",
-        )]])
-        .await;
+            )]]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4999,8 +5023,9 @@ value: alpha\n\
 
     #[tokio::test]
     async fn only_visible_tool_call_is_detected_when_thinking_wraps_another() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
-            "visible first\n\
+        let harness =
+            runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
+                "visible first\n\
 <tool_call>\n\
 tool: mock_tool\n\
 value: alpha\n\
@@ -5011,8 +5036,7 @@ tool: mock_tool\n\
 value: hidden\n\
 </tool_call>\n\
 </thinking>",
-        )]])
-        .await;
+            )]]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -5068,7 +5092,7 @@ value: hidden\n\
 
     #[tokio::test]
     async fn malformed_thinking_block_adds_history_error_and_continues() -> Result<()> {
-        let harness = RuntimeTestHarness::new(vec![
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
             vec![ScriptedChunk::plain(
                 "<think>\n\
 <tool_call>\n\
@@ -5077,8 +5101,7 @@ value: alpha\n\
 </tool_call>",
             )],
             vec![ScriptedChunk::plain("continuation complete")],
-        ])
-        .await;
+        ]));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -5139,7 +5162,7 @@ value: alpha\n\
 
     #[tokio::test]
     async fn invalid_tool_arguments_do_not_emit_permission_events() -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
@@ -5155,8 +5178,7 @@ edits[1]{old_text,new_text}:
             |tools| {
                 tools.register_tool(EditFileTool);
             },
-        )
-        .await;
+        ));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -5214,7 +5236,7 @@ edits[1]{old_text,new_text}:
 
     #[tokio::test]
     async fn native_toon_edit_file_call_executes_automatically_in_workspace() -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
@@ -5238,8 +5260,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
                 tools.register_tool(ReadFileTool);
                 tools.register_tool(EditFileTool);
             },
-        )
-        .await;
+        ));
 
         let workspace_src = harness.data_dir.join("workspace").join("src");
         tokio::fs::create_dir_all(&workspace_src).await?;
@@ -5382,7 +5403,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
 
     #[tokio::test]
     async fn batched_read_files_does_not_unlock_same_turn_edit_file() -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
@@ -5404,8 +5425,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
                 tools.register_tool(ReadFileTool);
                 tools.register_tool(EditFileTool);
             },
-        )
-        .await;
+        ));
 
         let workspace_src = harness.data_dir.join("workspace").join("src");
         tokio::fs::create_dir_all(&workspace_src).await?;
@@ -5474,7 +5494,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
 
     #[tokio::test]
     async fn open_file_refresh_allows_next_turn_edit_without_explicit_reread() -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
@@ -5498,8 +5518,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
                 tools.register_tool(OpenFileTool);
                 tools.register_tool(EditFileTool);
             },
-        )
-        .await;
+        ));
 
         let workspace_src = harness.data_dir.join("workspace").join("src");
         tokio::fs::create_dir_all(&workspace_src).await?;
@@ -5586,7 +5605,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
 
     #[tokio::test]
     async fn second_same_turn_edit_fails_after_first_changes_file() -> Result<()> {
-        let harness = RuntimeTestHarness::new_with_tools(
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_tools(
             vec![
                 vec![ScriptedChunk::plain(
                     r#"<tool_call>
@@ -5618,8 +5637,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
                 tools.register_tool(OpenFileTool);
                 tools.register_tool(EditFileTool);
             },
-        )
-        .await;
+        ));
 
         let workspace_src = harness.data_dir.join("workspace").join("src");
         tokio::fs::create_dir_all(&workspace_src).await?;
