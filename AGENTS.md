@@ -51,7 +51,7 @@ crates/
   tui/               - Terminal UI
 
 apps/
-  agent-desktop/     - Electron + React frontend
+  agent-desktop/     - Electron + React frontend (currently defunct)
 ```
 
 ## Commands
