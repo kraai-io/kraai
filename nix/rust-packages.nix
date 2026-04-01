@@ -88,8 +88,6 @@
     };
 
     checks = {
-      inherit tui;
-
       clippy = mkCargoCheck {
         name = "clippy";
         command = ''
