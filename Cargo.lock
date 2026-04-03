@@ -4208,6 +4208,7 @@ dependencies = [
  "agent-runtime",
  "arboard",
  "base64",
+ "clap",
  "color-eyre",
  "crossbeam-channel",
  "ratatui 0.30.0",

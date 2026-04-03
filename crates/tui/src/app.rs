@@ -355,6 +355,13 @@ pub struct App {
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StartupOptions {
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub agent_profile_id: Option<String>,
+}
+
 pub struct AppState {
     exit: bool,
     input: String,
@@ -475,6 +482,19 @@ impl Default for AppState {
             connect_provider_index: 0,
             openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
+        }
+    }
+}
+
+impl AppState {
+    fn from_startup_options(startup_options: StartupOptions) -> Self {
+        Self {
+            selected_provider_id: startup_options.provider_id,
+            selected_model_id: startup_options.model_id,
+            selected_profile_id: startup_options
+                .agent_profile_id
+                .or_else(|| Some(String::from(DEFAULT_AGENT_PROFILE_ID))),
+            ..Self::default()
         }
     }
 }
@@ -616,7 +636,11 @@ impl App {
         self.clear_chat_selection();
     }
 
-    pub fn new(runtime: RuntimeHandle, event_rx: Receiver<Event>) -> Self {
+    pub fn new(
+        runtime: RuntimeHandle,
+        event_rx: Receiver<Event>,
+        startup_options: StartupOptions,
+    ) -> Self {
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
 
         Self {
@@ -624,7 +648,7 @@ impl App {
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            state: AppState::default(),
+            state: AppState::from_startup_options(startup_options),
             last_stream_refresh: None,
             last_statusline_animation_tick: None,
         }
@@ -2334,15 +2358,29 @@ impl App {
     }
 
     fn ensure_selected_model(&mut self) {
-        if let (Some(provider_id), Some(model_id)) = (
-            self.state.selected_provider_id.as_ref(),
-            self.state.selected_model_id.as_ref(),
-        ) && self
-            .state
-            .models_by_provider
-            .get(provider_id)
-            .is_some_and(|models| models.iter().any(|model| &model.id == model_id))
+        if let Some(provider_id) = self.state.selected_provider_id.as_ref()
+            && let Some(models) = self.state.models_by_provider.get(provider_id)
         {
+            if let Some(model_id) = self.state.selected_model_id.as_ref()
+                && models.iter().any(|model| &model.id == model_id)
+            {
+                return;
+            }
+
+            if let Some(model) = models.first() {
+                self.state.selected_model_id = Some(model.id.clone());
+                return;
+            }
+        }
+
+        if let Some(model_id) = self.state.selected_model_id.as_ref()
+            && let Some((provider_id, _)) = self
+                .state
+                .models_by_provider
+                .iter()
+                .find(|(_, models)| models.iter().any(|model| &model.id == model_id))
+        {
+            self.state.selected_provider_id = Some(provider_id.clone());
             return;
         }
 
@@ -2377,7 +2415,9 @@ impl App {
 
     fn sync_current_session_profile_from_sessions(&mut self) {
         let Some(session_id) = self.state.current_session_id.as_ref() else {
-            self.state.selected_profile_id = Some(String::from(DEFAULT_AGENT_PROFILE_ID));
+            self.state
+                .selected_profile_id
+                .get_or_insert_with(|| String::from(DEFAULT_AGENT_PROFILE_ID));
             self.state.profile_locked = false;
             return;
         };
@@ -3141,11 +3181,13 @@ impl App {
             default_agent_profiles()
         };
         self.state.agent_profile_warnings.clear();
-        self.state.selected_profile_id = if has_session {
-            None
+        if has_session {
+            self.state.selected_profile_id = None;
         } else {
-            Some(String::from(DEFAULT_AGENT_PROFILE_ID))
-        };
+            self.state
+                .selected_profile_id
+                .get_or_insert_with(|| String::from(DEFAULT_AGENT_PROFILE_ID));
+        }
         self.state.profile_locked = false;
         self.state.tool_approval_action = ToolApprovalAction::Allow;
         self.state.tool_phase = ToolPhase::Idle;
@@ -3595,8 +3637,8 @@ mod tests {
         ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
         OptimisticToolMessage, PendingSubmit, PendingTool, ProviderAuthState, ProviderAuthStatus,
         ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse,
-        STATUSLINE_ANIMATION_INTERVAL, SettingsModelField, SettingsProviderField, ToolPhase,
-        UiMode, default_agent_profiles, is_copy_shortcut, menu_scroll_offset,
+        STATUSLINE_ANIMATION_INTERVAL, SettingsModelField, SettingsProviderField, StartupOptions,
+        ToolPhase, UiMode, default_agent_profiles, is_copy_shortcut, menu_scroll_offset,
         model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
         selection_text,
     };
@@ -4065,6 +4107,54 @@ mod tests {
     #[test]
     fn model_menu_previous_index_moves_back_within_bounds() {
         assert_eq!(model_menu_previous_index(3, 5), 2);
+    }
+
+    #[test]
+    fn startup_options_apply_initial_selections() {
+        let state = AppState::from_startup_options(StartupOptions {
+            provider_id: Some(String::from("openai-chat-completions")),
+            model_id: Some(String::from("gpt-4o-mini")),
+            agent_profile_id: Some(String::from("build-code")),
+        });
+
+        assert_eq!(
+            state.selected_provider_id.as_deref(),
+            Some("openai-chat-completions")
+        );
+        assert_eq!(state.selected_model_id.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(state.selected_profile_id.as_deref(), Some("build-code"));
+    }
+
+    #[test]
+    fn ensure_selected_model_prefers_requested_provider() {
+        let mut harness = test_harness();
+        harness.app.state.models_by_provider = sample_models();
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+
+        harness.app.ensure_selected_model();
+
+        assert_eq!(
+            harness.app.state.selected_provider_id.as_deref(),
+            Some("openai-chat-completions")
+        );
+        assert_eq!(
+            harness.app.state.selected_model_id.as_deref(),
+            Some("gpt-4.1-mini")
+        );
+    }
+
+    #[test]
+    fn sync_current_session_profile_preserves_preselected_profile_without_session() {
+        let mut harness = test_harness();
+        harness.app.state.selected_profile_id = Some(String::from("build-code"));
+
+        harness.app.sync_current_session_profile_from_sessions();
+
+        assert_eq!(
+            harness.app.state.selected_profile_id.as_deref(),
+            Some("build-code")
+        );
+        assert!(!harness.app.state.profile_locked);
     }
 
     #[test]

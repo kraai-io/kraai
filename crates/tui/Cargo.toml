@@ -9,6 +9,7 @@ version = "0.1.0"
 agent-runtime = { workspace = true }
 arboard = { workspace = true }
 base64 = { workspace = true }
+clap = { workspace = true }
 color-eyre = { workspace = true }
 crossbeam-channel = { workspace = true }
 ratatui = { workspace = true }
