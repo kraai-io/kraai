@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -347,6 +348,12 @@ pub struct App {
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
     clipboard: Option<arboard::Clipboard>,
+    ci_output: Box<dyn Write + Send>,
+    ci_output_needs_newline: bool,
+    ci_turn_completion_pending: bool,
+    startup_options: StartupOptions,
+    startup_message_sent: bool,
+    ci_error: Option<String>,
     state: AppState,
     last_stream_refresh: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
@@ -357,9 +364,11 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
+    pub ci: bool,
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
+    pub message: Option<String>,
 }
 
 pub struct AppState {
@@ -642,15 +651,44 @@ impl App {
         startup_options: StartupOptions,
     ) -> Self {
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
+        let state = AppState::from_startup_options(startup_options.clone());
 
         Self {
             event_rx,
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            state: AppState::from_startup_options(startup_options),
+            ci_output: Box::new(io::stdout()),
+            ci_output_needs_newline: false,
+            ci_turn_completion_pending: false,
+            startup_options,
+            startup_message_sent: false,
+            ci_error: None,
+            state,
             last_stream_refresh: None,
             last_statusline_animation_tick: None,
+        }
+    }
+
+    pub fn run_ci(&mut self) -> Result<()> {
+        while !self.state.exit {
+            crossbeam_channel::select! {
+                recv(self.event_rx) -> event => match event {
+                    Ok(event) => self.handle_runtime_event(event),
+                    Err(_) => self.fail_ci("event channel closed"),
+                },
+                recv(self.runtime_rx) -> response => match response {
+                    Ok(response) => self.handle_runtime_response(response),
+                    Err(_) => self.fail_ci("runtime response channel closed"),
+                },
+                default(Duration::from_millis(100)) => {}
+            }
+        }
+
+        if let Some(error) = self.ci_error.take() {
+            Err(color_eyre::eyre::eyre!(error))
+        } else {
+            Ok(())
         }
     }
 
@@ -780,21 +818,32 @@ impl App {
             Event::Error(msg) => {
                 self.state.is_streaming = false;
                 self.state.status = format!("Runtime error: {msg}");
+                self.fail_ci(format!("Runtime error: {msg}"));
             }
             Event::StreamStart { session_id, .. } => {
                 self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
                 }
+                if self.is_ci_mode() {
+                    self.ci_output_needs_newline = false;
+                    self.ci_turn_completion_pending = false;
+                }
                 self.state.is_streaming = true;
+                self.state.profile_locked = true;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
                 self.last_stream_refresh = None;
                 self.request(RuntimeRequest::GetCurrentTip { session_id });
             }
-            Event::StreamChunk { session_id, .. } => {
+            Event::StreamChunk {
+                session_id, chunk, ..
+            } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
+                }
+                if self.is_ci_mode() {
+                    self.write_ci_output(&chunk);
                 }
                 let now = Instant::now();
                 let should_refresh = self
@@ -820,6 +869,10 @@ impl App {
                     {
                         self.finish_tool_batch_execution();
                     }
+                    if self.is_ci_mode() {
+                        self.finish_ci_output_line();
+                        self.ci_turn_completion_pending = true;
+                    }
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -838,6 +891,7 @@ impl App {
                         self.finish_tool_batch_execution();
                     }
                 }
+                self.fail_ci(format!("Stream error: {error}"));
                 self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamCancelled { session_id, .. } => {
@@ -872,6 +926,7 @@ impl App {
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
+                self.fail_ci(format!("Continuation failed: {error}"));
             }
             Event::HistoryUpdated { session_id } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
@@ -912,6 +967,10 @@ impl App {
                     .iter()
                     .any(|tool| tool.call_id == call_id);
                 if !exists {
+                    if self.is_ci_mode() {
+                        self.fail_ci(format!("CI mode does not support tool approval: {tool_id}"));
+                        return;
+                    }
                     self.state.pending_tools.push(PendingTool {
                         call_id,
                         tool_id,
@@ -970,10 +1029,19 @@ impl App {
         match response {
             RuntimeResponse::Models(Ok(models)) => {
                 self.state.models_by_provider = models;
-                self.ensure_selected_model();
+                if self.is_ci_mode() {
+                    if let Err(err) = self.validate_ci_model_selection() {
+                        self.fail_ci(err);
+                        return;
+                    }
+                } else {
+                    self.ensure_selected_model();
+                }
+                self.maybe_send_startup_message();
             }
             RuntimeResponse::Models(Err(err)) => {
                 self.state.status = format!("Failed loading models: {err}");
+                self.fail_ci(format!("Failed loading models: {err}"));
             }
             RuntimeResponse::AgentProfiles {
                 session_id,
@@ -983,6 +1051,7 @@ impl App {
                     return;
                 }
                 self.apply_agent_profiles_state(state);
+                self.maybe_finish_ci_run();
             }
             RuntimeResponse::AgentProfiles {
                 result: Err(err), ..
@@ -1064,6 +1133,7 @@ impl App {
             RuntimeResponse::CreateSession(Err(err)) => {
                 self.state.pending_submit = None;
                 self.state.status = format!("Failed creating session: {err}");
+                self.fail_ci(format!("Failed creating session: {err}"));
             }
             RuntimeResponse::SetSessionProfile {
                 profile_id,
@@ -1094,6 +1164,7 @@ impl App {
             } => {
                 self.state.pending_submit = None;
                 self.state.status = format!("Failed changing agent: {err}");
+                self.fail_ci(format!("Failed changing agent: {err}"));
             }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
@@ -1104,6 +1175,7 @@ impl App {
                 }
                 self.state.is_streaming = false;
                 self.state.status = format!("Send failed: {err}");
+                self.fail_ci(format!("Send failed: {err}"));
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
                 self.state.settings_errors.clear();
@@ -1185,6 +1257,7 @@ impl App {
                         {
                             self.maybe_start_tool_batch_execution();
                         }
+                        self.maybe_finish_ci_run();
                     }
                     Err(err) => {
                         self.state.status = format!("Failed loading pending tools: {err}");
@@ -1214,6 +1287,7 @@ impl App {
                     self.state.sessions_menu_index = self.state.sessions.len();
                 }
                 self.sync_current_session_profile_from_sessions();
+                self.maybe_finish_ci_run();
             }
             RuntimeResponse::Sessions(Err(err)) => {
                 self.state.status = format!("Failed loading sessions: {err}");
@@ -2243,6 +2317,17 @@ impl App {
         self.state.input.clear();
         self.state.input_cursor = 0;
 
+        self.submit_message(raw_input);
+    }
+
+    fn submit_message(&mut self, raw_input: String) {
+        if raw_input.trim().is_empty() {
+            let message = String::from("Message cannot be empty");
+            self.state.status = message.clone();
+            self.fail_ci(message);
+            return;
+        }
+
         if !self.state.config_loaded {
             self.state.status = String::from("Config not loaded yet");
             return;
@@ -2390,6 +2475,114 @@ impl App {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.state.selected_model_id = Some(model.id.clone());
         }
+    }
+
+    fn maybe_send_startup_message(&mut self) {
+        if self.startup_message_sent {
+            return;
+        }
+
+        let Some(message) = self.startup_options.message.clone() else {
+            return;
+        };
+
+        if !self.state.config_loaded
+            || self.state.pending_submit.is_some()
+            || self.state.is_streaming
+        {
+            return;
+        }
+
+        if self.state.selected_provider_id.is_none()
+            || self.state.selected_model_id.is_none()
+            || self.state.selected_profile_id.is_none()
+        {
+            return;
+        }
+
+        self.startup_message_sent = true;
+        self.submit_message(message);
+    }
+
+    fn validate_ci_model_selection(&self) -> std::result::Result<(), String> {
+        let provider_id = self
+            .startup_options
+            .provider_id
+            .as_ref()
+            .ok_or_else(|| String::from("CI mode requires --provider"))?;
+        let model_id = self
+            .startup_options
+            .model_id
+            .as_ref()
+            .ok_or_else(|| String::from("CI mode requires --model"))?;
+
+        let Some(models) = self.state.models_by_provider.get(provider_id) else {
+            return Err(format!("Unknown provider for --ci: {provider_id}"));
+        };
+
+        if models.iter().any(|model| &model.id == model_id) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Unknown model for provider {provider_id}: {model_id}"
+            ))
+        }
+    }
+
+    fn is_ci_mode(&self) -> bool {
+        self.startup_options.ci
+    }
+
+    fn fail_ci(&mut self, message: impl Into<String>) {
+        if !self.is_ci_mode() || self.state.exit {
+            return;
+        }
+
+        let message = message.into();
+        self.finish_ci_output_line();
+        self.ci_turn_completion_pending = false;
+        self.ci_error = Some(message.clone());
+        self.state.status = message;
+        self.state.is_streaming = false;
+        self.state.exit = true;
+    }
+
+    fn maybe_finish_ci_run(&mut self) {
+        if !self.is_ci_mode() || !self.ci_turn_completion_pending || self.state.exit {
+            return;
+        }
+
+        if self.state.is_streaming
+            || !self.state.pending_tools.is_empty()
+            || self.state.tool_phase != ToolPhase::Idle
+            || self.state.profile_locked
+        {
+            return;
+        }
+
+        self.ci_turn_completion_pending = false;
+        self.state.status = String::from("CI run completed");
+        self.state.exit = true;
+    }
+
+    fn write_ci_output(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+
+        let _ = self.ci_output.write_all(chunk.as_bytes());
+        let _ = self.ci_output.flush();
+        self.ci_output_needs_newline = !chunk.ends_with('\n');
+    }
+
+    fn finish_ci_output_line(&mut self) {
+        if !self.ci_output_needs_newline {
+            return;
+        }
+
+        let _ = self.ci_output.write_all(b"\n");
+        let _ = self.ci_output.flush();
+        self.ci_output_needs_newline = false;
     }
 
     fn apply_agent_profiles_state(&mut self, state: AgentProfilesState) {
@@ -3613,12 +3806,14 @@ fn is_ctrl_c(key_event: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use agent_runtime::{
-        AgentProfileSummary, Event, FieldDefinition, FieldValueEntry, FieldValueKind, Model,
-        ModelSettings, ProviderDefinition, ProviderSettings, Session, SettingsDocument,
-        SettingsValue,
+        AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
+        FieldValueKind, Model, ModelSettings, ProviderDefinition, ProviderSettings, Session,
+        SettingsDocument, SettingsValue,
     };
     use crossbeam_channel::{Receiver, unbounded};
     use ratatui::{
@@ -3649,6 +3844,25 @@ mod tests {
         requests_rx: Receiver<RuntimeRequest>,
     }
 
+    #[derive(Clone, Default)]
+    struct SharedBuffer {
+        data: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.data
+                .lock()
+                .expect("buffer poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     fn test_harness() -> TestHarness {
         let (_event_tx, event_rx) = unbounded();
         let (runtime_tx, requests_rx) = unbounded();
@@ -3660,12 +3874,36 @@ mod tests {
                 runtime_tx,
                 runtime_rx,
                 clipboard: None,
+                ci_output: Box::new(io::sink()),
+                ci_output_needs_newline: false,
+                ci_turn_completion_pending: false,
+                startup_options: StartupOptions::default(),
+                startup_message_sent: false,
+                ci_error: None,
                 state: AppState::default(),
                 last_stream_refresh: None,
                 last_statusline_animation_tick: None,
             },
             requests_rx,
         }
+    }
+
+    fn test_harness_with_startup_options(startup_options: StartupOptions) -> TestHarness {
+        let mut harness = test_harness();
+        harness.app.startup_options = startup_options.clone();
+        harness.app.state = AppState::from_startup_options(startup_options);
+        harness
+    }
+
+    fn install_ci_output_capture(harness: &mut TestHarness) -> Arc<Mutex<Vec<u8>>> {
+        let buffer = SharedBuffer::default();
+        let data = buffer.data.clone();
+        harness.app.ci_output = Box::new(buffer);
+        data
+    }
+
+    fn captured_output(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(buffer.lock().expect("buffer poisoned").clone()).expect("utf8 output")
     }
 
     impl TestHarness {
@@ -4112,9 +4350,11 @@ mod tests {
     #[test]
     fn startup_options_apply_initial_selections() {
         let state = AppState::from_startup_options(StartupOptions {
+            ci: false,
             provider_id: Some(String::from("openai-chat-completions")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
+            message: None,
         });
 
         assert_eq!(
@@ -4155,6 +4395,289 @@ mod tests {
             Some("build-code")
         );
         assert!(!harness.app.state.profile_locked);
+    }
+
+    #[test]
+    fn models_response_autosends_startup_message() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: false,
+            provider_id: Some(String::from("openai-chat-completions")),
+            model_id: Some(String::from("gpt-4o-mini")),
+            agent_profile_id: Some(String::from("build-code")),
+            message: Some(String::from("hello from startup")),
+        });
+        harness.app.state.config_loaded = true;
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Models(Ok(sample_models())));
+
+        assert_eq!(
+            harness
+                .app
+                .state
+                .pending_submit
+                .as_ref()
+                .map(|submit| submit.message.as_str()),
+            Some("hello from startup")
+        );
+        assert!(matches!(
+            harness.drain_requests().as_slice(),
+            [RuntimeRequest::CreateSession]
+        ));
+    }
+
+    #[test]
+    fn startup_message_treats_slash_prefix_as_literal_message() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: false,
+            provider_id: Some(String::from("openai-chat-completions")),
+            model_id: Some(String::from("gpt-4o-mini")),
+            agent_profile_id: Some(String::from("build-code")),
+            message: Some(String::from("/help")),
+        });
+        harness.app.state.config_loaded = true;
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Models(Ok(sample_models())));
+
+        assert_eq!(
+            harness
+                .app
+                .state
+                .pending_submit
+                .as_ref()
+                .map(|submit| submit.message.as_str()),
+            Some("/help")
+        );
+        assert_eq!(harness.app.state.mode, UiMode::Chat);
+    }
+
+    #[test]
+    fn ci_rejects_unknown_provider_before_sending_startup_message() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            provider_id: Some(String::from("missing-provider")),
+            model_id: Some(String::from("gpt-4o-mini")),
+            agent_profile_id: Some(String::from("build-code")),
+            message: Some(String::from("hello")),
+        });
+        harness.app.state.config_loaded = true;
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Models(Ok(sample_models())));
+
+        assert!(harness.app.state.exit);
+        assert_eq!(
+            harness.app.ci_error.as_deref(),
+            Some("Unknown provider for --ci: missing-provider")
+        );
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn ci_rejects_whitespace_only_startup_message() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            provider_id: Some(String::from("openai-chat-completions")),
+            model_id: Some(String::from("gpt-4o-mini")),
+            agent_profile_id: Some(String::from("build-code")),
+            message: Some(String::from("   ")),
+        });
+        harness.app.state.config_loaded = true;
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Models(Ok(sample_models())));
+
+        assert!(harness.app.state.exit);
+        assert_eq!(
+            harness.app.ci_error.as_deref(),
+            Some("Message cannot be empty")
+        );
+    }
+
+    #[test]
+    fn ci_stream_complete_waits_for_turn_to_unlock() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.is_streaming = true;
+        harness.app.state.profile_locked = true;
+
+        harness.app.handle_runtime_event(Event::StreamComplete {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+        });
+
+        assert!(!harness.app.state.exit);
+        assert_eq!(harness.app.ci_error, None);
+        assert!(harness.app.ci_turn_completion_pending);
+    }
+
+    #[test]
+    fn ci_finishes_after_synced_state_shows_turn_is_idle() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.is_streaming = true;
+        harness.app.state.profile_locked = true;
+
+        harness.app.handle_runtime_event(Event::StreamComplete {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+        });
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::PendingTools {
+                session_id: String::from("sess-2"),
+                result: Ok(Vec::new()),
+            });
+        assert!(!harness.app.state.exit);
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::AgentProfiles {
+                session_id: String::from("sess-2"),
+                result: Ok(AgentProfilesState {
+                    profiles: default_agent_profiles(),
+                    warnings: Vec::new(),
+                    selected_profile_id: Some(String::from("plan-code")),
+                    profile_locked: false,
+                }),
+            });
+
+        assert!(harness.app.state.exit);
+        assert_eq!(harness.app.ci_error, None);
+        assert_eq!(harness.app.state.status, "CI run completed");
+        assert!(!harness.app.ci_turn_completion_pending);
+    }
+
+    #[test]
+    fn ci_stream_chunk_prints_to_terminal_output() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        let output = install_ci_output_capture(&mut harness);
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_runtime_event(Event::StreamChunk {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+            chunk: String::from("hello"),
+        });
+
+        assert_eq!(captured_output(&output), "hello");
+    }
+
+    #[test]
+    fn ci_stream_complete_finishes_terminal_line() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        let output = install_ci_output_capture(&mut harness);
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_runtime_event(Event::StreamChunk {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+            chunk: String::from("hello"),
+        });
+        harness.app.handle_runtime_event(Event::StreamComplete {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+        });
+
+        assert_eq!(captured_output(&output), "hello\n");
+    }
+
+    #[test]
+    fn ci_failure_finishes_terminal_line_before_exiting() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        let output = install_ci_output_capture(&mut harness);
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_runtime_event(Event::StreamChunk {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+            chunk: String::from("partial"),
+        });
+        harness.app.handle_runtime_event(Event::StreamError {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+            error: String::from("boom"),
+        });
+
+        assert_eq!(captured_output(&output), "partial\n");
+        assert_eq!(harness.app.ci_error.as_deref(), Some("Stream error: boom"));
+    }
+
+    #[test]
+    fn non_ci_and_stale_chunks_do_not_print_terminal_output() {
+        let mut non_ci_harness = test_harness();
+        let non_ci_output = install_ci_output_capture(&mut non_ci_harness);
+        non_ci_harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        non_ci_harness.app.handle_runtime_event(Event::StreamChunk {
+            session_id: String::from("sess-2"),
+            message_id: String::from("msg-1"),
+            chunk: String::from("hello"),
+        });
+
+        assert_eq!(captured_output(&non_ci_output), "");
+
+        let mut stale_harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        let stale_output = install_ci_output_capture(&mut stale_harness);
+        stale_harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        stale_harness.app.handle_runtime_event(Event::StreamChunk {
+            session_id: String::from("sess-3"),
+            message_id: String::from("msg-1"),
+            chunk: String::from("hello"),
+        });
+
+        assert_eq!(captured_output(&stale_output), "");
+    }
+
+    #[test]
+    fn ci_tool_call_detection_fails_immediately() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            ci: true,
+            ..StartupOptions::default()
+        });
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_runtime_event(Event::ToolCallDetected {
+            session_id: String::from("sess-2"),
+            call_id: String::from("call-1"),
+            tool_id: String::from("write_file"),
+            args: String::from("{}"),
+            description: String::from("Write a file"),
+            risk_level: String::from("undoable_workspace_write"),
+            reasons: vec![String::from("Need to edit source")],
+            queue_order: 0,
+        });
+
+        assert!(harness.app.state.exit);
+        assert_eq!(
+            harness.app.ci_error.as_deref(),
+            Some("CI mode does not support tool approval: write_file")
+        );
     }
 
     #[test]
