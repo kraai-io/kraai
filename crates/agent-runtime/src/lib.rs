@@ -1707,6 +1707,21 @@ impl RuntimeInner {
         }
     }
 
+    async fn abort_stream_for_recovery(
+        session_id: &str,
+        message_id: &MessageId,
+        agent_manager: Arc<Mutex<AgentManager>>,
+    ) -> Result<bool> {
+        let mut agent = agent_manager.lock().await;
+        let rollback_result = agent.abort_streaming_message(message_id).await?;
+        if rollback_result.is_some() {
+            agent.clear_active_turn(session_id);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn handle_execute_tools(&self, session_id: String) {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
@@ -1916,29 +1931,63 @@ impl RuntimeInner {
                             .await;
                         }
                         StreamDriveResult::FailedToStart { error } => {
+                            match Self::abort_stream_for_recovery(
+                                &request_session_id,
+                                &request_message_id,
+                                agent_manager.clone(),
+                            )
+                            .await
                             {
-                                let mut agent = agent_manager.lock().await;
-                                let _ = agent.abort_streaming_message(&request_message_id).await;
-                                agent.clear_active_turn(&request_session_id);
+                                Ok(true) => {
+                                    Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                        .await;
+                                    event_callback.on_event(Event::HistoryUpdated {
+                                        session_id: request_session_id.clone(),
+                                    });
+                                }
+                                Ok(false) => {
+                                    event_callback.on_event(Event::Error(format!(
+                                        "Failed to recover continuation stream {} after start failure",
+                                        request_message_id
+                                    )));
+                                }
+                                Err(rollback_error) => {
+                                    event_callback.on_event(Event::Error(format!(
+                                        "Failed to roll back continuation stream {} after start failure: {rollback_error}",
+                                        request_message_id
+                                    )));
+                                }
                             }
-                            Self::schedule_queue_drain(&request_session_id, command_tx.clone())
-                                .await;
-                            event_callback.on_event(Event::HistoryUpdated {
-                                session_id: request_session_id.clone(),
-                            });
                             event_callback.on_event(Event::ContinuationFailed {
                                 session_id: request_session_id,
                                 error,
                             });
                         }
                         StreamDriveResult::FailedDuringStream { error } => {
+                            match Self::abort_stream_for_recovery(
+                                &request_session_id,
+                                &request_message_id,
+                                agent_manager.clone(),
+                            )
+                            .await
                             {
-                                let mut agent = agent_manager.lock().await;
-                                let _ = agent.abort_streaming_message(&request_message_id).await;
-                                agent.clear_active_turn(&request_session_id);
+                                Ok(true) => {
+                                    Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                        .await;
+                                }
+                                Ok(false) => {
+                                    event_callback.on_event(Event::Error(format!(
+                                        "Failed to recover continuation stream {} after runtime error",
+                                        request_message_id
+                                    )));
+                                }
+                                Err(rollback_error) => {
+                                    event_callback.on_event(Event::Error(format!(
+                                        "Failed to roll back continuation stream {} after runtime error: {rollback_error}",
+                                        request_message_id
+                                    )));
+                                }
                             }
-                            Self::schedule_queue_drain(&request_session_id, command_tx.clone())
-                                .await;
                             tracing::error!("Continuation stream error: {}", error);
                             event_callback.on_event(Event::StreamError {
                                 session_id: request_session_id,
@@ -2054,21 +2103,55 @@ impl RuntimeInner {
                         .await;
                     }
                     StreamDriveResult::FailedToStart { error } => {
+                        match Self::abort_stream_for_recovery(
+                            &request_session_id,
+                            &request_message_id,
+                            agent_manager.clone(),
+                        )
+                        .await
                         {
-                            let mut agent = agent_manager.lock().await;
-                            let _ = agent.abort_streaming_message(&request_message_id).await;
-                            agent.clear_active_turn(&request_session_id);
+                            Ok(true) => {
+                                Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
+                            }
+                            Ok(false) => {
+                                event_callback.on_event(Event::Error(format!(
+                                    "Failed to recover stream {} after start failure",
+                                    request_message_id
+                                )));
+                            }
+                            Err(rollback_error) => {
+                                event_callback.on_event(Event::Error(format!(
+                                    "Failed to roll back stream {} after start failure: {rollback_error}",
+                                    request_message_id
+                                )));
+                            }
                         }
-                        Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
                         event_callback.on_event(Event::Error(error));
                     }
                     StreamDriveResult::FailedDuringStream { error } => {
+                        match Self::abort_stream_for_recovery(
+                            &request_session_id,
+                            &request_message_id,
+                            agent_manager.clone(),
+                        )
+                        .await
                         {
-                            let mut agent = agent_manager.lock().await;
-                            let _ = agent.abort_streaming_message(&request_message_id).await;
-                            agent.clear_active_turn(&request_session_id);
+                            Ok(true) => {
+                                Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
+                            }
+                            Ok(false) => {
+                                event_callback.on_event(Event::Error(format!(
+                                    "Failed to recover stream {} after runtime error",
+                                    request_message_id
+                                )));
+                            }
+                            Err(rollback_error) => {
+                                event_callback.on_event(Event::Error(format!(
+                                    "Failed to roll back stream {} after runtime error: {rollback_error}",
+                                    request_message_id
+                                )));
+                            }
                         }
-                        Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
                         event_callback.on_event(Event::StreamError {
                             session_id: request_session_id,
                             message_id: request_message_id.to_string(),
@@ -2717,7 +2800,7 @@ mod tests {
     use async_trait::async_trait;
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
-    use persistence::{FileMessageStore, FileSessionStore, MessageStore, SessionStore};
+    use persistence::{FileMessageStore, FileSessionStore, MessageStore, SessionMeta, SessionStore};
     use serde::Deserialize;
     use tool_core::{ToolCallResult, ToolContext, ToolManager, TypedTool};
     use tool_edit_file::EditFileTool;
@@ -3060,6 +3143,13 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
+    struct DeferredFailingProvider {
+        id: ProviderId,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        failure_message: String,
+    }
+
     #[derive(Clone, Copy)]
     struct NoopTool;
 
@@ -3126,6 +3216,50 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl provider_core::Provider for DeferredFailingProvider {
+        fn get_provider_id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        async fn list_models(&self) -> Vec<provider_core::Model> {
+            vec![provider_core::Model {
+                id: ModelId::new("mock-model"),
+                name: String::from("Mock Model"),
+                max_context: None,
+            }]
+        }
+
+        async fn cache_models(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn generate_reply(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<ChatMessage> {
+            Ok(ChatMessage {
+                role: ChatRole::Assistant,
+                content: String::from("unused non-streaming reply"),
+            })
+        }
+
+        async fn generate_reply_stream(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+        ) -> Result<BoxStream<'static, Result<String>>> {
+            self.started.notify_waiters();
+            self.release.notified().await;
+            Err(eyre!(self.failure_message.clone()))
+        }
+    }
+
     #[derive(Clone, Default)]
     struct EventCollector {
         events: Arc<StdMutex<Vec<Event>>>,
@@ -3133,6 +3267,11 @@ mod tests {
 
     struct FailOnAssistantCompletionMessageStore {
         inner: Arc<dyn MessageStore>,
+        should_fail: Arc<AtomicBool>,
+    }
+
+    struct FailOnDemandSessionStore {
+        inner: Arc<dyn SessionStore>,
         should_fail: Arc<AtomicBool>,
     }
 
@@ -3171,6 +3310,32 @@ mod tests {
 
         async fn list_hot(&self) -> Result<std::collections::HashSet<types::MessageId>> {
             self.inner.list_hot().await
+        }
+    }
+
+    #[async_trait]
+    impl SessionStore for FailOnDemandSessionStore {
+        async fn list(&self) -> Result<Vec<SessionMeta>> {
+            self.inner.list().await
+        }
+
+        async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, session: &SessionMeta) -> Result<()> {
+            if self.should_fail.load(Ordering::SeqCst) {
+                return Err(eyre!(
+                    "intentional session save failure for {}",
+                    session.id
+                ));
+            }
+
+            self.inner.save(session).await
+        }
+
+        async fn delete(&self, id: &str) -> Result<()> {
+            self.inner.delete(id).await
         }
     }
 
@@ -3417,6 +3582,66 @@ default_risk_level = \"undoable_workspace_write\"\n"
             let message_store = configure_store(base_store.clone());
             let session_store: Arc<dyn SessionStore> =
                 Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+
+            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
+                .await
+        }
+
+        async fn new_with_provider_and_session_store<F>(
+            provider: Box<dyn provider_core::Provider>,
+            configure_session_store: F,
+        ) -> Option<Self>
+        where
+            F: FnOnce(Arc<dyn SessionStore>) -> Arc<dyn SessionStore>,
+        {
+            let mut providers = ProviderManager::new();
+            providers.register_provider(ProviderId::new("mock"), provider);
+
+            let mut tools = ToolManager::new();
+            tools.register_tool(ApprovalTool);
+            tools.register_tool(AutonomousTool);
+            tools.register_tool(NoopTool);
+
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let pid = std::process::id();
+            let data_dir = std::env::temp_dir().join(format!("agent-runtime-test-{pid}-{nanos}"));
+            tokio::fs::create_dir_all(&data_dir)
+                .await
+                .expect("create temp runtime dir");
+            let workspace_dir = data_dir.join("workspace");
+            tokio::fs::create_dir_all(&workspace_dir)
+                .await
+                .expect("create temp workspace dir");
+            let profile_dir = workspace_dir.join(".agent");
+            tokio::fs::create_dir_all(&profile_dir)
+                .await
+                .expect("create temp profile dir");
+            let tool_ids = tools
+                .list_tools()
+                .into_iter()
+                .map(|tool_id| format!("\"{}\"", tool_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let profile_doc = format!(
+                "[[profiles]]\n\
+id = \"test-profile\"\n\
+display_name = \"Test Profile\"\n\
+description = \"Runtime test profile\"\n\
+system_prompt = \"Runtime test profile\"\n\
+tools = [{tool_ids}]\n\
+default_risk_level = \"undoable_workspace_write\"\n"
+            );
+            tokio::fs::write(profile_dir.join("agents.toml"), profile_doc)
+                .await
+                .expect("write test profile config");
+
+            let message_store: Arc<dyn MessageStore> = Arc::new(FileMessageStore::new(&data_dir));
+            let base_session_store: Arc<dyn SessionStore> =
+                Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+            let session_store = configure_session_store(base_session_store);
 
             Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
                 .await
@@ -3815,6 +4040,92 @@ value: alpha\n\
         assert!(recovered_history
             .values()
             .any(|message| message.content == "second reply"));
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_failure_surfaces_rollback_error_without_clearing_active_turn() -> Result<()> {
+        let provider_started = Arc::new(tokio::sync::Notify::new());
+        let provider_release = Arc::new(tokio::sync::Notify::new());
+        let fail_session_save = Arc::new(AtomicBool::new(false));
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_provider_and_session_store(
+            Box::new(DeferredFailingProvider {
+                id: ProviderId::new("mock"),
+                started: provider_started.clone(),
+                release: provider_release.clone(),
+                failure_message: String::from("provider start failed"),
+            }),
+            {
+                let fail_session_save = fail_session_save.clone();
+                move |base_store| {
+                    Arc::new(FailOnDemandSessionStore {
+                        inner: base_store,
+                        should_fail: fail_session_save,
+                    })
+                }
+            },
+        ));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("trigger failure"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        provider_started.notified().await;
+        fail_session_save.store(true, Ordering::SeqCst);
+        provider_release.notify_one();
+
+        let events = harness
+            .events
+            .wait_for("rollback failure surfaced", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::Error(message)
+                            if message.contains("Failed to roll back stream")
+                                && message.contains("intentional session save failure")
+                    )
+                })
+            })
+            .await;
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Error(message) if message == "provider start failed"
+            )
+        }));
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Event::HistoryUpdated { session_id: event_session }
+                    if event_session == &session_id
+            )
+        }));
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("retry should stay blocked"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(history
+            .values()
+            .all(|message| message.content != "retry should stay blocked"));
 
         harness.shutdown().await;
         Ok(())
