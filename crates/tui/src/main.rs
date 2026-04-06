@@ -12,6 +12,7 @@ use ratatui::crossterm::{
     execute,
 };
 use std::io::stdout;
+use std::path::PathBuf;
 
 use crate::app::{App, StartupOptions};
 
@@ -37,6 +38,9 @@ struct Cli {
 
     #[arg(long, value_name = "TEXT")]
     message: Option<String>,
+
+    #[arg(long = "provider-config", value_name = "PATH")]
+    provider_config: Option<PathBuf>,
 }
 
 impl Cli {
@@ -77,7 +81,13 @@ fn main() -> Result<()> {
         let _ = event_tx.send(event);
     };
 
-    let runtime = RuntimeBuilder::new(callback).build();
+    let runtime_builder = RuntimeBuilder::new(callback);
+    let runtime_builder = if let Some(path) = cli.provider_config.clone() {
+        runtime_builder.provider_config_path(path)
+    } else {
+        runtime_builder
+    };
+    let runtime = runtime_builder.build();
 
     let startup_options = StartupOptions {
         ci: cli.ci,
@@ -159,5 +169,21 @@ mod tests {
         assert_eq!(cli.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(cli.agent_profile.as_deref(), Some("build-code"));
         assert_eq!(cli.message.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn parses_provider_config_path_argument() {
+        let cli = Cli::try_parse_from([
+            "tui",
+            "--provider-config",
+            "/tmp/custom-providers.toml",
+        ])
+        .and_then(Cli::validate)
+        .expect("provider config arg should parse");
+
+        assert_eq!(
+            cli.provider_config.as_deref(),
+            Some(std::path::Path::new("/tmp/custom-providers.toml"))
+        );
     }
 }

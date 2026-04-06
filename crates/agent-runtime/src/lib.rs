@@ -659,6 +659,7 @@ impl RuntimeHandle {
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     callback: Arc<dyn EventCallback>,
+    provider_config_path: Option<PathBuf>,
 }
 
 impl RuntimeBuilder {
@@ -666,7 +667,13 @@ impl RuntimeBuilder {
     pub fn new(callback: impl EventCallback + 'static) -> Self {
         Self {
             callback: Arc::new(callback),
+            provider_config_path: None,
         }
+    }
+
+    pub fn provider_config_path(mut self, path: PathBuf) -> Self {
+        self.provider_config_path = Some(path);
+        self
     }
 
     /// Build and start the runtime
@@ -679,6 +686,7 @@ impl RuntimeBuilder {
         let command_tx_for_runtime = handle.command_tx.clone();
 
         let callback = self.callback.clone();
+        let provider_config_path = self.provider_config_path.clone();
 
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
@@ -695,6 +703,7 @@ impl RuntimeBuilder {
                 callback.clone(),
                 command_tx_for_runtime,
                 command_rx,
+                provider_config_path,
             )) {
                 callback.on_event(Event::Error(error.to_string()));
             }
@@ -707,6 +716,7 @@ impl RuntimeBuilder {
         callback: Arc<dyn EventCallback>,
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
+        provider_config_path_override: Option<PathBuf>,
     ) -> Result<()> {
         Self::init_tracing()?;
 
@@ -724,6 +734,7 @@ impl RuntimeBuilder {
             OpenAiCodexAuthController::new().wrap_err("Failed to initialize OpenAI auth")?,
         );
         let registry = build_provider_registry(openai_codex_auth.clone())?;
+        let provider_config_path = resolve_provider_config_path(provider_config_path_override)?;
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
@@ -741,6 +752,7 @@ impl RuntimeBuilder {
             active_streams: Arc::new(Mutex::new(HashMap::new())),
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
             openai_codex_auth,
+            provider_config_path,
         };
 
         runtime.run(command_rx).await;
@@ -885,6 +897,7 @@ struct RuntimeInner {
     active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
     queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     openai_codex_auth: Arc<OpenAiCodexAuthController>,
+    provider_config_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -1264,7 +1277,7 @@ impl RuntimeInner {
             }
 
             Command::GetSettings { response } => {
-                let settings = read_settings_document(&settings_path()?, &self.provider_registry)?;
+                let settings = read_settings_document(&self.provider_config_path, &self.provider_registry)?;
                 response
                     .send(settings)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -2462,15 +2475,9 @@ impl RuntimeInner {
     fn spawn_config_watcher(&self) {
         let command_tx = self.command_tx.clone();
         let callback = self.event_callback.clone();
+        let config_loc = self.provider_config_path.clone();
 
         tokio::spawn(async move {
-            let config_loc = match settings_path() {
-                Ok(path) => path,
-                Err(error) => {
-                    callback.on_event(Event::Error(format!("Config path error: {error}")));
-                    return;
-                }
-            };
             let config_dir = match config_loc.parent() {
                 Some(path) => path.to_path_buf(),
                 None => {
@@ -2525,7 +2532,7 @@ impl RuntimeInner {
     }
 
     async fn load_providers_config(&self) -> Result<()> {
-        let config_loc = settings_path()?;
+        let config_loc = &self.provider_config_path;
         let config = if !config_loc.exists() {
             ProviderManagerConfig {
                 providers: Vec::new(),
@@ -2533,7 +2540,9 @@ impl RuntimeInner {
             }
         } else {
             let config_slice = tokio::fs::read(&config_loc).await?;
-            toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?
+            toml::from_slice(&config_slice).wrap_err_with(|| {
+                format!("Failed to parse provider config {}", config_loc.display())
+            })?
         };
 
         self.agent_manager
@@ -2546,8 +2555,8 @@ impl RuntimeInner {
     }
 
     async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
-        let config_loc = settings_path()?;
-        write_settings_document(&config_loc, &settings, &self.provider_registry).await?;
+        write_settings_document(&self.provider_config_path, &settings, &self.provider_registry)
+            .await?;
         self.load_providers_config().await?;
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
@@ -2573,8 +2582,15 @@ fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     Ok(raw.canonicalize().unwrap_or(raw))
 }
 
-fn settings_path() -> Result<std::path::PathBuf> {
+fn default_provider_config_path() -> Result<PathBuf> {
     Ok(agent_state_root()?.join("providers.toml"))
+}
+
+fn resolve_provider_config_path(provider_config_path_override: Option<PathBuf>) -> Result<PathBuf> {
+    match provider_config_path_override {
+        Some(path) => Ok(path),
+        None => default_provider_config_path(),
+    }
 }
 
 fn map_openai_codex_auth_status(status: ProviderOpenAiCodexAuthStatus) -> OpenAiCodexAuthStatus {
@@ -2614,7 +2630,8 @@ fn read_settings_document(
 
     let config_slice = std::fs::read(path)?;
     let config: ProviderManagerConfig =
-        toml::from_slice(&config_slice).wrap_err("Failed to parse providers.toml")?;
+        toml::from_slice(&config_slice)
+            .wrap_err_with(|| format!("Failed to parse provider config {}", path.display()))?;
     settings_from_provider_config(config, registry)
 }
 
@@ -2873,6 +2890,26 @@ mod tests {
             current = error.source();
         }
         false
+    }
+
+    #[test]
+    fn resolve_provider_config_path_uses_override_when_present() {
+        let override_path = PathBuf::from("/tmp/custom-providers.toml");
+
+        let resolved =
+            resolve_provider_config_path(Some(override_path.clone())).expect("path should resolve");
+
+        assert_eq!(resolved, override_path);
+    }
+
+    #[test]
+    fn resolve_provider_config_path_falls_back_to_default_location() {
+        let resolved = resolve_provider_config_path(None).expect("default path should resolve");
+
+        assert_eq!(
+            resolved,
+            default_provider_config_path().expect("default path should resolve")
+        );
     }
 
     #[derive(Clone, Debug)]
@@ -3581,6 +3618,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 active_streams: Arc::new(Mutex::new(HashMap::new())),
                 queued_messages: Arc::new(Mutex::new(HashMap::new())),
                 openai_codex_auth,
+                provider_config_path: data_dir.join("providers.toml"),
             };
 
             let runtime_task = tokio::spawn(async move {
