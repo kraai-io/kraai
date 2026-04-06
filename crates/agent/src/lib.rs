@@ -782,9 +782,16 @@ impl AgentManager {
         let Some(mut state) = state else {
             return Ok(None);
         };
+        let original_state = state.clone();
 
         state.message.status = MessageStatus::Complete;
-        self.message_store.save(&state.message).await?;
+        if let Err(error) = self.message_store.save(&state.message).await {
+            self.streaming_messages
+                .write()
+                .await
+                .insert(message_id.clone(), original_state);
+            return Err(error);
+        }
         Ok(Some(state.session_id))
     }
 
@@ -793,8 +800,15 @@ impl AgentManager {
         let Some(state) = state else {
             return Ok(None);
         };
+        let original_state = state.clone();
 
-        self.set_tip(&state.session_id, state.previous_tip).await?;
+        if let Err(error) = self.set_tip(&state.session_id, state.previous_tip.clone()).await {
+            self.streaming_messages
+                .write()
+                .await
+                .insert(message_id.clone(), original_state);
+            return Err(error);
+        }
         Ok(Some(state.session_id))
     }
 

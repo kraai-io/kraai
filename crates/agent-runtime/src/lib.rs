@@ -1654,6 +1654,59 @@ impl RuntimeInner {
             .await;
     }
 
+    async fn handle_completion_persistence_failure(
+        session_id: String,
+        message_id: MessageId,
+        error: color_eyre::Report,
+        continuation_error: bool,
+        command_tx: mpsc::Sender<Command>,
+        agent_manager: Arc<Mutex<AgentManager>>,
+        event_callback: Arc<dyn EventCallback>,
+    ) {
+        let rollback_result = {
+            let mut agent = agent_manager.lock().await;
+            let rollback_result = agent.abort_streaming_message(&message_id).await;
+            if rollback_result.is_ok() {
+                agent.clear_active_turn(&session_id);
+            }
+            rollback_result
+        };
+
+        match rollback_result {
+            Ok(Some(_)) => {
+                Self::schedule_queue_drain(&session_id, command_tx).await;
+                event_callback.on_event(Event::HistoryUpdated {
+                    session_id: session_id.clone(),
+                });
+            }
+            Ok(None) => {
+                event_callback.on_event(Event::Error(format!(
+                    "Failed to recover stream state for message {} after completion error",
+                    message_id
+                )));
+            }
+            Err(rollback_error) => {
+                event_callback.on_event(Event::Error(format!(
+                    "Failed to roll back stream {} after completion error: {rollback_error}",
+                    message_id
+                )));
+            }
+        }
+
+        if continuation_error {
+            event_callback.on_event(Event::ContinuationFailed {
+                session_id,
+                error: error.to_string(),
+            });
+        } else {
+            event_callback.on_event(Event::StreamError {
+                session_id,
+                message_id: message_id.to_string(),
+                error: error.to_string(),
+            });
+        }
+    }
+
     async fn handle_execute_tools(&self, session_id: String) {
         let event_callback = self.event_callback.clone();
         let agent_manager = self.agent_manager.clone();
@@ -1823,8 +1876,22 @@ impl RuntimeInner {
                                 let agent = agent_manager.lock().await;
                                 agent.complete_message(&request_message_id).await
                             };
-                            let Ok(Some(completed_session)) = completed_session else {
-                                return;
+                            let completed_session = match completed_session {
+                                Ok(Some(completed_session)) => completed_session,
+                                Ok(None) => return,
+                                Err(error) => {
+                                    Self::handle_completion_persistence_failure(
+                                        request_session_id.clone(),
+                                        request_message_id.clone(),
+                                        error,
+                                        true,
+                                        command_tx.clone(),
+                                        agent_manager.clone(),
+                                        event_callback.clone(),
+                                    )
+                                    .await;
+                                    return;
+                                }
                             };
 
                             event_callback.on_event(Event::StreamComplete {
@@ -1947,8 +2014,22 @@ impl RuntimeInner {
                             let agent = agent_manager.lock().await;
                             agent.complete_message(&request_message_id).await
                         };
-                        let Ok(Some(completed_session)) = completed_session else {
-                            return;
+                        let completed_session = match completed_session {
+                            Ok(Some(completed_session)) => completed_session,
+                            Ok(None) => return,
+                            Err(error) => {
+                                Self::handle_completion_persistence_failure(
+                                    request_session_id.clone(),
+                                    request_message_id.clone(),
+                                    error,
+                                    false,
+                                    command_tx.clone(),
+                                    agent_manager.clone(),
+                                    event_callback.clone(),
+                                )
+                                .await;
+                                return;
+                            }
                         };
 
                         event_callback.on_event(Event::StreamComplete {
@@ -2625,7 +2706,10 @@ fn format_settings_errors(errors: Vec<SettingsValidationError>) -> String {
 mod tests {
     use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -2633,7 +2717,7 @@ mod tests {
     use async_trait::async_trait;
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
-    use persistence::{FileMessageStore, FileSessionStore};
+    use persistence::{FileMessageStore, FileSessionStore, MessageStore, SessionStore};
     use serde::Deserialize;
     use tool_core::{ToolCallResult, ToolContext, ToolManager, TypedTool};
     use tool_edit_file::EditFileTool;
@@ -3047,6 +3131,49 @@ mod tests {
         events: Arc<StdMutex<Vec<Event>>>,
     }
 
+    struct FailOnAssistantCompletionMessageStore {
+        inner: Arc<dyn MessageStore>,
+        should_fail: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl MessageStore for FailOnAssistantCompletionMessageStore {
+        async fn get(&self, id: &types::MessageId) -> Result<Option<types::Message>> {
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, message: &types::Message) -> Result<()> {
+            if self.should_fail.load(Ordering::SeqCst)
+                && message.role == ChatRole::Assistant
+                && message.status == MessageStatus::Complete
+            {
+                return Err(eyre!("intentional assistant completion save failure"));
+            }
+
+            self.inner.save(message).await
+        }
+
+        async fn unload(&self, id: &types::MessageId) {
+            self.inner.unload(id).await;
+        }
+
+        async fn delete(&self, id: &types::MessageId) -> Result<()> {
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &types::MessageId) -> Result<bool> {
+            self.inner.exists(id).await
+        }
+
+        async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<types::MessageId>> {
+            self.inner.list_all_on_disk().await
+        }
+
+        async fn list_hot(&self) -> Result<std::collections::HashSet<types::MessageId>> {
+            self.inner.list_hot().await
+        }
+    }
+
     impl EventCollector {
         fn snapshot(&self) -> Vec<Event> {
             self.events
@@ -3167,10 +3294,25 @@ default_risk_level = \"undoable_workspace_write\"\n"
             let message_store = Arc::new(FileMessageStore::new(&data_dir));
             let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
 
+            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
+                .await
+        }
+
+        async fn new_with_stores_and_parts(
+            providers: ProviderManager,
+            mut tools: ToolManager,
+            message_store: Arc<dyn MessageStore>,
+            session_store: Arc<dyn SessionStore>,
+            data_dir: PathBuf,
+        ) -> Option<Self> {
+            if tools.list_tools().is_empty() {
+                tools.register_tool(ApprovalTool);
+            }
+
             let agent_manager = Arc::new(Mutex::new(AgentManager::new(
                 providers,
                 tools,
-                workspace_dir,
+                data_dir.join("workspace"),
                 message_store,
                 session_store,
             )));
@@ -3212,6 +3354,72 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 runtime_task,
                 data_dir,
             })
+        }
+
+        async fn new_with_message_store<F>(
+            scripts: Vec<Vec<ScriptedChunk>>,
+            configure_store: F,
+        ) -> Option<Self>
+        where
+            F: FnOnce(Arc<dyn MessageStore>) -> Arc<dyn MessageStore>,
+        {
+            let mut providers = ProviderManager::new();
+            providers.register_provider(
+                ProviderId::new("mock"),
+                Box::new(ScriptedProvider {
+                    id: ProviderId::new("mock"),
+                    scripts: StdMutex::new(scripts.into()),
+                }),
+            );
+
+            let mut tools = ToolManager::new();
+            tools.register_tool(ApprovalTool);
+            tools.register_tool(AutonomousTool);
+            tools.register_tool(NoopTool);
+
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let pid = std::process::id();
+            let data_dir = std::env::temp_dir().join(format!("agent-runtime-test-{pid}-{nanos}"));
+            tokio::fs::create_dir_all(&data_dir)
+                .await
+                .expect("create temp runtime dir");
+            let workspace_dir = data_dir.join("workspace");
+            tokio::fs::create_dir_all(&workspace_dir)
+                .await
+                .expect("create temp workspace dir");
+            let profile_dir = workspace_dir.join(".agent");
+            tokio::fs::create_dir_all(&profile_dir)
+                .await
+                .expect("create temp profile dir");
+            let tool_ids = tools
+                .list_tools()
+                .into_iter()
+                .map(|tool_id| format!("\"{}\"", tool_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let profile_doc = format!(
+                "[[profiles]]\n\
+id = \"test-profile\"\n\
+display_name = \"Test Profile\"\n\
+description = \"Runtime test profile\"\n\
+system_prompt = \"Runtime test profile\"\n\
+tools = [{tool_ids}]\n\
+default_risk_level = \"undoable_workspace_write\"\n"
+            );
+            tokio::fs::write(profile_dir.join("agents.toml"), profile_doc)
+                .await
+                .expect("write test profile config");
+
+            let base_store: Arc<dyn MessageStore> = Arc::new(FileMessageStore::new(&data_dir));
+            let message_store = configure_store(base_store.clone());
+            let session_store: Arc<dyn SessionStore> =
+                Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+
+            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
+                .await
         }
 
         async fn shutdown(self) {
@@ -3518,6 +3726,95 @@ value: alpha\n\
                 .values()
                 .any(|message| message.content == "session-b complete")
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completion_save_failure_rolls_back_stream_and_allows_retry() -> Result<()> {
+        let fail_completion_save = Arc::new(AtomicBool::new(true));
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_message_store(
+            vec![
+                vec![ScriptedChunk::plain("first reply")],
+                vec![ScriptedChunk::plain("second reply")],
+            ],
+            {
+                let fail_completion_save = fail_completion_save.clone();
+                move |base_store| {
+                    Arc::new(FailOnAssistantCompletionMessageStore {
+                        inner: base_store,
+                        should_fail: fail_completion_save,
+                    })
+                }
+            },
+        ));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first prompt"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("stream completion persistence failure", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamError {
+                            session_id: event_session,
+                            error,
+                            ..
+                        } if event_session == &session_id
+                            && error.contains("intentional assistant completion save failure")
+                    )
+                })
+            })
+            .await;
+
+        assert_eq!(stream_complete_count(&events, &session_id), 0);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::HistoryUpdated { session_id: event_session }
+                    if event_session == &session_id
+            )
+        }));
+
+        let failed_history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert_eq!(failed_history.len(), 1);
+        assert!(failed_history
+            .values()
+            .all(|message| message.content != "first reply"));
+
+        fail_completion_save.store(false, Ordering::SeqCst);
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("second prompt"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("retry completion after rollback", |events| {
+                stream_complete_count(events, &session_id) == 1
+            })
+            .await;
+
+        let recovered_history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(recovered_history
+            .values()
+            .any(|message| message.content == "second reply"));
 
         harness.shutdown().await;
         Ok(())
