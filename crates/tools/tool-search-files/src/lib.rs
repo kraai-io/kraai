@@ -160,7 +160,12 @@ fn search_directory(
             continue;
         }
 
-        search_file(entry.path(), matcher, state)?;
+        if let Err(error) = search_file(entry.path(), matcher, state) {
+            if error.to_string().contains("invalid utf-8") {
+                continue;
+            }
+            return Err(error);
+        }
         if state.truncated {
             break;
         }
@@ -383,6 +388,41 @@ mod tests {
                         .expect("path")
                         .ends_with("visible.txt")
                 );
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[tokio::test]
+    async fn skips_non_utf8_files_without_aborting_directory_search() {
+        let workspace_dir = make_temp_dir("skips_non_utf8_files_without_aborting_directory_search");
+        fs::write(workspace_dir.join("valid.txt"), "needle\n").expect("write valid file");
+        fs::write(
+            workspace_dir.join("broken.txt"),
+            [0x80, b'n', b'e', b'e', b'd', b'l', b'e'],
+        )
+        .expect("write invalid utf8 file");
+
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let output = tool
+            .call(
+                search_args("needle", Option::<String>::None),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                let matches = data["matches"].as_array().expect("matches array");
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0]["path"]
+                    .as_str()
+                    .expect("path")
+                    .ends_with("valid.txt"));
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
