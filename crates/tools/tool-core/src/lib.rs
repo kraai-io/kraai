@@ -4,6 +4,7 @@ pub mod toon_parser;
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
@@ -362,10 +363,35 @@ pub fn normalize_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
 
 pub fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> ResolvedToolPath {
     let path = normalize_tool_path(workspace_root, raw_path);
-    let within_workspace = path.starts_with(workspace_root);
+    let within_workspace = canonicalize_for_workspace_check(workspace_root)
+        .zip(canonicalize_for_workspace_check(&path))
+        .map(|(workspace_root, candidate)| candidate.starts_with(workspace_root))
+        .unwrap_or_else(|| path.starts_with(workspace_root));
     ResolvedToolPath {
         path,
         within_workspace,
+    }
+}
+
+fn canonicalize_for_workspace_check(path: &Path) -> Option<PathBuf> {
+    let mut missing_suffix = Vec::<OsString>::new();
+    let mut cursor = path;
+
+    loop {
+        match fs::canonicalize(cursor) {
+            Ok(mut canonical) => {
+                for component in missing_suffix.iter().rev() {
+                    canonical.push(component);
+                }
+                return Some(canonical);
+            }
+            Err(_) if cursor.exists() => return None,
+            Err(_) => {
+                let file_name = cursor.file_name()?.to_os_string();
+                missing_suffix.push(file_name);
+                cursor = cursor.parent()?;
+            }
+        }
     }
 }
 
@@ -481,11 +507,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use async_trait::async_trait;
     use serde::ser::{Error as _, Serialize, Serializer};
@@ -500,6 +528,23 @@ mod tests {
         TypedTool, assess_read_path, assess_write_path, format_text_with_line_numbers,
         read_text_path, resolve_tool_path,
     };
+
+    fn make_temp_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "agent-tool-core-{test_name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn cleanup_temp_dir(path: &PathBuf) {
+        let _ = fs::remove_dir_all(path);
+    }
 
     struct FailingSerialize;
 
@@ -587,6 +632,27 @@ mod tests {
         );
         assert_eq!(outside.risk, RiskLevel::WriteOutsideWorkspace);
         assert_eq!(outside.policy, ExecutionPolicy::AlwaysAsk);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_tool_path_treats_symlink_escape_as_outside_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_root = make_temp_dir("symlink-workspace");
+        let outside_root = make_temp_dir("symlink-outside");
+        let symlink_path = workspace_root.join("outside-link");
+        let outside_file = outside_root.join("secret.txt");
+        fs::write(&outside_file, "secret").expect("write outside file");
+        symlink(&outside_root, &symlink_path).expect("create symlink");
+
+        let resolved = resolve_tool_path(&workspace_root, "outside-link/secret.txt");
+
+        assert_eq!(resolved.path(), workspace_root.join("outside-link/secret.txt"));
+        assert!(!resolved.is_within_workspace());
+
+        cleanup_temp_dir(&workspace_root);
+        cleanup_temp_dir(&outside_root);
     }
 
     #[derive(Clone)]
