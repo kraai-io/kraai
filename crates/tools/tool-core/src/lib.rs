@@ -648,7 +648,10 @@ mod tests {
 
         let resolved = resolve_tool_path(&workspace_root, "outside-link/secret.txt");
 
-        assert_eq!(resolved.path(), workspace_root.join("outside-link/secret.txt"));
+        assert_eq!(
+            resolved.path(),
+            workspace_root.join("outside-link/secret.txt")
+        );
         assert!(!resolved.is_within_workspace());
 
         cleanup_temp_dir(&workspace_root);

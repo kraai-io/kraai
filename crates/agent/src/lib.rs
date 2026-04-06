@@ -403,8 +403,7 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
-        self
-            .prepare_start_stream_with_options(session_id, message, model_id, provider_id, false)
+        self.prepare_start_stream_with_options(session_id, message, model_id, provider_id, false)
             .await
     }
 
@@ -818,7 +817,10 @@ impl AgentManager {
         };
         let original_state = state.clone();
 
-        if let Err(error) = self.set_tip(&state.session_id, state.previous_tip.clone()).await {
+        if let Err(error) = self
+            .set_tip(&state.session_id, state.previous_tip.clone())
+            .await
+        {
             self.streaming_messages
                 .write()
                 .await

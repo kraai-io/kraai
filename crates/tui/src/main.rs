@@ -173,13 +173,9 @@ mod tests {
 
     #[test]
     fn parses_provider_config_path_argument() {
-        let cli = Cli::try_parse_from([
-            "tui",
-            "--provider-config",
-            "/tmp/custom-providers.toml",
-        ])
-        .and_then(Cli::validate)
-        .expect("provider config arg should parse");
+        let cli = Cli::try_parse_from(["tui", "--provider-config", "/tmp/custom-providers.toml"])
+            .and_then(Cli::validate)
+            .expect("provider config arg should parse");
 
         assert_eq!(
             cli.provider_config.as_deref(),

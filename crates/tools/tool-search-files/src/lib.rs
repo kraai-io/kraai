@@ -419,10 +419,12 @@ mod tests {
             ToolOutput::Success { data } => {
                 let matches = data["matches"].as_array().expect("matches array");
                 assert_eq!(matches.len(), 1);
-                assert!(matches[0]["path"]
-                    .as_str()
-                    .expect("path")
-                    .ends_with("valid.txt"));
+                assert!(
+                    matches[0]["path"]
+                        .as_str()
+                        .expect("path")
+                        .ends_with("valid.txt")
+                );
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }

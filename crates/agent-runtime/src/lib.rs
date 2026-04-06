@@ -454,8 +454,7 @@ impl RuntimeHandle {
         model_id: String,
         provider_id: String,
     ) -> Result<()> {
-        self
-            .send_message_with_options(session_id, message, model_id, provider_id, false)
+        self.send_message_with_options(session_id, message, model_id, provider_id, false)
             .await
     }
 
@@ -1277,7 +1276,8 @@ impl RuntimeInner {
             }
 
             Command::GetSettings { response } => {
-                let settings = read_settings_document(&self.provider_config_path, &self.provider_registry)?;
+                let settings =
+                    read_settings_document(&self.provider_config_path, &self.provider_registry)?;
                 response
                     .send(settings)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -1596,16 +1596,16 @@ impl RuntimeInner {
 
         let stream_request = {
             let mut agent = self.agent_manager.lock().await;
-                match agent
-                    .prepare_start_stream_with_options(
-                        &session_id,
-                        message,
-                        model_id,
-                        provider_id,
-                        auto_approve,
-                    )
-                    .await
-                {
+            match agent
+                .prepare_start_stream_with_options(
+                    &session_id,
+                    message,
+                    model_id,
+                    provider_id,
+                    auto_approve,
+                )
+                .await
+            {
                 Ok(result) => Some((agent.cloned_provider_manager(), result)),
                 Err(error) => {
                     self.send_event(Event::Error(error.to_string()));
@@ -1978,8 +1978,11 @@ impl RuntimeInner {
                             .await
                             {
                                 Ok(true) => {
-                                    Self::schedule_queue_drain(&request_session_id, command_tx.clone())
-                                        .await;
+                                    Self::schedule_queue_drain(
+                                        &request_session_id,
+                                        command_tx.clone(),
+                                    )
+                                    .await;
                                     event_callback.on_event(Event::HistoryUpdated {
                                         session_id: request_session_id.clone(),
                                     });
@@ -2011,8 +2014,11 @@ impl RuntimeInner {
                             .await
                             {
                                 Ok(true) => {
-                                    Self::schedule_queue_drain(&request_session_id, command_tx.clone())
-                                        .await;
+                                    Self::schedule_queue_drain(
+                                        &request_session_id,
+                                        command_tx.clone(),
+                                    )
+                                    .await;
                                 }
                                 Ok(false) => {
                                     event_callback.on_event(Event::Error(format!(
@@ -2150,7 +2156,8 @@ impl RuntimeInner {
                         .await
                         {
                             Ok(true) => {
-                                Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
+                                Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                    .await;
                             }
                             Ok(false) => {
                                 event_callback.on_event(Event::Error(format!(
@@ -2176,7 +2183,8 @@ impl RuntimeInner {
                         .await
                         {
                             Ok(true) => {
-                                Self::schedule_queue_drain(&request_session_id, command_tx.clone()).await;
+                                Self::schedule_queue_drain(&request_session_id, command_tx.clone())
+                                    .await;
                             }
                             Ok(false) => {
                                 event_callback.on_event(Event::Error(format!(
@@ -2555,8 +2563,12 @@ impl RuntimeInner {
     }
 
     async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
-        write_settings_document(&self.provider_config_path, &settings, &self.provider_registry)
-            .await?;
+        write_settings_document(
+            &self.provider_config_path,
+            &settings,
+            &self.provider_registry,
+        )
+        .await?;
         self.load_providers_config().await?;
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
@@ -2629,9 +2641,8 @@ fn read_settings_document(
     }
 
     let config_slice = std::fs::read(path)?;
-    let config: ProviderManagerConfig =
-        toml::from_slice(&config_slice)
-            .wrap_err_with(|| format!("Failed to parse provider config {}", path.display()))?;
+    let config: ProviderManagerConfig = toml::from_slice(&config_slice)
+        .wrap_err_with(|| format!("Failed to parse provider config {}", path.display()))?;
     settings_from_provider_config(config, registry)
 }
 
@@ -2856,7 +2867,9 @@ mod tests {
     use async_trait::async_trait;
     use color_eyre::eyre::{Result, eyre};
     use futures::stream::{self, BoxStream};
-    use persistence::{FileMessageStore, FileSessionStore, MessageStore, SessionMeta, SessionStore};
+    use persistence::{
+        FileMessageStore, FileSessionStore, MessageStore, SessionMeta, SessionStore,
+    };
     use serde::Deserialize;
     use tool_core::{ToolCallResult, ToolContext, ToolManager, TypedTool};
     use tool_edit_file::EditFileTool;
@@ -3441,10 +3454,7 @@ mod tests {
 
         async fn save(&self, session: &SessionMeta) -> Result<()> {
             if self.should_fail.load(Ordering::SeqCst) {
-                return Err(eyre!(
-                    "intentional session save failure for {}",
-                    session.id
-                ));
+                return Err(eyre!("intentional session save failure for {}", session.id));
             }
 
             self.inner.save(session).await
@@ -3575,8 +3585,14 @@ default_risk_level = \"undoable_workspace_write\"\n"
             let message_store = Arc::new(FileMessageStore::new(&data_dir));
             let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
 
-            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-                .await
+            Self::new_with_stores_and_parts(
+                providers,
+                tools,
+                message_store,
+                session_store,
+                data_dir,
+            )
+            .await
         }
 
         async fn new_with_stores_and_parts(
@@ -3700,8 +3716,14 @@ default_risk_level = \"undoable_workspace_write\"\n"
             let session_store: Arc<dyn SessionStore> =
                 Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
 
-            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-                .await
+            Self::new_with_stores_and_parts(
+                providers,
+                tools,
+                message_store,
+                session_store,
+                data_dir,
+            )
+            .await
         }
 
         async fn new_with_provider_and_session_store<F>(
@@ -3760,8 +3782,14 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
             let session_store = configure_session_store(base_session_store);
 
-            Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-                .await
+            Self::new_with_stores_and_parts(
+                providers,
+                tools,
+                message_store,
+                session_store,
+                data_dir,
+            )
+            .await
         }
 
         async fn shutdown(self) {
@@ -4131,9 +4159,11 @@ value: alpha\n\
 
         let failed_history = harness.handle.get_chat_history(session_id.clone()).await?;
         assert_eq!(failed_history.len(), 1);
-        assert!(failed_history
-            .values()
-            .all(|message| message.content != "first reply"));
+        assert!(
+            failed_history
+                .values()
+                .all(|message| message.content != "first reply")
+        );
 
         fail_completion_save.store(false, Ordering::SeqCst);
         harness
@@ -4154,9 +4184,11 @@ value: alpha\n\
             .await;
 
         let recovered_history = harness.handle.get_chat_history(session_id.clone()).await?;
-        assert!(recovered_history
-            .values()
-            .any(|message| message.content == "second reply"));
+        assert!(
+            recovered_history
+                .values()
+                .any(|message| message.content == "second reply")
+        );
 
         harness.shutdown().await;
         Ok(())
@@ -4167,23 +4199,24 @@ value: alpha\n\
         let provider_started = Arc::new(tokio::sync::Notify::new());
         let provider_release = Arc::new(tokio::sync::Notify::new());
         let fail_session_save = Arc::new(AtomicBool::new(false));
-        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_provider_and_session_store(
-            Box::new(DeferredFailingProvider {
-                id: ProviderId::new("mock"),
-                started: provider_started.clone(),
-                release: provider_release.clone(),
-                failure_message: String::from("provider start failed"),
-            }),
-            {
-                let fail_session_save = fail_session_save.clone();
-                move |base_store| {
-                    Arc::new(FailOnDemandSessionStore {
-                        inner: base_store,
-                        should_fail: fail_session_save,
-                    })
-                }
-            },
-        ));
+        let harness =
+            runtime_harness_or_skip!(RuntimeTestHarness::new_with_provider_and_session_store(
+                Box::new(DeferredFailingProvider {
+                    id: ProviderId::new("mock"),
+                    started: provider_started.clone(),
+                    release: provider_release.clone(),
+                    failure_message: String::from("provider start failed"),
+                }),
+                {
+                    let fail_session_save = fail_session_save.clone();
+                    move |base_store| {
+                        Arc::new(FailOnDemandSessionStore {
+                            inner: base_store,
+                            should_fail: fail_session_save,
+                        })
+                    }
+                },
+            ));
 
         let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
         harness
@@ -4240,9 +4273,11 @@ value: alpha\n\
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         let history = harness.handle.get_chat_history(session_id.clone()).await?;
-        assert!(history
-            .values()
-            .all(|message| message.content != "retry should stay blocked"));
+        assert!(
+            history
+                .values()
+                .all(|message| message.content != "retry should stay blocked")
+        );
 
         harness.shutdown().await;
         Ok(())
@@ -7315,12 +7350,16 @@ value: {\n\
         }));
 
         let failed_history = harness.handle.get_chat_history(session_id.clone()).await?;
-        assert!(failed_history
-            .values()
-            .all(|message| !message.content.contains("Failed to parse tool call")));
-        assert!(failed_history
-            .values()
-            .all(|message| message.content != "retry reply"));
+        assert!(
+            failed_history
+                .values()
+                .all(|message| !message.content.contains("Failed to parse tool call"))
+        );
+        assert!(
+            failed_history
+                .values()
+                .all(|message| message.content != "retry reply")
+        );
 
         fail_tool_history_save.store(false, Ordering::SeqCst);
         harness
@@ -7336,22 +7375,28 @@ value: {\n\
         harness
             .events
             .wait_for("retry after parse failure write error", |events| {
-                events.iter().filter(|event| {
-                    matches!(
-                        event,
-                        Event::StreamComplete {
-                            session_id: event_session,
-                            ..
-                        } if event_session == &session_id
-                    )
-                }).count() >= 2
+                events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::StreamComplete {
+                                session_id: event_session,
+                                ..
+                            } if event_session == &session_id
+                        )
+                    })
+                    .count()
+                    >= 2
             })
             .await;
 
         let recovered_history = harness.handle.get_chat_history(session_id.clone()).await?;
-        assert!(recovered_history
-            .values()
-            .any(|message| message.content == "retry reply"));
+        assert!(
+            recovered_history
+                .values()
+                .any(|message| message.content == "retry reply")
+        );
 
         harness.shutdown().await;
         Ok(())
