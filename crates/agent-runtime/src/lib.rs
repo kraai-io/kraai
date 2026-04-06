@@ -2307,11 +2307,24 @@ impl RuntimeInner {
 
         if !failed.is_empty() {
             tracing::warn!("Failed tool calls found, adding to history");
-            {
+            let add_result = {
                 let mut agent = agent_manager.lock().await;
-                let _ = agent
+                agent
                     .add_parse_failures_to_history(&completed_session, failed)
-                    .await;
+                    .await
+            };
+            if let Err(error) = add_result {
+                {
+                    let mut agent = agent_manager.lock().await;
+                    agent.clear_active_turn(&completed_session);
+                }
+                Self::schedule_queue_drain(&completed_session, command_tx.clone()).await;
+                event_callback.on_event(Event::Error(error.to_string()));
+                event_callback.on_event(Event::ContinuationFailed {
+                    session_id: completed_session,
+                    error: error.to_string(),
+                });
+                return;
             }
             event_callback.on_event(Event::HistoryUpdated {
                 session_id: completed_session.clone(),
@@ -3270,6 +3283,11 @@ mod tests {
         should_fail: Arc<AtomicBool>,
     }
 
+    struct FailOnToolMessageStore {
+        inner: Arc<dyn MessageStore>,
+        should_fail: Arc<AtomicBool>,
+    }
+
     struct FailOnDemandSessionStore {
         inner: Arc<dyn SessionStore>,
         should_fail: Arc<AtomicBool>,
@@ -3287,6 +3305,41 @@ mod tests {
                 && message.status == MessageStatus::Complete
             {
                 return Err(eyre!("intentional assistant completion save failure"));
+            }
+
+            self.inner.save(message).await
+        }
+
+        async fn unload(&self, id: &types::MessageId) {
+            self.inner.unload(id).await;
+        }
+
+        async fn delete(&self, id: &types::MessageId) -> Result<()> {
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &types::MessageId) -> Result<bool> {
+            self.inner.exists(id).await
+        }
+
+        async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<types::MessageId>> {
+            self.inner.list_all_on_disk().await
+        }
+
+        async fn list_hot(&self) -> Result<std::collections::HashSet<types::MessageId>> {
+            self.inner.list_hot().await
+        }
+    }
+
+    #[async_trait]
+    impl MessageStore for FailOnToolMessageStore {
+        async fn get(&self, id: &types::MessageId) -> Result<Option<types::Message>> {
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, message: &types::Message) -> Result<()> {
+            if self.should_fail.load(Ordering::SeqCst) && message.role == ChatRole::Tool {
+                return Err(eyre!("intentional tool history save failure"));
             }
 
             self.inner.save(message).await
@@ -7068,6 +7121,111 @@ edits[1]{start_line,end_line,old_text,new_text}:
             .await;
 
         assert_eq!(tokio::fs::read_to_string(&file_path).await?, "new");
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parse_failure_history_write_error_stops_continuation_and_recovers() -> Result<()> {
+        let fail_tool_history_save = Arc::new(AtomicBool::new(true));
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_message_store(
+            vec![
+                vec![ScriptedChunk::plain(
+                    "<tool_call>\n\
+tool: mock_tool\n\
+value: {\n\
+</tool_call>",
+                )],
+                vec![ScriptedChunk::plain("retry reply")],
+            ],
+            {
+                let fail_tool_history_save = fail_tool_history_save.clone();
+                move |base_store| {
+                    Arc::new(FailOnToolMessageStore {
+                        inner: base_store,
+                        should_fail: fail_tool_history_save,
+                    })
+                }
+            },
+        ));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("first message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("parse failure history persistence error", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ContinuationFailed {
+                            session_id: event_session,
+                            error,
+                        } if event_session == &session_id
+                            && error.contains("intentional tool history save failure")
+                    )
+                })
+            })
+            .await;
+
+        assert_eq!(stream_complete_count(&events, &session_id), 1);
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    ..
+                } if event_session == &session_id
+            )
+        }));
+
+        let failed_history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(failed_history
+            .values()
+            .all(|message| !message.content.contains("Failed to parse tool call")));
+        assert!(failed_history
+            .values()
+            .all(|message| message.content != "retry reply"));
+
+        fail_tool_history_save.store(false, Ordering::SeqCst);
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("second message"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("retry after parse failure write error", |events| {
+                events.iter().filter(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id: event_session,
+                            ..
+                        } if event_session == &session_id
+                    )
+                }).count() >= 2
+            })
+            .await;
+
+        let recovered_history = harness.handle.get_chat_history(session_id.clone()).await?;
+        assert!(recovered_history
+            .values()
+            .any(|message| message.content == "retry reply"));
 
         harness.shutdown().await;
         Ok(())
