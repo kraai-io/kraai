@@ -23,6 +23,9 @@ struct Cli {
     #[arg(long)]
     ci: bool,
 
+    #[arg(long)]
+    auto_approve: bool,
+
     #[arg(long, value_name = "ID")]
     provider: Option<String>,
 
@@ -78,6 +81,7 @@ fn main() -> Result<()> {
 
     let startup_options = StartupOptions {
         ci: cli.ci,
+        auto_approve: cli.auto_approve,
         provider_id: cli.provider,
         model_id: cli.model,
         agent_profile_id: cli.agent_profile,
@@ -136,6 +140,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "tui",
             "--ci",
+            "--auto-approve",
             "--provider",
             "openai-chat-completions",
             "--model",
@@ -149,6 +154,7 @@ mod tests {
         .expect("complete ci args should parse");
 
         assert!(cli.ci);
+        assert!(cli.auto_approve);
         assert_eq!(cli.provider.as_deref(), Some("openai-chat-completions"));
         assert_eq!(cli.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(cli.agent_profile.as_deref(), Some("build-code"));

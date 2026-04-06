@@ -254,6 +254,7 @@ enum RuntimeRequest {
         message: String,
         model_id: String,
         provider_id: String,
+        auto_approve: bool,
     },
     SaveSettings {
         settings: SettingsDocument,
@@ -365,6 +366,7 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
     pub ci: bool,
+    pub auto_approve: bool,
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
@@ -3443,6 +3445,7 @@ impl App {
             message,
             model_id,
             provider_id,
+            auto_approve: self.startup_options.auto_approve,
         });
     }
 
@@ -4351,6 +4354,7 @@ mod tests {
     fn startup_options_apply_initial_selections() {
         let state = AppState::from_startup_options(StartupOptions {
             ci: false,
+            auto_approve: false,
             provider_id: Some(String::from("openai-chat-completions")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
@@ -4401,6 +4405,7 @@ mod tests {
     fn models_response_autosends_startup_message() {
         let mut harness = test_harness_with_startup_options(StartupOptions {
             ci: false,
+            auto_approve: false,
             provider_id: Some(String::from("openai-chat-completions")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
@@ -4431,6 +4436,7 @@ mod tests {
     fn startup_message_treats_slash_prefix_as_literal_message() {
         let mut harness = test_harness_with_startup_options(StartupOptions {
             ci: false,
+            auto_approve: false,
             provider_id: Some(String::from("openai-chat-completions")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
@@ -4458,6 +4464,7 @@ mod tests {
     fn ci_rejects_unknown_provider_before_sending_startup_message() {
         let mut harness = test_harness_with_startup_options(StartupOptions {
             ci: true,
+            auto_approve: false,
             provider_id: Some(String::from("missing-provider")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
@@ -4481,6 +4488,7 @@ mod tests {
     fn ci_rejects_whitespace_only_startup_message() {
         let mut harness = test_harness_with_startup_options(StartupOptions {
             ci: true,
+            auto_approve: false,
             provider_id: Some(String::from("openai-chat-completions")),
             model_id: Some(String::from("gpt-4o-mini")),
             agent_profile_id: Some(String::from("build-code")),
@@ -5279,10 +5287,12 @@ mod tests {
                     message,
                     model_id,
                     provider_id,
+                    auto_approve,
                 } if session_id == "sess-3"
                     && message == "hello world"
                     && model_id == "gpt-4o-mini"
                     && provider_id == "openai-chat-completions"
+                    && !*auto_approve
             )
         }));
     }
@@ -5332,14 +5342,49 @@ mod tests {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             } => {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "hello world");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai-chat-completions");
+                assert!(!auto_approve);
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
+    }
+
+    #[test]
+    fn submit_propagates_auto_approve_startup_option() {
+        let mut harness = test_harness_with_startup_options(StartupOptions {
+            auto_approve: true,
+            ..StartupOptions::default()
+        });
+        harness.app.state.config_loaded = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+        harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+        harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+        harness.app.state.input = String::from("hello world");
+        harness.app.state.input_cursor = harness.app.state.input.len();
+
+        harness.app.handle_key_event(key(KeyCode::Enter));
+
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::SendMessage {
+                session_id,
+                message,
+                model_id,
+                provider_id,
+                auto_approve,
+            }] if session_id == "sess-2"
+                && message == "hello world"
+                && model_id == "gpt-4o-mini"
+                && provider_id == "openai-chat-completions"
+                && *auto_approve
+        ));
     }
 
     #[test]
@@ -5371,11 +5416,13 @@ mod tests {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             } => {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/not-a-command");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai-chat-completions");
+                assert!(!auto_approve);
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -5523,11 +5570,13 @@ mod tests {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             } => {
                 assert_eq!(session_id, "sess-2");
                 assert_eq!(message, "/se");
                 assert_eq!(model_id, "gpt-4o-mini");
                 assert_eq!(provider_id, "openai-chat-completions");
+                assert!(!auto_approve);
             }
             other => panic!("unexpected request: {}", request_name(other)),
         }
@@ -5564,10 +5613,12 @@ mod tests {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             }] if session_id == "sess-2"
                 && message == "keep this draft"
                 && model_id == "gpt-4o-mini"
                 && provider_id == "openai-chat-completions"
+                && !*auto_approve
         ));
     }
 
@@ -5602,10 +5653,12 @@ mod tests {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             }] if session_id == "sess-2"
                 && message == "queue this"
                 && model_id == "gpt-4o-mini"
                 && provider_id == "openai-chat-completions"
+                && !*auto_approve
         ));
     }
 

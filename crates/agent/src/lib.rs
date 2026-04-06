@@ -117,6 +117,7 @@ struct SessionRuntimeState {
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
     active_turn_profile: Option<AgentProfile>,
+    active_turn_auto_approve: bool,
     active_turn_tool_state_snapshot: Option<ToolStateSnapshot>,
 }
 
@@ -131,6 +132,7 @@ impl SessionRuntimeState {
             last_model: None,
             last_provider: None,
             active_turn_profile: None,
+            active_turn_auto_approve: false,
             active_turn_tool_state_snapshot: None,
         }
     }
@@ -401,6 +403,19 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
+        self
+            .prepare_start_stream_with_options(session_id, message, model_id, provider_id, false)
+            .await
+    }
+
+    pub async fn prepare_start_stream_with_options(
+        &mut self,
+        session_id: &str,
+        message: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
+        auto_approve: bool,
+    ) -> Result<PendingStreamRequest> {
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
         {
@@ -414,6 +429,7 @@ impl AgentManager {
             state.last_model = Some(model_id.clone());
             state.last_provider = Some(provider_id.clone());
             state.active_turn_profile = Some(profile.clone());
+            state.active_turn_auto_approve = auto_approve;
         }
         self.last_used_profile_id = Some(profile.id.clone());
 
@@ -913,6 +929,7 @@ impl AgentManager {
         let (
             active_tool_config,
             active_turn_profile,
+            active_turn_auto_approve,
             active_turn_tool_state_snapshot,
             mut next_queue_order,
         ) = {
@@ -927,6 +944,7 @@ impl AgentManager {
             (
                 state.active_tool_config.clone(),
                 active_turn_profile,
+                state.active_turn_auto_approve,
                 active_turn_tool_state_snapshot,
                 state.next_tool_queue_order,
             )
@@ -973,8 +991,8 @@ impl AgentManager {
                 tool_state_snapshot: &active_turn_tool_state_snapshot,
             });
             let description = prepared.describe();
-            let requires_confirmation =
-                !assessment.is_auto_approved(active_turn_profile.default_risk_level);
+            let requires_confirmation = !active_turn_auto_approve
+                && !assessment.is_auto_approved(active_turn_profile.default_risk_level);
 
             let call = ToolCall {
                 call_id: call_id.clone(),
@@ -1132,6 +1150,7 @@ impl AgentManager {
     pub fn clear_active_turn(&mut self, session_id: &str) {
         if let Some(state) = self.session_states.get_mut(session_id) {
             state.active_turn_profile = None;
+            state.active_turn_auto_approve = false;
             state.active_turn_tool_state_snapshot = None;
         }
     }

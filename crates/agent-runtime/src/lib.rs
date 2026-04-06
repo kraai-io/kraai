@@ -294,6 +294,7 @@ enum Command {
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        auto_approve: bool,
     },
     StartQueuedMessages {
         session_id: String,
@@ -453,12 +454,26 @@ impl RuntimeHandle {
         model_id: String,
         provider_id: String,
     ) -> Result<()> {
+        self
+            .send_message_with_options(session_id, message, model_id, provider_id, false)
+            .await
+    }
+
+    pub async fn send_message_with_options(
+        &self,
+        session_id: String,
+        message: String,
+        model_id: String,
+        provider_id: String,
+        auto_approve: bool,
+    ) -> Result<()> {
         self.command_tx
             .send(Command::SendMessage {
                 session_id,
                 message,
                 model_id: ModelId::new(model_id),
                 provider_id: ProviderId::new(provider_id),
+                auto_approve,
             })
             .await?;
         Ok(())
@@ -883,6 +898,7 @@ struct QueuedMessage {
     message: String,
     model_id: ModelId,
     provider_id: ProviderId,
+    auto_approve: bool,
 }
 
 #[derive(Clone)]
@@ -1309,8 +1325,9 @@ impl RuntimeInner {
                 message,
                 model_id,
                 provider_id,
+                auto_approve,
             } => {
-                self.handle_send_message(session_id, message, model_id, provider_id)
+                self.handle_send_message(session_id, message, model_id, provider_id, auto_approve)
                     .await;
             }
 
@@ -1537,6 +1554,7 @@ impl RuntimeInner {
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        auto_approve: bool,
     ) {
         let has_queued_messages = {
             let queued = self.queued_messages.lock().await;
@@ -1555,6 +1573,7 @@ impl RuntimeInner {
                     message,
                     model_id,
                     provider_id,
+                    auto_approve,
                 },
             )
             .await;
@@ -1564,10 +1583,16 @@ impl RuntimeInner {
 
         let stream_request = {
             let mut agent = self.agent_manager.lock().await;
-            match agent
-                .prepare_start_stream(&session_id, message, model_id, provider_id)
-                .await
-            {
+                match agent
+                    .prepare_start_stream_with_options(
+                        &session_id,
+                        message,
+                        model_id,
+                        provider_id,
+                        auto_approve,
+                    )
+                    .await
+                {
                 Ok(result) => Some((agent.cloned_provider_manager(), result)),
                 Err(error) => {
                     self.send_event(Event::Error(error.to_string()));
@@ -1621,11 +1646,12 @@ impl RuntimeInner {
             let stream_request = {
                 let mut agent = self.agent_manager.lock().await;
                 match agent
-                    .prepare_start_stream(
+                    .prepare_start_stream_with_options(
                         &session_id,
                         next_message.message,
                         next_message.model_id,
                         next_message.provider_id,
+                        next_message.auto_approve,
                     )
                     .await
                 {
@@ -4870,6 +4896,68 @@ value: beta\n\
         assert!(approved_result_index < continuation_start_index);
         assert_eq!(stream_start_count(&final_events, &session_id), 2);
         assert_eq!(stream_complete_count(&final_events, &session_id), 2);
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_approve_option_bypasses_manual_tool_confirmation() -> Result<()> {
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("continuation complete")],
+        ]));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message_with_options(
+                session_id.clone(),
+                String::from("run manual tool without confirmation"),
+                String::from("mock-model"),
+                String::from("mock"),
+                true,
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("manual tool auto-approved by option", |events| {
+                let tool_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "mock_tool"
+                            && *success
+                            && !denied
+                    )
+                });
+                tool_result_ready && stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let events = harness.events.snapshot();
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Event::ToolCallDetected {
+                    session_id: event_session,
+                    tool_id,
+                    ..
+                } if event_session == &session_id && tool_id == "mock_tool"
+            )
+        }));
 
         harness.shutdown().await;
         Ok(())

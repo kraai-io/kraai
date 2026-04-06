@@ -2,7 +2,7 @@ use agent_runtime::{
     OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
     OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, RuntimeHandle,
 };
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
 
@@ -121,9 +121,16 @@ pub(super) fn spawn_runtime_bridge(
                     message,
                     model_id,
                     provider_id,
+                    auto_approve,
                 } => {
                     let result = rt
-                        .block_on(runtime.send_message(session_id, message, model_id, provider_id))
+                        .block_on(runtime.send_message_with_options(
+                            session_id,
+                            message,
+                            model_id,
+                            provider_id,
+                            auto_approve,
+                        ))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::SendMessage(result));
                 }
