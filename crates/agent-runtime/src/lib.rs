@@ -10,7 +10,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use persistence::{SessionMeta, agent_state_root};
 use provider_core::{
     DynamicConfig, ModelConfig, ProviderConfig, ProviderManager, ProviderManagerConfig,
-    ProviderRegistry,
+    ProviderRegistry, ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver,
 };
 use tool_close_file::CloseFileTool;
 use tool_core::{ToolContext, ToolManager, ToolOutput};
@@ -199,6 +199,15 @@ pub enum Event {
         session_id: String,
         message_id: String,
     },
+    ProviderRetryScheduled {
+        session_id: String,
+        provider_id: String,
+        model_id: String,
+        operation: String,
+        retry_number: u32,
+        delay_seconds: u64,
+        reason: String,
+    },
 
     // Tool events
     /// Tool call detected, awaiting permission
@@ -255,6 +264,27 @@ where
 {
     fn on_event(&self, event: Event) {
         self(event)
+    }
+}
+
+struct RuntimeRetryObserver {
+    session_id: String,
+    provider_id: ProviderId,
+    model_id: ModelId,
+    event_callback: Arc<dyn EventCallback>,
+}
+
+impl ProviderRetryObserver for RuntimeRetryObserver {
+    fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
+        self.event_callback.on_event(Event::ProviderRetryScheduled {
+            session_id: self.session_id.clone(),
+            provider_id: self.provider_id.to_string(),
+            model_id: self.model_id.to_string(),
+            operation: event.operation.to_string(),
+            retry_number: event.retry_number,
+            delay_seconds: event.delay.as_secs(),
+            reason: event.reason.clone(),
+        });
     }
 }
 
@@ -2230,13 +2260,21 @@ impl RuntimeInner {
         agent_manager: Arc<Mutex<AgentManager>>,
         event_callback: Arc<dyn EventCallback>,
     ) -> StreamDriveResult {
-        let msg_id = request.message_id.clone();
+        let PendingStreamRequest {
+            message_id: msg_id,
+            provider_id,
+            model_id,
+            provider_messages,
+        } = request;
+        let request_context =
+            ProviderRequestContext::with_retry_observer(Arc::new(RuntimeRetryObserver {
+                session_id: session_id.clone(),
+                provider_id: provider_id.clone(),
+                model_id: model_id.clone(),
+                event_callback: event_callback.clone(),
+            }));
         let mut stream = match providers
-            .generate_reply_stream(
-                request.provider_id,
-                &request.model_id,
-                request.provider_messages,
-            )
+            .generate_reply_stream(provider_id, &model_id, provider_messages, request_context)
             .await
         {
             Ok(stream) => stream,
@@ -2986,6 +3024,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<ChatMessage> {
             Ok(ChatMessage {
                 role: ChatRole::Assistant,
@@ -2997,6 +3036,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<BoxStream<'static, Result<String>>> {
             let script = self
                 .scripts
@@ -3239,6 +3279,10 @@ mod tests {
         failure_message: String,
     }
 
+    struct RetryNotifyingProvider {
+        id: ProviderId,
+    }
+
     #[derive(Clone, Copy)]
     struct NoopTool;
 
@@ -3285,6 +3329,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<ChatMessage> {
             Ok(ChatMessage {
                 role: ChatRole::Assistant,
@@ -3296,6 +3341,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<BoxStream<'static, Result<String>>> {
             self.started.notify_waiters();
             self.release.notified().await;
@@ -3331,6 +3377,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<ChatMessage> {
             Ok(ChatMessage {
                 role: ChatRole::Assistant,
@@ -3342,10 +3389,75 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<BoxStream<'static, Result<String>>> {
             self.started.notify_waiters();
             self.release.notified().await;
             Err(eyre!(self.failure_message.clone()))
+        }
+    }
+
+    #[async_trait]
+    impl provider_core::Provider for RetryNotifyingProvider {
+        fn get_provider_id(&self) -> ProviderId {
+            self.id.clone()
+        }
+
+        async fn list_models(&self) -> Vec<provider_core::Model> {
+            vec![provider_core::Model {
+                id: ModelId::new("mock-model"),
+                name: String::from("Mock Model"),
+                max_context: None,
+            }]
+        }
+
+        async fn cache_models(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn generate_reply(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+            request_context: &provider_core::ProviderRequestContext,
+        ) -> Result<ChatMessage> {
+            if let Some(observer) = request_context.retry_observer() {
+                observer.on_retry_scheduled(&provider_core::ProviderRetryEvent {
+                    operation: "responses",
+                    retry_number: 1,
+                    delay: Duration::from_secs(1),
+                    reason: String::from("HTTP 429"),
+                });
+            }
+
+            Ok(ChatMessage {
+                role: ChatRole::Assistant,
+                content: String::from("unused non-streaming reply"),
+            })
+        }
+
+        async fn generate_reply_stream(
+            &self,
+            _model_id: &ModelId,
+            _messages: Vec<ChatMessage>,
+            request_context: &provider_core::ProviderRequestContext,
+        ) -> Result<BoxStream<'static, Result<String>>> {
+            if let Some(observer) = request_context.retry_observer() {
+                observer.on_retry_scheduled(&provider_core::ProviderRetryEvent {
+                    operation: "responses",
+                    retry_number: 1,
+                    delay: Duration::from_secs(1),
+                    reason: String::from("HTTP 429"),
+                });
+            }
+
+            Ok(Box::pin(stream::once(async {
+                Ok(String::from("provider started"))
+            })))
         }
     }
 
@@ -3809,6 +3921,77 @@ default_risk_level = \"undoable_workspace_write\"\n"
             .set_session_profile(session_id.clone(), profile_id.to_string())
             .await?;
         Ok(session_id)
+    }
+
+    #[tokio::test]
+    async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> {
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("retry-mock"),
+            Box::new(RetryNotifyingProvider {
+                id: ProviderId::new("retry-mock"),
+            }),
+        );
+
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new_with_parts(
+            providers,
+            ToolManager::new(),
+        ));
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("hello"),
+                String::from("mock-model"),
+                String::from("retry-mock"),
+            )
+            .await?;
+
+        let events = harness
+            .events
+            .wait_for("provider retry event", |events| {
+                events.iter().any(|event| {
+                    matches!(event, Event::ProviderRetryScheduled { session_id: event_session, .. } if event_session == &session_id)
+                })
+            })
+            .await;
+
+        let retry_event = events.iter().find_map(|event| match event {
+            Event::ProviderRetryScheduled {
+                session_id: event_session,
+                provider_id,
+                model_id,
+                operation,
+                retry_number,
+                delay_seconds,
+                reason,
+            } if event_session == &session_id => Some((
+                provider_id.clone(),
+                model_id.clone(),
+                operation.clone(),
+                *retry_number,
+                *delay_seconds,
+                reason.clone(),
+            )),
+            _ => None,
+        });
+
+        assert_eq!(
+            retry_event,
+            Some((
+                String::from("retry-mock"),
+                String::from("mock-model"),
+                String::from("responses"),
+                1,
+                1,
+                String::from("HTTP 429"),
+            ))
+        );
+
+        harness.shutdown().await;
+        Ok(())
     }
 
     fn stream_complete_for(events: &[Event], session_id: &str) -> usize {

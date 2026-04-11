@@ -3,8 +3,11 @@ use std::marker::PhantomData;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
-use provider_core::{DynamicConfig, DynamicValue, Model, ModelConfig, Provider, ProviderFactory};
-use reqwest::Client;
+use provider_core::{
+    DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
+    ProviderFactory, ProviderRequestContext, send_with_retry,
+};
+use reqwest::{Client, Response};
 use tokio::sync::RwLock;
 use types::{ChatMessage, ModelId, ProviderId};
 
@@ -42,6 +45,28 @@ where
     fn build_endpoint(&self, path: &str) -> String {
         format!("{}/{}", self.base_url.trim_end_matches('/'), path)
     }
+
+    async fn send_chat_completion_request(
+        &self,
+        operation: &'static str,
+        request: &ChatCompletionRequest,
+        request_context: &ProviderRequestContext,
+    ) -> Result<Response> {
+        let response = send_with_retry(
+            operation,
+            &DEFAULT_HTTP_RETRY_POLICY,
+            request_context,
+            || {
+                self.auth
+                    .apply(self.client.post(self.build_endpoint("chat/completions")))
+                    .json(request)
+                    .send()
+            },
+        )
+        .await?;
+
+        ensure_success_response(operation, response).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -58,10 +83,18 @@ where
     }
 
     async fn cache_models(&self) -> Result<()> {
-        let request = self
-            .auth
-            .apply(self.client.get(self.build_endpoint("models")));
-        let response = request.send().await?.error_for_status()?;
+        let response = send_with_retry(
+            "list models",
+            &DEFAULT_HTTP_RETRY_POLICY,
+            &ProviderRequestContext::default(),
+            || {
+                self.auth
+                    .apply(self.client.get(self.build_endpoint("models")))
+                    .send()
+            },
+        )
+        .await?;
+        let response = ensure_success_response("list models", response).await?;
         let models = response.json::<ListModelsResponse>().await?;
 
         let mut cache = self.cached_models.write().await;
@@ -114,6 +147,7 @@ where
         &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<ChatMessage> {
         let request = ChatCompletionRequest {
             model: model_id.to_string(),
@@ -122,12 +156,8 @@ where
         };
 
         let response = self
-            .auth
-            .apply(self.client.post(self.build_endpoint("chat/completions")))
-            .json(&request)
-            .send()
+            .send_chat_completion_request("chat completions", &request, request_context)
             .await?
-            .error_for_status()?
             .json::<ChatCompletionResponse>()
             .await?;
 
@@ -148,6 +178,7 @@ where
         &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<String>>> {
         let request = ChatCompletionRequest {
             model: model_id.to_string(),
@@ -156,12 +187,8 @@ where
         };
 
         let response = self
-            .auth
-            .apply(self.client.post(self.build_endpoint("chat/completions")))
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?;
+            .send_chat_completion_request("chat completions stream", &request, request_context)
+            .await?;
 
         let stream = stream_sse_data(response)
             .filter_map(|event| async move {
@@ -181,6 +208,23 @@ where
 
         Ok(stream)
     }
+}
+
+async fn ensure_success_response(operation: &str, response: Response) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let url = response.url().to_string();
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("<failed to read body: {error}>"));
+
+    Err(eyre!(
+        "Chat completions {operation} failed with status {status} at {url}: {body}"
+    ))
 }
 
 fn create_provider<P>(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>>
@@ -247,5 +291,149 @@ impl ProviderFactory for OpenAiFactory {
 
     fn validate_model_config(config: &DynamicConfig) -> Vec<provider_core::ValidationError> {
         OpenAiChatCompletionsProfile::validate_model_config(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[derive(Clone, Default)]
+    struct RetryCollector {
+        events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
+    }
+
+    impl RetryCollector {
+        fn snapshot(&self) -> Vec<ProviderRetryEvent> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    impl ProviderRetryObserver for RetryCollector {
+        fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event.clone());
+        }
+    }
+
+    enum ScriptedResponse {
+        Status {
+            status_line: &'static str,
+            body: &'static str,
+        },
+    }
+
+    async fn spawn_server(script: Vec<ScriptedResponse>) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let script = Arc::new(tokio::sync::Mutex::new(VecDeque::from(script)));
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let next = {
+                    let mut guard = script.lock().await;
+                    guard.pop_front()
+                };
+                let Some(next) = next else {
+                    break;
+                };
+
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+
+                match next {
+                    ScriptedResponse::Status { status_line, body } => {
+                        write_json_response(&mut stream, status_line, body).await;
+                    }
+                }
+            }
+        });
+
+        address
+    }
+
+    async fn write_json_response(
+        stream: &mut tokio::net::TcpStream,
+        status_line: &str,
+        body: &str,
+    ) {
+        let response = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+
+        stream.write_all(response.as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generate_reply_forwards_retry_observer_to_http_retry_layer() {
+        let address = spawn_server(vec![
+            ScriptedResponse::Status {
+                status_line: "429 Too Many Requests",
+                body: r#"{"error":{"message":"slow down"}}"#,
+            },
+            ScriptedResponse::Status {
+                status_line: "200 OK",
+                body: r#"{"choices":[{"message":{"role":"assistant","content":"ok after retry"}}]}"#,
+            },
+        ])
+        .await;
+
+        let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
+            id: ProviderId::new("openai-chat-completions"),
+            client: Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{address}"),
+            auth: ApiKeyAuth::resolve(&BTreeMap::from([(
+                String::from("api_key"),
+                provider_core::DynamicValue::from("test-key"),
+            )]))
+            .unwrap(),
+            only_listed_models: false,
+            cached_models: RwLock::new(BTreeMap::new()),
+            model_configs: BTreeMap::new(),
+            _profile: PhantomData,
+        };
+
+        let collector = Arc::new(RetryCollector::default());
+        let reply = provider
+            .generate_reply(
+                &ModelId::new("gpt-4.1-mini"),
+                vec![ChatMessage {
+                    role: types::ChatRole::User,
+                    content: String::from("hello"),
+                }],
+                &ProviderRequestContext::with_retry_observer(collector.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(reply.content, "ok after retry");
+
+        let events = collector.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].operation, "chat completions");
+        assert_eq!(events[0].retry_number, 1);
+        assert_eq!(events[0].reason, "HTTP 429 Too Many Requests");
     }
 }

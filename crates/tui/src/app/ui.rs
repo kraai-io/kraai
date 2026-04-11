@@ -108,6 +108,10 @@ fn statusline_activity_label(state: &AppState) -> String {
         .to_string();
     }
 
+    if state.retry_waiting {
+        return String::from("retrying");
+    }
+
     if state.status == "Stream cancelled" {
         return String::from("cancelled");
     }
@@ -118,7 +122,7 @@ fn statusline_activity_label(state: &AppState) -> String {
 fn statusline_activity_color(state: &AppState) -> Color {
     if state.is_streaming {
         Color::Cyan
-    } else if state.status == "Stream cancelled" {
+    } else if state.retry_waiting || state.status == "Stream cancelled" {
         Color::Yellow
     } else {
         Color::DarkGray

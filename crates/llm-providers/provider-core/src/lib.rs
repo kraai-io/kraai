@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod http_retry;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -8,6 +10,11 @@ use futures::{future::join_all, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use types::{ChatMessage, ModelId, ProviderId};
+
+pub use http_retry::{
+    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderRequestContext, ProviderRetryEvent,
+    ProviderRetryObserver, send_with_retry,
+};
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -401,12 +408,15 @@ impl ProviderManager {
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: ProviderRequestContext,
     ) -> Result<ChatMessage> {
         let provider = self
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        provider.generate_reply(model_id, messages).await
+        provider
+            .generate_reply(model_id, messages, &request_context)
+            .await
     }
 
     pub async fn generate_reply_stream(
@@ -414,12 +424,15 @@ impl ProviderManager {
         provider_id: ProviderId,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<String>>> {
         let provider = self
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        provider.generate_reply_stream(model_id, messages).await
+        provider
+            .generate_reply_stream(model_id, messages, &request_context)
+            .await
     }
 }
 
@@ -445,12 +458,14 @@ pub trait Provider: Send + Sync {
         &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<ChatMessage>;
 
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<String>>>;
 }
 
@@ -508,6 +523,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             messages: Vec<ChatMessage>,
+            _request_context: &ProviderRequestContext,
         ) -> Result<ChatMessage> {
             self.reply_count.fetch_add(1, Ordering::SeqCst);
             let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
@@ -521,6 +537,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             messages: Vec<ChatMessage>,
+            _request_context: &ProviderRequestContext,
         ) -> Result<BoxStream<'static, Result<String>>> {
             use futures::StreamExt;
 

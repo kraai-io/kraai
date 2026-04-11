@@ -393,6 +393,7 @@ pub struct AppState {
     mode: UiMode,
     status: String,
     is_streaming: bool,
+    retry_waiting: bool,
     statusline_animation_frame: usize,
     models_by_provider: HashMap<String, Vec<Model>>,
     agent_profiles: Vec<AgentProfileSummary>,
@@ -455,6 +456,7 @@ impl Default for AppState {
             mode: UiMode::Chat,
             status: String::from("Type /help for commands"),
             is_streaming: false,
+            retry_waiting: false,
             statusline_animation_frame: 0,
             models_by_provider: HashMap::new(),
             agent_profiles: default_agent_profiles(),
@@ -819,6 +821,7 @@ impl App {
             }
             Event::Error(msg) => {
                 self.state.is_streaming = false;
+                self.state.retry_waiting = false;
                 self.state.status = format!("Runtime error: {msg}");
                 self.fail_ci(format!("Runtime error: {msg}"));
             }
@@ -832,6 +835,7 @@ impl App {
                     self.ci_turn_completion_pending = false;
                 }
                 self.state.is_streaming = true;
+                self.state.retry_waiting = false;
                 self.state.profile_locked = true;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
@@ -862,6 +866,7 @@ impl App {
             Event::StreamComplete { session_id, .. } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
@@ -883,6 +888,7 @@ impl App {
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
@@ -899,6 +905,7 @@ impl App {
             Event::StreamCancelled { session_id, .. } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
@@ -912,9 +919,22 @@ impl App {
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
+            Event::ProviderRetryScheduled {
+                session_id,
+                retry_number,
+                delay_seconds,
+                ..
+            } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.retry_waiting = true;
+                    self.state.status =
+                        format!("Provider error, retry #{retry_number} in {delay_seconds}s");
+                }
+            }
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
+                    self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_refresh = None;
@@ -3388,6 +3408,7 @@ impl App {
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
         self.state.is_streaming = false;
+        self.state.retry_waiting = false;
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.state.auto_scroll = true;
@@ -4711,11 +4732,22 @@ mod tests {
         let mut state = populated_state();
         state.status = String::from("Stream cancelled");
 
-        let rendered = render_state_snapshot(&state, 80, 18);
+        let rendered = render_state_snapshot(&state, 120, 18);
 
         assert!(rendered.contains(
             "cancelled · openai-chat-completions/GPT-4o Mini · Plan Code · Stream cancelled"
         ));
+    }
+
+    #[test]
+    fn renders_retrying_statusline_snapshot() {
+        let mut state = populated_state();
+        state.retry_waiting = true;
+        state.status = String::from("Provider error, retry #6 in 27s");
+
+        let rendered = render_state_snapshot(&state, 80, 18);
+
+        assert!(rendered.contains("retrying"));
     }
 
     #[test]
@@ -4746,6 +4778,59 @@ mod tests {
         assert!(harness.app.advance_statusline_animation(Instant::now()));
         assert_eq!(harness.app.state.statusline_animation_frame, 0);
         assert!(harness.app.last_statusline_animation_tick.is_none());
+    }
+
+    #[test]
+    fn retry_waiting_clears_when_stream_starts() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-current"));
+        harness.app.state.retry_waiting = true;
+
+        harness.app.handle_runtime_event(Event::StreamStart {
+            session_id: String::from("sess-current"),
+            message_id: String::from("m-retry"),
+        });
+
+        assert!(!harness.app.state.retry_waiting);
+        assert!(harness.app.state.is_streaming);
+    }
+
+    #[test]
+    fn provider_retry_event_updates_status_text() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-current"));
+
+        harness
+            .app
+            .handle_runtime_event(Event::ProviderRetryScheduled {
+                session_id: String::from("sess-current"),
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-4.1"),
+                operation: String::from("responses"),
+                retry_number: 6,
+                delay_seconds: 27,
+                reason: String::from("HTTP 429"),
+            });
+
+        assert!(harness.app.state.retry_waiting);
+        assert_eq!(harness.app.state.status, "Provider error, retry #6 in 27s");
+    }
+
+    #[test]
+    fn reset_chat_session_clears_retry_waiting() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-current"));
+        harness.app.state.retry_waiting = true;
+        harness.app.state.is_streaming = true;
+
+        harness
+            .app
+            .reset_chat_session(Some(String::from("sess-next")), "Session loaded");
+
+        assert_eq!(harness.app.state.current_session_id.as_deref(), Some("sess-next"));
+        assert!(!harness.app.state.retry_waiting);
+        assert!(!harness.app.state.is_streaming);
+        assert_eq!(harness.app.state.status, "Session loaded");
     }
 
     #[test]
@@ -5177,6 +5262,7 @@ mod tests {
     fn new_command_clears_local_state_without_creating_session() {
         let mut harness = test_harness();
         harness.app.state = populated_state();
+        harness.app.state.retry_waiting = true;
         harness.app.state.pending_submit = Some(PendingSubmit {
             session_id: None,
             message: String::from("stale"),
@@ -5192,6 +5278,7 @@ mod tests {
         assert!(harness.app.state.chat_history.is_empty());
         assert!(harness.app.state.optimistic_messages.is_empty());
         assert!(harness.app.state.pending_submit.is_none());
+        assert!(!harness.app.state.retry_waiting);
         assert_eq!(
             harness.app.state.selected_profile_id.as_deref(),
             Some("plan-code")
@@ -6132,6 +6219,7 @@ mod tests {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-1"));
         harness.app.state.pending_tools = sample_pending_tools();
+        harness.app.state.retry_waiting = true;
 
         harness
             .app
@@ -6145,6 +6233,7 @@ mod tests {
             Some("sess-2")
         );
         assert!(harness.app.state.pending_tools.is_empty());
+        assert!(!harness.app.state.retry_waiting);
 
         let requests = harness.drain_requests();
         assert!(requests

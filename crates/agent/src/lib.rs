@@ -1402,6 +1402,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ProviderChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<ProviderChatMessage> {
             Ok(ProviderChatMessage {
                 role: ChatRole::Assistant,
@@ -1413,6 +1414,7 @@ mod tests {
             &self,
             _model_id: &ModelId,
             _messages: Vec<ProviderChatMessage>,
+            _request_context: &provider_core::ProviderRequestContext,
         ) -> Result<BoxStream<'static, Result<String>>> {
             Ok(Box::pin(futures::stream::iter(vec![Ok(String::from(
                 "reply",
@@ -1635,6 +1637,7 @@ mod tests {
                 request.provider_id,
                 &request.model_id,
                 request.provider_messages,
+                provider_core::ProviderRequestContext::default(),
             )
             .await;
         assert!(result.is_err());

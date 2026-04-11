@@ -4,8 +4,9 @@ use std::sync::Arc;
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
 use provider_core::{
-    DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model, ModelConfig, Provider,
-    ProviderDefinition, ValidationError,
+    DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
+    ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ValidationError,
+    send_with_retry as send_http_with_retry,
 };
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use tokio::sync::RwLock;
@@ -198,9 +199,10 @@ impl Provider for OpenAiCodexProvider {
         &self,
         model_id: &ModelId,
         messages: Vec<ProviderChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<ProviderChatMessage> {
         let response = self
-            .send_responses_request(model_id, messages, false)
+            .send_responses_request(model_id, messages, false, request_context)
             .await?
             .json::<ResponsesOutput>()
             .await?;
@@ -216,9 +218,10 @@ impl Provider for OpenAiCodexProvider {
         &self,
         model_id: &ModelId,
         messages: Vec<ProviderChatMessage>,
+        request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<String>>> {
         let response = self
-            .send_responses_request(model_id, messages, true)
+            .send_responses_request(model_id, messages, true, request_context)
             .await?;
         let stream = crate::sse::stream_sse_data(response)
             .filter_map(|event| async move {
@@ -270,8 +273,9 @@ impl OpenAiCodexProvider {
     async fn fetch_remote_model_availability(
         &self,
     ) -> Result<BTreeMap<String, RemoteModelMetadata>> {
+        let request_context = ProviderRequestContext::default();
         let response = self
-            .send_with_retry("list models", |auth| {
+            .send_authenticated_request("list models", &request_context, |auth| {
                 self.authenticated_get(CHATGPT_MODELS_ENDPOINT, auth)
             })
             .await?;
@@ -362,6 +366,7 @@ impl OpenAiCodexProvider {
         model_id: &ModelId,
         messages: Vec<ProviderChatMessage>,
         stream: bool,
+        request_context: &ProviderRequestContext,
     ) -> Result<Response> {
         let normalized = normalize_chat_messages(messages)?;
         let resolved_model = resolve_request_model(model_id)?;
@@ -374,19 +379,30 @@ impl OpenAiCodexProvider {
             store: false,
         };
 
-        self.send_with_retry("responses", |auth| {
+        self.send_authenticated_request("responses", request_context, |auth| {
             self.authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
                 .json(&request)
         })
         .await
     }
 
-    async fn send_with_retry<F>(&self, operation: &'static str, build: F) -> Result<Response>
+    async fn send_authenticated_request<F>(
+        &self,
+        operation: &'static str,
+        request_context: &ProviderRequestContext,
+        build: F,
+    ) -> Result<Response>
     where
         F: Fn(RequestAuth) -> RequestBuilder,
     {
         let auth = self.auth.get_request_auth().await?;
-        let response = build(auth.clone()).send().await?;
+        let response = send_http_with_retry(
+            operation,
+            &DEFAULT_HTTP_RETRY_POLICY,
+            request_context,
+            || build(auth.clone()).send(),
+        )
+        .await?;
         if response.status() != StatusCode::UNAUTHORIZED {
             return ensure_success_response(operation, response).await;
         }
@@ -397,7 +413,13 @@ impl OpenAiCodexProvider {
             .auth
             .refresh_request_auth(Some(auth.account_id.clone()))
             .await?;
-        let response = build(refreshed).send().await?;
+        let response = send_http_with_retry(
+            operation,
+            &DEFAULT_HTTP_RETRY_POLICY,
+            request_context,
+            || build(refreshed.clone()).send(),
+        )
+        .await?;
         ensure_success_response(operation, response).await
     }
 }

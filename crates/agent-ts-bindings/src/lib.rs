@@ -560,6 +560,15 @@ pub enum Event {
     session_id: String,
     message_id: String,
   },
+  ProviderRetryScheduled {
+    session_id: String,
+    provider_id: String,
+    model_id: String,
+    operation: String,
+    retry_number: u32,
+    delay_seconds: f64,
+    reason: String,
+  },
   ToolCallDetected {
     session_id: String,
     call_id: String,
@@ -634,6 +643,23 @@ impl From<agent_runtime::Event> for Event {
       } => Event::StreamCancelled {
         session_id,
         message_id,
+      },
+      agent_runtime::Event::ProviderRetryScheduled {
+        session_id,
+        provider_id,
+        model_id,
+        operation,
+        retry_number,
+        delay_seconds,
+        reason,
+      } => Event::ProviderRetryScheduled {
+        session_id,
+        provider_id,
+        model_id,
+        operation,
+        retry_number,
+        delay_seconds: delay_seconds as f64,
+        reason,
       },
       agent_runtime::Event::ToolCallDetected {
         session_id,
