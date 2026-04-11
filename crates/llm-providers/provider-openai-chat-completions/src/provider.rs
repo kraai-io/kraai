@@ -306,6 +306,30 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            if display.contains("No CA certificates were loaded from the system")
+                || debug.contains("No CA certificates were loaded from the system")
+                || display == "builder error"
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
+    fn test_client_or_skip() -> Option<Client> {
+        match Client::builder().timeout(Duration::from_secs(2)).build() {
+            Ok(client) => Some(client),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected reqwest client build error: {error}"),
+        }
+    }
+
     #[derive(Clone, Default)]
     struct RetryCollector {
         events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
@@ -397,12 +421,13 @@ mod tests {
         ])
         .await;
 
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
+
         let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
             id: ProviderId::new("openai-chat-completions"),
-            client: Client::builder()
-                .timeout(Duration::from_secs(2))
-                .build()
-                .unwrap(),
+            client,
             base_url: format!("http://{address}"),
             auth: ApiKeyAuth::resolve(&BTreeMap::from([(
                 String::from("api_key"),

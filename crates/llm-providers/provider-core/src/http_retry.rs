@@ -204,6 +204,36 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            if display.contains("No CA certificates were loaded from the system")
+                || debug.contains("No CA certificates were loaded from the system")
+                || display == "builder error"
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
+    fn test_client_from_builder_or_skip(
+        builder: reqwest::ClientBuilder,
+    ) -> Option<reqwest::Client> {
+        match builder.build() {
+            Ok(client) => Some(client),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected reqwest client build error: {error}"),
+        }
+    }
+
+    fn test_client_or_skip() -> Option<reqwest::Client> {
+        test_client_from_builder_or_skip(reqwest::Client::builder())
+    }
+
     #[derive(Clone, Default)]
     struct RetryCollector {
         events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
@@ -340,7 +370,9 @@ mod tests {
             },
         ])
         .await;
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -369,7 +401,9 @@ mod tests {
             },
         ])
         .await;
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -398,7 +432,9 @@ mod tests {
             },
         ])
         .await;
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -427,7 +463,9 @@ mod tests {
             },
         ])
         .await;
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -450,7 +488,9 @@ mod tests {
         }])
         .await;
         let collector = Arc::new(RetryCollector::default());
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -474,7 +514,9 @@ mod tests {
         }])
         .await;
         let collector = Arc::new(RetryCollector::default());
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -499,7 +541,9 @@ mod tests {
         .await;
         let closed_url = closed_port_url();
         let ok_url = format!("http://{ok_address}/");
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
         let attempt = Arc::new(Mutex::new(0usize));
 
         let response = send_with_retry(
@@ -546,10 +590,11 @@ mod tests {
         .await;
         let slow_url = format!("http://{slow_address}/");
         let ok_url = format!("http://{ok_address}/");
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_millis(10))
-            .build()
-            .unwrap();
+        let Some(client) = test_client_from_builder_or_skip(
+            reqwest::Client::builder().timeout(Duration::from_millis(10)),
+        ) else {
+            return;
+        };
         let attempt = Arc::new(Mutex::new(0usize));
 
         let response = send_with_retry(
@@ -604,7 +649,9 @@ mod tests {
             initial_backoff: Duration::from_millis(1),
         };
         let collector = Arc::new(RetryCollector::default());
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "test",
@@ -644,7 +691,9 @@ mod tests {
             initial_backoff: Duration::from_millis(7),
         };
         let collector = Arc::new(RetryCollector::default());
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "responses",
@@ -682,7 +731,9 @@ mod tests {
         ])
         .await;
         let collector = Arc::new(RetryCollector::default());
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "responses",
@@ -717,7 +768,9 @@ mod tests {
             max_attempts: 2,
             initial_backoff: Duration::from_millis(11),
         };
-        let client = reqwest::Client::new();
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
 
         let response = send_with_retry(
             "responses",

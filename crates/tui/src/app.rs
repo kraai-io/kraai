@@ -4827,7 +4827,10 @@ mod tests {
             .app
             .reset_chat_session(Some(String::from("sess-next")), "Session loaded");
 
-        assert_eq!(harness.app.state.current_session_id.as_deref(), Some("sess-next"));
+        assert_eq!(
+            harness.app.state.current_session_id.as_deref(),
+            Some("sess-next")
+        );
         assert!(!harness.app.state.retry_waiting);
         assert!(!harness.app.state.is_streaming);
         assert_eq!(harness.app.state.status, "Session loaded");

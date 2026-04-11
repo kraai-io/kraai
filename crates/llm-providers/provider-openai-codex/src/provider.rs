@@ -580,13 +580,23 @@ mod tests {
         }
     }
 
+    fn test_client_or_skip() -> Option<Client> {
+        match Client::builder().build() {
+            Ok(client) => Some(client),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected reqwest client build error: {error}"),
+        }
+    }
+
+    fn factory() -> Option<OpenAiCodexFactory> {
+        let auth = auth_controller()?;
+        test_client_or_skip()?;
+        Some(OpenAiCodexFactory::new(Arc::new(auth)))
+    }
+
     fn provider() -> Option<OpenAiCodexProvider> {
         let auth = auth_controller()?;
-        let client = match Client::builder().build() {
-            Ok(client) => client,
-            Err(error) if is_missing_system_ca_error(&error) => return None,
-            Err(error) => panic!("unexpected reqwest client build error: {error}"),
-        };
+        let client = test_client_or_skip()?;
         Some(OpenAiCodexProvider {
             id: ProviderId::new("openai"),
             auth: Arc::new(auth),
@@ -608,10 +618,9 @@ mod tests {
 
     #[test]
     fn factory_create_uses_fixed_codex_endpoints() {
-        let Some(auth_controller) = auth_controller() else {
+        let Some(factory) = factory() else {
             return;
         };
-        let factory = OpenAiCodexFactory::new(Arc::new(auth_controller));
         let provider = factory
             .create(ProviderId::new("openai"), DynamicConfig::new())
             .unwrap();
