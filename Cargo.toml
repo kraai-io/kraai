@@ -63,7 +63,7 @@ ignore = "0.4.25"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
-rand = "0.10.0"
+rand = "0.10.1"
 ratatui = { version = "0.30.0", features = [
   "all-widgets",
   "macros",
@@ -79,8 +79,8 @@ syn = { version = "2.0.117", features = ["derive", "full"] }
 tachyonfx = "0.25.0"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
-tokio = { features = ["full"], version = "1.50.0" }
-toml = "1.1.0"
+tokio = { features = ["full"], version = "1.51.1" }
+toml = "1.1.2"
 toon-format = "0.4.5"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
