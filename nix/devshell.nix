@@ -29,9 +29,6 @@
           })
           rust-analyzer
 
-          pnpm
-          nodejs
-
           just
 
           ripgrep

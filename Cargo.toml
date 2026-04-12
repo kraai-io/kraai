@@ -2,7 +2,6 @@
 members = [
   "crates/agent",
   "crates/agent-runtime",
-  "crates/agent-ts-bindings",
   "crates/llm-providers/provider-core",
   "crates/llm-providers/provider-openai-chat-completions",
   "crates/llm-providers/provider-openai-codex",
