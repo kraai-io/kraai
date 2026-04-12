@@ -48,11 +48,6 @@ toon-schema = { path = "crates/toon-schema" }
 types = { path = "crates/types" }
 
 arboard = "3.6.1"
-async-openai = { version = "0.34.0", features = [
-  "byot",
-  "chat-completion",
-  "model",
-] }
 async-trait = "0.1.89"
 base64 = "0.22.1"
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -65,10 +60,6 @@ grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
 ignore = "0.4.25"
-llm-toolkit = "0.63.0"
-napi = { version = "3.8.4", features = ["async", "tokio_rt"] }
-napi-build = "2.3.1"
-napi-derive = "3.5.3"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
