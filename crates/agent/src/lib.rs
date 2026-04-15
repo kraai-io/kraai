@@ -26,6 +26,7 @@ use types::{
 use ulid::Ulid;
 
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+const AGENTS_MD_FILE_NAME: &str = "AGENTS.md";
 const SESSION_TITLE_MAX_CHARS: usize = 60;
 
 fn title_from_user_prompt(prompt: &str) -> Option<String> {
@@ -446,7 +447,7 @@ impl AgentManager {
     ) -> Result<PendingStreamRequest> {
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
-        {
+        let workspace_dir = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             if state.active_turn_profile.is_some() {
                 return Err(eyre!(
@@ -458,7 +459,8 @@ impl AgentManager {
             state.last_provider = Some(provider_id.clone());
             state.active_turn_profile = Some(profile.clone());
             state.active_turn_auto_approve = auto_approve;
-        }
+            state.active_tool_config.workspace_dir.clone()
+        };
         self.last_used_profile_id = Some(profile.id.clone());
 
         let user_msg_id = match self
@@ -487,7 +489,7 @@ impl AgentManager {
         let system_prompt = self.build_turn_system_prompt(
             session_id,
             &profile,
-            &session.workspace_dir,
+            &workspace_dir,
             &mut tool_state_snapshot,
         )?;
         if let Some(state) = self.session_states.get_mut(session_id) {
@@ -541,7 +543,7 @@ impl AgentManager {
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
         let session = self.require_session(session_id).await?;
-        let (model_id, provider_id, profile) = {
+        let (model_id, provider_id, profile, workspace_dir) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             let Some(model_id) = &state.last_model else {
                 return Ok(None);
@@ -552,7 +554,12 @@ impl AgentManager {
             let Some(profile) = &state.active_turn_profile else {
                 return Ok(None);
             };
-            (model_id.clone(), provider_id.clone(), profile.clone())
+            (
+                model_id.clone(),
+                provider_id.clone(),
+                profile.clone(),
+                state.active_tool_config.workspace_dir.clone(),
+            )
         };
 
         let tip_id = match self.get_tip(session_id).await? {
@@ -565,7 +572,7 @@ impl AgentManager {
         let system_prompt = self.build_turn_system_prompt(
             session_id,
             &profile,
-            &session.workspace_dir,
+            &workspace_dir,
             &mut tool_state_snapshot,
         )?;
         if let Some(state) = self.session_states.get_mut(session_id) {
@@ -648,6 +655,23 @@ impl AgentManager {
         }
     }
 
+    fn load_workspace_agents_md_prompt(&self, workspace_dir: &Path) -> Result<Option<String>> {
+        let agents_path = workspace_dir.join(AGENTS_MD_FILE_NAME);
+        let contents = match std::fs::read_to_string(&agents_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(eyre!("Failed reading {}: {error}", agents_path.display())),
+        };
+
+        if contents.trim().is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(format!(
+            "Workspace Instructions\nThe following instructions come from {AGENTS_MD_FILE_NAME} in the active workspace. Follow them in addition to the rest of this system prompt.\n\n```markdown\n{contents}\n```"
+        )))
+    }
+
     fn build_turn_system_prompt(
         &self,
         session_id: &str,
@@ -660,6 +684,10 @@ impl AgentManager {
         let base_system_prompt = self.build_system_prompt(profile)?;
         if !base_system_prompt.is_empty() {
             sections.push(base_system_prompt);
+        }
+
+        if let Some(workspace_agents_prompt) = self.load_workspace_agents_md_prompt(workspace_dir)? {
+            sections.push(workspace_agents_prompt);
         }
 
         let tool_state_prompt = render_tool_state_prompt(tool_state_snapshot, workspace_dir);
@@ -2107,6 +2135,214 @@ mod tests {
         assert!(!history.contains_key(&second_user));
         assert_eq!(history.len(), 1);
 
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_dir = test_dir("agents-missing");
+        tokio::fs::create_dir_all(&workspace_dir).await?;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_dir.clone())
+            .await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("follow up"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+
+        let system_prompt = request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(!system_prompt.content.contains("Workspace Instructions"));
+        assert!(!system_prompt.content.contains(AGENTS_MD_FILE_NAME));
+
+        let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_dir = test_dir("agents-present");
+        tokio::fs::create_dir_all(&workspace_dir).await?;
+        tokio::fs::write(
+            workspace_dir.join(AGENTS_MD_FILE_NAME),
+            "# Workspace rules\nAlways prefer deterministic behavior.\n",
+        )
+        .await?;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_dir.clone())
+            .await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("follow up"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+
+        let system_prompt = request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(system_prompt.content.contains("Workspace Instructions"));
+        assert!(system_prompt.content.contains("# Workspace rules"));
+        assert!(system_prompt
+            .content
+            .contains("Always prefer deterministic behavior."));
+
+        let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_dir = test_dir("agents-dynamic");
+        tokio::fs::create_dir_all(&workspace_dir).await?;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_dir.clone())
+            .await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let first_request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("first"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        let first_system_prompt = first_request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(!first_system_prompt.content.contains("First instructions"));
+        manager.complete_message(&first_request.message_id).await?;
+
+        tokio::fs::write(
+            workspace_dir.join(AGENTS_MD_FILE_NAME),
+            "First instructions\n",
+        )
+        .await?;
+
+        let second_request = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist");
+        let second_system_prompt = second_request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(second_system_prompt.content.contains("First instructions"));
+        manager.complete_message(&second_request.message_id).await?;
+
+        tokio::fs::write(
+            workspace_dir.join(AGENTS_MD_FILE_NAME),
+            "Updated instructions\n",
+        )
+        .await?;
+
+        let third_request = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist");
+        let third_system_prompt = third_request
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(third_system_prompt.content.contains("Updated instructions"));
+        assert!(!third_system_prompt.content.contains("First instructions"));
+
+        let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending(
+    ) -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+        let workspace_a = test_dir("agents-active-workspace-a");
+        let workspace_b = test_dir("agents-active-workspace-b");
+        tokio::fs::create_dir_all(&workspace_a).await?;
+        tokio::fs::create_dir_all(&workspace_b).await?;
+        tokio::fs::write(workspace_a.join(AGENTS_MD_FILE_NAME), "Workspace A\n").await?;
+        tokio::fs::write(workspace_b.join(AGENTS_MD_FILE_NAME), "Workspace B\n").await?;
+
+        let session_id = manager.create_session().await?;
+        manager.set_workspace_dir(&session_id, workspace_a.clone()).await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let first_request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("first"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        manager.complete_message(&first_request.message_id).await?;
+
+        manager.set_workspace_dir(&session_id, workspace_b.clone()).await?;
+
+        let continuation = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist");
+        let system_prompt = continuation
+            .provider_messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ChatRole::System)
+            .expect("system prompt should be present");
+        assert!(system_prompt.content.contains("Workspace A"));
+        assert!(!system_prompt.content.contains("Workspace B"));
+
+        let workspace_state = manager.get_workspace_dir_state(&session_id).await?.unwrap();
+        assert_eq!(workspace_state.0, workspace_b);
+        assert!(workspace_state.1);
+
+        let _ = tokio::fs::remove_dir_all(&workspace_a).await;
+        let _ = tokio::fs::remove_dir_all(&workspace_b).await;
         cleanup_dir(data_dir).await;
         Ok(())
     }
