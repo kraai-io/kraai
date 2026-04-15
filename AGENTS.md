@@ -2,8 +2,7 @@
 
 ## Task Completion Requirements
 
-1. Run `just lint` before committing to catch issues
-2. Rust changes require `cargo clippy --all-targets -- -D warnings` and `cargo nextest run`
+1. Run `just check` before committing to format, lint, and test
 
 ## Project Overview
 
