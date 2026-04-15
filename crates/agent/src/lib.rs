@@ -562,6 +562,10 @@ impl AgentManager {
             )
         };
 
+        if self.session_has_active_stream(session_id).await {
+            return Ok(None);
+        }
+
         let tip_id = match self.get_tip(session_id).await? {
             Some(id) => id,
             None => return Ok(None),
@@ -809,13 +813,7 @@ impl AgentManager {
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
-        let session_has_stream = {
-            let streaming = self.streaming_messages.read().await;
-            streaming
-                .values()
-                .any(|state| state.session_id == session_id)
-        };
-        if session_has_stream {
+        if self.session_has_active_stream(session_id).await {
             return Err(eyre!("Session already has an active stream: {session_id}"));
         }
 
@@ -846,6 +844,13 @@ impl AgentManager {
 
         self.set_tip(session_id, Some(message_id.clone())).await?;
         Ok(message_id)
+    }
+
+    async fn session_has_active_stream(&self, session_id: &str) -> bool {
+        let streaming = self.streaming_messages.read().await;
+        streaming
+            .values()
+            .any(|state| state.session_id == session_id)
     }
 
     pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) -> bool {
@@ -2427,6 +2432,46 @@ mod tests {
         assert!(system_prompt.content.contains("1|current"));
 
         let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let first_request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("first"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        manager.complete_message(&first_request.message_id).await?;
+
+        let continuation = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist");
+
+        let duplicate = manager.prepare_continuation_stream(&session_id).await?;
+        assert!(duplicate.is_none());
+        assert!(manager.is_turn_active(&session_id));
+
+        manager.complete_message(&continuation.message_id).await?;
+
+        let next_continuation = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("session should continue working after duplicate trigger");
+        assert_ne!(next_continuation.message_id, continuation.message_id);
+
         cleanup_dir(data_dir).await;
         Ok(())
     }
