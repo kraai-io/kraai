@@ -353,6 +353,10 @@ enum Command {
         session_id: String,
         response: oneshot::Sender<Option<String>>,
     },
+    UndoLastUserMessage {
+        session_id: String,
+        response: oneshot::Sender<Option<String>>,
+    },
     GetChatHistory {
         session_id: String,
         response: oneshot::Sender<BTreeMap<MessageId, types::Message>>,
@@ -580,6 +584,17 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::GetTip {
+                session_id,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn undo_last_user_message(&self, session_id: String) -> Result<Option<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::UndoLastUserMessage {
                 session_id,
                 response: tx,
             })
@@ -1471,6 +1486,21 @@ impl RuntimeInner {
                     .map(|id| id.to_string());
                 response
                     .send(tip_id)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::UndoLastUserMessage {
+                session_id,
+                response,
+            } => {
+                let restored_message = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .undo_last_user_message(&session_id)
+                    .await?;
+                response
+                    .send(restored_message)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 

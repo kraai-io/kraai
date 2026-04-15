@@ -31,11 +31,7 @@ const SESSION_TITLE_MAX_CHARS: usize = 60;
 fn title_from_user_prompt(prompt: &str) -> Option<String> {
     let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     let title: String = normalized.chars().take(SESSION_TITLE_MAX_CHARS).collect();
-    if title.is_empty() {
-        None
-    } else {
-        Some(title)
-    }
+    if title.is_empty() { None } else { Some(title) }
 }
 
 #[derive(Clone)]
@@ -769,7 +765,7 @@ impl AgentManager {
         self.message_store.save(&message).await?;
         self.set_tip(session_id, Some(message_id.clone())).await?;
         self.maybe_set_title_from_first_user_message(session_id, session_title)
-        .await?;
+            .await?;
 
         Ok(message_id)
     }
@@ -959,6 +955,31 @@ impl AgentManager {
         }
 
         Ok(result)
+    }
+
+    pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
+        if self.is_turn_active(session_id) {
+            return Err(eyre!("Cannot undo while the current turn is active"));
+        }
+
+        let Some(mut cursor) = self.get_tip(session_id).await? else {
+            return Ok(None);
+        };
+
+        let history = self.get_chat_history(session_id).await?;
+        while let Some(message) = history.get(&cursor) {
+            if message.role == ChatRole::User {
+                self.set_tip(session_id, message.parent_id.clone()).await?;
+                return Ok(Some(message.content.clone()));
+            }
+
+            let Some(parent_id) = message.parent_id.clone() else {
+                break;
+            };
+            cursor = parent_id;
+        }
+
+        Ok(None)
     }
 
     pub async fn parse_tool_calls_from_content(
@@ -1543,14 +1564,17 @@ mod tests {
         let prompt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         let title = title_from_user_prompt(prompt).expect("title should be present");
 
-        assert_eq!(title, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567");
+        assert_eq!(
+            title,
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
+        );
         assert_eq!(title.chars().count(), 60);
     }
 
     #[test]
     fn title_from_user_prompt_flattens_newlines() {
-        let title = title_from_user_prompt("first line\nsecond\r\nthird")
-            .expect("title should be present");
+        let title =
+            title_from_user_prompt("first line\nsecond\r\nthird").expect("title should be present");
 
         assert_eq!(title, "first line second third");
         assert!(!title.contains('\n'));
@@ -1655,9 +1679,7 @@ mod tests {
             .add_message(
                 &session_id,
                 ChatRole::User,
-                String::from(
-                    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-                ),
+                String::from("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
                 None,
             )
             .await?;
@@ -2046,6 +2068,45 @@ mod tests {
         assert!(system_prompt.content.contains("2|second line"));
 
         let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        let first_user = manager
+            .add_message(&session_id, ChatRole::User, String::from("first"), None)
+            .await?;
+        let second_user = manager
+            .add_message(&session_id, ChatRole::User, String::from("second"), None)
+            .await?;
+        let assistant = manager
+            .add_message(
+                &session_id,
+                ChatRole::Assistant,
+                String::from("reply"),
+                None,
+            )
+            .await?;
+
+        assert_eq!(manager.get_tip(&session_id).await?, Some(assistant));
+
+        let restored = manager.undo_last_user_message(&session_id).await?;
+
+        assert_eq!(restored.as_deref(), Some("second"));
+        assert_eq!(
+            manager.get_tip(&session_id).await?,
+            Some(first_user.clone())
+        );
+
+        let history = manager.get_chat_history(&session_id).await?;
+        assert!(history.contains_key(&first_user));
+        assert!(!history.contains_key(&second_user));
+        assert_eq!(history.len(), 1);
+
         cleanup_dir(data_dir).await;
         Ok(())
     }

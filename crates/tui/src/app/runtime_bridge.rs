@@ -152,6 +152,13 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::CurrentTip { session_id, result });
                 }
+                RuntimeRequest::UndoLastUserMessage { session_id } => {
+                    let result = rt
+                        .block_on(runtime.undo_last_user_message(session_id.clone()))
+                        .map_err(|e| e.to_string());
+                    let _ =
+                        res_tx.send(RuntimeResponse::UndoLastUserMessage { session_id, result });
+                }
                 RuntimeRequest::GetPendingTools { session_id } => {
                     let result = rt
                         .block_on(runtime.get_pending_tools(session_id.clone()))
@@ -264,6 +271,12 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
+        RuntimeRequest::UndoLastUserMessage { session_id } => {
+            RuntimeResponse::UndoLastUserMessage {
+                session_id,
+                result: Err(message.to_string()),
+            }
+        }
         RuntimeRequest::GetPendingTools { session_id } => RuntimeResponse::PendingTools {
             session_id,
             result: Err(message.to_string()),

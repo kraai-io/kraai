@@ -36,7 +36,7 @@ use self::ui::{
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
 
-const SLASH_COMMANDS: [(&str, &str); 7] = [
+const SLASH_COMMANDS: [(&str, &str); 8] = [
     ("agent", "Open agent selector"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
@@ -44,6 +44,7 @@ const SLASH_COMMANDS: [(&str, &str); 7] = [
     ("providers", "Open providers"),
     ("quit", "Exit the TUI"),
     ("sessions", "Open sessions menu"),
+    ("undo", "Restore last user message"),
 ];
 
 fn default_agent_profiles() -> Vec<AgentProfileSummary> {
@@ -265,6 +266,9 @@ enum RuntimeRequest {
     GetCurrentTip {
         session_id: String,
     },
+    UndoLastUserMessage {
+        session_id: String,
+    },
     GetPendingTools {
         session_id: String,
     },
@@ -316,6 +320,10 @@ enum RuntimeResponse {
         result: Result<BTreeMap<MessageId, Message>, String>,
     },
     CurrentTip {
+        session_id: String,
+        result: Result<Option<String>, String>,
+    },
+    UndoLastUserMessage {
         session_id: String,
         result: Result<Option<String>, String>,
     },
@@ -1246,6 +1254,25 @@ impl App {
                     }
                     Err(err) => {
                         self.state.status = format!("Failed loading tip: {err}");
+                    }
+                }
+            }
+            RuntimeResponse::UndoLastUserMessage { session_id, result } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+
+                match result {
+                    Ok(Some(message)) => {
+                        self.set_input_text(message);
+                        self.state.status = String::from("Restored last user message");
+                        self.request_sync_for_session(&session_id);
+                    }
+                    Ok(None) => {
+                        self.state.status = String::from("No user message to undo");
+                    }
+                    Err(err) => {
+                        self.state.status = format!("Failed to undo: {err}");
                     }
                 }
             }
@@ -2453,6 +2480,19 @@ impl App {
             "new" => {
                 self.start_new_chat();
             }
+            "undo" => {
+                let Some(session_id) = self.state.current_session_id.clone() else {
+                    self.state.status = String::from("No session to undo");
+                    return;
+                };
+                if self.state.is_streaming || self.state.retry_waiting || self.state.profile_locked
+                {
+                    self.state.status =
+                        String::from("Cannot undo while the current turn is active");
+                    return;
+                }
+                self.request(RuntimeRequest::UndoLastUserMessage { session_id });
+            }
             "help" => {
                 self.clear_chat_selection();
                 self.state.visible_chat_view = None;
@@ -2497,6 +2537,11 @@ impl App {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.state.selected_model_id = Some(model.id.clone());
         }
+    }
+
+    fn set_input_text(&mut self, text: String) {
+        self.state.input = text;
+        self.state.input_cursor = self.state.input.len();
     }
 
     fn maybe_send_startup_message(&mut self) {
@@ -5832,6 +5877,44 @@ mod tests {
     }
 
     #[test]
+    fn undo_command_requests_runtime_undo_for_current_session() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_command("undo");
+
+        assert!(matches!(
+            harness.drain_requests().as_slice(),
+            [RuntimeRequest::UndoLastUserMessage { session_id }] if session_id == "sess-2"
+        ));
+    }
+
+    #[test]
+    fn undo_command_requires_existing_session() {
+        let mut harness = test_harness();
+
+        harness.app.handle_command("undo");
+
+        assert_eq!(harness.app.state.status, "No session to undo");
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn undo_command_is_blocked_while_turn_is_active() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.is_streaming = true;
+
+        harness.app.handle_command("undo");
+
+        assert_eq!(
+            harness.app.state.status,
+            "Cannot undo while the current turn is active"
+        );
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
     fn final_tool_decision_starts_batch_execution() {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-2"));
@@ -6055,6 +6138,31 @@ mod tests {
             harness.app.state.current_tip_id.as_deref(),
             Some("tip-current")
         );
+    }
+
+    #[test]
+    fn undo_response_restores_input_and_requests_session_refresh() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::UndoLastUserMessage {
+                session_id: String::from("sess-2"),
+                result: Ok(Some(String::from("redo this"))),
+            });
+
+        assert_eq!(harness.app.state.input, "redo this");
+        assert_eq!(harness.app.state.input_cursor, "redo this".len());
+        assert_eq!(harness.app.state.status, "Restored last user message");
+
+        let requests = harness.drain_requests();
+        assert!(requests.iter().any(
+            |request| matches!(request, RuntimeRequest::GetCurrentTip { session_id } if session_id == "sess-2")
+        ));
+        assert!(requests.iter().any(
+            |request| matches!(request, RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2")
+        ));
     }
 
     #[test]
@@ -6438,6 +6546,7 @@ mod tests {
             RuntimeRequest::SaveSettings { .. } => "SaveSettings",
             RuntimeRequest::GetChatHistory { .. } => "GetChatHistory",
             RuntimeRequest::GetCurrentTip { .. } => "GetCurrentTip",
+            RuntimeRequest::UndoLastUserMessage { .. } => "UndoLastUserMessage",
             RuntimeRequest::GetPendingTools { .. } => "GetPendingTools",
             RuntimeRequest::LoadSession { .. } => "LoadSession",
             RuntimeRequest::ListSessions => "ListSessions",

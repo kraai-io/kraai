@@ -1438,6 +1438,7 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("/new       Start a new chat"),
         Line::raw("/providers Open providers"),
         Line::raw("/sessions  Open sessions menu"),
+        Line::raw("/undo      Restore last user message"),
         Line::raw("/quit      Exit the TUI"),
         Line::raw(""),
         Line::styled(
