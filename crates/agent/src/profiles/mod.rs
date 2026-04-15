@@ -93,7 +93,6 @@ fn built_in_profiles() -> Vec<AgentProfile> {
                 ToolId::new("list_files"),
                 ToolId::new("open_file"),
                 ToolId::new("search_files"),
-                ToolId::new("read_files"),
             ],
             default_risk_level: RiskLevel::ReadOnlyWorkspace,
             source: AgentProfileSource::BuiltIn,
@@ -108,7 +107,6 @@ fn built_in_profiles() -> Vec<AgentProfile> {
                 ToolId::new("list_files"),
                 ToolId::new("open_file"),
                 ToolId::new("search_files"),
-                ToolId::new("read_files"),
                 ToolId::new("edit_file"),
             ],
             default_risk_level: RiskLevel::UndoableWorkspaceWrite,
@@ -241,7 +239,6 @@ mod tests {
             "list_files",
             "open_file",
             "search_files",
-            "read_files",
             "edit_file",
         ]
         .into_iter()
