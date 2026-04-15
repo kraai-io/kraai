@@ -26,6 +26,17 @@ use types::{
 use ulid::Ulid;
 
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+const SESSION_TITLE_MAX_CHARS: usize = 60;
+
+fn title_from_user_prompt(prompt: &str) -> Option<String> {
+    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title: String = normalized.chars().take(SESSION_TITLE_MAX_CHARS).collect();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
 
 #[derive(Clone)]
 pub struct PendingToolCall {
@@ -383,6 +394,28 @@ impl AgentManager {
         Ok(())
     }
 
+    async fn maybe_set_title_from_first_user_message(
+        &self,
+        session_id: &str,
+        title: Option<String>,
+    ) -> Result<()> {
+        let Some(mut session) = self.session_store.get(session_id).await? else {
+            return Ok(());
+        };
+
+        if session.title.is_some() {
+            return Ok(());
+        }
+
+        let Some(title) = title else {
+            return Ok(());
+        };
+
+        session.title = Some(title);
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await
+    }
+
     async fn persist_tool_state_snapshot(
         &self,
         message_id: &MessageId,
@@ -708,6 +741,11 @@ impl AgentManager {
 
         let message_id = MessageId::new(Ulid::new());
         let parent_id = self.get_tip(session_id).await?;
+        let session_title = if role == ChatRole::User && parent_id.is_none() {
+            title_from_user_prompt(&content)
+        } else {
+            None
+        };
 
         tracing::debug!(
             "Adding message: session={}, id={}, role={:?}, parent={:?}",
@@ -730,6 +768,8 @@ impl AgentManager {
 
         self.message_store.save(&message).await?;
         self.set_tip(session_id, Some(message_id.clone())).await?;
+        self.maybe_set_title_from_first_user_message(session_id, session_title)
+        .await?;
 
         Ok(message_id)
     }
@@ -1498,6 +1538,25 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn title_from_user_prompt_truncates_to_sixty_characters() {
+        let prompt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let title = title_from_user_prompt(prompt).expect("title should be present");
+
+        assert_eq!(title, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567");
+        assert_eq!(title.chars().count(), 60);
+    }
+
+    #[test]
+    fn title_from_user_prompt_flattens_newlines() {
+        let title = title_from_user_prompt("first line\nsecond\r\nthird")
+            .expect("title should be present");
+
+        assert_eq!(title, "first line second third");
+        assert!(!title.contains('\n'));
+        assert!(!title.contains('\r'));
+    }
+
     #[tokio::test]
     async fn last_used_profile_is_inherited_by_new_sessions() -> Result<()> {
         let (mut manager, data_dir) = test_manager().await;
@@ -1582,6 +1641,69 @@ mod tests {
         assert_eq!(history_b.len(), 1);
         assert_eq!(history_a.get(&a_message).unwrap().content, "hello a");
         assert_eq!(history_b.get(&b_message).unwrap().content, "hello b");
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_user_message_sets_session_title() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .add_message(
+                &session_id,
+                ChatRole::User,
+                String::from(
+                    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                ),
+                None,
+            )
+            .await?;
+
+        let session = manager.require_session(&session_id).await?;
+        assert_eq!(
+            session.title.as_deref(),
+            Some("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567")
+        );
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .add_message(
+                &session_id,
+                ChatRole::User,
+                String::from("first prompt"),
+                None,
+            )
+            .await?;
+        manager
+            .add_message(
+                &session_id,
+                ChatRole::Assistant,
+                String::from("assistant response"),
+                None,
+            )
+            .await?;
+        manager
+            .add_message(
+                &session_id,
+                ChatRole::User,
+                String::from("second prompt should not replace the title"),
+                None,
+            )
+            .await?;
+
+        let session = manager.require_session(&session_id).await?;
+        assert_eq!(session.title.as_deref(), Some("first prompt"));
 
         cleanup_dir(data_dir).await;
         Ok(())
