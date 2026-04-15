@@ -543,6 +543,7 @@ impl AgentManager {
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
         let session = self.require_session(session_id).await?;
+        let selected_profile = self.resolve_selected_profile(&session)?;
         let (model_id, provider_id, profile, workspace_dir) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             let Some(model_id) = &state.last_model else {
@@ -551,13 +552,18 @@ impl AgentManager {
             let Some(provider_id) = &state.last_provider else {
                 return Ok(None);
             };
-            let Some(profile) = &state.active_turn_profile else {
-                return Ok(None);
+            let profile = match state.active_turn_profile.clone() {
+                Some(profile) => profile,
+                None => {
+                    state.active_turn_profile = Some(selected_profile.clone());
+                    state.active_turn_auto_approve = false;
+                    selected_profile.clone()
+                }
             };
             (
                 model_id.clone(),
                 provider_id.clone(),
-                profile.clone(),
+                profile,
                 state.active_tool_config.workspace_dir.clone(),
             )
         };
@@ -2471,6 +2477,39 @@ mod tests {
             .await?
             .expect("session should continue working after duplicate trigger");
         assert_ne!(next_continuation.message_id, continuation.message_id);
+
+        cleanup_dir(data_dir).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared() -> Result<()>
+    {
+        let (mut manager, data_dir) = test_manager().await;
+
+        let session_id = manager.create_session().await?;
+        manager
+            .set_session_profile(&session_id, String::from("plan-code"))
+            .await?;
+
+        let first_request = manager
+            .prepare_start_stream(
+                &session_id,
+                String::from("first"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        manager.complete_message(&first_request.message_id).await?;
+        manager.clear_active_turn(&session_id);
+
+        let continuation = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .expect("continuation request should exist after clearing the previous turn");
+
+        assert!(manager.is_turn_active(&session_id));
+        assert_ne!(continuation.message_id, first_request.message_id);
 
         cleanup_dir(data_dir).await;
         Ok(())

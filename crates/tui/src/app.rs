@@ -36,8 +36,9 @@ use self::ui::{
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
 
-const SLASH_COMMANDS: [(&str, &str); 8] = [
+const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("agent", "Open agent selector"),
+    ("continue", "Reprompt the agent"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("new", "Start new chat"),
@@ -290,6 +291,9 @@ enum RuntimeRequest {
     CancelStream {
         session_id: String,
     },
+    ContinueSession {
+        session_id: String,
+    },
     ExecuteApprovedTools {
         session_id: String,
     },
@@ -349,6 +353,7 @@ enum RuntimeResponse {
         result: Result<(), String>,
     },
     CancelStream(Result<bool, String>),
+    ContinueSession(Result<(), String>),
     ExecuteApprovedTools(Result<(), String>),
 }
 
@@ -1397,6 +1402,12 @@ impl App {
             }
             RuntimeResponse::CancelStream(Err(err)) => {
                 self.state.status = format!("Failed cancelling stream: {err}");
+            }
+            RuntimeResponse::ContinueSession(Ok(())) => {
+                self.state.status = String::from("Continuing session");
+            }
+            RuntimeResponse::ContinueSession(Err(err)) => {
+                self.state.status = format!("Failed continuing session: {err}");
             }
             RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
                 self.state.status = String::from("Executing decided tool calls");
@@ -2493,6 +2504,19 @@ impl App {
                     return;
                 }
                 self.request(RuntimeRequest::UndoLastUserMessage { session_id });
+            }
+            "continue" => {
+                let Some(session_id) = self.state.current_session_id.clone() else {
+                    self.state.status = String::from("No session to continue");
+                    return;
+                };
+                if self.state.is_streaming || self.state.retry_waiting || self.state.profile_locked
+                {
+                    self.state.status =
+                        String::from("Cannot continue while the current turn is active");
+                    return;
+                }
+                self.request(RuntimeRequest::ContinueSession { session_id });
             }
             "help" => {
                 self.clear_chat_selection();
@@ -5102,11 +5126,11 @@ mod tests {
 04:  • Use render ┌/help────────────────────────────────────┐r of end-to-end
 05:     smoke test│Slash Commands                           │
 06:               │/agent     Open agent selector           │
-07:               │/help      Open this help menu           │
-08:               │/model     Open model selector           │
-09:               │/new       Start a new chat              │
-10:               │/providers Open providers                │
-11:               │/sessions  Open sessions menu            │
+07:               │/continue  Reprompt the agent            │
+08:               │/help      Open this help menu           │
+09:               │/model     Open model selector           │
+10:               │/new       Start a new chat              │
+11:               │/providers Open providers                │
 12:               └─────────────────────────────────────────┘
 14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
 16:  >"#,
@@ -5916,6 +5940,44 @@ mod tests {
     }
 
     #[test]
+    fn continue_command_requests_runtime_continuation_for_current_session() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_command("continue");
+
+        assert!(matches!(
+            harness.drain_requests().as_slice(),
+            [RuntimeRequest::ContinueSession { session_id }] if session_id == "sess-2"
+        ));
+    }
+
+    #[test]
+    fn continue_command_requires_existing_session() {
+        let mut harness = test_harness();
+
+        harness.app.handle_command("continue");
+
+        assert_eq!(harness.app.state.status, "No session to continue");
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
+    fn continue_command_is_blocked_while_turn_is_active() {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+        harness.app.state.is_streaming = true;
+
+        harness.app.handle_command("continue");
+
+        assert_eq!(
+            harness.app.state.status,
+            "Cannot continue while the current turn is active"
+        );
+        assert!(harness.drain_requests().is_empty());
+    }
+
+    #[test]
     fn final_tool_decision_starts_batch_execution() {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(String::from("sess-2"));
@@ -6555,6 +6617,7 @@ mod tests {
             RuntimeRequest::ApproveTool { .. } => "ApproveTool",
             RuntimeRequest::DenyTool { .. } => "DenyTool",
             RuntimeRequest::CancelStream { .. } => "CancelStream",
+            RuntimeRequest::ContinueSession { .. } => "ContinueSession",
             RuntimeRequest::ExecuteApprovedTools { .. } => "ExecuteApprovedTools",
         }
     }

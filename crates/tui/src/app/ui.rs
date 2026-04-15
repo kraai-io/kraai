@@ -1433,6 +1433,7 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Line::raw("/agent     Open agent selector"),
+        Line::raw("/continue  Reprompt the agent"),
         Line::raw("/help      Open this help menu"),
         Line::raw("/model     Open model selector"),
         Line::raw("/new       Start a new chat"),

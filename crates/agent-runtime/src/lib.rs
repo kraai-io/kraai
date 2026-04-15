@@ -385,6 +385,9 @@ enum Command {
         session_id: String,
         response: oneshot::Sender<bool>,
     },
+    ContinueSession {
+        session_id: String,
+    },
     ExecuteApprovedTools {
         session_id: String,
     },
@@ -658,6 +661,13 @@ impl RuntimeHandle {
             })
             .await?;
         Ok(rx.await?)
+    }
+
+    pub async fn continue_session(&self, session_id: String) -> Result<()> {
+        self.command_tx
+            .send(Command::ContinueSession { session_id })
+            .await?;
+        Ok(())
     }
 
     /// Execute all approved tools
@@ -1596,6 +1606,20 @@ impl RuntimeInner {
                 response
                     .send(cancelled)
                     .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::ContinueSession { session_id } => {
+                Self::start_continuation(
+                    session_id,
+                    RuntimeServices {
+                        event_tx: self.event_tx.clone(),
+                        command_tx: self.command_tx.clone(),
+                        agent_manager: self.agent_manager.clone(),
+                        active_streams: self.active_streams.clone(),
+                        queued_messages: self.queued_messages.clone(),
+                    },
+                )
+                .await;
             }
 
             Command::ExecuteApprovedTools { session_id } => {
@@ -5032,6 +5056,61 @@ value: beta\n\
             history
                 .values()
                 .any(|message| message.content == "continuation complete")
+        );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continue_session_starts_new_assistant_turn_without_new_user_message() -> Result<()> {
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![
+            vec![ScriptedChunk::plain("first reply")],
+            vec![ScriptedChunk::plain("second reply")],
+        ]));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("hello"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("first turn completion", |events| {
+                stream_complete_count(events, &session_id) == 1
+            })
+            .await;
+
+        harness.handle.continue_session(session_id.clone()).await?;
+
+        harness
+            .events
+            .wait_for("continued turn completion", |events| {
+                stream_complete_count(events, &session_id) == 2
+            })
+            .await;
+
+        let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        let user_count = history
+            .values()
+            .filter(|message| message.role == types::ChatRole::User)
+            .count();
+        assert_eq!(user_count, 1);
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "first reply")
+        );
+        assert!(
+            history
+                .values()
+                .any(|message| message.content == "second reply")
         );
 
         harness.shutdown().await;
