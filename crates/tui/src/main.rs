@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-use agent_runtime::{Event, RuntimeBuilder};
+use agent_runtime::RuntimeBuilder;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use color_eyre::eyre::Result;
-use crossbeam_channel::{Sender, bounded};
 use ratatui::crossterm::{
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -75,13 +74,7 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse().validate().unwrap_or_else(|error| error.exit());
 
-    let (event_tx, event_rx): (Sender<Event>, _) = bounded(100);
-
-    let callback = move |event: Event| {
-        let _ = event_tx.send(event);
-    };
-
-    let runtime_builder = RuntimeBuilder::new(callback);
+    let runtime_builder = RuntimeBuilder::new();
     let runtime_builder = if let Some(path) = cli.provider_config.clone() {
         runtime_builder.provider_config_path(path)
     } else {
@@ -98,7 +91,7 @@ fn main() -> Result<()> {
         message: cli.message,
     };
 
-    let mut app = App::new(runtime, event_rx, startup_options);
+    let mut app = App::new(runtime, startup_options);
 
     if cli.ci {
         return app.run_ci();

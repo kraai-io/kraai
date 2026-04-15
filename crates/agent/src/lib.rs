@@ -686,7 +686,9 @@ impl AgentManager {
             sections.push(base_system_prompt);
         }
 
-        if let Some(workspace_agents_prompt) = self.load_workspace_agents_md_prompt(workspace_dir)? {
+        if let Some(workspace_agents_prompt) =
+            self.load_workspace_agents_md_prompt(workspace_dir)?
+        {
             sections.push(workspace_agents_prompt);
         }
 
@@ -2212,9 +2214,11 @@ mod tests {
             .expect("system prompt should be present");
         assert!(system_prompt.content.contains("Workspace Instructions"));
         assert!(system_prompt.content.contains("# Workspace rules"));
-        assert!(system_prompt
-            .content
-            .contains("Always prefer deterministic behavior."));
+        assert!(
+            system_prompt
+                .content
+                .contains("Always prefer deterministic behavior.")
+        );
 
         let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
         cleanup_dir(data_dir).await;
@@ -2296,8 +2300,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending(
-    ) -> Result<()> {
+    async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending()
+    -> Result<()> {
         let (mut manager, data_dir) = test_manager().await;
         let workspace_a = test_dir("agents-active-workspace-a");
         let workspace_b = test_dir("agents-active-workspace-b");
@@ -2307,7 +2311,9 @@ mod tests {
         tokio::fs::write(workspace_b.join(AGENTS_MD_FILE_NAME), "Workspace B\n").await?;
 
         let session_id = manager.create_session().await?;
-        manager.set_workspace_dir(&session_id, workspace_a.clone()).await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_a.clone())
+            .await?;
         manager
             .set_session_profile(&session_id, String::from("plan-code"))
             .await?;
@@ -2322,7 +2328,9 @@ mod tests {
             .await?;
         manager.complete_message(&first_request.message_id).await?;
 
-        manager.set_workspace_dir(&session_id, workspace_b.clone()).await?;
+        manager
+            .set_workspace_dir(&session_id, workspace_b.clone())
+            .await?;
 
         let continuation = manager
             .prepare_continuation_stream(&session_id)

@@ -27,7 +27,7 @@ use crate::components::{ChatHistory, RenderedLine, TextInput, VisibleChatView};
 mod runtime_bridge;
 mod ui;
 
-use self::runtime_bridge::spawn_runtime_bridge;
+use self::runtime_bridge::{spawn_event_bridge, spawn_runtime_bridge};
 use self::ui::{
     STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
     copy_via_osc52, is_copy_shortcut, is_known_slash_command, model_menu_next_index,
@@ -657,15 +657,12 @@ impl App {
         self.clear_chat_selection();
     }
 
-    pub fn new(
-        runtime: RuntimeHandle,
-        event_rx: Receiver<Event>,
-        startup_options: StartupOptions,
-    ) -> Self {
+    pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
+        let event_rx = spawn_event_bridge(runtime.subscribe());
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
         let state = AppState::from_startup_options(startup_options.clone());
 
-        Self {
+        let app = Self {
             event_rx,
             runtime_tx,
             runtime_rx,
@@ -679,7 +676,10 @@ impl App {
             state,
             last_stream_refresh: None,
             last_statusline_animation_tick: None,
-        }
+        };
+
+        app.request_sync();
+        app
     }
 
     pub fn run_ci(&mut self) -> Result<()> {
@@ -1058,6 +1058,7 @@ impl App {
     fn handle_runtime_response(&mut self, response: RuntimeResponse) {
         match response {
             RuntimeResponse::Models(Ok(models)) => {
+                self.state.config_loaded = true;
                 self.state.models_by_provider = models;
                 if self.is_ci_mode() {
                     if let Err(err) = self.validate_ci_model_selection() {

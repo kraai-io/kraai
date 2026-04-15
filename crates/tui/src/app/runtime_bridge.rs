@@ -1,10 +1,40 @@
 use agent_runtime::{
-    OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
+    Event, OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
     OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, RuntimeHandle,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use tokio::sync::broadcast;
 
 use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
+
+pub(super) fn spawn_event_bridge(
+    mut runtime_events: broadcast::Receiver<Event>,
+) -> Receiver<Event> {
+    let (event_tx, event_rx) = unbounded();
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+
+        rt.block_on(async move {
+            loop {
+                match runtime_events.recv().await {
+                    Ok(event) => {
+                        if event_tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    });
+
+    event_rx
+}
 
 pub(super) fn spawn_runtime_bridge(
     runtime: RuntimeHandle,

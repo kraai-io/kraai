@@ -28,7 +28,7 @@ use provider_openai_codex::{
     OpenAiCodexAuthController, OpenAiCodexAuthStatus as ProviderOpenAiCodexAuthStatus,
     OpenAiCodexFactory, OpenAiCodexLoginState as ProviderOpenAiCodexLoginState,
 };
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 pub use provider_core::{
@@ -246,13 +246,14 @@ pub enum Event {
 }
 
 // ============================================================================
-// Event Callback Trait - clients implement this
+// Event Callback Trait - optional adapters may implement this
 // ============================================================================
 
-/// Trait for receiving events from the runtime
+/// Optional callback adapter for receiving runtime events.
 ///
-/// Clients (TUI, CLI, Electron, etc.) implement this trait to receive
-/// events from the runtime.
+/// The primary runtime API is subscription-based via `RuntimeHandle::subscribe`.
+/// This trait remains available for local adapters and tests that want a
+/// callback-style sink.
 pub trait EventCallback: Send + Sync {
     /// Called when an event occurs
     fn on_event(&self, event: Event);
@@ -271,21 +272,28 @@ struct RuntimeRetryObserver {
     session_id: String,
     provider_id: ProviderId,
     model_id: ModelId,
-    event_callback: Arc<dyn EventCallback>,
+    event_tx: broadcast::Sender<Event>,
 }
 
 impl ProviderRetryObserver for RuntimeRetryObserver {
     fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
-        self.event_callback.on_event(Event::ProviderRetryScheduled {
-            session_id: self.session_id.clone(),
-            provider_id: self.provider_id.to_string(),
-            model_id: self.model_id.to_string(),
-            operation: event.operation.to_string(),
-            retry_number: event.retry_number,
-            delay_seconds: event.delay.as_secs(),
-            reason: event.reason.clone(),
-        });
+        emit_event(
+            &self.event_tx,
+            Event::ProviderRetryScheduled {
+                session_id: self.session_id.clone(),
+                provider_id: self.provider_id.to_string(),
+                model_id: self.model_id.to_string(),
+                operation: event.operation.to_string(),
+                retry_number: event.retry_number,
+                delay_seconds: event.delay.as_secs(),
+                reason: event.reason.clone(),
+            },
+        );
     }
+}
+
+fn emit_event(event_tx: &broadcast::Sender<Event>, event: Event) {
+    let _ = event_tx.send(event);
 }
 
 // ============================================================================
@@ -408,9 +416,14 @@ enum Command {
 #[derive(Clone)]
 pub struct RuntimeHandle {
     command_tx: mpsc::Sender<Command>,
+    event_tx: broadcast::Sender<Event>,
 }
 
 impl RuntimeHandle {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.event_tx.subscribe()
+    }
+
     /// List available models from all providers
     pub async fn list_models(&self) -> Result<HashMap<String, Vec<Model>>> {
         let (tx, rx) = oneshot::channel();
@@ -702,15 +715,13 @@ impl RuntimeHandle {
 
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
-    callback: Arc<dyn EventCallback>,
     provider_config_path: Option<PathBuf>,
 }
 
 impl RuntimeBuilder {
-    /// Create a new runtime builder with the given event callback
-    pub fn new(callback: impl EventCallback + 'static) -> Self {
+    /// Create a new runtime builder.
+    pub fn new() -> Self {
         Self {
-            callback: Arc::new(callback),
             provider_config_path: None,
         }
     }
@@ -726,30 +737,34 @@ impl RuntimeBuilder {
     /// to send commands.
     pub fn build(self) -> RuntimeHandle {
         let (command_tx, command_rx) = mpsc::channel(100);
-        let handle = RuntimeHandle { command_tx };
+        let (event_tx, _) = broadcast::channel(1024);
+        let handle = RuntimeHandle {
+            command_tx,
+            event_tx: event_tx.clone(),
+        };
         let command_tx_for_runtime = handle.command_tx.clone();
 
-        let callback = self.callback.clone();
         let provider_config_path = self.provider_config_path.clone();
 
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(error) => {
-                    callback.on_event(Event::Error(format!(
-                        "Failed to create tokio runtime: {error}"
-                    )));
+                    emit_event(
+                        &event_tx,
+                        Event::Error(format!("Failed to create tokio runtime: {error}")),
+                    );
                     return;
                 }
             };
 
             if let Err(error) = rt.block_on(Self::run_background(
-                callback.clone(),
+                event_tx.clone(),
                 command_tx_for_runtime,
                 command_rx,
                 provider_config_path,
             )) {
-                callback.on_event(Event::Error(error.to_string()));
+                emit_event(&event_tx, Event::Error(error.to_string()));
             }
         });
 
@@ -757,7 +772,7 @@ impl RuntimeBuilder {
     }
 
     async fn run_background(
-        callback: Arc<dyn EventCallback>,
+        event_tx: broadcast::Sender<Event>,
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
         provider_config_path_override: Option<PathBuf>,
@@ -789,7 +804,7 @@ impl RuntimeBuilder {
         )));
 
         let runtime = RuntimeInner {
-            event_callback: callback,
+            event_tx,
             command_tx,
             agent_manager,
             provider_registry: registry,
@@ -846,6 +861,12 @@ impl RuntimeBuilder {
                 Err(error) => Err(eyre!(error.clone())),
             })
             .unwrap_or_else(|| Ok(()))
+    }
+}
+
+impl Default for RuntimeBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -934,7 +955,7 @@ async fn execute_tool_requests(executions: Vec<ToolExecutionRequest>) -> Vec<typ
 
 #[derive(Clone)]
 struct RuntimeInner {
-    event_callback: Arc<dyn EventCallback>,
+    event_tx: broadcast::Sender<Event>,
     command_tx: mpsc::Sender<Command>,
     agent_manager: Arc<Mutex<AgentManager>>,
     provider_registry: ProviderRegistry,
@@ -960,7 +981,7 @@ struct QueuedMessage {
 
 #[derive(Clone)]
 struct RuntimeServices {
-    event_callback: Arc<dyn EventCallback>,
+    event_tx: broadcast::Sender<Event>,
     command_tx: mpsc::Sender<Command>,
     agent_manager: Arc<Mutex<AgentManager>>,
     active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
@@ -1252,7 +1273,7 @@ fn is_possible_think_tag_prefix(input: &str, closing: bool) -> bool {
 
 impl RuntimeInner {
     fn send_event(&self, event: Event) {
-        self.event_callback.on_event(event);
+        emit_event(&self.event_tx, event);
     }
 
     fn send_error(&self, error: impl Into<String>) {
@@ -1760,7 +1781,7 @@ impl RuntimeInner {
         continuation_error: bool,
         command_tx: mpsc::Sender<Command>,
         agent_manager: Arc<Mutex<AgentManager>>,
-        event_callback: Arc<dyn EventCallback>,
+        event_tx: broadcast::Sender<Event>,
     ) {
         let rollback_result = {
             let mut agent = agent_manager.lock().await;
@@ -1774,35 +1795,50 @@ impl RuntimeInner {
         match rollback_result {
             Ok(Some(_)) => {
                 Self::schedule_queue_drain(&session_id, command_tx).await;
-                event_callback.on_event(Event::HistoryUpdated {
-                    session_id: session_id.clone(),
-                });
+                emit_event(
+                    &event_tx,
+                    Event::HistoryUpdated {
+                        session_id: session_id.clone(),
+                    },
+                );
             }
             Ok(None) => {
-                event_callback.on_event(Event::Error(format!(
-                    "Failed to recover stream state for message {} after completion error",
-                    message_id
-                )));
+                emit_event(
+                    &event_tx,
+                    Event::Error(format!(
+                        "Failed to recover stream state for message {} after completion error",
+                        message_id
+                    )),
+                );
             }
             Err(rollback_error) => {
-                event_callback.on_event(Event::Error(format!(
-                    "Failed to roll back stream {} after completion error: {rollback_error}",
-                    message_id
-                )));
+                emit_event(
+                    &event_tx,
+                    Event::Error(format!(
+                        "Failed to roll back stream {} after completion error: {rollback_error}",
+                        message_id
+                    )),
+                );
             }
         }
 
         if continuation_error {
-            event_callback.on_event(Event::ContinuationFailed {
-                session_id,
-                error: error.to_string(),
-            });
+            emit_event(
+                &event_tx,
+                Event::ContinuationFailed {
+                    session_id,
+                    error: error.to_string(),
+                },
+            );
         } else {
-            event_callback.on_event(Event::StreamError {
-                session_id,
-                message_id: message_id.to_string(),
-                error: error.to_string(),
-            });
+            emit_event(
+                &event_tx,
+                Event::StreamError {
+                    session_id,
+                    message_id: message_id.to_string(),
+                    error: error.to_string(),
+                },
+            );
         }
     }
 
@@ -1822,13 +1858,13 @@ impl RuntimeInner {
     }
 
     async fn handle_execute_tools(&self, session_id: String) {
-        let event_callback = self.event_callback.clone();
+        let event_tx = self.event_tx.clone();
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
         let active_streams = self.active_streams.clone();
         let queued_messages = self.queued_messages.clone();
         let services = RuntimeServices {
-            event_callback: event_callback.clone(),
+            event_tx: event_tx.clone(),
             command_tx: command_tx.clone(),
             agent_manager: agent_manager.clone(),
             active_streams: active_streams.clone(),
@@ -1857,14 +1893,17 @@ impl RuntimeInner {
                 let success = result.output.get("error").is_none();
                 let output = serde_json::to_string(&result.output).unwrap_or_default();
 
-                event_callback.on_event(Event::ToolResultReady {
-                    session_id: session_id.clone(),
-                    call_id: result.call_id.to_string(),
-                    tool_id: result.tool_id.to_string(),
-                    success,
-                    output,
-                    denied: result.permission_denied,
-                });
+                emit_event(
+                    &event_tx,
+                    Event::ToolResultReady {
+                        session_id: session_id.clone(),
+                        call_id: result.call_id.to_string(),
+                        tool_id: result.tool_id.to_string(),
+                        success,
+                        output,
+                        denied: result.permission_denied,
+                    },
+                );
             }
 
             // Add results to history
@@ -1876,14 +1915,20 @@ impl RuntimeInner {
                 {
                     agent.clear_active_turn(&session_id);
                     drop(agent);
-                    event_callback.on_event(Event::Error(error.to_string()));
-                    event_callback.on_event(Event::ContinuationFailed {
-                        session_id: session_id.clone(),
-                        error: error.to_string(),
-                    });
-                    event_callback.on_event(Event::HistoryUpdated {
-                        session_id: session_id.clone(),
-                    });
+                    emit_event(&event_tx, Event::Error(error.to_string()));
+                    emit_event(
+                        &event_tx,
+                        Event::ContinuationFailed {
+                            session_id: session_id.clone(),
+                            error: error.to_string(),
+                        },
+                    );
+                    emit_event(
+                        &event_tx,
+                        Event::HistoryUpdated {
+                            session_id: session_id.clone(),
+                        },
+                    );
                     Self::schedule_queue_drain(&session_id, command_tx.clone()).await;
                     return;
                 }
@@ -1891,9 +1936,12 @@ impl RuntimeInner {
             }
 
             tracing::debug!("Emitting HistoryUpdated event after tool results");
-            event_callback.on_event(Event::HistoryUpdated {
-                session_id: session_id.clone(),
-            });
+            emit_event(
+                &event_tx,
+                Event::HistoryUpdated {
+                    session_id: session_id.clone(),
+                },
+            );
 
             for source_message_id in completed_source_message_ids {
                 let has_pending_tools = {
@@ -1917,7 +1965,7 @@ impl RuntimeInner {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
             let agent_manager = services.agent_manager.clone();
-            let event_callback = services.event_callback.clone();
+            let event_tx = services.event_tx.clone();
             let command_tx = services.command_tx.clone();
             let active_streams = services.active_streams.clone();
             let queued_messages = services.queued_messages.clone();
@@ -1943,13 +1991,19 @@ impl RuntimeInner {
                         agent.clear_active_turn(&session_id);
                     }
                     Self::schedule_queue_drain(&session_id, command_tx.clone()).await;
-                    event_callback.on_event(Event::HistoryUpdated {
-                        session_id: session_id.clone(),
-                    });
-                    event_callback.on_event(Event::ContinuationFailed {
-                        session_id,
-                        error: error.to_string(),
-                    });
+                    emit_event(
+                        &event_tx,
+                        Event::HistoryUpdated {
+                            session_id: session_id.clone(),
+                        },
+                    );
+                    emit_event(
+                        &event_tx,
+                        Event::ContinuationFailed {
+                            session_id,
+                            error: error.to_string(),
+                        },
+                    );
                     return;
                 }
             };
@@ -1967,7 +2021,7 @@ impl RuntimeInner {
                         request,
                         providers,
                         agent_manager.clone(),
-                        event_callback.clone(),
+                        event_tx.clone(),
                     )
                     .await;
 
@@ -2001,26 +2055,32 @@ impl RuntimeInner {
                                         true,
                                         command_tx.clone(),
                                         agent_manager.clone(),
-                                        event_callback.clone(),
+                                        event_tx.clone(),
                                     )
                                     .await;
                                     return;
                                 }
                             };
 
-                            event_callback.on_event(Event::StreamComplete {
-                                session_id: completed_session.clone(),
-                                message_id: request_message_id.to_string(),
-                            });
-                            event_callback.on_event(Event::HistoryUpdated {
-                                session_id: completed_session.clone(),
-                            });
+                            emit_event(
+                                &event_tx,
+                                Event::StreamComplete {
+                                    session_id: completed_session.clone(),
+                                    message_id: request_message_id.to_string(),
+                                },
+                            );
+                            emit_event(
+                                &event_tx,
+                                Event::HistoryUpdated {
+                                    session_id: completed_session.clone(),
+                                },
+                            );
                             Self::process_completed_stream_output(
                                 completed_session,
                                 request_message_id,
                                 content,
                                 RuntimeServices {
-                                    event_callback: event_callback.clone(),
+                                    event_tx: event_tx.clone(),
                                     command_tx: command_tx.clone(),
                                     agent_manager: agent_manager.clone(),
                                     active_streams: task_active_streams.clone(),
@@ -2043,27 +2103,39 @@ impl RuntimeInner {
                                         command_tx.clone(),
                                     )
                                     .await;
-                                    event_callback.on_event(Event::HistoryUpdated {
-                                        session_id: request_session_id.clone(),
-                                    });
+                                    emit_event(
+                                        &event_tx,
+                                        Event::HistoryUpdated {
+                                            session_id: request_session_id.clone(),
+                                        },
+                                    );
                                 }
                                 Ok(false) => {
-                                    event_callback.on_event(Event::Error(format!(
-                                        "Failed to recover continuation stream {} after start failure",
-                                        request_message_id
-                                    )));
+                                    emit_event(
+                                        &event_tx,
+                                        Event::Error(format!(
+                                            "Failed to recover continuation stream {} after start failure",
+                                            request_message_id
+                                        )),
+                                    );
                                 }
                                 Err(rollback_error) => {
-                                    event_callback.on_event(Event::Error(format!(
-                                        "Failed to roll back continuation stream {} after start failure: {rollback_error}",
-                                        request_message_id
-                                    )));
+                                    emit_event(
+                                        &event_tx,
+                                        Event::Error(format!(
+                                            "Failed to roll back continuation stream {} after start failure: {rollback_error}",
+                                            request_message_id
+                                        )),
+                                    );
                                 }
                             }
-                            event_callback.on_event(Event::ContinuationFailed {
-                                session_id: request_session_id,
-                                error,
-                            });
+                            emit_event(
+                                &event_tx,
+                                Event::ContinuationFailed {
+                                    session_id: request_session_id,
+                                    error,
+                                },
+                            );
                         }
                         StreamDriveResult::FailedDuringStream { error } => {
                             match Self::abort_stream_for_recovery(
@@ -2081,24 +2153,33 @@ impl RuntimeInner {
                                     .await;
                                 }
                                 Ok(false) => {
-                                    event_callback.on_event(Event::Error(format!(
-                                        "Failed to recover continuation stream {} after runtime error",
-                                        request_message_id
-                                    )));
+                                    emit_event(
+                                        &event_tx,
+                                        Event::Error(format!(
+                                            "Failed to recover continuation stream {} after runtime error",
+                                            request_message_id
+                                        )),
+                                    );
                                 }
                                 Err(rollback_error) => {
-                                    event_callback.on_event(Event::Error(format!(
-                                        "Failed to roll back continuation stream {} after runtime error: {rollback_error}",
-                                        request_message_id
-                                    )));
+                                    emit_event(
+                                        &event_tx,
+                                        Event::Error(format!(
+                                            "Failed to roll back continuation stream {} after runtime error: {rollback_error}",
+                                            request_message_id
+                                        )),
+                                    );
                                 }
                             }
                             tracing::error!("Continuation stream error: {}", error);
-                            event_callback.on_event(Event::StreamError {
-                                session_id: request_session_id,
-                                message_id: request_message_id.to_string(),
-                                error,
-                            });
+                            emit_event(
+                                &event_tx,
+                                Event::StreamError {
+                                    session_id: request_session_id,
+                                    message_id: request_message_id.to_string(),
+                                    error,
+                                },
+                            );
                         }
                         StreamDriveResult::Stopped => {}
                     }
@@ -2125,7 +2206,7 @@ impl RuntimeInner {
         providers: ProviderManager,
         request: PendingStreamRequest,
     ) {
-        let event_callback = self.event_callback.clone();
+        let event_tx = self.event_tx.clone();
         let agent_manager = self.agent_manager.clone();
         let command_tx = self.command_tx.clone();
         let active_streams = self.active_streams.clone();
@@ -2145,7 +2226,7 @@ impl RuntimeInner {
                     request,
                     providers,
                     agent_manager.clone(),
-                    event_callback.clone(),
+                    event_tx.clone(),
                 )
                 .await;
 
@@ -2179,26 +2260,32 @@ impl RuntimeInner {
                                     false,
                                     command_tx.clone(),
                                     agent_manager.clone(),
-                                    event_callback.clone(),
+                                    event_tx.clone(),
                                 )
                                 .await;
                                 return;
                             }
                         };
 
-                        event_callback.on_event(Event::StreamComplete {
-                            session_id: completed_session.clone(),
-                            message_id: request_message_id.to_string(),
-                        });
-                        event_callback.on_event(Event::HistoryUpdated {
-                            session_id: completed_session.clone(),
-                        });
+                        emit_event(
+                            &event_tx,
+                            Event::StreamComplete {
+                                session_id: completed_session.clone(),
+                                message_id: request_message_id.to_string(),
+                            },
+                        );
+                        emit_event(
+                            &event_tx,
+                            Event::HistoryUpdated {
+                                session_id: completed_session.clone(),
+                            },
+                        );
                         Self::process_completed_stream_output(
                             completed_session,
                             request_message_id,
                             content,
                             RuntimeServices {
-                                event_callback: event_callback.clone(),
+                                event_tx: event_tx.clone(),
                                 command_tx: command_tx.clone(),
                                 agent_manager: agent_manager.clone(),
                                 active_streams: task_active_streams.clone(),
@@ -2220,19 +2307,25 @@ impl RuntimeInner {
                                     .await;
                             }
                             Ok(false) => {
-                                event_callback.on_event(Event::Error(format!(
-                                    "Failed to recover stream {} after start failure",
-                                    request_message_id
-                                )));
+                                emit_event(
+                                    &event_tx,
+                                    Event::Error(format!(
+                                        "Failed to recover stream {} after start failure",
+                                        request_message_id
+                                    )),
+                                );
                             }
                             Err(rollback_error) => {
-                                event_callback.on_event(Event::Error(format!(
-                                    "Failed to roll back stream {} after start failure: {rollback_error}",
-                                    request_message_id
-                                )));
+                                emit_event(
+                                    &event_tx,
+                                    Event::Error(format!(
+                                        "Failed to roll back stream {} after start failure: {rollback_error}",
+                                        request_message_id
+                                    )),
+                                );
                             }
                         }
-                        event_callback.on_event(Event::Error(error));
+                        emit_event(&event_tx, Event::Error(error));
                     }
                     StreamDriveResult::FailedDuringStream { error } => {
                         match Self::abort_stream_for_recovery(
@@ -2247,23 +2340,32 @@ impl RuntimeInner {
                                     .await;
                             }
                             Ok(false) => {
-                                event_callback.on_event(Event::Error(format!(
-                                    "Failed to recover stream {} after runtime error",
-                                    request_message_id
-                                )));
+                                emit_event(
+                                    &event_tx,
+                                    Event::Error(format!(
+                                        "Failed to recover stream {} after runtime error",
+                                        request_message_id
+                                    )),
+                                );
                             }
                             Err(rollback_error) => {
-                                event_callback.on_event(Event::Error(format!(
-                                    "Failed to roll back stream {} after runtime error: {rollback_error}",
-                                    request_message_id
-                                )));
+                                emit_event(
+                                    &event_tx,
+                                    Event::Error(format!(
+                                        "Failed to roll back stream {} after runtime error: {rollback_error}",
+                                        request_message_id
+                                    )),
+                                );
                             }
                         }
-                        event_callback.on_event(Event::StreamError {
-                            session_id: request_session_id,
-                            message_id: request_message_id.to_string(),
-                            error,
-                        });
+                        emit_event(
+                            &event_tx,
+                            Event::StreamError {
+                                session_id: request_session_id,
+                                message_id: request_message_id.to_string(),
+                                error,
+                            },
+                        );
                     }
                     StreamDriveResult::Stopped => {}
                 }
@@ -2288,7 +2390,7 @@ impl RuntimeInner {
         request: PendingStreamRequest,
         providers: ProviderManager,
         agent_manager: Arc<Mutex<AgentManager>>,
-        event_callback: Arc<dyn EventCallback>,
+        event_tx: broadcast::Sender<Event>,
     ) -> StreamDriveResult {
         let PendingStreamRequest {
             message_id: msg_id,
@@ -2301,7 +2403,7 @@ impl RuntimeInner {
                 session_id: session_id.clone(),
                 provider_id: provider_id.clone(),
                 model_id: model_id.clone(),
-                event_callback: event_callback.clone(),
+                event_tx: event_tx.clone(),
             }));
         let mut stream = match providers
             .generate_reply_stream(provider_id, &model_id, provider_messages, request_context)
@@ -2315,10 +2417,13 @@ impl RuntimeInner {
             }
         };
 
-        event_callback.on_event(Event::StreamStart {
-            session_id: session_id.clone(),
-            message_id: msg_id.to_string(),
-        });
+        emit_event(
+            &event_tx,
+            Event::StreamStart {
+                session_id: session_id.clone(),
+                message_id: msg_id.to_string(),
+            },
+        );
 
         let mut content = String::new();
         let mut guard = ToolCallStreamGuard::default();
@@ -2335,11 +2440,14 @@ impl RuntimeInner {
                                 return StreamDriveResult::Stopped;
                             }
                         }
-                        event_callback.on_event(Event::StreamChunk {
-                            session_id: session_id.clone(),
-                            message_id: msg_id.to_string(),
-                            chunk: guarded.accepted,
-                        });
+                        emit_event(
+                            &event_tx,
+                            Event::StreamChunk {
+                                session_id: session_id.clone(),
+                                message_id: msg_id.to_string(),
+                                chunk: guarded.accepted,
+                            },
+                        );
                     }
                     if guarded.should_stop {
                         tracing::debug!(
@@ -2368,11 +2476,14 @@ impl RuntimeInner {
                     return StreamDriveResult::Stopped;
                 }
             }
-            event_callback.on_event(Event::StreamChunk {
-                session_id: session_id.clone(),
-                message_id: msg_id.to_string(),
-                chunk: tail,
-            });
+            emit_event(
+                &event_tx,
+                Event::StreamChunk {
+                    session_id: session_id.clone(),
+                    message_id: msg_id.to_string(),
+                    chunk: tail,
+                },
+            );
         }
 
         tracing::debug!("Full content length: {}", content.len());
@@ -2390,7 +2501,7 @@ impl RuntimeInner {
         services: RuntimeServices,
     ) {
         let agent_manager = services.agent_manager.clone();
-        let event_callback = services.event_callback.clone();
+        let event_tx = services.event_tx.clone();
         let command_tx = services.command_tx.clone();
         let (tool_calls, failed) = {
             let mut agent = agent_manager.lock().await;
@@ -2405,10 +2516,13 @@ impl RuntimeInner {
                         agent.clear_active_turn(&completed_session);
                     }
                     Self::schedule_queue_drain(&completed_session, command_tx.clone()).await;
-                    event_callback.on_event(Event::HistoryUpdated {
-                        session_id: completed_session,
-                    });
-                    event_callback.on_event(Event::Error(error.to_string()));
+                    emit_event(
+                        &event_tx,
+                        Event::HistoryUpdated {
+                            session_id: completed_session,
+                        },
+                    );
+                    emit_event(&event_tx, Event::Error(error.to_string()));
                     return;
                 }
             }
@@ -2434,16 +2548,22 @@ impl RuntimeInner {
                     agent.clear_active_turn(&completed_session);
                 }
                 Self::schedule_queue_drain(&completed_session, command_tx.clone()).await;
-                event_callback.on_event(Event::Error(error.to_string()));
-                event_callback.on_event(Event::ContinuationFailed {
-                    session_id: completed_session,
-                    error: error.to_string(),
-                });
+                emit_event(&event_tx, Event::Error(error.to_string()));
+                emit_event(
+                    &event_tx,
+                    Event::ContinuationFailed {
+                        session_id: completed_session,
+                        error: error.to_string(),
+                    },
+                );
                 return;
             }
-            event_callback.on_event(Event::HistoryUpdated {
-                session_id: completed_session.clone(),
-            });
+            emit_event(
+                &event_tx,
+                Event::HistoryUpdated {
+                    session_id: completed_session.clone(),
+                },
+            );
             Self::start_continuation(completed_session, services).await;
             return;
         }
@@ -2466,16 +2586,19 @@ impl RuntimeInner {
                     tool_call.tool_id,
                     tool_call.description
                 );
-                event_callback.on_event(Event::ToolCallDetected {
-                    session_id: completed_session.clone(),
-                    call_id: tool_call.call_id.to_string(),
-                    tool_id: tool_call.tool_id,
-                    args: args_json,
-                    description: tool_call.description,
-                    risk_level: tool_call.assessment.risk.as_str().to_string(),
-                    reasons: tool_call.assessment.reasons,
-                    queue_order: tool_call.queue_order,
-                });
+                emit_event(
+                    &event_tx,
+                    Event::ToolCallDetected {
+                        session_id: completed_session.clone(),
+                        call_id: tool_call.call_id.to_string(),
+                        tool_id: tool_call.tool_id,
+                        args: args_json,
+                        description: tool_call.description,
+                        risk_level: tool_call.assessment.risk.as_str().to_string(),
+                        reasons: tool_call.assessment.reasons,
+                        queue_order: tool_call.queue_order,
+                    },
+                );
             } else {
                 has_auto_approved_tools = true;
             }
@@ -2493,9 +2616,12 @@ impl RuntimeInner {
                 agent.clear_active_turn(&completed_session);
             }
             Self::schedule_queue_drain(&completed_session, command_tx).await;
-            event_callback.on_event(Event::HistoryUpdated {
-                session_id: completed_session,
-            });
+            emit_event(
+                &event_tx,
+                Event::HistoryUpdated {
+                    session_id: completed_session,
+                },
+            );
         }
     }
 
@@ -2550,22 +2676,28 @@ impl RuntimeInner {
 
     fn spawn_config_watcher(&self) {
         let command_tx = self.command_tx.clone();
-        let callback = self.event_callback.clone();
+        let event_tx = self.event_tx.clone();
         let config_loc = self.provider_config_path.clone();
 
         tokio::spawn(async move {
             let config_dir = match config_loc.parent() {
                 Some(path) => path.to_path_buf(),
                 None => {
-                    callback.on_event(Event::Error(String::from("Config path has no parent")));
+                    emit_event(
+                        &event_tx,
+                        Event::Error(String::from("Config path has no parent")),
+                    );
                     return;
                 }
             };
             if let Err(error) = std::fs::create_dir_all(&config_dir) {
-                callback.on_event(Event::Error(format!(
-                    "Failed to create config directory {}: {error}",
-                    config_dir.display()
-                )));
+                emit_event(
+                    &event_tx,
+                    Event::Error(format!(
+                        "Failed to create config directory {}: {error}",
+                        config_dir.display()
+                    )),
+                );
                 return;
             }
 
@@ -2573,18 +2705,22 @@ impl RuntimeInner {
             let mut watcher = match notify::recommended_watcher(tx) {
                 Ok(watcher) => watcher,
                 Err(error) => {
-                    callback.on_event(Event::Error(format!(
-                        "Failed to create config watcher: {error}"
-                    )));
+                    emit_event(
+                        &event_tx,
+                        Event::Error(format!("Failed to create config watcher: {error}")),
+                    );
                     return;
                 }
             };
 
             if let Err(error) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
-                callback.on_event(Event::Error(format!(
-                    "Failed to watch config directory {}: {error}",
-                    config_dir.display()
-                )));
+                emit_event(
+                    &event_tx,
+                    Event::Error(format!(
+                        "Failed to watch config directory {}: {error}",
+                        config_dir.display()
+                    )),
+                );
                 return;
             }
 
@@ -2600,7 +2736,10 @@ impl RuntimeInner {
                         let _ = command_tx.send(Command::LoadConfig).await;
                     }
                     Err(e) => {
-                        callback.on_event(Event::Error(format!("Config watch error: {:?}", e)));
+                        emit_event(
+                            &event_tx,
+                            Event::Error(format!("Config watch error: {:?}", e)),
+                        );
                     }
                 }
             }
@@ -3647,6 +3786,7 @@ mod tests {
         handle: RuntimeHandle,
         events: EventCollector,
         runtime_task: tokio::task::JoinHandle<()>,
+        event_task: tokio::task::JoinHandle<()>,
         data_dir: PathBuf,
     }
 
@@ -3758,8 +3898,10 @@ default_risk_level = \"undoable_workspace_write\"\n"
 
             let events = EventCollector::default();
             let (command_tx, mut command_rx) = mpsc::channel(32);
+            let (event_tx, _) = broadcast::channel(1024);
             let handle = RuntimeHandle {
                 command_tx: command_tx.clone(),
+                event_tx: event_tx.clone(),
             };
 
             let openai_codex_auth = match OpenAiCodexAuthController::new() {
@@ -3768,7 +3910,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 Err(error) => panic!("unexpected openai auth controller init error: {error}"),
             };
             let runtime = RuntimeInner {
-                event_callback: Arc::new(events.clone()),
+                event_tx: event_tx.clone(),
                 command_tx,
                 agent_manager,
                 provider_registry: build_provider_registry(openai_codex_auth.clone())
@@ -3778,6 +3920,18 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 openai_codex_auth,
                 provider_config_path: data_dir.join("providers.toml"),
             };
+
+            let events_for_task = events.clone();
+            let mut event_rx = event_tx.subscribe();
+            let event_task = tokio::spawn(async move {
+                loop {
+                    match event_rx.recv().await {
+                        Ok(event) => events_for_task.on_event(event),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
 
             let runtime_task = tokio::spawn(async move {
                 while let Some(command) = command_rx.recv().await {
@@ -3792,6 +3946,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 handle,
                 events,
                 runtime_task,
+                event_task,
                 data_dir,
             })
         }
@@ -3936,7 +4091,9 @@ default_risk_level = \"undoable_workspace_write\"\n"
 
         async fn shutdown(self) {
             drop(self.handle);
+            self.event_task.abort();
             self.runtime_task.abort();
+            let _ = self.event_task.await;
             let _ = self.runtime_task.await;
             let _ = tokio::fs::remove_dir_all(self.data_dir).await;
         }
@@ -4019,6 +4176,102 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 String::from("HTTP 429"),
             ))
         );
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
+        let harness =
+            runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
+                "shared event stream"
+            ),]]));
+        let mut first = harness.handle.subscribe();
+        let mut second = harness.handle.subscribe();
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("hello"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        async fn collect_events(
+            receiver: &mut broadcast::Receiver<Event>,
+            session_id: &str,
+        ) -> Result<Vec<Event>> {
+            let mut events = Vec::new();
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        let is_complete = matches!(
+                            &event,
+                            Event::StreamComplete {
+                                session_id: completed_session,
+                                ..
+                            } if completed_session == session_id
+                        );
+                        events.push(event);
+                        if is_complete {
+                            return Ok(events);
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return Err(eyre!("event stream closed before completion"));
+                    }
+                }
+            }
+        }
+
+        let first_events = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_events(&mut first, &session_id),
+        )
+        .await
+        .map_err(|_| eyre!("timed out waiting for first subscriber events"))??;
+        let second_events = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_events(&mut second, &session_id),
+        )
+        .await
+        .map_err(|_| eyre!("timed out waiting for second subscriber events"))??;
+
+        for events in [&first_events, &second_events] {
+            assert!(events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamStart {
+                        session_id: started_session,
+                        ..
+                    } if started_session == &session_id
+                )
+            }));
+            assert!(events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamChunk {
+                        session_id: chunk_session,
+                        chunk,
+                        ..
+                    } if chunk_session == &session_id && chunk == "shared event stream"
+                )
+            }));
+            assert!(events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamComplete {
+                        session_id: completed_session,
+                        ..
+                    } if completed_session == &session_id
+                )
+            }));
+        }
 
         harness.shutdown().await;
         Ok(())
