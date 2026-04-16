@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+name = "kraai-persistence"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+async-trait.workspace = true
+color-eyre.workspace = true
+directories.workspace = true
+kraai-types = { workspace = true }
+kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ulid.workspace = true

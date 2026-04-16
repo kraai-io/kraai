@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+name = "kraai-toon-schema"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+serde_json = { workspace = true }
+syn = { workspace = true }
+toon-format = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toon-format = { workspace = true }
+trybuild = { workspace = true }

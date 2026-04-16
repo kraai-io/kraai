@@ -1,4 +1,4 @@
-name: Build TUI Release Binaries
+name: Build Kraai Release Binaries
 on:
   workflow_dispatch:
 permissions:
@@ -24,10 +24,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Build tui (release)
+      - name: Build Kraai (release)
         run: cargo build -p tui --release
+      - name: Prepare Kraai artifact
+        shell: bash
+        run: cp "target/release/tui${{ matrix.ext }}" "target/release/kraai${{ matrix.ext }}"
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tui-${{ runner.os }}
-          path: target/release/tui${{ matrix.ext }}
+          name: kraai-${{ runner.os }}
+          path: target/release/kraai${{ matrix.ext }}

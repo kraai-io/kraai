@@ -18,60 +18,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "color-eyre",
- "directories",
- "futures",
- "persistence",
- "provider-core",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tool-core",
- "tracing",
- "types",
- "ulid",
- "workspace-hack",
-]
-
-[[package]]
-name = "agent-runtime"
-version = "0.1.0"
-dependencies = [
- "agent",
- "async-trait",
- "color-eyre",
- "directories",
- "futures",
- "notify",
- "persistence",
- "provider-core",
- "provider-openai-chat-completions",
- "provider-openai-codex",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tool-close-file",
- "tool-core",
- "tool-edit-file",
- "tool-list-files",
- "tool-open-file",
- "tool-read-file",
- "tool-search-files",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "types",
- "workspace-hack",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1846,6 +1792,318 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "color-eyre",
+ "directories",
+ "futures",
+ "kraai-persistence",
+ "kraai-provider-core",
+ "kraai-tool-core",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "kraai-persistence"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "directories",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "kraai-provider-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "futures",
+ "httpdate",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "reqwest",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "kraai-provider-openai-chat-completions"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "futures",
+ "kraai-provider-core",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "kraai-provider-openai-codex"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "color-eyre",
+ "directories",
+ "futures",
+ "kraai-provider-core",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "rand 0.10.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+ "ulid",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
+name = "kraai-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "directories",
+ "futures",
+ "kraai-agent",
+ "kraai-persistence",
+ "kraai-provider-core",
+ "kraai-provider-openai-chat-completions",
+ "kraai-provider-openai-codex",
+ "kraai-tool-close-file",
+ "kraai-tool-core",
+ "kraai-tool-edit-file",
+ "kraai-tool-list-files",
+ "kraai-tool-open-file",
+ "kraai-tool-read-file",
+ "kraai-tool-search-files",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "notify",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "kraai-tool-close-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "kraai-tool-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "toon-format",
+]
+
+[[package]]
+name = "kraai-tool-edit-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toon-format",
+]
+
+[[package]]
+name = "kraai-tool-list-files"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toon-format",
+]
+
+[[package]]
+name = "kraai-tool-open-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "kraai-tool-read-file"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toon-format",
+]
+
+[[package]]
+name = "kraai-tool-search-files"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toon-format",
+]
+
+[[package]]
+name = "kraai-toon-schema"
+version = "0.1.0"
+dependencies = [
+ "kraai-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "toon-format",
+ "trybuild",
+]
+
+[[package]]
+name = "kraai-tui"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "base64",
+ "clap",
+ "color-eyre",
+ "crossbeam-channel",
+ "kraai-runtime",
+ "kraai-types",
+ "kraai-workspace-hack",
+ "ratatui 0.30.0",
+ "regex",
+ "serde_json",
+ "tokio",
+ "toon-format",
+ "tracing",
+]
+
+[[package]]
+name = "kraai-types"
+version = "0.1.0"
+dependencies = [
+ "kraai-workspace-hack",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kraai-workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "bitflags 2.11.0",
+ "cc",
+ "chrono",
+ "crossterm 0.29.0",
+ "linux-raw-sys 0.12.1",
+ "log",
+ "memchr",
+ "miniz_oxide",
+ "mio",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "rustix 1.1.4",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "smallvec",
+ "syn 2.0.117",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2328,23 +2586,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "persistence"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "color-eyre",
- "directories",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "types",
- "ulid",
- "workspace-hack",
-]
-
-[[package]]
 name = "pest"
 version = "2.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2524,64 +2765,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "provider-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "color-eyre",
- "futures",
- "httpdate",
- "reqwest",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "provider-openai-chat-completions"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "color-eyre",
- "futures",
- "provider-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "provider-openai-codex"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "color-eyre",
- "directories",
- "futures",
- "provider-core",
- "rand 0.10.1",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "tracing",
- "types",
- "ulid",
- "url",
- "urlencoding",
- "workspace-hack",
 ]
 
 [[package]]
@@ -3787,115 +3970,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
-name = "tool-close-file"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "toon-format",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-edit-file"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-format",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-list-files"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-format",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-open-file"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-read-file"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-format",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
-name = "tool-search-files"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "serde",
- "serde_json",
- "tokio",
- "tool-core",
- "toon-format",
- "toon-schema",
- "types",
- "workspace-hack",
-]
-
-[[package]]
 name = "toon-format"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3916,20 +3990,6 @@ dependencies = [
  "tiktoken-rs",
  "tui-textarea",
  "unicode-width 0.2.0",
-]
-
-[[package]]
-name = "toon-schema"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "toon-format",
- "trybuild",
- "workspace-hack",
 ]
 
 [[package]]
@@ -4082,26 +4142,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tui"
-version = "0.1.0"
-dependencies = [
- "agent-runtime",
- "arboard",
- "base64",
- "clap",
- "color-eyre",
- "crossbeam-channel",
- "ratatui 0.30.0",
- "regex",
- "serde_json",
- "tokio",
- "toon-format",
- "tracing",
- "types",
- "workspace-hack",
-]
-
-[[package]]
 name = "tui-textarea"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4117,15 +4157,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "types"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "workspace-hack",
-]
 
 [[package]]
 name = "ucd-trie"
@@ -4943,37 +4974,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "workspace-hack"
-version = "0.1.0"
-dependencies = [
- "aho-corasick",
- "bitflags 2.11.0",
- "cc",
- "chrono",
- "crossterm 0.29.0",
- "linux-raw-sys 0.12.1",
- "log",
- "memchr",
- "miniz_oxide",
- "mio",
- "num-traits",
- "proc-macro2",
- "quote",
- "regex-automata",
- "regex-syntax",
- "rustix 1.1.4",
- "serde",
- "serde_core",
- "serde_json",
- "simd-adler32",
- "smallvec",
- "syn 2.0.117",
- "time",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

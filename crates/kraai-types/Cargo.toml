@@ -1,0 +1,11 @@
+[package]
+edition.workspace = true
+name = "kraai-types"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,22 +1,22 @@
 [workspace]
 members = [
-  "crates/agent",
-  "crates/agent-runtime",
-  "crates/llm-providers/provider-core",
-  "crates/llm-providers/provider-openai-chat-completions",
-  "crates/llm-providers/provider-openai-codex",
-  "crates/persistence",
-  "crates/tools/tool-close-file",
-  "crates/tools/tool-core",
-  "crates/tools/tool-edit-file",
-  "crates/tools/tool-list-files",
-  "crates/tools/tool-open-file",
-  "crates/tools/tool-read-file",
-  "crates/tools/tool-search-files",
-  "crates/toon-schema",
-  "crates/tui",
-  "crates/types",
-  "crates/workspace-hack",
+  "crates/kraai-agent",
+  "crates/kraai-persistence",
+  "crates/kraai-runtime",
+  "crates/kraai-toon-schema",
+  "crates/kraai-tui",
+  "crates/kraai-types",
+  "crates/kraai-workspace-hack",
+  "crates/llm-providers/kraai-provider-core",
+  "crates/llm-providers/kraai-provider-openai-chat-completions",
+  "crates/llm-providers/kraai-provider-openai-codex",
+  "crates/tools/kraai-tool-close-file",
+  "crates/tools/kraai-tool-core",
+  "crates/tools/kraai-tool-edit-file",
+  "crates/tools/kraai-tool-list-files",
+  "crates/tools/kraai-tool-open-file",
+  "crates/tools/kraai-tool-read-file",
+  "crates/tools/kraai-tool-search-files",
 ]
 resolver = "3"
 
@@ -31,21 +31,21 @@ opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
-agent = { path = "crates/agent" }
-agent-runtime = { path = "crates/agent-runtime" }
-persistence = { path = "crates/persistence" }
-provider-core = { path = "crates/llm-providers/provider-core" }
-provider-openai-chat-completions = { path = "crates/llm-providers/provider-openai-chat-completions" }
-provider-openai-codex = { path = "crates/llm-providers/provider-openai-codex" }
-tool-close-file = { path = "crates/tools/tool-close-file" }
-tool-core = { path = "crates/tools/tool-core" }
-tool-edit-file = { path = "crates/tools/tool-edit-file" }
-tool-list-files = { path = "crates/tools/tool-list-files" }
-tool-open-file = { path = "crates/tools/tool-open-file" }
-tool-read-file = { path = "crates/tools/tool-read-file" }
-tool-search-files = { path = "crates/tools/tool-search-files" }
-toon-schema = { path = "crates/toon-schema" }
-types = { path = "crates/types" }
+kraai-agent = { path = "crates/kraai-agent" }
+kraai-persistence = { path = "crates/kraai-persistence" }
+kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
+kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }
+kraai-provider-openai-codex = { path = "crates/llm-providers/kraai-provider-openai-codex" }
+kraai-runtime = { path = "crates/kraai-runtime" }
+kraai-tool-close-file = { path = "crates/tools/kraai-tool-close-file" }
+kraai-tool-core = { path = "crates/tools/kraai-tool-core" }
+kraai-tool-edit-file = { path = "crates/tools/kraai-tool-edit-file" }
+kraai-tool-list-files = { path = "crates/tools/kraai-tool-list-files" }
+kraai-tool-open-file = { path = "crates/tools/kraai-tool-open-file" }
+kraai-tool-read-file = { path = "crates/tools/kraai-tool-read-file" }
+kraai-tool-search-files = { path = "crates/tools/kraai-tool-search-files" }
+kraai-toon-schema = { path = "crates/kraai-toon-schema" }
+kraai-types = { path = "crates/kraai-types" }
 
 arboard = "3.6.1"
 async-trait = "0.1.89"

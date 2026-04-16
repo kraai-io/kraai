@@ -6,7 +6,7 @@
 
 ## Project Overview
 
-Agent (not named yet / unbranded) is a ai agent framework.
+Kraai is an AI agent framework.
 Main goals:
 - Find and implement new methods for using llms.
 - Improve token efficiency.
@@ -30,19 +30,19 @@ Long term maintainability is a core priority. If you add new functionality, firs
 
 ```
 crates/
-  agent/             - Core agent logic
-  agent-runtime/     - Agent runtime
-  persistence/       - Data persistence layer
-  types/             - Shared type definitions
+  kraai-agent/       - Core agent logic
+  kraai-runtime/     - Agent runtime
+  kraai-persistence/ - Data persistence layer
+  kraai-types/       - Shared type definitions
   llm-providers/
-    provider-core/   - LLM provider trait definitions
-    provider-*/      - LLM provider implementations
+    kraai-provider-core/ - LLM provider trait definitions
+    kraai-provider-*/    - LLM provider implementations
   tools/
-    tool-core/       - Tool trait definitions
-    tool-*/          - Tool definitions
-  toon-schema/       - Schema definitions
+    kraai-tool-core/ - Tool trait definitions
+    kraai-tool-*/    - Tool definitions
+  kraai-toon-schema/ - Schema definitions
   toon-schema-core/  - Core schema types
-  tui/               - Terminal UI
+  kraai-tui/         - Terminal UI
 ```
 
 ## Commands

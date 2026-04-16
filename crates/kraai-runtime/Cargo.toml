@@ -1,0 +1,37 @@
+[package]
+edition.workspace = true
+name = "kraai-runtime"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+kraai-agent.workspace = true
+kraai-persistence.workspace = true
+kraai-provider-core.workspace = true
+kraai-provider-openai-chat-completions.workspace = true
+kraai-provider-openai-codex.workspace = true
+kraai-tool-close-file.workspace = true
+kraai-tool-core.workspace = true
+kraai-tool-edit-file.workspace = true
+kraai-tool-list-files.workspace = true
+kraai-tool-open-file.workspace = true
+kraai-tool-read-file.workspace = true
+kraai-tool-search-files.workspace = true
+kraai-types.workspace = true
+
+color-eyre.workspace = true
+directories.workspace = true
+futures.workspace = true
+kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
+notify.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+async-trait.workspace = true
+serde.workspace = true

@@ -20,7 +20,7 @@
     };
 
     generatedCargoNix = inputs.crate2nix.tools.${system}.generatedCargoNix {
-      name = "agent-checks";
+      name = "kraai-checks";
       inherit src;
     };
 
@@ -80,7 +80,7 @@
         '';
       };
 
-    tui = cargoNix.workspaceMembers.tui.build;
+    tui = cargoNix.workspaceMembers."kraai-tui".build;
   in {
     packages = {
       inherit tui;
@@ -131,8 +131,8 @@
         name = "hakari";
         nativeBuildInputs = [pkgs.cargo-hakari];
         command = ''
-          cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
-          cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+          cargo hakari generate --diff  # kraai-workspace-hack Cargo.toml is up-to-date
+          cargo hakari manage-deps --dry-run  # all workspace crates depend on kraai-workspace-hack
           cargo hakari verify
         '';
       };
