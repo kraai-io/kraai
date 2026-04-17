@@ -1524,7 +1524,9 @@ impl App {
                 self.reset_completion_cycle();
                 return;
             }
-            if self.state.mode == UiMode::Chat && self.state.is_streaming {
+            if self.state.mode == UiMode::Chat
+                && (self.state.is_streaming || self.state.retry_waiting)
+            {
                 if let Some(session_id) = &self.state.current_session_id {
                     self.request(RuntimeRequest::CancelStream {
                         session_id: session_id.clone(),
@@ -5803,6 +5805,21 @@ mod tests {
     fn escape_cancels_stream_when_chat_input_is_active() {
         let mut harness = test_harness();
         harness.app.state.is_streaming = true;
+        harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+        harness.app.handle_key_event(key(KeyCode::Esc));
+
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [RuntimeRequest::CancelStream { session_id }] if session_id == "sess-2"
+        ));
+    }
+
+    #[test]
+    fn escape_cancels_retry_wait_when_chat_input_is_active() {
+        let mut harness = test_harness();
+        harness.app.state.retry_waiting = true;
         harness.app.state.current_session_id = Some(String::from("sess-2"));
 
         harness.app.handle_key_event(key(KeyCode::Esc));
