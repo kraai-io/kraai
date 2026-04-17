@@ -722,7 +722,7 @@ impl App {
             needs_redraw |= self.process_events();
             let event_timeout = if needs_redraw {
                 std::time::Duration::from_millis(0)
-            } else if self.state.is_streaming {
+            } else if self.state.runtime_is_active() {
                 STATUSLINE_ANIMATION_INTERVAL
             } else {
                 std::time::Duration::from_millis(100)
@@ -808,7 +808,7 @@ impl App {
     }
 
     fn advance_statusline_animation(&mut self, now: Instant) -> bool {
-        if !self.state.is_streaming {
+        if !self.state.runtime_is_active() {
             self.last_statusline_animation_tick = None;
             if self.state.statusline_animation_frame != 0 {
                 self.state.statusline_animation_frame = 0;
@@ -3856,6 +3856,13 @@ fn message_fingerprint(msg: &Message) -> u64 {
 }
 
 impl AppState {
+    fn runtime_is_active(&self) -> bool {
+        self.is_streaming
+            || self.retry_waiting
+            || self.tool_phase == ToolPhase::ExecutingBatch
+            || (self.profile_locked && self.tool_phase != ToolPhase::Deciding)
+    }
+
     fn chat_max_scroll(&self) -> u16 {
         let cache = self.chat_render_cache.borrow();
         cache.total_lines.saturating_sub(self.chat_viewport_height)
@@ -4858,9 +4865,25 @@ mod tests {
         state.retry_waiting = true;
         state.status = String::from("Provider error, retry #6 in 27s");
 
-        let rendered = render_state_snapshot(&state, 80, 18);
+        let rendered = render_state_snapshot(&state, 120, 18);
 
-        assert!(rendered.contains("retrying"));
+        assert!(rendered.contains("⠋"));
+        assert!(rendered.contains("Provider error, retry #6 in 27s"));
+    }
+
+    #[test]
+    fn renders_tool_execution_statusline_snapshot() {
+        let mut state = populated_state();
+        state.pending_tools = vec![sample_pending_tools()[0].clone()];
+        state.tool_phase = ToolPhase::ExecutingBatch;
+        state.tool_batch_execution_started = true;
+        state.status = String::from("Executing 1 decided tool call(s)");
+
+        let rendered = render_state_snapshot(&state, 96, 18);
+
+        assert!(rendered.contains(
+            "⠋ · openai-chat-completions/GPT-4o Mini · Plan Code · Executing 1 decided tool call(s)"
+        ));
     }
 
     #[test]
@@ -4881,16 +4904,62 @@ mod tests {
     }
 
     #[test]
-    fn statusline_animation_resets_when_streaming_stops() {
+    fn statusline_animation_advances_while_tools_execute() {
         let mut harness = test_harness();
-        harness.app.state.is_streaming = true;
+        let start = Instant::now();
+        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+
+        assert!(!harness.app.advance_statusline_animation(start));
+        assert_eq!(harness.app.state.statusline_animation_frame, 0);
+
+        assert!(
+            harness
+                .app
+                .advance_statusline_animation(start + STATUSLINE_ANIMATION_INTERVAL)
+        );
+        assert_eq!(harness.app.state.statusline_animation_frame, 1);
+    }
+
+    #[test]
+    fn statusline_animation_resets_when_runtime_becomes_idle() {
+        let mut harness = test_harness();
+        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
         harness.app.state.statusline_animation_frame = 3;
         harness.app.last_statusline_animation_tick = Some(Instant::now());
-        harness.app.state.is_streaming = false;
+        harness.app.state.tool_phase = ToolPhase::Idle;
 
         assert!(harness.app.advance_statusline_animation(Instant::now()));
         assert_eq!(harness.app.state.statusline_animation_frame, 0);
         assert!(harness.app.last_statusline_animation_tick.is_none());
+    }
+
+    #[test]
+    fn tool_execution_phase_counts_as_runtime_active_without_start_flag() {
+        let mut harness = test_harness();
+        harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+        harness.app.state.tool_batch_execution_started = false;
+
+        assert!(harness.app.state.runtime_is_active());
+    }
+
+    #[test]
+    fn locked_profile_waiting_for_continuation_counts_as_runtime_active() {
+        let mut harness = test_harness();
+        harness.app.state.profile_locked = true;
+        harness.app.state.tool_phase = ToolPhase::Idle;
+        harness.app.state.is_streaming = false;
+        harness.app.state.retry_waiting = false;
+
+        assert!(harness.app.state.runtime_is_active());
+    }
+
+    #[test]
+    fn waiting_for_tool_approval_does_not_count_as_runtime_active() {
+        let mut harness = test_harness();
+        harness.app.state.profile_locked = true;
+        harness.app.state.tool_phase = ToolPhase::Deciding;
+
+        assert!(!harness.app.state.runtime_is_active());
     }
 
     #[test]
