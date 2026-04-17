@@ -80,11 +80,11 @@
         '';
       };
 
-    tui = cargoNix.workspaceMembers."kraai-tui".build;
+    kraai = cargoNix.workspaceMembers."kraai-tui".build;
   in {
     packages = {
-      inherit tui;
-      default = tui;
+      inherit kraai;
+      default = kraai;
     };
 
     checks = {
