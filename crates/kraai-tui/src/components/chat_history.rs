@@ -687,13 +687,7 @@ impl<'a> ChatHistory<'a> {
             return;
         }
 
-        let total_height = lines.len() as u16;
-        let max_scroll = total_height.saturating_sub(area.height);
-        let scroll = if auto_scroll {
-            max_scroll
-        } else {
-            scroll.min(max_scroll)
-        };
+        let scroll = Self::resolve_scroll(lines.len() as u16, area.height, scroll, auto_scroll);
 
         let start_idx = scroll as usize;
         let end_idx = start_idx
@@ -739,12 +733,7 @@ impl<'a> ChatHistory<'a> {
             return;
         }
 
-        let max_scroll = total_lines.saturating_sub(area.height);
-        let scroll = if auto_scroll {
-            max_scroll
-        } else {
-            scroll.min(max_scroll)
-        };
+        let scroll = Self::resolve_scroll(total_lines, area.height, scroll, auto_scroll);
 
         let start_idx = scroll as usize;
         let mut consumed = 0usize;
@@ -811,12 +800,7 @@ impl<'a> ChatHistory<'a> {
             };
         }
 
-        let max_scroll = total_lines.saturating_sub(area.height);
-        let scroll = if auto_scroll {
-            max_scroll
-        } else {
-            scroll.min(max_scroll)
-        };
+        let scroll = Self::resolve_scroll(total_lines, area.height, scroll, auto_scroll);
 
         let start_idx = scroll as usize;
         let mut consumed = 0usize;
@@ -850,6 +834,20 @@ impl<'a> ChatHistory<'a> {
         }
 
         VisibleChatView { area, lines }
+    }
+
+    pub(crate) fn resolve_scroll(
+        total_lines: u16,
+        viewport_height: u16,
+        scroll: u16,
+        auto_scroll: bool,
+    ) -> u16 {
+        let max_scroll = total_lines.saturating_sub(viewport_height);
+        if auto_scroll {
+            max_scroll
+        } else {
+            scroll.min(max_scroll)
+        }
     }
 }
 
@@ -1092,5 +1090,15 @@ mod tests {
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert_eq!(rendered.first().map(String::as_str), Some(" • read_file"));
+    }
+
+    #[test]
+    fn resolve_scroll_uses_bottom_when_auto_scroll_is_enabled() {
+        assert_eq!(ChatHistory::resolve_scroll(20, 8, 0, true), 12);
+    }
+
+    #[test]
+    fn resolve_scroll_clamps_manual_scroll_to_bottom() {
+        assert_eq!(ChatHistory::resolve_scroll(20, 8, 99, false), 12);
     }
 }

@@ -633,21 +633,27 @@ impl App {
         self.clamp_chat_scroll();
     }
 
-    fn clamp_chat_scroll(&mut self) {
+    fn effective_chat_scroll(&self) -> u16 {
+        let max_scroll = self.state.chat_max_scroll();
         if self.state.auto_scroll {
-            return;
+            max_scroll
+        } else {
+            self.state.scroll.min(max_scroll)
         }
+    }
 
-        self.state.scroll = self.state.scroll.min(self.state.chat_max_scroll());
+    fn clamp_chat_scroll(&mut self) {
+        self.state.scroll = self.effective_chat_scroll();
     }
 
     fn scroll_chat_by(&mut self, delta: i16) {
-        self.state.auto_scroll = false;
-        self.state.scroll = self
-            .state
-            .scroll
+        let max_scroll = self.state.chat_max_scroll();
+        let next_scroll = self
+            .effective_chat_scroll()
             .saturating_add_signed(delta)
-            .min(self.state.chat_max_scroll());
+            .min(max_scroll);
+        self.state.scroll = next_scroll;
+        self.state.auto_scroll = delta > 0 && next_scroll == max_scroll;
         self.clear_chat_selection();
     }
 
@@ -659,6 +665,7 @@ impl App {
 
     fn scroll_chat_to_bottom(&mut self) {
         self.state.auto_scroll = true;
+        self.state.scroll = self.state.chat_max_scroll();
         self.clear_chat_selection();
     }
 
@@ -4357,7 +4364,20 @@ mod tests {
     }
 
     #[test]
-    fn page_down_clamps_stored_scroll_to_chat_bottom() {
+    fn page_up_from_auto_scroll_uses_visible_bottom_instead_of_stale_scroll() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = true;
+        harness.app.state.scroll = 0;
+
+        harness.app.handle_chat_key_event(key(KeyCode::PageUp));
+
+        assert_eq!(harness.app.state.scroll, 2);
+        assert!(!harness.app.state.auto_scroll);
+    }
+
+    #[test]
+    fn page_down_at_chat_bottom_reenables_auto_scroll() {
         let mut harness = test_harness();
         harness.set_chat_metrics(20, 8);
         harness.app.state.auto_scroll = false;
@@ -4366,11 +4386,11 @@ mod tests {
         harness.app.handle_chat_key_event(key(KeyCode::PageDown));
 
         assert_eq!(harness.app.state.scroll, 12);
-        assert!(!harness.app.state.auto_scroll);
+        assert!(harness.app.state.auto_scroll);
     }
 
     #[test]
-    fn mouse_scroll_down_does_not_accumulate_hidden_overscroll() {
+    fn mouse_scroll_down_at_chat_bottom_reenables_auto_scroll() {
         let mut harness = test_harness();
         harness.set_chat_metrics(20, 8);
         harness.app.state.auto_scroll = false;
@@ -4384,6 +4404,7 @@ mod tests {
         });
 
         assert_eq!(harness.app.state.scroll, 12);
+        assert!(harness.app.state.auto_scroll);
     }
 
     #[test]
@@ -4421,7 +4442,26 @@ mod tests {
         harness.app.handle_chat_key_event(key(KeyCode::End));
 
         assert!(harness.app.state.auto_scroll);
-        assert_eq!(harness.app.state.scroll, 5);
+        assert_eq!(harness.app.state.scroll, 12);
+    }
+
+    #[test]
+    fn scrolling_back_to_bottom_restores_sticky_auto_scroll() {
+        let mut harness = test_harness();
+        harness.set_chat_metrics(20, 8);
+        harness.app.state.auto_scroll = false;
+        harness.app.state.scroll = 2;
+
+        harness.app.handle_chat_key_event(key(KeyCode::PageDown));
+
+        assert!(harness.app.state.auto_scroll);
+        assert_eq!(harness.app.state.scroll, 12);
+
+        harness.set_chat_metrics(24, 8);
+        harness.app.clamp_chat_scroll();
+
+        assert!(harness.app.state.auto_scroll);
+        assert_eq!(harness.app.state.scroll, 16);
     }
 
     #[test]
