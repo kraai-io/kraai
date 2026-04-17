@@ -80,7 +80,13 @@
         '';
       };
 
-    kraai = cargoNix.workspaceMembers."kraai-tui".build;
+    kraai = cargoNix.workspaceMembers."kraai-tui".build.overrideAttrs (old: {
+      meta =
+        (old.meta or {})
+        // {
+          mainProgram = "kraai";
+        };
+    });
   in {
     packages = {
       inherit kraai;
