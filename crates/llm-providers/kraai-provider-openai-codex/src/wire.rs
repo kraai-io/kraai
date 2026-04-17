@@ -52,6 +52,38 @@ pub struct ResponsesStreamEvent {
     pub kind: String,
     #[serde(default)]
     pub delta: Option<String>,
+    #[serde(default)]
+    pub response: Option<ResponsesCompletedResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct ResponsesCompletedResponse {
+    #[serde(default)]
+    pub usage: Option<ResponsesUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ResponsesUsage {
+    #[serde(default)]
+    pub input_tokens: usize,
+    #[serde(default)]
+    pub output_tokens: usize,
+    #[serde(default)]
+    pub input_tokens_details: Option<ResponsesInputTokenDetails>,
+    #[serde(default)]
+    pub output_tokens_details: Option<ResponsesOutputTokenDetails>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ResponsesInputTokenDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ResponsesOutputTokenDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<usize>,
 }
 
 #[derive(Deserialize)]

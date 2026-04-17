@@ -5,8 +5,8 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
-    ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ValidationError,
-    send_with_retry as send_http_with_retry,
+    ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ProviderStreamEvent,
+    ValidationError, send_with_retry as send_http_with_retry,
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
@@ -18,7 +18,7 @@ use crate::catalog::{CatalogModel, all_catalog_models, title_case_effort, visibl
 use crate::messages::normalize_chat_messages;
 use crate::wire::{
     ListModelEntry, ListModelsResponse, ResponsesOutput, ResponsesReasoning, ResponsesRequest,
-    ResponsesStreamEvent,
+    ResponsesStreamEvent, ResponsesUsage,
 };
 
 const CHATGPT_ORIGIN: &str = "https://chatgpt.com";
@@ -219,7 +219,7 @@ impl Provider for OpenAiCodexProvider {
         model_id: &ModelId,
         messages: Vec<ProviderChatMessage>,
         request_context: &ProviderRequestContext,
-    ) -> Result<BoxStream<'static, Result<String>>> {
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let response = self
             .send_responses_request(model_id, messages, true, request_context)
             .await?;
@@ -233,8 +233,14 @@ impl Provider for OpenAiCodexProvider {
                         };
 
                         match event.kind.as_str() {
-                            "response.output_text.delta" => event.delta.map(Ok),
-                            "response.completed" => None,
+                            "response.output_text.delta" => event
+                                .delta
+                                .map(|delta| Ok(ProviderStreamEvent::TextDelta(delta))),
+                            "response.completed" => event
+                                .response
+                                .and_then(|response| response.usage)
+                                .and_then(normalize_usage)
+                                .map(|usage| Ok(ProviderStreamEvent::Usage(usage))),
                             "response.failed" | "response.incomplete" => {
                                 Some(Err(eyre!("OpenAI response stream failed")))
                             }
@@ -248,6 +254,38 @@ impl Provider for OpenAiCodexProvider {
 
         Ok(stream)
     }
+}
+
+fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
+    let cache_read_tokens = usage
+        .input_tokens_details
+        .and_then(|details| details.cached_tokens)
+        .unwrap_or_default();
+    let reasoning_tokens = usage
+        .output_tokens_details
+        .and_then(|details| details.reasoning_tokens)
+        .unwrap_or_default();
+    let input_tokens = usage.input_tokens.saturating_sub(cache_read_tokens);
+    let output_tokens = usage.output_tokens.saturating_sub(reasoning_tokens);
+    let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
+
+    if total_tokens == 0
+        && input_tokens == 0
+        && output_tokens == 0
+        && reasoning_tokens == 0
+        && cache_read_tokens == 0
+    {
+        return None;
+    }
+
+    Some(kraai_types::TokenUsage {
+        total_tokens,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cache_read_tokens,
+        cache_write_tokens: 0,
+    })
 }
 
 impl OpenAiCodexProvider {
@@ -736,5 +774,27 @@ mod tests {
 
         assert!(ids.contains(&"gpt-5.2-codex-low".to_string()));
         assert!(ids.contains(&"gpt-5.2-low".to_string()));
+    }
+
+    #[test]
+    fn normalize_usage_splits_cache_and_reasoning_tokens() {
+        let usage = normalize_usage(ResponsesUsage {
+            input_tokens: 120,
+            output_tokens: 45,
+            input_tokens_details: Some(crate::wire::ResponsesInputTokenDetails {
+                cached_tokens: Some(20),
+            }),
+            output_tokens_details: Some(crate::wire::ResponsesOutputTokenDetails {
+                reasoning_tokens: Some(5),
+            }),
+        })
+        .expect("usage should normalize");
+
+        assert_eq!(usage.total_tokens, 165);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 40);
+        assert_eq!(usage.reasoning_tokens, 5);
+        assert_eq!(usage.cache_read_tokens, 20);
+        assert_eq!(usage.cache_write_tokens, 0);
     }
 }

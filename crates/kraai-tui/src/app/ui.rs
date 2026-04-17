@@ -86,8 +86,7 @@ impl Widget for &AppState {
 
 fn statusline_line(state: &AppState) -> Line<'static> {
     let separator = Span::styled(" · ", Style::default().fg(Color::DarkGray));
-
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             statusline_activity_label(state),
             Style::default().fg(statusline_activity_color(state)),
@@ -96,9 +95,14 @@ fn statusline_line(state: &AppState) -> Line<'static> {
         Span::raw(statusline_model_label(state)),
         separator.clone(),
         Span::raw(statusline_agent_label(state)),
-        separator,
-        Span::raw(state.status.clone()),
-    ])
+    ];
+
+    spans.push(separator.clone());
+    spans.push(Span::raw(statusline_context_label(state)));
+
+    spans.push(separator);
+    spans.push(Span::raw(state.status.clone()));
+    Line::from(spans)
 }
 
 fn statusline_activity_label(state: &AppState) -> String {
@@ -154,6 +158,56 @@ fn statusline_agent_label(state: &AppState) -> String {
         .find(|profile| profile.id == profile_id)
         .map(|profile| profile.display_name.clone())
         .unwrap_or_else(|| profile_id.to_string())
+}
+
+fn statusline_context_label(state: &AppState) -> String {
+    let used_context_tokens = state
+        .context_usage
+        .as_ref()
+        .map(|usage| usage.used_context_tokens())
+        .unwrap_or_default();
+    let max_context = state
+        .context_usage
+        .as_ref()
+        .and_then(|usage| usage.max_context)
+        .or_else(|| selected_model_max_context(state));
+    let used = format_token_count(used_context_tokens);
+
+    match max_context {
+        Some(max_context) if max_context > 0 => format!(
+            "ctx {used}/{} ({}%)",
+            format_token_count(max_context),
+            used_context_tokens
+                .saturating_mul(100)
+                .checked_div(max_context)
+                .unwrap_or_default()
+        ),
+        _ => format!("ctx {used}"),
+    }
+}
+
+fn selected_model_max_context(state: &AppState) -> Option<usize> {
+    let provider_id = state.selected_provider_id.as_deref()?;
+    let model_id = state.selected_model_id.as_deref()?;
+
+    state
+        .models_by_provider
+        .get(provider_id)?
+        .iter()
+        .find(|model| model.id == model_id)
+        .and_then(|model| model.max_context)
+}
+
+fn format_token_count(value: usize) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index != 0 && index % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }
 
 impl AppState {

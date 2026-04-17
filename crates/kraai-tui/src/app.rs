@@ -11,7 +11,8 @@ use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, AgentProfilesState, Event, FieldDefinition,
     FieldValueEntry, Model, ModelSettings, OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
     OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, ProviderDefinition, ProviderSettings,
-    RuntimeHandle, Session, SettingsDocument, SettingsValue,
+    RuntimeHandle, Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
+    SettingsValue,
 };
 use kraai_types::{ChatRole, Message, MessageId, MessageStatus, RiskLevel};
 use ratatui::{
@@ -264,6 +265,9 @@ enum RuntimeRequest {
     GetChatHistory {
         session_id: String,
     },
+    GetSessionContextUsage {
+        session_id: String,
+    },
     GetCurrentTip {
         session_id: String,
     },
@@ -322,6 +326,10 @@ enum RuntimeResponse {
     ChatHistory {
         session_id: String,
         result: Result<BTreeMap<MessageId, Message>, String>,
+    },
+    SessionContextUsage {
+        session_id: String,
+        result: Result<Option<RuntimeSessionContextUsage>, String>,
     },
     CurrentTip {
         session_id: String,
@@ -416,6 +424,7 @@ pub struct AppState {
     profile_locked: bool,
     selected_provider_id: Option<String>,
     selected_model_id: Option<String>,
+    context_usage: Option<RuntimeSessionContextUsage>,
     pending_tools: Vec<PendingTool>,
     sessions: Vec<Session>,
     current_session_id: Option<String>,
@@ -479,6 +488,7 @@ impl Default for AppState {
             profile_locked: false,
             selected_provider_id: None,
             selected_model_id: None,
+            context_usage: None,
             pending_tools: Vec::new(),
             sessions: Vec::new(),
             current_session_id: None,
@@ -1247,6 +1257,20 @@ impl App {
                     }
                     Err(err) => {
                         self.state.status = format!("Failed loading history: {err}");
+                    }
+                }
+            }
+            RuntimeResponse::SessionContextUsage { session_id, result } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+
+                match result {
+                    Ok(usage) => {
+                        self.state.context_usage = usage;
+                    }
+                    Err(err) => {
+                        self.state.status = format!("Failed loading context usage: {err}");
                     }
                 }
             }
@@ -3452,6 +3476,9 @@ impl App {
         self.request(RuntimeRequest::GetChatHistory {
             session_id: session_id.to_string(),
         });
+        self.request(RuntimeRequest::GetSessionContextUsage {
+            session_id: session_id.to_string(),
+        });
         self.request(RuntimeRequest::GetPendingTools {
             session_id: session_id.to_string(),
         });
@@ -3466,6 +3493,7 @@ impl App {
         self.state.current_session_id = session_id;
         self.state.current_tip_id = None;
         self.state.chat_history.clear();
+        self.state.context_usage = None;
         self.state.optimistic_messages.clear();
         self.state.optimistic_tool_messages.clear();
         self.state.pending_tools.clear();
@@ -3892,6 +3920,7 @@ impl AppState {
                 agent_profile_id: self.selected_profile_id.clone(),
                 tool_state_snapshot: None,
                 tool_state_deltas: Vec::new(),
+                generation: None,
             });
         }
 
@@ -3905,6 +3934,7 @@ impl AppState {
                 agent_profile_id: self.selected_profile_id.clone(),
                 tool_state_snapshot: None,
                 tool_state_deltas: Vec::new(),
+                generation: None,
             });
         }
 
@@ -4062,6 +4092,7 @@ mod tests {
             agent_profile_id: None,
             tool_state_snapshot: None,
             tool_state_deltas: Vec::new(),
+            generation: None,
         }
     }
 
@@ -4072,10 +4103,12 @@ mod tests {
                 Model {
                     id: String::from("gpt-4.1-mini"),
                     name: String::from("GPT-4.1 Mini"),
+                    max_context: Some(128_000),
                 },
                 Model {
                     id: String::from("gpt-4o-mini"),
                     name: String::from("GPT-4o Mini"),
+                    max_context: Some(128_000),
                 },
             ],
         )])
@@ -4844,7 +4877,7 @@ mod tests {
             r#"01:  > How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end
 05:     smoke tests.
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
 16:  > Add tests for the settings menu"#,
         );
     }
@@ -4857,7 +4890,7 @@ mod tests {
         let rendered = render_state_snapshot(&state, 120, 18);
 
         assert!(rendered.contains(
-            "cancelled · openai-chat-completions/GPT-4o Mini · Plan Code · Stream cancelled"
+            "cancelled · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Stream cancelled"
         ));
     }
 
@@ -4881,10 +4914,34 @@ mod tests {
         state.tool_batch_execution_started = true;
         state.status = String::from("Executing 1 decided tool call(s)");
 
-        let rendered = render_state_snapshot(&state, 96, 18);
+        let rendered = render_state_snapshot(&state, 140, 18);
 
         assert!(rendered.contains(
-            "⠋ · openai-chat-completions/GPT-4o Mini · Plan Code · Executing 1 decided tool call(s)"
+            "⠋ · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Executing 1 decided tool call(s)"
+        ));
+    }
+
+    #[test]
+    fn renders_statusline_with_context_usage_snapshot() {
+        let mut state = populated_state();
+        state.context_usage = Some(kraai_runtime::SessionContextUsage {
+            provider_id: String::from("mock"),
+            model_id: String::from("mock-model"),
+            max_context: Some(128_000),
+            usage: kraai_runtime::TokenUsage {
+                total_tokens: 14_575,
+                input_tokens: 10_000,
+                output_tokens: 3_000,
+                reasoning_tokens: 500,
+                cache_read_tokens: 1_000,
+                cache_write_tokens: 75,
+            },
+        });
+
+        let rendered = render_state_snapshot(&state, 120, 18);
+
+        assert!(rendered.contains(
+            "idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 14,575/128,000 (11%) · Ready"
         ));
     }
 
@@ -5035,7 +5092,7 @@ mod tests {
 05:     smoke tests.
 12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
 13:  │> /sessions  Open sessions menu          │
-14: i└─────────────────────────────────────────┘ Plan Code · Ready
+14: i└─────────────────────────────────────────┘ Plan Code · ctx 0/128,000 (
 16:  > /s"#,
         );
     }
@@ -5060,7 +5117,7 @@ mod tests {
 10:          │                                                    │
 11:          │                                                    │
 12:          └────────────────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
 16:  >"#,
         );
     }
@@ -5196,7 +5253,7 @@ mod tests {
 10:        │                                                       │
 11:        │                                                       │
 12:        └───────────────────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
 16:  >"#,
         );
     }
@@ -5213,7 +5270,7 @@ mod tests {
             r#"01:  > How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end smoke t
 05:    ests.
-09: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
+09: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Re
 10:   Permission required ─────────────────────────────────────────────────────────┐
 11:   Patch the app module                                                         │
 12:   tool: write_file  risk: undoable_workspace_write                             │
@@ -5246,7 +5303,7 @@ mod tests {
 10:               │/new       Start a new chat              │
 11:               │/providers Open providers                │
 12:               └─────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · Ready
+14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
 16:  >"#,
         );
     }
@@ -5971,6 +6028,7 @@ mod tests {
                 agent_profile_id: Some(String::from("plan-code")),
                 tool_state_snapshot: None,
                 tool_state_deltas: Vec::new(),
+                generation: None,
             },
         )]);
         harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
@@ -6737,6 +6795,7 @@ mod tests {
             RuntimeRequest::SendMessage { .. } => "SendMessage",
             RuntimeRequest::SaveSettings { .. } => "SaveSettings",
             RuntimeRequest::GetChatHistory { .. } => "GetChatHistory",
+            RuntimeRequest::GetSessionContextUsage { .. } => "GetSessionContextUsage",
             RuntimeRequest::GetCurrentTip { .. } => "GetCurrentTip",
             RuntimeRequest::UndoLastUserMessage { .. } => "UndoLastUserMessage",
             RuntimeRequest::GetPendingTools { .. } => "GetPendingTools",

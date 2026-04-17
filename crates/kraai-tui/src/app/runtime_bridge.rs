@@ -176,6 +176,13 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::ChatHistory { session_id, result });
                 }
+                RuntimeRequest::GetSessionContextUsage { session_id } => {
+                    let result = rt
+                        .block_on(runtime.get_session_context_usage(session_id.clone()))
+                        .map_err(|e| e.to_string());
+                    let _ =
+                        res_tx.send(RuntimeResponse::SessionContextUsage { session_id, result });
+                }
                 RuntimeRequest::GetCurrentTip { session_id } => {
                     let result = rt
                         .block_on(runtime.get_tip(session_id.clone()))
@@ -303,6 +310,12 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
+        RuntimeRequest::GetSessionContextUsage { session_id } => {
+            RuntimeResponse::SessionContextUsage {
+                session_id,
+                result: Err(message.to_string()),
+            }
+        }
         RuntimeRequest::GetCurrentTip { session_id } => RuntimeResponse::CurrentTip {
             session_id,
             result: Err(message.to_string()),

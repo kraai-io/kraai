@@ -8,7 +8,7 @@ mod settings;
 
 pub use api::{
     Event, EventCallback, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, PendingToolInfo, Session, WorkspaceState,
+    PendingDeviceCodeLogin, PendingToolInfo, Session, SessionContextUsage, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
 pub use kraai_provider_core::{
@@ -16,7 +16,7 @@ pub use kraai_provider_core::{
 };
 pub use kraai_types::{
     AgentProfileSource, AgentProfileSummary, AgentProfileWarning, AgentProfilesState, Message,
-    MessageId,
+    MessageId, TokenUsage,
 };
 pub use runtime::RuntimeBuilder;
 pub use settings::{FieldValueEntry, ModelSettings, ProviderSettings, SettingsDocument};

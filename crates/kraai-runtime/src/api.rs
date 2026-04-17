@@ -1,10 +1,26 @@
 use kraai_persistence::SessionMeta;
+use kraai_types::TokenUsage;
 
 /// Model information
 #[derive(Clone, Debug)]
 pub struct Model {
     pub id: String,
     pub name: String,
+    pub max_context: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionContextUsage {
+    pub provider_id: String,
+    pub model_id: String,
+    pub max_context: Option<usize>,
+    pub usage: TokenUsage,
+}
+
+impl SessionContextUsage {
+    pub fn used_context_tokens(&self) -> usize {
+        self.usage.used_context_tokens()
+    }
 }
 
 /// Session information

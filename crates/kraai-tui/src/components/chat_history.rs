@@ -876,6 +876,7 @@ mod tests {
             agent_profile_id: None,
             tool_state_snapshot: None,
             tool_state_deltas: Vec::new(),
+            generation: None,
         }
     }
 

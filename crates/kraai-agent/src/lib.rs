@@ -15,8 +15,9 @@ use kraai_tool_core::{
     toon_parser::{self, ParseFailure, ParseFailureKind},
 };
 use kraai_types::{
-    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageId, MessageStatus, ModelId,
-    ProviderId, RiskLevel, ToolCall, ToolCallAssessment, ToolId, ToolResult, ToolStateSnapshot,
+    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageGeneration, MessageId,
+    MessageStatus, ModelId, ProviderId, RiskLevel, TokenUsage, ToolCall, ToolCallAssessment,
+    ToolId, ToolResult, ToolStateSnapshot,
 };
 use profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 use tokio::sync::RwLock;
@@ -113,6 +114,14 @@ pub struct CancelledStreamResult {
     pub session_id: String,
     pub message_id: MessageId,
     pub persisted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionContextUsage {
+    pub provider_id: ProviderId,
+    pub model_id: ModelId,
+    pub max_context: Option<usize>,
+    pub usage: TokenUsage,
 }
 
 #[derive(Clone)]
@@ -519,8 +528,22 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
+        let generation = Some(MessageGeneration {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            max_context: self
+                .resolve_model_max_context(&provider_id, &model_id)
+                .await,
+            usage: None,
+        });
         let assistant_msg_id = match self
-            .start_streaming_message(session_id, ChatRole::Assistant, call_id, Some(profile.id))
+            .start_streaming_message(
+                session_id,
+                ChatRole::Assistant,
+                call_id,
+                Some(profile.id),
+                generation,
+            )
             .await
         {
             Ok(message_id) => message_id,
@@ -607,8 +630,22 @@ impl AgentManager {
         }
 
         let call_id = CallId::new(Ulid::new());
+        let generation = Some(MessageGeneration {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            max_context: self
+                .resolve_model_max_context(&provider_id, &model_id)
+                .await,
+            usage: None,
+        });
         let assistant_msg_id = self
-            .start_streaming_message(session_id, ChatRole::Assistant, call_id, Some(profile.id))
+            .start_streaming_message(
+                session_id,
+                ChatRole::Assistant,
+                call_id,
+                Some(profile.id),
+                generation,
+            )
             .await?;
 
         Ok(Some(PendingStreamRequest {
@@ -739,6 +776,20 @@ impl AgentManager {
             .map(|profile| profile.id.clone())
     }
 
+    async fn resolve_model_max_context(
+        &self,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Option<usize> {
+        self.providers
+            .get_provider(provider_id)?
+            .list_models()
+            .await
+            .into_iter()
+            .find(|model| model.id == *model_id)
+            .and_then(|model| model.max_context)
+    }
+
     async fn require_session(&self, session_id: &str) -> Result<SessionMeta> {
         self.session_store
             .get(session_id)
@@ -800,6 +851,7 @@ impl AgentManager {
             agent_profile_id,
             tool_state_snapshot,
             tool_state_deltas,
+            generation: None,
         };
 
         self.message_store.save(&message).await?;
@@ -816,6 +868,7 @@ impl AgentManager {
         role: ChatRole,
         call_id: CallId,
         agent_profile_id: Option<String>,
+        generation: Option<MessageGeneration>,
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
@@ -835,6 +888,7 @@ impl AgentManager {
             agent_profile_id,
             tool_state_snapshot: None,
             tool_state_deltas: Vec::new(),
+            generation,
         };
 
         let mut streaming = self.streaming_messages.write().await;
@@ -867,6 +921,21 @@ impl AgentManager {
         } else {
             false
         }
+    }
+
+    pub async fn set_streaming_message_usage(
+        &self,
+        message_id: &MessageId,
+        usage: TokenUsage,
+    ) -> bool {
+        let mut streaming = self.streaming_messages.write().await;
+        if let Some(state) = streaming.get_mut(message_id)
+            && let Some(generation) = state.message.generation.as_mut()
+        {
+            generation.usage = Some(usage);
+            return true;
+        }
+        false
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
@@ -996,6 +1065,30 @@ impl AgentManager {
         }
 
         Ok(result)
+    }
+
+    pub async fn get_session_context_usage(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionContextUsage>> {
+        let Some(tip_id) = self.get_tip(session_id).await? else {
+            return Ok(None);
+        };
+
+        let context = self.get_history_context(&tip_id).await?;
+        Ok(context.into_iter().rev().find_map(|message| {
+            (message.role == ChatRole::Assistant && message.status == MessageStatus::Complete)
+                .then_some(message.generation)
+                .flatten()
+                .and_then(|generation| {
+                    generation.usage.map(|usage| SessionContextUsage {
+                        provider_id: generation.provider_id,
+                        model_id: generation.model_id,
+                        max_context: generation.max_context,
+                        usage,
+                    })
+                })
+        }))
     }
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
@@ -1517,10 +1610,10 @@ mod tests {
             _model_id: &ModelId,
             _messages: Vec<ProviderChatMessage>,
             _request_context: &kraai_provider_core::ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
-            Ok(Box::pin(futures::stream::iter(vec![Ok(String::from(
-                "reply",
-            ))])))
+        ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
+            Ok(Box::pin(futures::stream::iter(vec![Ok(
+                kraai_provider_core::ProviderStreamEvent::TextDelta(String::from("reply")),
+            )])))
         }
     }
 
@@ -1865,6 +1958,7 @@ mod tests {
                 &session_id,
                 ChatRole::Assistant,
                 CallId::new("call-1"),
+                None,
                 None,
             )
             .await?;

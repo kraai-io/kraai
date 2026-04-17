@@ -34,6 +34,8 @@ pub struct Message {
     pub tool_state_snapshot: Option<ToolStateSnapshot>,
     #[serde(default)]
     pub tool_state_deltas: Vec<ToolStateDelta>,
+    #[serde(default)]
+    pub generation: Option<MessageGeneration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +44,42 @@ pub enum MessageStatus {
     Streaming { call_id: CallId },
     ProcessingTools,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    #[serde(default)]
+    pub total_tokens: usize,
+    #[serde(default)]
+    pub input_tokens: usize,
+    #[serde(default)]
+    pub output_tokens: usize,
+    #[serde(default)]
+    pub reasoning_tokens: usize,
+    #[serde(default)]
+    pub cache_read_tokens: usize,
+    #[serde(default)]
+    pub cache_write_tokens: usize,
+}
+
+impl TokenUsage {
+    pub fn used_context_tokens(&self) -> usize {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageGeneration {
+    pub provider_id: ProviderId,
+    pub model_id: ModelId,
+    #[serde(default)]
+    pub max_context: Option<usize>,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

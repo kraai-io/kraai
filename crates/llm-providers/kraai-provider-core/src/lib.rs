@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use color_eyre::Result;
 use futures::{future::join_all, stream::BoxStream};
-use kraai_types::{ChatMessage, ModelId, ProviderId};
+use kraai_types::{ChatMessage, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -15,6 +15,12 @@ pub use http_retry::{
     DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderRequestContext, ProviderRetryEvent,
     ProviderRetryObserver, send_with_retry,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderStreamEvent {
+    TextDelta(String),
+    Usage(TokenUsage),
+}
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -425,7 +431,7 @@ impl ProviderManager {
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
         request_context: ProviderRequestContext,
-    ) -> Result<BoxStream<'static, Result<String>>> {
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let provider = self
             .providers
             .get(&provider_id)
@@ -466,7 +472,7 @@ pub trait Provider: Send + Sync {
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
         request_context: &ProviderRequestContext,
-    ) -> Result<BoxStream<'static, Result<String>>>;
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -538,13 +544,13 @@ mod tests {
             _model_id: &ModelId,
             messages: Vec<ChatMessage>,
             _request_context: &ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
             use futures::StreamExt;
 
             self.reply_count.fetch_add(1, Ordering::SeqCst);
             let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
             let response = format!("Streamed response to: {last_content}");
-            Ok(futures::stream::iter(vec![Ok(response)]).boxed())
+            Ok(futures::stream::iter(vec![Ok(ProviderStreamEvent::TextDelta(response))]).boxed())
         }
     }
 

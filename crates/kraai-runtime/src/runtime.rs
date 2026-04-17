@@ -8,7 +8,7 @@ use kraai_agent::{AgentManager, PendingStreamRequest, ToolExecutionPayload, Tool
 use kraai_persistence::agent_state_root;
 use kraai_provider_core::{
     ProviderManager, ProviderManagerConfig, ProviderRegistry, ProviderRequestContext,
-    ProviderRetryEvent, ProviderRetryObserver,
+    ProviderRetryEvent, ProviderRetryObserver, ProviderStreamEvent,
 };
 use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use kraai_provider_openai_codex::{
@@ -29,7 +29,7 @@ use tokio::task::AbortHandle;
 
 use crate::api::{
     Event, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, PendingToolInfo, Session, WorkspaceState,
+    PendingDeviceCodeLogin, PendingToolInfo, Session, SessionContextUsage, WorkspaceState,
 };
 use crate::handle::{Command, RuntimeHandle};
 use crate::settings::{
@@ -678,6 +678,7 @@ impl RuntimeInner {
                             .map(|m| Model {
                                 id: m.id.to_string(),
                                 name: m.name,
+                                max_context: m.max_context,
                             })
                             .collect();
                         (provider_id.to_string(), models)
@@ -890,6 +891,27 @@ impl RuntimeInner {
                     .await?;
                 response
                     .send(history)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
+
+            Command::GetSessionContextUsage {
+                session_id,
+                response,
+            } => {
+                let usage = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .get_session_context_usage(&session_id)
+                    .await?
+                    .map(|usage| SessionContextUsage {
+                        provider_id: usage.provider_id.to_string(),
+                        model_id: usage.model_id.to_string(),
+                        max_context: usage.max_context,
+                        usage: usage.usage,
+                    });
+                response
+                    .send(usage)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
 
@@ -1797,7 +1819,7 @@ impl RuntimeInner {
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
-                Ok(chunk) => {
+                Ok(ProviderStreamEvent::TextDelta(chunk)) => {
                     let guarded = guard.ingest_chunk(&chunk);
                     if !guarded.accepted.is_empty() {
                         content.push_str(&guarded.accepted);
@@ -1824,6 +1846,12 @@ impl RuntimeInner {
                             session_id,
                             content,
                         };
+                    }
+                }
+                Ok(ProviderStreamEvent::Usage(usage)) => {
+                    let agent = agent_manager.lock().await;
+                    if !agent.set_streaming_message_usage(&msg_id, usage).await {
+                        return StreamDriveResult::Stopped;
                     }
                 }
                 Err(error) => {
@@ -2222,7 +2250,7 @@ mod tests {
     use kraai_tool_read_file::ReadFileTool;
     use kraai_types::{
         ChatMessage, ChatRole, ExecutionPolicy, MessageStatus, ModelId, ProviderId, RiskLevel,
-        ToolCallAssessment,
+        TokenUsage, ToolCallAssessment,
     };
     use serde::Deserialize;
 
@@ -2272,23 +2300,36 @@ mod tests {
     }
 
     #[derive(Clone, Debug)]
+    enum ScriptedChunkKind {
+        Text(String),
+        Usage(TokenUsage),
+    }
+
+    #[derive(Clone, Debug)]
     struct ScriptedChunk {
-        text: String,
+        kind: ScriptedChunkKind,
         gate: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl ScriptedChunk {
         fn plain(text: impl Into<String>) -> Self {
             Self {
-                text: text.into(),
+                kind: ScriptedChunkKind::Text(text.into()),
                 gate: None,
             }
         }
 
         fn gated(text: impl Into<String>, gate: Arc<tokio::sync::Notify>) -> Self {
             Self {
-                text: text.into(),
+                kind: ScriptedChunkKind::Text(text.into()),
                 gate: Some(gate),
+            }
+        }
+
+        fn usage(usage: TokenUsage) -> Self {
+            Self {
+                kind: ScriptedChunkKind::Usage(usage),
+                gate: None,
             }
         }
     }
@@ -2345,7 +2386,7 @@ mod tests {
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
             _request_context: &kraai_provider_core::ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
+        ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
             let script = self
                 .scripts
                 .lock()
@@ -2365,7 +2406,16 @@ mod tests {
                         gate.notified().await;
                     }
 
-                    Some((Ok(chunk.text), (script, index + 1)))
+                    let event = match chunk.kind {
+                        ScriptedChunkKind::Text(text) => {
+                            kraai_provider_core::ProviderStreamEvent::TextDelta(text)
+                        }
+                        ScriptedChunkKind::Usage(usage) => {
+                            kraai_provider_core::ProviderStreamEvent::Usage(usage)
+                        }
+                    };
+
+                    Some((Ok(event), (script, index + 1)))
                 },
             )))
         }
@@ -2650,11 +2700,13 @@ mod tests {
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
             _request_context: &kraai_provider_core::ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
+        ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
             self.started.notify_waiters();
             self.release.notified().await;
             Ok(Box::pin(stream::once(async {
-                Ok(String::from("provider started"))
+                Ok(kraai_provider_core::ProviderStreamEvent::TextDelta(
+                    String::from("provider started"),
+                ))
             })))
         }
     }
@@ -2698,7 +2750,7 @@ mod tests {
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
             _request_context: &kraai_provider_core::ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
+        ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
             self.started.notify_waiters();
             self.release.notified().await;
             Err(eyre!(self.failure_message.clone()))
@@ -2753,7 +2805,7 @@ mod tests {
             _model_id: &ModelId,
             _messages: Vec<ChatMessage>,
             request_context: &kraai_provider_core::ProviderRequestContext,
-        ) -> Result<BoxStream<'static, Result<String>>> {
+        ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
             if let Some(observer) = request_context.retry_observer() {
                 observer.on_retry_scheduled(&kraai_provider_core::ProviderRetryEvent {
                     operation: "responses",
@@ -2764,7 +2816,9 @@ mod tests {
             }
 
             Ok(Box::pin(stream::once(async {
-                Ok(String::from("provider started"))
+                Ok(kraai_provider_core::ProviderStreamEvent::TextDelta(
+                    String::from("provider started"),
+                ))
             })))
         }
     }
@@ -3415,6 +3469,76 @@ default_risk_level = \"undoable_workspace_write\"\n"
                 )
             }));
         }
+
+        harness.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> Result<()> {
+        let harness = runtime_harness_or_skip!(RuntimeTestHarness::new(vec![vec![
+            ScriptedChunk::plain("usage-aware reply"),
+            ScriptedChunk::usage(TokenUsage {
+                total_tokens: 42,
+                input_tokens: 10,
+                output_tokens: 20,
+                reasoning_tokens: 3,
+                cache_read_tokens: 7,
+                cache_write_tokens: 2,
+            }),
+        ]]));
+
+        let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                String::from("hello"),
+                String::from("mock-model"),
+                String::from("mock"),
+            )
+            .await?;
+
+        harness
+            .events
+            .wait_for("stream completion", |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::StreamComplete {
+                            session_id: completed_session,
+                            ..
+                        } if completed_session == &session_id
+                    )
+                })
+            })
+            .await;
+
+        let usage = harness
+            .handle
+            .get_session_context_usage(session_id.clone())
+            .await?
+            .expect("context usage should be available");
+
+        assert_eq!(usage.provider_id, "mock");
+        assert_eq!(usage.model_id, "mock-model");
+        assert_eq!(usage.usage.used_context_tokens(), 42);
+
+        let history = harness.handle.get_chat_history(session_id).await?;
+        let assistant = history
+            .values()
+            .find(|message| message.role == ChatRole::Assistant)
+            .expect("assistant message should be present");
+        let generation = assistant
+            .generation
+            .as_ref()
+            .expect("assistant generation metadata should be persisted");
+        let usage = generation
+            .usage
+            .as_ref()
+            .expect("assistant usage should be persisted");
+        assert_eq!(usage.total_tokens, 42);
+        assert_eq!(usage.cache_write_tokens, 2);
 
         harness.shutdown().await;
         Ok(())

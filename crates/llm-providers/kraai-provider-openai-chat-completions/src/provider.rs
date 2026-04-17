@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequestContext, send_with_retry,
+    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, send_with_retry,
 };
 use kraai_types::{ChatMessage, ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -18,7 +18,8 @@ use crate::profile::{
 };
 use crate::sse::stream_sse_data;
 use crate::wire::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ListModelsResponse,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
+    ChatCompletionStreamOptions, ChatCompletionUsage, ListModelsResponse,
 };
 
 #[derive(Clone)]
@@ -153,6 +154,7 @@ where
             model: model_id.to_string(),
             messages: normalize_chat_messages(messages)?,
             stream: false,
+            stream_options: None,
         };
 
         let response = self
@@ -160,6 +162,7 @@ where
             .await?
             .json::<ChatCompletionResponse>()
             .await?;
+        let _usage = response.usage.as_ref().cloned().and_then(normalize_usage);
 
         let message = response
             .choices
@@ -179,11 +182,14 @@ where
         model_id: &ModelId,
         messages: Vec<ChatMessage>,
         request_context: &ProviderRequestContext,
-    ) -> Result<BoxStream<'static, Result<String>>> {
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let request = ChatCompletionRequest {
             model: model_id.to_string(),
             messages: normalize_chat_messages(messages)?,
             stream: true,
+            stream_options: Some(ChatCompletionStreamOptions {
+                include_usage: true,
+            }),
         };
 
         let response = self
@@ -194,11 +200,17 @@ where
             .filter_map(|event| async move {
                 match event {
                     Ok(payload) => match serde_json::from_str::<ChatCompletionChunk>(&payload) {
-                        Ok(chunk) => chunk
-                            .choices
-                            .into_iter()
-                            .find_map(|choice| choice.delta.content)
-                            .map(Ok),
+                        Ok(chunk) => {
+                            if let Some(usage) = chunk.usage.and_then(normalize_usage) {
+                                return Some(Ok(ProviderStreamEvent::Usage(usage)));
+                            }
+
+                            chunk
+                                .choices
+                                .into_iter()
+                                .find_map(|choice| choice.delta.content)
+                                .map(|delta| Ok(ProviderStreamEvent::TextDelta(delta)))
+                        }
                         Err(error) => Some(Err(eyre!(error))),
                     },
                     Err(error) => Some(Err(error)),
@@ -208,6 +220,43 @@ where
 
         Ok(stream)
     }
+}
+
+fn normalize_usage(usage: ChatCompletionUsage) -> Option<kraai_types::TokenUsage> {
+    let cache_read_tokens = usage
+        .prompt_tokens_details
+        .and_then(|details| details.cached_tokens)
+        .unwrap_or_default();
+    let reasoning_tokens = usage
+        .completion_tokens_details
+        .and_then(|details| details.reasoning_tokens)
+        .unwrap_or_default();
+    let input_tokens = usage.prompt_tokens.saturating_sub(cache_read_tokens);
+    let output_tokens = usage.completion_tokens.saturating_sub(reasoning_tokens);
+    let total_tokens = usage.total_tokens.unwrap_or_else(|| {
+        input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(reasoning_tokens)
+            .saturating_add(cache_read_tokens)
+    });
+
+    if total_tokens == 0
+        && input_tokens == 0
+        && output_tokens == 0
+        && reasoning_tokens == 0
+        && cache_read_tokens == 0
+    {
+        return None;
+    }
+
+    Some(kraai_types::TokenUsage {
+        total_tokens,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cache_read_tokens,
+        cache_write_tokens: 0,
+    })
 }
 
 async fn ensure_success_response(operation: &str, response: Response) -> Result<Response> {
@@ -464,5 +513,28 @@ mod tests {
         assert_eq!(events[0].operation, "chat completions");
         assert_eq!(events[0].retry_number, 1);
         assert_eq!(events[0].reason, "HTTP 429 Too Many Requests");
+    }
+
+    #[test]
+    fn normalize_usage_splits_cache_and_reasoning_tokens() {
+        let usage = normalize_usage(ChatCompletionUsage {
+            prompt_tokens: 120,
+            completion_tokens: 45,
+            total_tokens: Some(165),
+            prompt_tokens_details: Some(crate::wire::PromptTokenDetails {
+                cached_tokens: Some(20),
+            }),
+            completion_tokens_details: Some(crate::wire::CompletionTokenDetails {
+                reasoning_tokens: Some(5),
+            }),
+        })
+        .expect("usage should normalize");
+
+        assert_eq!(usage.total_tokens, 165);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 40);
+        assert_eq!(usage.reasoning_tokens, 5);
+        assert_eq!(usage.cache_read_tokens, 20);
+        assert_eq!(usage.cache_write_tokens, 0);
     }
 }

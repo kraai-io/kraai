@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
     AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, Session,
-    SettingsDocument, WorkspaceState,
+    SessionContextUsage, SettingsDocument, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime
@@ -78,6 +78,10 @@ pub(crate) enum Command {
     GetChatHistory {
         session_id: String,
         response: oneshot::Sender<BTreeMap<MessageId, kraai_types::Message>>,
+    },
+    GetSessionContextUsage {
+        session_id: String,
+        response: oneshot::Sender<Option<SessionContextUsage>>,
     },
     GetPendingTools {
         session_id: String,
@@ -242,6 +246,20 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::GetChatHistory {
+                session_id,
+                response: tx,
+            })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn get_session_context_usage(
+        &self,
+        session_id: String,
+    ) -> Result<Option<SessionContextUsage>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetSessionContextUsage {
                 session_id,
                 response: tx,
             })
