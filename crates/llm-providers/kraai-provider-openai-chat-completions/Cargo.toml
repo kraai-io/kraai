@@ -1,5 +1,6 @@
 [package]
 edition.workspace = true
+license.workspace = true
 name = "kraai-provider-openai-chat-completions"
 publish = false
 rust-version.workspace = true

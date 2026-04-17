@@ -4,7 +4,8 @@
 
 [package]
 description = "kraai-workspace-hack package, managed by hakari"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 name = "kraai-workspace-hack"
 version = "0.1.0"
 # You can choose to publish this crate: see https://docs.rs/cargo-hakari/latest/cargo_hakari/publishing.
@@ -16,23 +17,37 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 aho-corasick = { version = "1.1.4" }
-bitflags = { version = "2.11.0", default-features = false, features = ["serde"] }
+bitflags = { version = "2.11.0", default-features = false, features = [
+	"serde",
+] }
 chrono = { version = "0.4.44", features = ["serde"] }
 log = { version = "0.4.29", default-features = false, features = ["std"] }
 memchr = { version = "2.8.0" }
 regex-automata = { version = "0.4.14" }
 regex-syntax = { version = "0.8.10" }
 serde = { version = "1.0.228", features = ["alloc", "derive"] }
-serde_core = { version = "1.0.228", default-features = false, features = ["alloc", "result", "std"] }
+serde_core = { version = "1.0.228", default-features = false, features = [
+	"alloc",
+	"result",
+	"std",
+] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
-smallvec = { version = "1.15.1", default-features = false, features = ["const_generics"] }
-time = { version = "0.3.47", features = ["formatting", "local-offset", "parsing"] }
+smallvec = { version = "1.15.1", default-features = false, features = [
+	"const_generics",
+] }
+time = { version = "0.3.47", features = [
+	"formatting",
+	"local-offset",
+	"parsing",
+] }
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [build-dependencies]
 aho-corasick = { version = "1.1.4" }
-bitflags = { version = "2.11.0", default-features = false, features = ["serde"] }
+bitflags = { version = "2.11.0", default-features = false, features = [
+	"serde",
+] }
 chrono = { version = "0.4.44", features = ["serde"] }
 log = { version = "0.4.29", default-features = false, features = ["std"] }
 memchr = { version = "2.8.0" }
@@ -41,35 +56,95 @@ quote = { version = "1.0.45" }
 regex-automata = { version = "0.4.14" }
 regex-syntax = { version = "0.8.10" }
 serde = { version = "1.0.228", features = ["alloc", "derive"] }
-serde_core = { version = "1.0.228", default-features = false, features = ["alloc", "result", "std"] }
+serde_core = { version = "1.0.228", default-features = false, features = [
+	"alloc",
+	"result",
+	"std",
+] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
-smallvec = { version = "1.15.1", default-features = false, features = ["const_generics"] }
-syn = { version = "2.0.117", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
-time = { version = "0.3.47", features = ["formatting", "local-offset", "parsing"] }
+smallvec = { version = "1.15.1", default-features = false, features = [
+	"const_generics",
+] }
+syn = { version = "2.0.117", features = [
+	"extra-traits",
+	"fold",
+	"full",
+	"visit",
+	"visit-mut",
+] }
+time = { version = "0.3.47", features = [
+	"formatting",
+	"local-offset",
+	"parsing",
+] }
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 crossterm = { version = "0.29.0", features = ["serde"] }
-linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "system", "xdp"] }
+linux-raw-sys = { version = "0.12.1", default-features = false, features = [
+	"auxvec",
+	"elf",
+	"errno",
+	"general",
+	"if_ether",
+	"ioctl",
+	"net",
+	"netlink",
+	"no_std",
+	"system",
+	"xdp",
+] }
 miniz_oxide = { version = "0.8.9", features = ["simd"] }
 mio = { version = "1.2.0", features = ["net", "os-ext"] }
 num-traits = { version = "0.2.19" }
-rustix = { version = "1.1.4", default-features = false, features = ["event", "fs", "net", "std", "stdio", "system", "termios"] }
+rustix = { version = "1.1.4", default-features = false, features = [
+	"event",
+	"fs",
+	"net",
+	"std",
+	"stdio",
+	"system",
+	"termios",
+] }
 simd-adler32 = { version = "0.3.9" }
-smallvec = { version = "1.15.1", default-features = false, features = ["const_new"] }
+smallvec = { version = "1.15.1", default-features = false, features = [
+	"const_new",
+] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 cc = { version = "1.2.60", default-features = false, features = ["parallel"] }
 crossterm = { version = "0.29.0", features = ["serde"] }
-linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "system", "xdp"] }
+linux-raw-sys = { version = "0.12.1", default-features = false, features = [
+	"auxvec",
+	"elf",
+	"errno",
+	"general",
+	"if_ether",
+	"ioctl",
+	"net",
+	"netlink",
+	"no_std",
+	"system",
+	"xdp",
+] }
 miniz_oxide = { version = "0.8.9", features = ["simd"] }
 mio = { version = "1.2.0", features = ["net", "os-ext"] }
 num-traits = { version = "0.2.19" }
-rustix = { version = "1.1.4", default-features = false, features = ["event", "fs", "net", "std", "stdio", "system", "termios"] }
+rustix = { version = "1.1.4", default-features = false, features = [
+	"event",
+	"fs",
+	"net",
+	"std",
+	"stdio",
+	"system",
+	"termios",
+] }
 simd-adler32 = { version = "0.3.9" }
-smallvec = { version = "1.15.1", default-features = false, features = ["const_new"] }
+smallvec = { version = "1.15.1", default-features = false, features = [
+	"const_new",
+] }
 
 ### END HAKARI SECTION

@@ -1,5 +1,6 @@
 [package]
 edition.workspace = true
+license.workspace = true
 name = "kraai-persistence"
 publish = false
 rust-version.workspace = true
