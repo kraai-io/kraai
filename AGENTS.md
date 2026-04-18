@@ -57,6 +57,7 @@ read the justfile for commands to use
 IMPORTANT: If you see a bad pattern in the code, don't be quick to copy it. It is best to squash bad patterns before they propogate. You should inform the user that you found the bad pattern, and then follow their instructions. Do not implement new features using these bad patterns without explicit confirmation.
 IMPORTANT: We do not keep legacy code around. We don't care about backwards compatibility. This is a project in its demo / alpha stage. We ship fast, and fix fast.
 This repo contains very heavy llm use, so some design decisions might not always be the best possible solutions.
+God files should be broken up in the best way possible. They are an issue because it pollutes the context window and thus should be avoided and broken up.
 
 ## Dependencies
 
