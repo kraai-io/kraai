@@ -16,10 +16,10 @@ use ratatui::{
 use crate::components::{ChatHistory, TextInput, VisibleChatView};
 
 use super::{
-    ActiveSettingsEditor, AppState, CachedMessageRender, ChatCellPosition, ChatSelection,
-    ProviderAuthState, ProvidersAdvancedFocus, ProvidersView, SettingsModelField,
-    SettingsProviderField, ToolApprovalAction, ToolPhase, UiMode, field_value_display,
-    flatten_models_map, message_fingerprint, provider_definition_rank,
+    ActiveSettingsEditor, AppState, ChatCellPosition, ChatSelection, ProviderAuthState,
+    ProvidersAdvancedFocus, ProvidersView, SettingsModelField, SettingsProviderField,
+    ToolApprovalAction, ToolPhase, UiMode, field_value_display, flatten_models_map,
+    provider_definition_rank,
 };
 
 pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
@@ -208,57 +208,6 @@ fn format_token_count(value: usize) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
-}
-
-impl AppState {
-    pub(super) fn refresh_chat_render_cache(&self, width: u16) {
-        let needs_refresh = {
-            let cache = self.chat_render_cache.borrow();
-            cache.epoch != self.chat_epoch || cache.width != width
-        };
-        if !needs_refresh {
-            return;
-        }
-
-        let rendered_messages = self.rendered_messages();
-        let mut cache = self.chat_render_cache.borrow_mut();
-        let mut prior_entries = std::mem::take(&mut cache.message_cache);
-        if cache.width != width {
-            prior_entries.clear();
-        }
-
-        let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
-        let mut sections = Vec::new();
-        let mut total_lines: u16 = 0;
-
-        for msg in &rendered_messages {
-            let key = msg.id.as_str().to_string();
-            let fingerprint = message_fingerprint(msg);
-            let lines = match prior_entries.remove(&key) {
-                Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                _ => std::sync::Arc::new(ChatHistory::build_message_lines(msg, width)),
-            };
-
-            if lines.is_empty() {
-                continue;
-            }
-
-            if !sections.is_empty() {
-                sections.push(std::sync::Arc::new(vec![ChatHistory::separator_line()]));
-                total_lines = total_lines.saturating_add(1);
-            }
-
-            total_lines = total_lines.saturating_add(lines.len().min(u16::MAX as usize) as u16);
-            sections.push(std::sync::Arc::clone(&lines));
-            next_entries.insert(key, CachedMessageRender { fingerprint, lines });
-        }
-
-        cache.sections = sections;
-        cache.total_lines = total_lines;
-        cache.message_cache = next_entries;
-        cache.width = width;
-        cache.epoch = self.chat_epoch;
-    }
 }
 
 pub(super) fn render_chat_selection_overlay(
