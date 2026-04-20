@@ -134,9 +134,6 @@ impl App {
             model_usage.cache_read_tokens = model_usage
                 .cache_read_tokens
                 .saturating_add(usage.cache_read_tokens);
-            model_usage.cache_write_tokens = model_usage
-                .cache_write_tokens
-                .saturating_add(usage.cache_write_tokens);
         }
     }
 }

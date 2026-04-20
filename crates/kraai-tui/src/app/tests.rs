@@ -890,12 +890,11 @@ fn renders_statusline_with_context_usage_snapshot() {
             output_tokens: 3_000,
             reasoning_tokens: 500,
             cache_read_tokens: 1_000,
-            cache_write_tokens: 75,
         },
     });
     let rendered = render_state_snapshot(&state, 120, 18);
     assert!(rendered.contains(
-        "idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 14,575/128,000 (11%) · Ready"
+        "idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 14,500/128,000 (11%) · Ready"
     ));
 }
 
@@ -915,7 +914,6 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
                     output_tokens: 3_000,
                     reasoning_tokens: 500,
                     cache_read_tokens: 1_000,
-                    cache_write_tokens: 75,
                 },
             ),
         ),
@@ -931,7 +929,6 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
                     output_tokens: 180,
                     reasoning_tokens: 20,
                     cache_read_tokens: 25,
-                    cache_write_tokens: 0,
                 },
             ),
         ),
@@ -948,7 +945,6 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
                 output_tokens: 120,
                 reasoning_tokens: 40,
                 cache_read_tokens: 10,
-                cache_write_tokens: 5,
             },
         ),
     )]);
@@ -975,7 +971,7 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
     assert_eq!(
         harness.app.exit_token_usage_summary().as_deref(),
         Some(
-            "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 925, input 700, output 180, reasoning 20, cached 25 (read 25, write 0)\n  openai-chat-completions/gpt-4o-mini: total 15,000, input 10,250, output 3,120, reasoning 540, cached 1,090 (read 1,010, write 80)\n  total: total 15,925, input 10,950, output 3,300, reasoning 560, cached 1,115 (read 1,035, write 80)"
+            "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 925, input 700, output 180, reasoning 20, cached 25\n  openai-chat-completions/gpt-4o-mini: total 15,000, input 10,250, output 3,120, reasoning 540, cached 1,010\n  total: total 15,925, input 10,950, output 3,300, reasoning 560, cached 1,035"
         )
     );
 }

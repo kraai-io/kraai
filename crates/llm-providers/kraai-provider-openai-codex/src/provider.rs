@@ -284,7 +284,6 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
         output_tokens,
         reasoning_tokens,
         cache_read_tokens,
-        cache_write_tokens: 0,
     })
 }
 
@@ -795,6 +794,5 @@ mod tests {
         assert_eq!(usage.output_tokens, 40);
         assert_eq!(usage.reasoning_tokens, 5);
         assert_eq!(usage.cache_read_tokens, 20);
-        assert_eq!(usage.cache_write_tokens, 0);
     }
 }

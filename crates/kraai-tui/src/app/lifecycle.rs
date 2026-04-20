@@ -241,23 +241,15 @@ fn accumulate_token_usage(
     total.cache_read_tokens = total
         .cache_read_tokens
         .saturating_add(usage.cache_read_tokens);
-    total.cache_write_tokens = total
-        .cache_write_tokens
-        .saturating_add(usage.cache_write_tokens);
 }
 
 fn format_exit_usage_fields(usage: &kraai_runtime::TokenUsage) -> String {
-    let cached_total = usage
-        .cache_read_tokens
-        .saturating_add(usage.cache_write_tokens);
     format!(
-        "total {}, input {}, output {}, reasoning {}, cached {} (read {}, write {})",
+        "total {}, input {}, output {}, reasoning {}, cached {}",
         format_token_count(usage.total_tokens),
         format_token_count(usage.input_tokens),
         format_token_count(usage.output_tokens),
         format_token_count(usage.reasoning_tokens),
-        format_token_count(cached_total),
         format_token_count(usage.cache_read_tokens),
-        format_token_count(usage.cache_write_tokens),
     )
 }

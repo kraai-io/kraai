@@ -58,8 +58,6 @@ pub struct TokenUsage {
     pub reasoning_tokens: usize,
     #[serde(default)]
     pub cache_read_tokens: usize,
-    #[serde(default)]
-    pub cache_write_tokens: usize,
 }
 
 impl TokenUsage {
@@ -68,7 +66,6 @@ impl TokenUsage {
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_read_tokens)
-            .saturating_add(self.cache_write_tokens)
     }
 }
 

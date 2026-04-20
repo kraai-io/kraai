@@ -187,7 +187,6 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
             output_tokens: 20,
             reasoning_tokens: 3,
             cache_read_tokens: 7,
-            cache_write_tokens: 2,
         }),
     ]])
     .await
@@ -229,7 +228,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
 
     assert_eq!(usage.provider_id, "mock");
     assert_eq!(usage.model_id, "mock-model");
-    assert_eq!(usage.usage.used_context_tokens(), 42);
+    assert_eq!(usage.usage.used_context_tokens(), 40);
 
     let history = harness.handle.get_chat_history(session_id).await?;
     let assistant = history
@@ -245,7 +244,6 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
         .as_ref()
         .expect("assistant usage should be persisted");
     assert_eq!(usage.total_tokens, 42);
-    assert_eq!(usage.cache_write_tokens, 2);
 
     harness.shutdown().await;
     Ok(())
