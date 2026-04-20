@@ -164,6 +164,28 @@ impl App {
         Ok(())
     }
 
+    pub fn exit_token_usage_summary(&self) -> Option<String> {
+        if self.state.exit_usage_totals.usage_by_model.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec![String::from("Token usage since launch:")];
+        let mut total = kraai_runtime::TokenUsage::default();
+
+        for (model_key, usage) in &self.state.exit_usage_totals.usage_by_model {
+            accumulate_token_usage(&mut total, usage);
+            lines.push(format!(
+                "  {}/{}: {}",
+                model_key.provider_id,
+                model_key.model_id,
+                format_exit_usage_fields(usage)
+            ));
+        }
+
+        lines.push(format!("  total: {}", format_exit_usage_fields(&total)));
+        Some(lines.join("\n"))
+    }
+
     pub(super) fn process_events(&mut self) -> bool {
         let mut changed = false;
 
@@ -204,4 +226,38 @@ impl App {
             (self.state.statusline_animation_frame + 1) % STATUSLINE_STREAMING_FRAMES.len();
         true
     }
+}
+
+fn accumulate_token_usage(
+    total: &mut kraai_runtime::TokenUsage,
+    usage: &kraai_runtime::TokenUsage,
+) {
+    total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
+    total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+    total.reasoning_tokens = total
+        .reasoning_tokens
+        .saturating_add(usage.reasoning_tokens);
+    total.cache_read_tokens = total
+        .cache_read_tokens
+        .saturating_add(usage.cache_read_tokens);
+    total.cache_write_tokens = total
+        .cache_write_tokens
+        .saturating_add(usage.cache_write_tokens);
+}
+
+fn format_exit_usage_fields(usage: &kraai_runtime::TokenUsage) -> String {
+    let cached_total = usage
+        .cache_read_tokens
+        .saturating_add(usage.cache_write_tokens);
+    format!(
+        "total {}, input {}, output {}, reasoning {}, cached {} (read {}, write {})",
+        format_token_count(usage.total_tokens),
+        format_token_count(usage.input_tokens),
+        format_token_count(usage.output_tokens),
+        format_token_count(usage.reasoning_tokens),
+        format_token_count(cached_total),
+        format_token_count(usage.cache_read_tokens),
+        format_token_count(usage.cache_write_tokens),
+    )
 }

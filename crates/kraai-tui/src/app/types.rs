@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Model, ProviderDefinition, Session,
     SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageId, RiskLevel};
+use kraai_types::{Message, MessageId, RiskLevel, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
@@ -158,6 +158,18 @@ pub(super) struct PendingSubmit {
     pub(super) message: String,
     pub(super) model_id: String,
     pub(super) provider_id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ExitUsageTotals {
+    pub(super) counted_message_ids: HashSet<MessageId>,
+    pub(super) usage_by_model: BTreeMap<UsageModelKey, TokenUsage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct UsageModelKey {
+    pub(super) provider_id: String,
+    pub(super) model_id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

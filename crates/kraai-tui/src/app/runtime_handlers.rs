@@ -53,6 +53,9 @@ impl App {
                 }
             }
             Event::StreamComplete { session_id, .. } => {
+                self.request(RuntimeRequest::GetChatHistory {
+                    session_id: session_id.clone(),
+                });
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
                     self.state.retry_waiting = false;
@@ -144,6 +147,9 @@ impl App {
                     self.clamp_chat_scroll();
                     self.request_sync_for_session(&session_id);
                 } else {
+                    self.request(RuntimeRequest::GetChatHistory {
+                        session_id: session_id.clone(),
+                    });
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
@@ -401,24 +407,23 @@ impl App {
                 self.state.settings_errors = parse_settings_errors(&err);
                 self.state.status = format!("Failed saving settings: {err}");
             }
-            RuntimeResponse::ChatHistory { session_id, result } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    return;
-                }
-
-                match result {
-                    Ok(history) => {
+            RuntimeResponse::ChatHistory { session_id, result } => match result {
+                Ok(history) => {
+                    self.accumulate_exit_usage_from_history(&history);
+                    if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                         self.state.chat_history = history;
                         self.invalidate_chat_cache();
                         self.reconcile_optimistic_messages();
                         self.reconcile_optimistic_tool_messages();
                         self.clamp_chat_scroll();
                     }
-                    Err(err) => {
+                }
+                Err(err) => {
+                    if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                         self.state.status = format!("Failed loading history: {err}");
                     }
                 }
-            }
+            },
             RuntimeResponse::SessionContextUsage { session_id, result } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;

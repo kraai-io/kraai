@@ -14,7 +14,9 @@ use kraai_runtime::{
     FieldValueKind, Model, ModelSettings, ProviderDefinition, ProviderSettings, Session,
     SettingsDocument, SettingsValue,
 };
-use kraai_types::{ChatRole, Message, MessageId, MessageStatus};
+use kraai_types::{
+    ChatRole, Message, MessageGeneration, MessageId, MessageStatus, ModelId, ProviderId, TokenUsage,
+};
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{
@@ -125,6 +127,30 @@ fn message(id: &str, parent_id: Option<&str>, role: ChatRole, content: &str) -> 
         tool_state_snapshot: None,
         tool_state_deltas: Vec::new(),
         generation: None,
+    }
+}
+
+fn assistant_message_with_usage(
+    id: &str,
+    provider_id: &str,
+    model_id: &str,
+    usage: TokenUsage,
+) -> Message {
+    Message {
+        id: MessageId::new(id),
+        parent_id: None,
+        role: ChatRole::Assistant,
+        content: String::from("assistant"),
+        status: MessageStatus::Complete,
+        agent_profile_id: None,
+        tool_state_snapshot: None,
+        tool_state_deltas: Vec::new(),
+        generation: Some(MessageGeneration {
+            provider_id: ProviderId::new(provider_id),
+            model_id: ModelId::new(model_id),
+            max_context: Some(128_000),
+            usage: Some(usage),
+        }),
     }
 }
 fn sample_models() -> HashMap<String, Vec<Model>> {
@@ -871,6 +897,87 @@ fn renders_statusline_with_context_usage_snapshot() {
     assert!(rendered.contains(
         "idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 14,575/128,000 (11%) · Ready"
     ));
+}
+
+#[test]
+fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
+    let mut harness = test_harness();
+    let history_one = BTreeMap::from([
+        (
+            MessageId::new("msg-1"),
+            assistant_message_with_usage(
+                "msg-1",
+                "openai-chat-completions",
+                "gpt-4o-mini",
+                TokenUsage {
+                    total_tokens: 14_575,
+                    input_tokens: 10_000,
+                    output_tokens: 3_000,
+                    reasoning_tokens: 500,
+                    cache_read_tokens: 1_000,
+                    cache_write_tokens: 75,
+                },
+            ),
+        ),
+        (
+            MessageId::new("msg-2"),
+            assistant_message_with_usage(
+                "msg-2",
+                "openai-chat-completions",
+                "gpt-4.1-mini",
+                TokenUsage {
+                    total_tokens: 925,
+                    input_tokens: 700,
+                    output_tokens: 180,
+                    reasoning_tokens: 20,
+                    cache_read_tokens: 25,
+                    cache_write_tokens: 0,
+                },
+            ),
+        ),
+    ]);
+    let history_two = BTreeMap::from([(
+        MessageId::new("msg-3"),
+        assistant_message_with_usage(
+            "msg-3",
+            "openai-chat-completions",
+            "gpt-4o-mini",
+            TokenUsage {
+                total_tokens: 425,
+                input_tokens: 250,
+                output_tokens: 120,
+                reasoning_tokens: 40,
+                cache_read_tokens: 10,
+                cache_write_tokens: 5,
+            },
+        ),
+    )]);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("background-session"),
+            result: Ok(history_one.clone()),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("background-session"),
+            result: Ok(history_one),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("foreground-session"),
+            result: Ok(history_two),
+        });
+
+    assert_eq!(
+        harness.app.exit_token_usage_summary().as_deref(),
+        Some(
+            "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 925, input 700, output 180, reasoning 20, cached 25 (read 25, write 0)\n  openai-chat-completions/gpt-4o-mini: total 15,000, input 10,250, output 3,120, reasoning 540, cached 1,090 (read 1,010, write 80)\n  total: total 15,925, input 10,950, output 3,300, reasoning 560, cached 1,115 (read 1,035, write 80)"
+        )
+    );
 }
 #[test]
 fn statusline_animation_advances_while_streaming() {

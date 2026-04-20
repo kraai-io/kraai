@@ -49,11 +49,13 @@ use self::types::{
     OptimisticMessage, OptimisticToolMessage, PendingSubmit, PendingTool, ProviderDetailAction,
     ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, SettingsFocus,
     SettingsModelField, SettingsProviderField, ToolApprovalAction, ToolPhase, UiMode,
+    UsageModelKey,
 };
 use self::ui::{
     STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
-    copy_via_osc52, is_copy_shortcut, is_known_slash_command, model_menu_next_index,
-    model_menu_previous_index, parse_settings_errors, selection_text, slash_command_matches,
+    copy_via_osc52, format_token_count, is_copy_shortcut, is_known_slash_command,
+    model_menu_next_index, model_menu_previous_index, parse_settings_errors, selection_text,
+    slash_command_matches,
 };
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
@@ -90,3 +92,51 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 
 #[cfg(test)]
 mod tests;
+
+impl App {
+    pub(super) fn accumulate_exit_usage_from_history(
+        &mut self,
+        history: &std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+    ) {
+        for message in history.values() {
+            let Some(generation) = message.generation.as_ref() else {
+                continue;
+            };
+            let Some(usage) = generation.usage.as_ref() else {
+                continue;
+            };
+            if !self
+                .state
+                .exit_usage_totals
+                .counted_message_ids
+                .insert(message.id.clone())
+            {
+                continue;
+            }
+
+            let model_usage = self
+                .state
+                .exit_usage_totals
+                .usage_by_model
+                .entry(UsageModelKey {
+                    provider_id: generation.provider_id.to_string(),
+                    model_id: generation.model_id.to_string(),
+                })
+                .or_default();
+            model_usage.total_tokens = model_usage.total_tokens.saturating_add(usage.total_tokens);
+            model_usage.input_tokens = model_usage.input_tokens.saturating_add(usage.input_tokens);
+            model_usage.output_tokens = model_usage
+                .output_tokens
+                .saturating_add(usage.output_tokens);
+            model_usage.reasoning_tokens = model_usage
+                .reasoning_tokens
+                .saturating_add(usage.reasoning_tokens);
+            model_usage.cache_read_tokens = model_usage
+                .cache_read_tokens
+                .saturating_add(usage.cache_read_tokens);
+            model_usage.cache_write_tokens = model_usage
+                .cache_write_tokens
+                .saturating_add(usage.cache_write_tokens);
+        }
+    }
+}

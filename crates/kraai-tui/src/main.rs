@@ -115,6 +115,12 @@ fn main() -> Result<()> {
     )?;
     ratatui::restore();
 
+    if result.is_ok()
+        && let Some(summary) = app.exit_token_usage_summary()
+    {
+        println!("{summary}");
+    }
+
     result
 }
 

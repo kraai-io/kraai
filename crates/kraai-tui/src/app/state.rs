@@ -13,9 +13,9 @@ use crate::components::{ChatHistory, RenderedLine, VisibleChatView};
 
 use super::auth::ProviderAuthStatus;
 use super::types::{
-    ActiveSettingsEditor, ChatSelection, DEFAULT_AGENT_PROFILE_ID, OptimisticMessage,
-    OptimisticToolMessage, PendingSubmit, PendingTool, ProvidersAdvancedFocus, ProvidersView,
-    SettingsFocus, ToolApprovalAction, ToolPhase, UiMode, default_agent_profiles,
+    ActiveSettingsEditor, ChatSelection, DEFAULT_AGENT_PROFILE_ID, ExitUsageTotals,
+    OptimisticMessage, OptimisticToolMessage, PendingSubmit, PendingTool, ProvidersAdvancedFocus,
+    ProvidersView, SettingsFocus, ToolApprovalAction, ToolPhase, UiMode, default_agent_profiles,
 };
 
 pub(super) struct AppState {
@@ -78,6 +78,7 @@ pub(super) struct AppState {
     pub(super) connect_provider_index: usize,
     pub(super) openai_codex_auth: ProviderAuthStatus,
     pub(super) pending_submit: Option<PendingSubmit>,
+    pub(super) exit_usage_totals: ExitUsageTotals,
 }
 
 impl Default for AppState {
@@ -142,6 +143,7 @@ impl Default for AppState {
             connect_provider_index: 0,
             openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
+            exit_usage_totals: ExitUsageTotals::default(),
         }
     }
 }

@@ -161,29 +161,17 @@ fn statusline_agent_label(state: &AppState) -> String {
 }
 
 fn statusline_context_label(state: &AppState) -> String {
-    let used_context_tokens = state
-        .context_usage
-        .as_ref()
-        .map(|usage| usage.used_context_tokens())
-        .unwrap_or_default();
-    let max_context = state
-        .context_usage
-        .as_ref()
-        .and_then(|usage| usage.max_context)
-        .or_else(|| selected_model_max_context(state));
-    let used = format_token_count(used_context_tokens);
-
-    match max_context {
-        Some(max_context) if max_context > 0 => format!(
-            "ctx {used}/{} ({}%)",
-            format_token_count(max_context),
-            used_context_tokens
-                .saturating_mul(100)
-                .checked_div(max_context)
-                .unwrap_or_default()
-        ),
-        _ => format!("ctx {used}"),
-    }
+    format_context_label(
+        state
+            .context_usage
+            .as_ref()
+            .map(|usage| usage.used_context_tokens()),
+        state
+            .context_usage
+            .as_ref()
+            .and_then(|usage| usage.max_context)
+            .or_else(|| selected_model_max_context(state)),
+    )
 }
 
 fn selected_model_max_context(state: &AppState) -> Option<usize> {
@@ -198,7 +186,7 @@ fn selected_model_max_context(state: &AppState) -> Option<usize> {
         .and_then(|model| model.max_context)
 }
 
-fn format_token_count(value: usize) -> String {
+pub(super) fn format_token_count(value: usize) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().rev().enumerate() {
@@ -208,6 +196,26 @@ fn format_token_count(value: usize) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
+}
+
+pub(super) fn format_context_label(
+    used_context_tokens: Option<usize>,
+    max_context: Option<usize>,
+) -> String {
+    let used_context_tokens = used_context_tokens.unwrap_or_default();
+    let used = format_token_count(used_context_tokens);
+
+    match max_context {
+        Some(max_context) if max_context > 0 => format!(
+            "ctx {used}/{} ({}%)",
+            format_token_count(max_context),
+            used_context_tokens
+                .saturating_mul(100)
+                .checked_div(max_context)
+                .unwrap_or_default()
+        ),
+        _ => format!("ctx {used}"),
+    }
 }
 
 pub(super) fn render_chat_selection_overlay(
