@@ -1220,6 +1220,48 @@ fn provider_detail_keeps_openai_actions_and_id_visible() {
     assert!(rendered.contains("b browser sign-in"));
 }
 #[test]
+fn provider_detail_hides_openai_confidential_auth_fields() {
+    let mut harness = test_harness();
+    harness
+        .app
+        .handle_runtime_event(Event::OpenAiCodexAuthUpdated {
+            status: kraai_runtime::OpenAiCodexAuthStatus {
+                state: kraai_runtime::OpenAiCodexLoginState::Authenticated,
+                email: Some(String::from("dev@example.com")),
+                plan_type: Some(String::from("Pro")),
+                account_id: Some(String::from("acct_123")),
+                last_refresh_unix: Some(42),
+                error: None,
+            },
+        });
+
+    harness.app.state.mode = UiMode::ProvidersMenu;
+    harness.app.state.providers_view = ProvidersView::Detail;
+    harness.app.state.settings_provider_index = 1;
+    harness.app.state.settings_draft = Some(SettingsDocument {
+        providers: vec![
+            ProviderSettings {
+                id: String::from("openai-chat-completions"),
+                type_id: String::from("openai-chat-completions"),
+                values: vec![],
+            },
+            ProviderSettings {
+                id: String::from("openai"),
+                type_id: String::from("openai-codex"),
+                values: vec![],
+            },
+        ],
+        models: vec![],
+    });
+
+    let rendered = render_state_snapshot(&harness.app.state, 120, 22);
+    assert!(rendered.contains("State: Pro"));
+    assert!(!rendered.contains("Email:"));
+    assert!(!rendered.contains("Account:"));
+    assert!(!rendered.contains("dev@example.com"));
+    assert!(!rendered.contains("acct_123"));
+}
+#[test]
 fn provider_detail_browser_pending_hides_raw_auth_url() {
     let mut state = populated_state();
     state.mode = UiMode::ProvidersMenu;

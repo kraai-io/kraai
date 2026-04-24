@@ -960,26 +960,10 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             let mut details_lines = vec![
                 Line::raw(format!("State: {}", openai_auth_badge(state))),
                 Line::raw(format!(
-                    "Email: {}",
-                    state
-                        .openai_codex_auth
-                        .email
-                        .as_deref()
-                        .unwrap_or("unknown")
-                )),
-                Line::raw(format!(
                     "Plan: {}",
                     state
                         .openai_codex_auth
                         .plan_type
-                        .as_deref()
-                        .unwrap_or("unknown")
-                )),
-                Line::raw(format!(
-                    "Account: {}",
-                    state
-                        .openai_codex_auth
-                        .account_id
                         .as_deref()
                         .unwrap_or("unknown")
                 )),

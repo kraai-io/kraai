@@ -364,9 +364,7 @@ fn respond_with_runtime_error(
 fn map_openai_codex_auth_status(status: RuntimeOpenAiCodexAuthStatus) -> ProviderAuthStatus {
     let mut mapped = ProviderAuthStatus {
         state: ProviderAuthState::SignedOut,
-        email: status.email,
         plan_type: status.plan_type,
-        account_id: status.account_id,
         last_refresh: status.last_refresh_unix.map(|value| value.to_string()),
         auth_url: None,
         verification_url: None,
