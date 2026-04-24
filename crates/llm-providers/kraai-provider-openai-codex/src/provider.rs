@@ -683,9 +683,9 @@ mod tests {
 
     #[test]
     fn resolve_unsuffixed_catalog_model_uses_default_reasoning_effort() {
-        let resolved = resolve_request_model(&ModelId::new("gpt-5.2-codex")).unwrap();
+        let resolved = resolve_request_model(&ModelId::new("gpt-5.4")).unwrap();
 
-        assert_eq!(resolved.api_model, "gpt-5.2-codex");
+        assert_eq!(resolved.api_model, "gpt-5.4");
         assert_eq!(
             resolved.reasoning,
             Some(ResponsesReasoning {
@@ -696,9 +696,9 @@ mod tests {
 
     #[test]
     fn resolve_suffixed_catalog_model_uses_requested_reasoning_effort() {
-        let resolved = resolve_request_model(&ModelId::new("gpt-5.2-codex-high")).unwrap();
+        let resolved = resolve_request_model(&ModelId::new("gpt-5.5-high")).unwrap();
 
-        assert_eq!(resolved.api_model, "gpt-5.2-codex");
+        assert_eq!(resolved.api_model, "gpt-5.5");
         assert_eq!(
             resolved.reasoning,
             Some(ResponsesReasoning {
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn resolve_invalid_effort_suffix_returns_error() {
-        let error = resolve_request_model(&ModelId::new("gpt-5.2-codex-minimal"))
+        let error = resolve_request_model(&ModelId::new("gpt-5.5-minimal"))
             .expect_err("unsupported effort should fail");
 
         assert!(
@@ -738,11 +738,12 @@ mod tests {
             .map(|model| model.id.to_string())
             .collect::<Vec<_>>();
 
-        assert!(ids.contains(&"gpt-5.2-codex-low".to_string()));
-        assert!(ids.contains(&"gpt-5.2-codex-medium".to_string()));
-        assert!(ids.contains(&"gpt-5.2-codex-high".to_string()));
-        assert!(ids.contains(&"gpt-5.2-codex-xhigh".to_string()));
-        assert!(!ids.contains(&"gpt-5.1-codex-medium".to_string()));
+        assert!(ids.contains(&"gpt-5.5-low".to_string()));
+        assert!(ids.contains(&"gpt-5.5-medium".to_string()));
+        assert!(ids.contains(&"gpt-5.5-high".to_string()));
+        assert!(ids.contains(&"gpt-5.5-xhigh".to_string()));
+        assert!(ids.contains(&"gpt-5.4-mini-medium".to_string()));
+        assert!(!ids.contains(&"codex-auto-review-medium".to_string()));
     }
 
     #[test]
@@ -751,7 +752,7 @@ mod tests {
             return;
         };
         let remote = BTreeMap::from([(
-            "gpt-5.2-codex".to_string(),
+            "gpt-5.5".to_string(),
             RemoteModelMetadata {
                 title: Some("ignored".to_string()),
                 max_context: Some(111),
@@ -764,7 +765,7 @@ mod tests {
             .map(|model| model.id.to_string())
             .collect::<Vec<_>>();
 
-        assert!(ids.contains(&"gpt-5.2-codex-low".to_string()));
+        assert!(ids.contains(&"gpt-5.5-low".to_string()));
         assert!(!ids.contains(&"gpt-5.2-low".to_string()));
     }
 
@@ -787,7 +788,7 @@ mod tests {
             .map(|model| model.id.to_string())
             .collect::<Vec<_>>();
 
-        assert!(ids.contains(&"gpt-5.2-codex-low".to_string()));
+        assert!(ids.contains(&"gpt-5.5-low".to_string()));
         assert!(ids.contains(&"gpt-5.2-low".to_string()));
     }
 
