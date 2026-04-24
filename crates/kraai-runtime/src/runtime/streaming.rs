@@ -412,13 +412,15 @@ impl RuntimeCore {
             model_id,
             provider_messages,
         } = request;
-        let request_context =
-            ProviderRequestContext::with_retry_observer(Arc::new(RuntimeRetryObserver {
+        let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
+            Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),
                 provider_id: provider_id.clone(),
                 model_id: model_id.clone(),
                 event_tx: event_tx.clone(),
-            }));
+            }),
+            session_id.clone(),
+        );
         let mut stream = match providers
             .generate_reply_stream(provider_id, &model_id, provider_messages, request_context)
             .await

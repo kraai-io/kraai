@@ -11,6 +11,8 @@ pub struct ResponsesRequest {
     pub reasoning: Option<ResponsesReasoning>,
     pub stream: bool,
     pub store: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -106,4 +108,45 @@ pub struct ResponseContentItem {
     pub kind: String,
     #[serde(default)]
     pub text: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages::ResponsesRequestMessage;
+    use serde_json::json;
+
+    #[test]
+    fn responses_request_serializes_prompt_cache_key_when_present() {
+        let request = ResponsesRequest {
+            model: "gpt-5.2-codex".to_string(),
+            instructions: "instructions".to_string(),
+            input: Vec::<ResponsesRequestMessage>::new(),
+            reasoning: None,
+            stream: true,
+            store: false,
+            prompt_cache_key: Some("session-123".to_string()),
+        };
+
+        let serialized = serde_json::to_value(request).expect("serialized request");
+
+        assert_eq!(serialized["prompt_cache_key"], json!("session-123"));
+    }
+
+    #[test]
+    fn responses_request_omits_prompt_cache_key_when_missing() {
+        let request = ResponsesRequest {
+            model: "gpt-5.2-codex".to_string(),
+            instructions: "instructions".to_string(),
+            input: Vec::<ResponsesRequestMessage>::new(),
+            reasoning: None,
+            stream: true,
+            store: false,
+            prompt_cache_key: None,
+        };
+
+        let serialized = serde_json::to_value(request).expect("serialized request");
+
+        assert!(serialized.get("prompt_cache_key").is_none());
+    }
 }

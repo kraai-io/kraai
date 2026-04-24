@@ -414,11 +414,14 @@ impl OpenAiCodexProvider {
             reasoning: resolved_model.reasoning,
             stream,
             store: false,
+            prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
 
         self.send_authenticated_request("responses", request_context, |auth| {
-            self.authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
-                .json(&request)
+            let builder = self
+                .authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
+                .json(&request);
+            apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
         .await
     }
@@ -458,6 +461,19 @@ impl OpenAiCodexProvider {
         )
         .await?;
         ensure_success_response(operation, response).await
+    }
+}
+
+fn apply_responses_session_headers(
+    builder: RequestBuilder,
+    prompt_cache_key: Option<&str>,
+) -> RequestBuilder {
+    if let Some(prompt_cache_key) = prompt_cache_key {
+        builder
+            .header("session_id", prompt_cache_key)
+            .header("x-client-request-id", prompt_cache_key)
+    } else {
+        builder
     }
 }
 
@@ -794,5 +810,30 @@ mod tests {
         assert_eq!(usage.output_tokens, 40);
         assert_eq!(usage.reasoning_tokens, 5);
         assert_eq!(usage.cache_read_tokens, 20);
+    }
+
+    #[test]
+    fn responses_session_headers_use_prompt_cache_key() {
+        let request = apply_responses_session_headers(
+            Client::new().post("https://chatgpt.com/backend-api/codex/responses"),
+            Some("session-123"),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("session_id")
+                .and_then(|value| value.to_str().ok()),
+            Some("session-123")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-client-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("session-123")
+        );
     }
 }
