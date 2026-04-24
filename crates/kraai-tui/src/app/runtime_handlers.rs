@@ -52,7 +52,11 @@ impl App {
                     self.request(RuntimeRequest::GetChatHistory { session_id });
                 }
             }
-            Event::StreamComplete { session_id, .. } => {
+            Event::StreamComplete {
+                session_id,
+                message_id,
+            } => {
+                self.mark_exit_usage_message_completed(kraai_types::MessageId::new(message_id));
                 self.request(RuntimeRequest::GetChatHistory {
                     session_id: session_id.clone(),
                 });

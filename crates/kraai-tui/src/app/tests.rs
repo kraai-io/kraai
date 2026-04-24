@@ -951,6 +951,16 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
 
     harness
         .app
+        .mark_exit_usage_message_completed(MessageId::new("msg-1"));
+    harness
+        .app
+        .mark_exit_usage_message_completed(MessageId::new("msg-2"));
+    harness
+        .app
+        .mark_exit_usage_message_completed(MessageId::new("msg-3"));
+
+    harness
+        .app
         .handle_runtime_response(RuntimeResponse::ChatHistory {
             session_id: String::from("background-session"),
             result: Ok(history_one.clone()),
@@ -971,10 +981,40 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
     assert_eq!(
         harness.app.exit_token_usage_summary().as_deref(),
         Some(
-            "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 925, input 700, output 180, reasoning 20, cached 25\n  openai-chat-completions/gpt-4o-mini: total 15,000, input 10,250, output 3,120, reasoning 540, cached 1,010\n  total: total 15,925, input 10,950, output 3,300, reasoning 560, cached 1,035"
+            "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 900 (+25 cached), input 700 (+25 cached), output 180 (+20 reasoning)\n  openai-chat-completions/gpt-4o-mini: total 13,990 (+1,010 cached), input 10,250 (+1,010 cached), output 3,120 (+540 reasoning)\n  total: total 14,890 (+1,035 cached), input 10,950 (+1,035 cached), output 3,300 (+560 reasoning)"
         )
     );
 }
+
+#[test]
+fn exit_token_usage_summary_ignores_history_not_completed_since_launch() {
+    let mut harness = test_harness();
+    let history = BTreeMap::from([(
+        MessageId::new("old-msg"),
+        assistant_message_with_usage(
+            "old-msg",
+            "openai-chat-completions",
+            "gpt-4o-mini",
+            TokenUsage {
+                total_tokens: 1_000,
+                input_tokens: 750,
+                output_tokens: 200,
+                reasoning_tokens: 50,
+                cache_read_tokens: 500,
+            },
+        ),
+    )]);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("foreground-session"),
+            result: Ok(history),
+        });
+
+    assert_eq!(harness.app.exit_token_usage_summary(), None);
+}
+
 #[test]
 fn statusline_animation_advances_while_streaming() {
     let mut harness = test_harness();

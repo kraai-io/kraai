@@ -245,11 +245,36 @@ fn accumulate_token_usage(
 
 fn format_exit_usage_fields(usage: &kraai_runtime::TokenUsage) -> String {
     format!(
-        "total {}, input {}, output {}, reasoning {}, cached {}",
-        format_token_count(usage.total_tokens),
-        format_token_count(usage.input_tokens),
-        format_token_count(usage.output_tokens),
-        format_token_count(usage.reasoning_tokens),
-        format_token_count(usage.cache_read_tokens),
+        "total {}, input {}, output {}",
+        format_cached_token_count(
+            usage.total_tokens.saturating_sub(usage.cache_read_tokens),
+            usage.cache_read_tokens
+        ),
+        format_cached_token_count(usage.input_tokens, usage.cache_read_tokens),
+        format_reasoning_token_count(usage.output_tokens, usage.reasoning_tokens),
+    )
+}
+
+fn format_cached_token_count(tokens: usize, cached_tokens: usize) -> String {
+    if cached_tokens == 0 {
+        return format_token_count(tokens);
+    }
+
+    format!(
+        "{} (+{} cached)",
+        format_token_count(tokens),
+        format_token_count(cached_tokens)
+    )
+}
+
+fn format_reasoning_token_count(output_tokens: usize, reasoning_tokens: usize) -> String {
+    if reasoning_tokens == 0 {
+        return format_token_count(output_tokens);
+    }
+
+    format!(
+        "{} (+{} reasoning)",
+        format_token_count(output_tokens),
+        format_token_count(reasoning_tokens)
     )
 }

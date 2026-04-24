@@ -162,6 +162,7 @@ pub(super) struct PendingSubmit {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ExitUsageTotals {
+    pub(super) completed_message_ids: HashSet<MessageId>,
     pub(super) counted_message_ids: HashSet<MessageId>,
     pub(super) usage_by_model: BTreeMap<UsageModelKey, TokenUsage>,
 }

@@ -94,11 +94,26 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 mod tests;
 
 impl App {
+    pub(super) fn mark_exit_usage_message_completed(&mut self, message_id: kraai_types::MessageId) {
+        self.state
+            .exit_usage_totals
+            .completed_message_ids
+            .insert(message_id);
+    }
+
     pub(super) fn accumulate_exit_usage_from_history(
         &mut self,
         history: &std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
     ) {
         for message in history.values() {
+            if !self
+                .state
+                .exit_usage_totals
+                .completed_message_ids
+                .contains(&message.id)
+            {
+                continue;
+            }
             let Some(generation) = message.generation.as_ref() else {
                 continue;
             };
