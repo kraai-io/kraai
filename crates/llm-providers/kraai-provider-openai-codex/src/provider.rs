@@ -815,8 +815,11 @@ mod tests {
 
     #[test]
     fn responses_session_headers_use_prompt_cache_key() {
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
         let request = apply_responses_session_headers(
-            Client::new().post("https://chatgpt.com/backend-api/codex/responses"),
+            client.post("https://chatgpt.com/backend-api/codex/responses"),
             Some("session-123"),
         )
         .build()
