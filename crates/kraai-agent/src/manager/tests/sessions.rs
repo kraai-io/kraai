@@ -134,6 +134,41 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
 }
 
 #[tokio::test]
+async fn user_input_history_lists_persisted_user_messages_newest_first() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+
+    let session_id = manager.create_session().await?;
+    manager
+        .add_message(&session_id, ChatRole::User, String::from("first"), None)
+        .await?;
+    manager
+        .add_message(
+            &session_id,
+            ChatRole::Assistant,
+            String::from("assistant reply"),
+            None,
+        )
+        .await?;
+    manager
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("  second  "),
+            None,
+        )
+        .await?;
+
+    let history = manager.list_user_input_history(10).await?;
+    assert_eq!(history, vec![String::from("second"), String::from("first")]);
+
+    let limited = manager.list_user_input_history(1).await?;
+    assert_eq!(limited, vec![String::from("second")]);
+
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn first_user_message_sets_session_title() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 

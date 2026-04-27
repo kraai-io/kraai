@@ -1802,6 +1802,92 @@ fn paste_inserts_text_at_cursor_position() {
     assert!(harness.drain_requests().is_empty());
 }
 #[test]
+fn up_and_down_recall_input_history_and_restore_draft() {
+    let mut harness = test_harness();
+    harness.app.state.input_history = vec![
+        String::from("newest message"),
+        String::from("older message"),
+    ];
+    harness.app.state.input = String::from("draft text");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    assert_eq!(harness.app.state.input, "newest message");
+    assert_eq!(harness.app.state.input_cursor, "newest message".len());
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    assert_eq!(harness.app.state.input, "older message");
+
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+    assert_eq!(harness.app.state.input, "newest message");
+
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+    assert_eq!(harness.app.state.input, "draft text");
+    assert_eq!(harness.app.state.input_history_index, None);
+    assert_eq!(harness.app.state.input_history_draft, None);
+}
+#[test]
+fn editing_after_history_recall_exits_history_navigation() {
+    let mut harness = test_harness();
+    harness.app.state.input_history = vec![String::from("previous")];
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    assert_eq!(harness.app.state.input_history_index, Some(0));
+
+    harness.app.handle_chat_key_event(key(KeyCode::Char('!')));
+    assert_eq!(harness.app.state.input, "previous!");
+    assert_eq!(harness.app.state.input_history_index, None);
+    assert_eq!(harness.app.state.input_history_draft, None);
+}
+#[test]
+fn up_and_down_move_within_multiline_input_before_history() {
+    let mut harness = test_harness();
+    harness.app.state.input_history = vec![String::from("previous")];
+    harness.app.state.input = String::from("one\ntwo");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    assert_eq!(harness.app.state.input, "one\ntwo");
+    assert_eq!(harness.app.state.input_cursor, "one".len());
+
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+    assert_eq!(harness.app.state.input, "one\ntwo");
+    assert_eq!(harness.app.state.input_cursor, "one\ntwo".len());
+
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+    assert_eq!(harness.app.state.input, "one\ntwo");
+    assert_eq!(harness.app.state.input_history_index, None);
+}
+#[test]
+fn up_and_down_move_within_wrapped_input_before_history() {
+    let mut harness = test_harness();
+    harness.app.state.input_history = vec![String::from("previous")];
+    harness.app.state.input_width = 8;
+    harness.app.state.input = String::from("abcdef");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    assert_eq!(harness.app.state.input, "abcdef");
+    assert_eq!(harness.app.state.input_cursor, "ab".len());
+
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+    assert_eq!(harness.app.state.input, "abcdef");
+    assert_eq!(harness.app.state.input_cursor, "abcdef".len());
+}
+#[test]
+fn slash_command_arrows_do_not_recall_input_history() {
+    let mut harness = test_harness();
+    harness.app.state.input_history = vec![String::from("previous")];
+    harness.app.state.input = String::from("/s");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+
+    harness.app.handle_chat_key_event(key(KeyCode::Up));
+    harness.app.handle_chat_key_event(key(KeyCode::Down));
+
+    assert_eq!(harness.app.state.input, "/s");
+    assert_eq!(harness.app.state.input_history_index, None);
+}
+#[test]
 fn escape_closes_providers_editor_before_leaving_advanced_view() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::ProvidersMenu;
@@ -2672,6 +2758,7 @@ fn request_name(request: &RuntimeRequest) -> &'static str {
         RuntimeRequest::GetPendingTools { .. } => "GetPendingTools",
         RuntimeRequest::LoadSession { .. } => "LoadSession",
         RuntimeRequest::ListSessions => "ListSessions",
+        RuntimeRequest::ListUserInputHistory { .. } => "ListUserInputHistory",
         RuntimeRequest::DeleteSession { .. } => "DeleteSession",
         RuntimeRequest::ApproveTool { .. } => "ApproveTool",
         RuntimeRequest::DenyTool { .. } => "DenyTool",

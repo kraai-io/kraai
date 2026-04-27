@@ -181,14 +181,14 @@ impl App {
                 if active_command_prefix(&self.state.input).is_some() {
                     self.cycle_command_suggestion(false);
                 } else {
-                    self.state.input_cursor = 0;
+                    self.handle_input_up();
                 }
             }
             KeyCode::Down => {
                 if active_command_prefix(&self.state.input).is_some() {
                     self.cycle_command_suggestion(true);
                 } else {
-                    self.state.input_cursor = self.state.input.len();
+                    self.handle_input_down();
                 }
             }
             KeyCode::Left => {

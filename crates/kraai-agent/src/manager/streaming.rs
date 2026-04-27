@@ -446,7 +446,7 @@ impl AgentManager {
         Ok(())
     }
 
-    async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
+    pub(super) async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
         let mut context = Vec::new();
         let mut current = Some(from.clone());
 

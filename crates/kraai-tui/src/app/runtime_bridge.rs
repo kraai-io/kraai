@@ -214,6 +214,12 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::Sessions(result));
                 }
+                RuntimeRequest::ListUserInputHistory { limit } => {
+                    let result = rt
+                        .block_on(runtime.list_user_input_history(limit))
+                        .map_err(|e| e.to_string());
+                    let _ = res_tx.send(RuntimeResponse::UserInputHistory(result));
+                }
                 RuntimeRequest::DeleteSession { session_id } => {
                     let result = rt
                         .block_on(runtime.delete_session(session_id.clone()))
@@ -335,6 +341,9 @@ fn respond_with_runtime_error(
             result: Err(message.to_string()),
         },
         RuntimeRequest::ListSessions => RuntimeResponse::Sessions(Err(message.to_string())),
+        RuntimeRequest::ListUserInputHistory { .. } => {
+            RuntimeResponse::UserInputHistory(Err(message.to_string()))
+        }
         RuntimeRequest::DeleteSession { session_id } => RuntimeResponse::DeleteSession {
             session_id,
             result: Err(message.to_string()),

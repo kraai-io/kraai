@@ -89,6 +89,7 @@ pub struct App {
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
+const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[cfg(test)]
 mod tests;

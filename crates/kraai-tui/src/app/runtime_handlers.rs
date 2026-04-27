@@ -57,6 +57,9 @@ impl App {
                 message_id,
             } => {
                 self.mark_exit_usage_message_completed(kraai_types::MessageId::new(message_id));
+                self.request(RuntimeRequest::ListUserInputHistory {
+                    limit: INPUT_HISTORY_LIMIT,
+                });
                 self.request(RuntimeRequest::GetChatHistory {
                     session_id: session_id.clone(),
                 });
@@ -545,6 +548,13 @@ impl App {
             }
             RuntimeResponse::Sessions(Err(err)) => {
                 self.state.status = format!("Failed loading sessions: {err}");
+            }
+            RuntimeResponse::UserInputHistory(Ok(history)) => {
+                self.state.input_history = history;
+                self.reset_input_history_navigation();
+            }
+            RuntimeResponse::UserInputHistory(Err(err)) => {
+                self.state.status = format!("Failed loading input history: {err}");
             }
             RuntimeResponse::DeleteSession {
                 session_id,

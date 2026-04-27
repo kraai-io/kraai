@@ -132,6 +132,17 @@ impl RuntimeCore {
                     .send(sessions)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
+            Command::ListUserInputHistory { limit, response } => {
+                let history = self
+                    .agent_manager
+                    .lock()
+                    .await
+                    .list_user_input_history(limit)
+                    .await?;
+                response
+                    .send(history)
+                    .map_err(|_| eyre!("Failed to send response"))?;
+            }
             Command::DeleteSession { session_id } => {
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();

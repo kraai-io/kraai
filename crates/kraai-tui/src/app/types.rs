@@ -243,6 +243,9 @@ pub(super) enum RuntimeRequest {
         session_id: String,
     },
     ListSessions,
+    ListUserInputHistory {
+        limit: usize,
+    },
     DeleteSession {
         session_id: String,
     },
@@ -310,6 +313,7 @@ pub(super) enum RuntimeResponse {
         result: Result<bool, String>,
     },
     Sessions(Result<Vec<Session>, String>),
+    UserInputHistory(Result<Vec<String>, String>),
     DeleteSession {
         session_id: String,
         result: Result<(), String>,

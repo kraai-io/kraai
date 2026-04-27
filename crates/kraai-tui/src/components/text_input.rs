@@ -10,6 +10,14 @@ pub struct TextInput<'a> {
     cursor: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CursorNavigation {
+    pub(crate) can_move_up: bool,
+    pub(crate) can_move_down: bool,
+    pub(crate) cursor_above: usize,
+    pub(crate) cursor_below: usize,
+}
+
 const H_PADDING: u16 = 1;
 const V_PADDING: u16 = 1;
 const PROMPT: &str = "> ";
@@ -24,19 +32,58 @@ impl<'a> TextInput<'a> {
     }
 
     fn wrap_text(content: &str, max_width: usize) -> Vec<String> {
+        Self::wrap_segments(content, max_width)
+            .into_iter()
+            .map(|segment| segment.text)
+            .collect()
+    }
+
+    pub(crate) fn cursor_navigation(
+        input: &str,
+        cursor: usize,
+        max_width: u16,
+    ) -> CursorNavigation {
+        let max_width = max_width.saturating_sub(H_PADDING * 2) as usize;
+        let segments = Self::wrap_segments(input, max_width);
+        let safe_cursor = previous_char_boundary(input, cursor.min(input.len()));
+        let current_line = segments
+            .iter()
+            .enumerate()
+            .find(|(_, segment)| safe_cursor >= segment.start && safe_cursor <= segment.end)
+            .map(|(index, segment)| {
+                let column = input[segment.start..safe_cursor.min(segment.end)]
+                    .chars()
+                    .count();
+                (index, column)
+            })
+            .unwrap_or((0, 0));
+
+        let (line_index, column) = current_line;
+        CursorNavigation {
+            can_move_up: line_index > 0,
+            can_move_down: line_index + 1 < segments.len(),
+            cursor_above: line_cursor(input, &segments, line_index.saturating_sub(1), column),
+            cursor_below: line_cursor(input, &segments, line_index + 1, column),
+        }
+    }
+
+    fn wrap_segments(content: &str, max_width: usize) -> Vec<WrappedSegment> {
         if max_width == 0 {
-            return vec![String::new()];
+            return vec![WrappedSegment {
+                text: String::new(),
+                start: 0,
+                end: 0,
+            }];
         }
 
         let mut wrapped = Vec::new();
-        let source_lines: Vec<&str> = if content.is_empty() {
-            vec![""]
-        } else {
-            content.split('\n').collect()
-        };
-
-        for (idx, source_line) in source_lines.iter().enumerate() {
-            let prefix = if idx == 0 {
+        let mut line_start = 0usize;
+        let mut source_index = 0usize;
+        loop {
+            let next_newline = content[line_start..].find('\n').map(|idx| line_start + idx);
+            let line_end = next_newline.unwrap_or(content.len());
+            let source_line = &content[line_start..line_end];
+            let prefix = if source_index == 0 {
                 PROMPT
             } else {
                 CONTINUATION_PREFIX
@@ -45,32 +92,58 @@ impl<'a> TextInput<'a> {
             let available = max_width.saturating_sub(prefix_width);
 
             if source_line.is_empty() {
-                wrapped.push(prefix.to_string());
-                continue;
+                wrapped.push(WrappedSegment {
+                    text: prefix.to_string(),
+                    start: line_start,
+                    end: line_start,
+                });
+            } else if available == 0 {
+                wrapped.push(WrappedSegment {
+                    text: prefix.chars().take(max_width).collect(),
+                    start: line_start,
+                    end: line_start,
+                });
+            } else {
+                let char_indices: Vec<(usize, char)> = source_line.char_indices().collect();
+                let mut start_char = 0usize;
+                while start_char < char_indices.len() {
+                    let end_char = (start_char + available).min(char_indices.len());
+                    let segment_start = line_start + char_indices[start_char].0;
+                    let segment_end = if end_char < char_indices.len() {
+                        line_start + char_indices[end_char].0
+                    } else {
+                        line_end
+                    };
+                    let line_prefix = if start_char == 0 {
+                        prefix
+                    } else {
+                        CONTINUATION_PREFIX
+                    };
+                    wrapped.push(WrappedSegment {
+                        text: format!("{line_prefix}{}", &content[segment_start..segment_end]),
+                        start: segment_start,
+                        end: segment_end,
+                    });
+                    start_char = end_char;
+                }
             }
 
-            if available == 0 {
-                wrapped.push(prefix.chars().take(max_width).collect());
-                continue;
-            }
-
-            let chars: Vec<char> = source_line.chars().collect();
-            let mut start = 0usize;
-            while start < chars.len() {
-                let end = (start + available).min(chars.len());
-                let line_prefix = if start == 0 {
-                    prefix
-                } else {
-                    CONTINUATION_PREFIX
-                };
-                let chunk: String = chars[start..end].iter().collect();
-                wrapped.push(format!("{line_prefix}{chunk}"));
-                start = end;
+            let Some(newline_index) = next_newline else {
+                break;
+            };
+            line_start = newline_index + 1;
+            source_index += 1;
+            if line_start > content.len() {
+                break;
             }
         }
 
         if wrapped.is_empty() {
-            wrapped.push(PROMPT.to_string());
+            wrapped.push(WrappedSegment {
+                text: PROMPT.to_string(),
+                start: 0,
+                end: 0,
+            });
         }
 
         wrapped
@@ -129,7 +202,45 @@ impl<'a> Widget for TextInput<'a> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WrappedSegment {
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+fn line_cursor(
+    input: &str,
+    segments: &[WrappedSegment],
+    line_index: usize,
+    column: usize,
+) -> usize {
+    let Some(segment) = segments.get(line_index) else {
+        return input.len();
+    };
+
+    input[segment.start..segment.end]
+        .char_indices()
+        .map(|(idx, _)| segment.start + idx)
+        .nth(column)
+        .unwrap_or(segment.end)
+}
+
 fn next_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    if s.is_char_boundary(idx) {
+        return idx;
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+fn previous_char_boundary(s: &str, idx: usize) -> usize {
     if idx >= s.len() {
         return s.len();
     }

@@ -20,6 +20,7 @@ impl App {
 
         self.state.input.clear();
         self.state.input_cursor = 0;
+        self.reset_input_history_navigation();
 
         self.submit_message(raw_input);
     }
@@ -208,6 +209,7 @@ impl App {
     }
 
     pub(super) fn set_input_text(&mut self, text: String) {
+        self.reset_input_history_navigation();
         self.state.input = text;
         self.state.input_cursor = self.state.input.len();
     }

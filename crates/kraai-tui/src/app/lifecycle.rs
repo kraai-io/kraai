@@ -152,6 +152,7 @@ impl App {
                     ])
                     .flex(Flex::End);
                     let [_chat_area, _status_area, input_area] = layout.areas(area);
+                    self.state.input_width = input_area.width;
 
                     let (cursor_x, cursor_y) =
                         TextInput::new(&self.state.input, self.state.input_cursor)

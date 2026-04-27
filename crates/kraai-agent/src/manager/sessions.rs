@@ -84,6 +84,35 @@ impl AgentManager {
         self.session_store.list().await
     }
 
+    pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut history = Vec::new();
+        for session in self.session_store.list().await? {
+            let Some(tip_id) = session.tip_id else {
+                continue;
+            };
+
+            for message in self.get_history_context(&tip_id).await?.into_iter().rev() {
+                if history.len() >= limit {
+                    return Ok(history);
+                }
+                if message.role != ChatRole::User {
+                    continue;
+                }
+
+                let content = message.content.trim().to_string();
+                if !content.is_empty() {
+                    history.push(content);
+                }
+            }
+        }
+
+        Ok(history)
+    }
+
     pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
         self.abort_streaming_messages_for_session(session_id)
             .await?;

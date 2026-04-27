@@ -132,6 +132,7 @@ impl App {
     }
 
     pub(super) fn insert_input_char(&mut self, ch: char) {
+        self.reset_input_history_navigation();
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if self.state.input.is_char_boundary(cursor) {
             self.state.input.insert(cursor, ch);
@@ -140,6 +141,7 @@ impl App {
     }
 
     pub(super) fn insert_input_text(&mut self, text: &str) {
+        self.reset_input_history_navigation();
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if self.state.input.is_char_boundary(cursor) {
             self.state.input.insert_str(cursor, text);
@@ -148,6 +150,7 @@ impl App {
     }
 
     pub(super) fn backspace_input_char(&mut self) {
+        self.reset_input_history_navigation();
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if cursor == 0 || !self.state.input.is_char_boundary(cursor) {
             return;
@@ -193,6 +196,79 @@ impl App {
             .find(|idx| *idx > cursor)
             .unwrap_or(self.state.input.len());
         self.state.input_cursor = next;
+    }
+
+    pub(super) fn reset_input_history_navigation(&mut self) {
+        self.state.input_history_index = None;
+        self.state.input_history_draft = None;
+    }
+
+    pub(super) fn handle_input_up(&mut self) {
+        let nav = TextInput::cursor_navigation(
+            &self.state.input,
+            self.state.input_cursor,
+            self.state.input_width,
+        );
+        if nav.can_move_up {
+            self.state.input_cursor = nav.cursor_above;
+            return;
+        }
+
+        self.recall_older_input_history();
+    }
+
+    pub(super) fn handle_input_down(&mut self) {
+        let nav = TextInput::cursor_navigation(
+            &self.state.input,
+            self.state.input_cursor,
+            self.state.input_width,
+        );
+        if nav.can_move_down {
+            self.state.input_cursor = nav.cursor_below;
+            return;
+        }
+
+        self.recall_newer_input_history();
+    }
+
+    fn recall_older_input_history(&mut self) {
+        if self.state.input_history.is_empty() {
+            return;
+        }
+
+        let next_index = match self.state.input_history_index {
+            Some(index) => (index + 1).min(self.state.input_history.len().saturating_sub(1)),
+            None => {
+                self.state.input_history_draft = Some(self.state.input.clone());
+                0
+            }
+        };
+        self.apply_input_history_index(next_index);
+    }
+
+    fn recall_newer_input_history(&mut self) {
+        let Some(index) = self.state.input_history_index else {
+            return;
+        };
+
+        if index == 0 {
+            let draft = self.state.input_history_draft.take().unwrap_or_default();
+            self.state.input = draft;
+            self.state.input_cursor = self.state.input.len();
+            self.state.input_history_index = None;
+            return;
+        }
+
+        self.apply_input_history_index(index - 1);
+    }
+
+    fn apply_input_history_index(&mut self, index: usize) {
+        let Some(message) = self.state.input_history.get(index).cloned() else {
+            return;
+        };
+        self.state.input = message;
+        self.state.input_cursor = self.state.input.len();
+        self.state.input_history_index = Some(index);
     }
 
     pub(super) fn set_tool_approval(&mut self, call_id: &str, approved: Option<bool>) {
@@ -318,6 +394,9 @@ impl App {
     pub(super) fn request_sync(&self) {
         self.request(RuntimeRequest::ListModels);
         self.request(RuntimeRequest::ListSessions);
+        self.request(RuntimeRequest::ListUserInputHistory {
+            limit: INPUT_HISTORY_LIMIT,
+        });
         if let Some(session_id) = &self.state.current_session_id {
             self.request_sync_for_session(session_id);
         }
@@ -420,6 +499,7 @@ impl App {
         }
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
+        self.remember_submitted_input(&message);
         self.invalidate_chat_cache();
 
         self.request(RuntimeRequest::SendMessage {
@@ -496,6 +576,17 @@ impl App {
         } else if self.state.status.starts_with("Queued message (") {
             self.state.status = String::from("Queued messages sent");
         }
+    }
+
+    pub(super) fn remember_submitted_input(&mut self, message: &str) {
+        let content = message.trim().to_string();
+        if content.is_empty() {
+            return;
+        }
+
+        self.state.input_history.insert(0, content);
+        self.state.input_history.truncate(INPUT_HISTORY_LIMIT);
+        self.reset_input_history_navigation();
     }
 
     pub(super) fn reconcile_optimistic_tool_messages(&mut self) {

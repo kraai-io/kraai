@@ -55,6 +55,10 @@ pub(crate) enum Command {
     ListSessions {
         response: oneshot::Sender<Vec<Session>>,
     },
+    ListUserInputHistory {
+        limit: usize,
+        response: oneshot::Sender<Vec<String>>,
+    },
     DeleteSession {
         session_id: String,
     },
@@ -284,6 +288,17 @@ impl RuntimeHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(Command::ListSessions { response: tx })
+            .await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::ListUserInputHistory {
+                limit,
+                response: tx,
+            })
             .await?;
         Ok(rx.await?)
     }
