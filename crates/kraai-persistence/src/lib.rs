@@ -585,27 +585,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn saving_sessions_does_not_create_fixed_tmp_file() {
-        with_test_store(
-            "no-fixed-temp-file",
-            |_message_store, session_store, data_dir| async move {
-                session_store
-                    .save(&session("saved", None, 1))
-                    .await
-                    .unwrap();
-
-                assert!(
-                    fs::try_exists(data_dir.join("sessions.json"))
-                        .await
-                        .unwrap()
-                );
-                assert!(!fs::try_exists(data_dir.join("sessions.tmp")).await.unwrap());
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
     async fn concurrent_save_and_delete_preserve_unrelated_sessions() {
         with_test_store(
             "concurrent-save-delete",

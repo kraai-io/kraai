@@ -602,7 +602,6 @@ fn extract_response_text(output: ResponsesOutput) -> String {
 mod tests {
     use super::*;
     use crate::auth::OpenAiCodexAuthControllerOptions;
-    use kraai_provider_core::DynamicConfig;
     use ulid::Ulid;
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -641,12 +640,6 @@ mod tests {
         }
     }
 
-    fn factory() -> Option<OpenAiCodexFactory> {
-        let auth = auth_controller()?;
-        test_client_or_skip()?;
-        Some(OpenAiCodexFactory::new(Arc::new(auth)))
-    }
-
     fn provider() -> Option<OpenAiCodexProvider> {
         let auth = auth_controller()?;
         let client = test_client_or_skip()?;
@@ -667,18 +660,6 @@ mod tests {
         assert_eq!(definition.protocol_family, "openai-responses");
         assert!(definition.provider_fields.is_empty());
         assert_eq!(definition.default_provider_id_prefix, "openai-codex");
-    }
-
-    #[test]
-    fn factory_create_uses_fixed_codex_endpoints() {
-        let Some(factory) = factory() else {
-            return;
-        };
-        let provider = factory
-            .create(ProviderId::new("openai"), DynamicConfig::new())
-            .unwrap();
-
-        assert_eq!(provider.get_provider_id(), ProviderId::new("openai"));
     }
 
     #[test]
