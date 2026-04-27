@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::{Mutex, RwLock};
+use ulid::Ulid;
 
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,15 +260,17 @@ impl FileSessionStore {
                 .with_context(|| format!("Failed to create directory: {:?}", parent))?;
         }
 
-        // Write to temp file, then rename for atomicity
-        let temp_path = path.with_extension("tmp");
+        // Write to a unique temp file in the same directory, then rename for atomicity.
+        let temp_path = temp_session_write_path(path);
         fs::write(&temp_path, &content)
             .await
             .with_context(|| format!("Failed to write temp file: {:?}", temp_path))?;
 
-        fs::rename(&temp_path, path)
-            .await
-            .with_context(|| format!("Failed to rename temp file to: {:?}", path))?;
+        if let Err(error) = fs::rename(&temp_path, path).await {
+            let _ = fs::remove_file(&temp_path).await;
+            return Err(error)
+                .with_context(|| format!("Failed to rename temp file to: {:?}", path));
+        }
 
         Ok(())
     }
@@ -395,6 +398,14 @@ impl SessionStore for FileSessionStore {
     }
 }
 
+fn temp_session_write_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| String::from("sessions.json"));
+    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()))
+}
+
 /// Get the data directory for the application
 pub fn agent_state_root() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new().context("Failed to determine home directory")?;
@@ -454,7 +465,6 @@ mod tests {
     use kraai_types::{ChatRole, MessageStatus};
     use std::future::Future;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use ulid::Ulid;
 
     #[test]
     fn data_dir_uses_agent_root() {
@@ -463,6 +473,46 @@ mod tests {
 
         assert_eq!(data_dir, root.join("data"));
         assert!(data_dir.ends_with(".kraai/data"));
+    }
+
+    #[test]
+    fn session_temp_write_paths_are_unique_and_adjacent_to_destination() {
+        let path = PathBuf::from("/tmp/kraai-data/sessions.json");
+
+        let first = temp_session_write_path(&path);
+        let second = temp_session_write_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".sessions.json.")
+        );
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        );
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".sessions.json.")
+        );
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        );
     }
 
     fn test_dir(name: &str) -> PathBuf {
@@ -532,6 +582,27 @@ mod tests {
         assert!(session_store.list().await.unwrap().is_empty());
 
         let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn saving_sessions_does_not_create_fixed_tmp_file() {
+        with_test_store(
+            "no-fixed-temp-file",
+            |_message_store, session_store, data_dir| async move {
+                session_store
+                    .save(&session("saved", None, 1))
+                    .await
+                    .unwrap();
+
+                assert!(
+                    fs::try_exists(data_dir.join("sessions.json"))
+                        .await
+                        .unwrap()
+                );
+                assert!(!fs::try_exists(data_dir.join("sessions.tmp")).await.unwrap());
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
