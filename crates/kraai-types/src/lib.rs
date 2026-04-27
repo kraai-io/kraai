@@ -3,6 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+fn validate_id(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("id cannot be empty".to_string());
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
@@ -234,7 +242,13 @@ macro_rules! define_id {
 
         impl $name {
             pub fn new(s: impl Into<String>) -> Self {
-                Self(Arc::new(s.into()))
+                Self::try_new(s).expect(concat!(stringify!($name), " contains invalid characters"))
+            }
+
+            pub fn try_new(s: impl Into<String>) -> Result<Self, String> {
+                let s = s.into();
+                validate_id(&s)?;
+                Ok(Self(Arc::new(s)))
             }
 
             pub fn as_str(&self) -> &str {
@@ -263,7 +277,7 @@ macro_rules! define_id {
                 D: serde::Deserializer<'de>,
             {
                 let s = String::deserialize(deserializer)?;
-                Ok(Self(Arc::new(s)))
+                Self::try_new(s).map_err(serde::de::Error::custom)
             }
         }
     };

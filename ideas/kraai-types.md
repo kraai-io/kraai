@@ -4,12 +4,6 @@ Scope: `crates/kraai-types` only, with cross-crate call-site checks where those 
 
 ## Findings
 
-### High: typed IDs can become filesystem path traversal inputs
-
-- Location: `crates/kraai-types/src/lib.rs:229-277`, used by `crates/kraai-persistence/src/lib.rs:85-87`.
-- Impact: `MessageId`, `SessionId`, `CallId`, `ToolId`, `ProviderId`, and `ModelId` accept any string and deserialize any string. `FileMessageStore::message_path` then builds a filename with `format!("{}.json", id)`. A deserialized or externally supplied `MessageId` containing `/`, `..`, path separators, control characters, or very long data can escape the message directory, collide with unexpected paths, or produce unreadable filenames. Even if current IDs are usually ULIDs, the type does not enforce that invariant at the persistence boundary.
-- Suggested fix: split ID constructors into checked and unchecked forms. For persisted/file-addressable IDs, validate an allowlist such as `[A-Za-z0-9._:-]` with a max length, or use a specific `MessageId` newtype backed by ULID. Make `Deserialize` validate too. Add tests for rejecting `../x`, `a/b`, empty strings, and oversized IDs.
-
 ### High: persisted wire format is implicit and unversioned
 
 - Location: `crates/kraai-types/src/lib.rs:24-39`, `41-47`, `72-80`, `168-173`; persisted directly by `crates/kraai-persistence/src/lib.rs:119-136`.
