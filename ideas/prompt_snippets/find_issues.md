@@ -1,0 +1,1 @@
+spawn a subagent for every crate in the project. each subagent's job will be to explore that specific crate and look for bugs, refactors, code smells, maintainability issues, bogus tests, etc. each subagent should write a summary to a file in the ideas dir, with the file name being unique and of the crate.
