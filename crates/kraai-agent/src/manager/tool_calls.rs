@@ -364,6 +364,16 @@ impl AgentManager {
             .is_some_and(|state| !state.pending_tool_calls.is_empty())
     }
 
+    pub fn has_unfinished_tools(&self, session_id: &str) -> bool {
+        self.session_states.get(session_id).is_some_and(|state| {
+            !state.pending_tool_calls.is_empty()
+                || state
+                    .in_flight_tool_calls
+                    .values()
+                    .any(|in_flight| *in_flight > 0)
+        })
+    }
+
     pub fn has_unfinished_tools_for_message(
         &self,
         session_id: &str,

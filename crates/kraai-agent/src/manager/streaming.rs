@@ -157,6 +157,10 @@ impl AgentManager {
             )
         };
 
+        if self.has_unfinished_tools(session_id) {
+            return Ok(None);
+        }
+
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
         }
