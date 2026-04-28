@@ -4,18 +4,6 @@ Scope: `crates/kraai-types` only, with cross-crate call-site checks where those 
 
 ## Findings
 
-### High: persisted wire format is implicit and unversioned
-
-- Location: `crates/kraai-types/src/lib.rs:24-39`, `41-47`, `72-80`, `168-173`; persisted directly by `crates/kraai-persistence/src/lib.rs:119-136`.
-- Impact: `Message` is the on-disk schema, but enum variants use default externally tagged serde names (`Complete`, `Streaming`, `AutonomousUpTo`, etc.) and new fields are only partly protected with `#[serde(default)]`. Any rename, enum representation change, or required field addition can make old histories fail to load entirely. This is especially risky because the project prioritizes session restarts and reconnects.
-- Suggested fix: define explicit stable serde names for persisted enums, add a top-level `schema_version` or versioned persisted DTO, and add round-trip/golden JSON tests for representative messages. If source-level names should remain free to change, keep separate persistence structs and convert to runtime structs.
-
-### Medium: `ChatMessage` erases tool-call structure before provider normalization
-
-- Location: `crates/kraai-types/src/lib.rs:6-10`, `82-87`, `193-201`; call sites `crates/llm-providers/kraai-provider-openai-chat-completions/src/messages.rs:6-22` and `crates/llm-providers/kraai-provider-openai-codex/src/messages.rs:27-66`.
-- Impact: provider-facing history is only `{ role, content }`, while `ToolCall` and `ToolResult` exist separately. Both OpenAI providers flatten tool results into user text with `"[Tool Result]\n..."`. That loses `call_id`, structured args/output, and tool role semantics, and makes provider adapters duplicate policy about how tool messages should be represented. It also makes it harder to use providers that support native tool calls or require strict message shapes.
-- Suggested fix: replace or supplement `ChatMessage` with a structured content enum, for example `MessageContent::Text`, `ToolCall`, `ToolResult`, `ToolError`, with provider adapters deciding how to degrade unsupported content. At minimum, move the common "tool result as user text" formatting into `kraai-types` or provider-core so adapters cannot drift.
-
 ### Medium: tool state deltas are stringly typed JSON with silent data loss
 
 - Location: `crates/kraai-types/src/lib.rs:203-214`; consumer `crates/kraai-agent/src/tool_state.rs:127-190`.
@@ -45,9 +33,3 @@ Scope: `crates/kraai-types` only, with cross-crate call-site checks where those 
 - Location: `ChatMessage` at `crates/kraai-types/src/lib.rs:6-10`, `Message` at `24-39`, `ToolCall` at `82-87`, `ToolResult` at `193-201`, no tests under `crates/kraai-types`.
 - Impact: many structs derive `Serialize`/`Deserialize` but not `PartialEq`/`Eq`, which makes direct round-trip tests awkward and pushes testing into downstream crates. The crate has no unit tests despite owning IDs, risk ordering, approval policy, token accounting, and persisted message schema.
 - Suggested fix: derive `PartialEq`/`Eq` where fields permit it and add a small test module covering ID serde, `RiskLevel` ordering, `ToolCallAssessment::is_auto_approved`, `format_tool_result_message`, `TokenUsage` semantics, and message JSON compatibility.
-
-## Refactor opportunities
-
-- Split `src/lib.rs` into focused modules: `ids`, `message`, `usage`, `tools`, `profiles`, and `risk`. The current file is small, but this crate is a central contract crate and will become a god file quickly.
-- Consider making `ToolId`, `ProviderId`, and `ModelId` lightweight `SmolStr`/`Box<str>`/`Arc<str>` wrappers instead of `Arc<String>`. `Arc<String>` adds an extra allocation layer and exposes no mutation benefit. This is not urgent, but if IDs are cloned heavily under load, benchmark the alternatives.
-- Add a crate-level policy comment documenting which types are persisted wire format versus runtime-only DTOs. Right now that boundary has to be inferred from persistence and provider call sites.

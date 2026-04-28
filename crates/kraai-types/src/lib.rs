@@ -234,11 +234,11 @@ pub fn format_tool_result_message(
     }
 }
 
-/// Wrapper that gives type safety while keeping Arc<String> benefits
+/// Wrapper that gives type safety while keeping Arc<str> benefits
 macro_rules! define_id {
     ($name:ident) => {
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub struct $name(pub Arc<String>);
+        pub struct $name(pub Arc<str>);
 
         impl $name {
             pub fn new(s: impl Into<String>) -> Self {
@@ -248,11 +248,11 @@ macro_rules! define_id {
             pub fn try_new(s: impl Into<String>) -> Result<Self, String> {
                 let s = s.into();
                 validate_id(&s)?;
-                Ok(Self(Arc::new(s)))
+                Ok(Self(Arc::from(s)))
             }
 
             pub fn as_str(&self) -> &str {
-                self.0.as_str()
+                self.0.as_ref()
             }
         }
 
@@ -267,7 +267,7 @@ macro_rules! define_id {
             where
                 S: serde::Serializer,
             {
-                serializer.serialize_str(self.0.as_str())
+                serializer.serialize_str(self.as_str())
             }
         }
 
