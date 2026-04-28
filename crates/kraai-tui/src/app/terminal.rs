@@ -326,17 +326,13 @@ impl App {
         let len = models.len();
 
         match key_event.code {
-            KeyCode::Up => {
-                if len > 0 {
-                    self.state.model_menu_index =
-                        model_menu_previous_index(self.state.model_menu_index, len);
-                }
+            KeyCode::Up if len > 0 => {
+                self.state.model_menu_index =
+                    model_menu_previous_index(self.state.model_menu_index, len);
             }
-            KeyCode::Down => {
-                if len > 0 {
-                    self.state.model_menu_index =
-                        model_menu_next_index(self.state.model_menu_index, len);
-                }
+            KeyCode::Down if len > 0 => {
+                self.state.model_menu_index =
+                    model_menu_next_index(self.state.model_menu_index, len);
             }
             KeyCode::Enter => {
                 if let Some((provider_id, model)) = models.get(self.state.model_menu_index) {
@@ -354,17 +350,13 @@ impl App {
         let len = self.state.agent_profiles.len();
 
         match key_event.code {
-            KeyCode::Up => {
-                if len > 0 {
-                    self.state.agent_menu_index =
-                        model_menu_previous_index(self.state.agent_menu_index, len);
-                }
+            KeyCode::Up if len > 0 => {
+                self.state.agent_menu_index =
+                    model_menu_previous_index(self.state.agent_menu_index, len);
             }
-            KeyCode::Down => {
-                if len > 0 {
-                    self.state.agent_menu_index =
-                        model_menu_next_index(self.state.agent_menu_index, len);
-                }
+            KeyCode::Down if len > 0 => {
+                self.state.agent_menu_index =
+                    model_menu_next_index(self.state.agent_menu_index, len);
             }
             KeyCode::Enter => {
                 if self.state.profile_locked {
@@ -394,16 +386,12 @@ impl App {
         let total = self.state.sessions.len() + 1;
 
         match key_event.code {
-            KeyCode::Up => {
-                if total > 0 {
-                    self.state.sessions_menu_index =
-                        (self.state.sessions_menu_index + total - 1) % total;
-                }
+            KeyCode::Up if total > 0 => {
+                self.state.sessions_menu_index =
+                    (self.state.sessions_menu_index + total - 1) % total;
             }
-            KeyCode::Down => {
-                if total > 0 {
-                    self.state.sessions_menu_index = (self.state.sessions_menu_index + 1) % total;
-                }
+            KeyCode::Down if total > 0 => {
+                self.state.sessions_menu_index = (self.state.sessions_menu_index + 1) % total;
             }
             KeyCode::Enter => {
                 if self.state.sessions_menu_index == 0 {
