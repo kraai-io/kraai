@@ -23,13 +23,6 @@ Scope: `crates/kraai-toon-schema`. Verification run: `cargo test -p kraai-toon-s
 - Suggested fix: first collect and validate all struct names, then parse fields against the complete declared-name set. Keep duplicate-name detection in that first pass.
 - Tests to add: a passing integration test where the root struct appears before a nested struct.
 
-## Medium: `src/toon_encode.rs` is dead, stale code
-
-- References: `crates/kraai-toon-schema/src/lib.rs:7`, `crates/kraai-toon-schema/src/lib.rs:8`, `crates/kraai-toon-schema/src/toon_encode.rs:3`, `crates/kraai-toon-schema/src/toon_encode.rs:7`
-- Problem: `toon_encode.rs` is not included by `lib.rs`, and it imports `crate::ir::{PrimitiveType, Schema, Type}` even though `Schema` and `Type` do not exist in the current IR.
-- Impact: this is a maintenance trap. It looks like an alternate encoder, but it cannot compile if reintroduced and it duplicates behavior now delegated to `toon_format::encode_default`.
-- Suggested fix: delete the file. If hand-rolled encoding is needed later, add it back with current IR names and tests. Given `README.md:19` promises canonical `toon-format` output, deletion is the better direction.
-
 ## Medium: invalid or misspelled attributes are silently ignored
 
 - References: `crates/kraai-toon-schema/src/parse.rs:285`, `crates/kraai-toon-schema/src/parse.rs:291`, `crates/kraai-toon-schema/src/parse.rs:303`, `crates/kraai-toon-schema/src/parse.rs:316`, `crates/kraai-toon-schema/src/parse.rs:309`
