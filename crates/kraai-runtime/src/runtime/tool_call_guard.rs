@@ -10,10 +10,12 @@ enum ToolCallStreamPhase {
     AfterToolCall,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ToolCallStreamGuard {
     phase: ToolCallStreamPhase,
     buffer: String,
+    completed_tool_calls: usize,
+    max_tool_calls_per_message: usize,
 }
 
 #[derive(Debug, Default)]
@@ -23,6 +25,13 @@ pub(crate) struct ToolCallGuardChunkResult {
 }
 
 impl ToolCallStreamGuard {
+    pub(crate) fn new(max_tool_calls_per_message: usize) -> Self {
+        Self {
+            max_tool_calls_per_message,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn ingest_chunk(&mut self, chunk: &str) -> ToolCallGuardChunkResult {
         self.buffer.push_str(chunk);
 
@@ -90,6 +99,7 @@ impl ToolCallStreamGuard {
                         let close_end = close_index + TOOL_CALL_CLOSE_TAG.len();
                         accepted.push_str(&remaining[..close_end]);
                         cursor += close_end;
+                        self.completed_tool_calls += 1;
                         self.phase = ToolCallStreamPhase::AfterToolCall;
                         continue;
                     }
@@ -116,6 +126,10 @@ impl ToolCallStreamGuard {
                     }
 
                     if remaining.starts_with(TOOL_CALL_OPEN_TAG) {
+                        if self.completed_tool_calls >= self.max_tool_calls_per_message {
+                            should_stop = true;
+                            break;
+                        }
                         accepted.push_str(TOOL_CALL_OPEN_TAG);
                         cursor += TOOL_CALL_OPEN_TAG.len();
                         self.phase = ToolCallStreamPhase::InsideToolCall;
@@ -153,6 +167,17 @@ impl ToolCallStreamGuard {
             ToolCallStreamPhase::PrefixVisible
             | ToolCallStreamPhase::PrefixInsideThink
             | ToolCallStreamPhase::InsideToolCall => std::mem::take(&mut self.buffer),
+        }
+    }
+}
+
+impl Default for ToolCallStreamGuard {
+    fn default() -> Self {
+        Self {
+            phase: ToolCallStreamPhase::default(),
+            buffer: String::new(),
+            completed_tool_calls: 0,
+            max_tool_calls_per_message: usize::MAX,
         }
     }
 }
@@ -310,6 +335,34 @@ mod tests {
         assert_eq!(
             second.accepted,
             "<tool_call>\ntool: auto_tool\nvalue: beta\n</tool_call>\n"
+        );
+        assert!(guard.finish().is_empty());
+    }
+
+    #[test]
+    fn tool_call_stream_guard_stops_when_tool_call_limit_is_reached() {
+        let mut guard = ToolCallStreamGuard::new(1);
+
+        let result = guard.ingest_chunk(
+            "before\n\
+<tool_call>\n\
+tool: auto_tool\n\
+value: alpha\n\
+</tool_call>\n\
+<tool_call>\n\
+tool: auto_tool\n\
+value: beta\n\
+</tool_call>\n",
+        );
+
+        assert!(result.should_stop);
+        assert_eq!(
+            result.accepted,
+            "before\n\
+<tool_call>\n\
+tool: auto_tool\n\
+value: alpha\n\
+</tool_call>\n"
         );
         assert!(guard.finish().is_empty());
     }

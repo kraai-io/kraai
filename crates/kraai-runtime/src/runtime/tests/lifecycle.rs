@@ -166,7 +166,7 @@ async fn continue_session_starts_new_assistant_turn_without_new_user_message() -
 }
 
 #[tokio::test]
-async fn continuation_failure_still_happens_once_after_all_results_in_a_tool_batch() -> Result<()> {
+async fn continuation_failure_still_happens_once_after_tool_result() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new_with_tools(
         vec![vec![ScriptedChunk::plain(
             "<tool_call>\n\
@@ -200,7 +200,7 @@ value: beta\n\
 
     let detection_events = harness
         .events
-        .wait_for("two failing tool detections", |events| {
+        .wait_for("failing tool detection", |events| {
             events
                 .iter()
                 .filter(|event| {
@@ -214,20 +214,15 @@ value: beta\n\
                     )
                 })
                 .count()
-                == 2
+                == 1
         })
         .await;
 
     let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "failing_tool", 0);
-    let second_call_id = call_id_for_queue_order(&detection_events, &session_id, "failing_tool", 1);
 
     harness
         .handle
         .approve_tool(session_id.clone(), first_call_id.clone())
-        .await?;
-    harness
-        .handle
-        .approve_tool(session_id.clone(), second_call_id.clone())
         .await?;
     harness
         .handle
@@ -257,7 +252,7 @@ value: beta\n\
                         )
                     })
                     .count();
-                result_count == 2 && continuation_failed_count(events, &session_id) == 1
+                result_count == 1 && continuation_failed_count(events, &session_id) == 1
             },
         )
         .await;
@@ -309,7 +304,7 @@ value: beta\n\
                 .contains("Tool 'failing_tool' result:\n{\n  \"error\": \"tool exploded\"\n}")
         })
         .count();
-    assert_eq!(failed_result_count, 2);
+    assert_eq!(failed_result_count, 1);
 
     harness.shutdown().await;
     Ok(())

@@ -108,7 +108,7 @@ value: alpha\n\
 }
 
 #[tokio::test]
-async fn split_adjacent_tool_calls_are_both_detected() -> Result<()> {
+async fn split_adjacent_tool_calls_stop_after_first_call() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::plain(
             "before\n\
@@ -141,26 +141,24 @@ value: beta\n\
         )
         .await?;
 
-    let events = harness
+    harness
         .events
-        .wait_for("two tool detections", |events| {
-            events
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event,
-                        Event::ToolCallDetected {
-                            session_id: event_session,
-                            tool_id,
-                            ..
-                        } if event_session == &session_id && tool_id == "mock_tool"
-                    )
-                })
-                .count()
-                == 2
+        .wait_for("first tool detection", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ToolCallDetected {
+                        session_id: event_session,
+                        tool_id,
+                        ..
+                    } if event_session == &session_id && tool_id == "mock_tool"
+                )
+            })
         })
         .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
+    let events = harness.events.snapshot();
     assert_eq!(
         events
             .iter()
@@ -175,7 +173,7 @@ value: beta\n\
                 )
             })
             .count(),
-        2
+        1
     );
 
     let history = harness.handle.get_chat_history(session_id.clone()).await?;
@@ -184,9 +182,9 @@ value: beta\n\
         .find(|message| {
             message.role == ChatRole::Assistant && message.content.contains("value: alpha")
         })
-        .expect("assistant message should persist both tool calls");
+        .expect("assistant message should persist first tool call");
     assert!(assistant.content.contains("value: alpha"));
-    assert!(assistant.content.contains("value: beta"));
+    assert!(!assistant.content.contains("value: beta"));
 
     harness.shutdown().await;
     Ok(())

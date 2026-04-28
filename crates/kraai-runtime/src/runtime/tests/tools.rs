@@ -1,5 +1,4 @@
 use color_eyre::eyre::Result;
-use std::time::Duration;
 
 use super::harness::{
     RuntimeTestHarness, ScriptedChunk, call_id_for_queue_order, create_session_with_profile,
@@ -167,7 +166,7 @@ value: alpha\n\
 }
 
 #[tokio::test]
-async fn continuation_waits_for_all_tools_from_one_message_across_split_executions() -> Result<()> {
+async fn continuation_starts_after_single_tool_execution() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
             "<tool_call>\n\
@@ -199,7 +198,7 @@ value: beta\n\
 
     let detection_events = harness
         .events
-        .wait_for("two tool detections", |events| {
+        .wait_for("single tool detection", |events| {
             events
                 .iter()
                 .filter(|event| {
@@ -213,12 +212,11 @@ value: beta\n\
                     )
                 })
                 .count()
-                == 2
+                == 1
         })
         .await;
 
     let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
-    let second_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 1);
 
     harness
         .handle
@@ -231,8 +229,8 @@ value: beta\n\
 
     harness
         .events
-        .wait_for("first tool result without continuation", |events| {
-            events.iter().any(|event| {
+        .wait_for("tool result and continuation", |events| {
+            let first_result_ready = events.iter().any(|event| {
                 matches!(
                     event,
                     Event::ToolResultReady {
@@ -246,42 +244,8 @@ value: beta\n\
                         && tool_id == "mock_tool"
                         && !denied
                 )
-            })
-        })
-        .await;
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let events_after_first = harness.events.snapshot();
-    assert_eq!(stream_complete_count(&events_after_first, &session_id), 1);
-
-    harness
-        .handle
-        .approve_tool(session_id.clone(), second_call_id.clone())
-        .await?;
-    harness
-        .handle
-        .execute_approved_tools(session_id.clone())
-        .await?;
-
-    harness
-        .events
-        .wait_for("second tool result and single continuation", |events| {
-            let second_result_ready = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        call_id,
-                        tool_id,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && call_id == &second_call_id
-                        && tool_id == "mock_tool"
-                        && !denied
-                )
             });
-            second_result_ready && stream_complete_count(events, &session_id) == 2
+            first_result_ready && stream_complete_count(events, &session_id) == 2
         })
         .await;
 
@@ -297,7 +261,7 @@ value: beta\n\
 }
 
 #[tokio::test]
-async fn auto_approved_and_manual_tools_share_one_continuation_boundary() -> Result<()> {
+async fn auto_approved_tool_starts_one_continuation_when_second_call_is_truncated() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
             "<tool_call>\n\
@@ -327,9 +291,9 @@ value: beta\n\
         )
         .await?;
 
-    let events = harness
+    harness
         .events
-        .wait_for("auto result plus manual detection", |events| {
+        .wait_for("auto result and continuation", |events| {
             let auto_result_ready = events.iter().any(|event| {
                 matches!(
                     event,
@@ -345,56 +309,21 @@ value: beta\n\
                         && !denied
                 )
             });
-            let manual_detected = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolCallDetected {
-                        session_id: event_session,
-                        tool_id,
-                        ..
-                    } if event_session == &session_id && tool_id == "mock_tool"
-                )
-            });
-            auto_result_ready && manual_detected
+            auto_result_ready && stream_complete_count(events, &session_id) == 2
         })
         .await;
 
-    let manual_call_id = call_id_for_queue_order(&events, &session_id, "mock_tool", 1);
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let events_after_auto = harness.events.snapshot();
-    assert_eq!(stream_complete_count(&events_after_auto, &session_id), 1);
-
-    harness
-        .handle
-        .approve_tool(session_id.clone(), manual_call_id.clone())
-        .await?;
-    harness
-        .handle
-        .execute_approved_tools(session_id.clone())
-        .await?;
-
-    harness
-        .events
-        .wait_for("manual result and continuation", |events| {
-            let manual_result_ready = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        call_id,
-                        tool_id,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && call_id == &manual_call_id
-                        && tool_id == "mock_tool"
-                        && !denied
-                )
-            });
-            manual_result_ready && stream_complete_count(events, &session_id) == 2
-        })
-        .await;
+    let events = harness.events.snapshot();
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event,
+            Event::ToolCallDetected {
+                session_id: event_session,
+                tool_id,
+                ..
+            } if event_session == &session_id && tool_id == "mock_tool"
+        )
+    }));
 
     harness.shutdown().await;
     Ok(())

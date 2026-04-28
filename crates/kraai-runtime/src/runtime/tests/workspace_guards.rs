@@ -7,7 +7,7 @@ use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_prof
 use crate::Event;
 
 #[tokio::test]
-async fn batched_read_files_does_not_unlock_same_turn_edit_file() -> Result<()> {
+async fn adjacent_read_then_edit_only_executes_first_tool_call() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new_with_tools(
         vec![
             vec![ScriptedChunk::plain(
@@ -54,8 +54,8 @@ edits[1]{start_line,end_line,old_text,new_text}:
 
     harness
         .events
-        .wait_for("batched read/edit tool results", |events| {
-            let read_ready = events.iter().any(|event| {
+        .wait_for("read result after adjacent read/edit calls", |events| {
+            events.iter().any(|event| {
                 matches!(
                     event,
                     Event::ToolResultReady {
@@ -69,31 +69,20 @@ edits[1]{start_line,end_line,old_text,new_text}:
                         && *success
                         && !denied
                 )
-            });
-            let edit_failed = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        tool_id,
-                        success,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && tool_id == "edit_file"
-                        && !*success
-                        && !denied
-                )
-            });
-            read_ready && edit_failed
+            })
         })
         .await;
 
-    let history = harness.handle.get_chat_history(session_id.clone()).await?;
-    assert!(history.values().any(|message| {
-        message
-            .content
-            .contains("edit_file requires the current file contents to be read first")
+    let events = harness.events.snapshot();
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event,
+            Event::ToolResultReady {
+                session_id: event_session,
+                tool_id,
+                ..
+            } if event_session == &session_id && tool_id == "edit_file"
+        )
     }));
     assert_eq!(tokio::fs::read_to_string(&file_path).await?, "old");
 
@@ -102,7 +91,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
 }
 
 #[tokio::test]
-async fn second_same_turn_edit_fails_after_first_changes_file() -> Result<()> {
+async fn adjacent_edits_only_execute_first_tool_call() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new_with_tools(
         vec![
             vec![ScriptedChunk::plain(
@@ -186,7 +175,7 @@ edits[1]{start_line,end_line,old_text,new_text}:
 
     harness
         .events
-        .wait_for("double edit results", |events| {
+        .wait_for("first adjacent edit result", |events| {
             let successes = events
                 .iter()
                 .filter(|event| {
@@ -205,24 +194,6 @@ edits[1]{start_line,end_line,old_text,new_text}:
                     )
                 })
                 .count();
-            let failures = events
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event,
-                        Event::ToolResultReady {
-                            session_id: event_session,
-                            tool_id,
-                            success,
-                            denied,
-                            ..
-                        } if event_session == &session_id
-                            && tool_id == "edit_file"
-                            && !*success
-                            && !denied
-                    )
-                })
-                .count();
             let stream_completions = events
                 .iter()
                 .filter(|event| {
@@ -233,10 +204,25 @@ edits[1]{start_line,end_line,old_text,new_text}:
                     )
                 })
                 .count();
-            successes >= 1 && failures >= 1 && stream_completions >= 4
+            successes >= 1 && stream_completions >= 4
         })
         .await;
 
+    let events = harness.events.snapshot();
+    let edit_result_count = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::ToolResultReady {
+                    session_id: event_session,
+                    tool_id,
+                    ..
+                } if event_session == &session_id && tool_id == "edit_file"
+            )
+        })
+        .count();
+    assert_eq!(edit_result_count, 1);
     assert_eq!(tokio::fs::read_to_string(&file_path).await?, "new");
 
     harness.shutdown().await;

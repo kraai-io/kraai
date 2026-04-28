@@ -442,7 +442,7 @@ impl RuntimeCore {
         );
 
         let mut content = String::new();
-        let mut guard = ToolCallStreamGuard::default();
+        let mut guard = ToolCallStreamGuard::new(1);
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {

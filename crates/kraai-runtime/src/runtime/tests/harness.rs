@@ -286,52 +286,6 @@ impl TypedTool for BlockingApprovalTool {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct BatchBlockingApprovalTool {
-    pub(super) started: Arc<tokio::sync::Notify>,
-    pub(super) ready: Arc<tokio::sync::Barrier>,
-}
-
-#[async_trait]
-impl TypedTool for BatchBlockingApprovalTool {
-    type Args = ValueArgs;
-
-    fn name(&self) -> &'static str {
-        "batch_blocking_tool"
-    }
-
-    fn schema(&self) -> &'static str {
-        "batch_blocking_tool(value: string)"
-    }
-
-    fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        ToolCallAssessment {
-            risk: RiskLevel::UndoableWorkspaceWrite,
-            policy: ExecutionPolicy::AlwaysAsk,
-            reasons: vec![format!(
-                "batch_blocking_tool requires approval for {:?}",
-                args.value
-            )],
-        }
-    }
-
-    async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
-        self.started.notify_waiters();
-        self.ready.wait().await;
-        if args.value == "beta" {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-        ToolCallResult::success(serde_json::json!({
-            "tool": "batch_blocking_tool",
-            "value": args.value,
-        }))
-    }
-
-    fn describe(&self, args: &Self::Args) -> String {
-        format!("Batch blocking tool for {}", args.value)
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct FailingApprovalTool;
 
