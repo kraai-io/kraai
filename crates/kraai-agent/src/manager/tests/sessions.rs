@@ -477,6 +477,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
     });
     tools.register_tool(super::common::MockTool { name: "read_files" });
     tools.register_tool(super::common::MockTool { name: "edit_file" });
+    tools.register_tool(super::common::MockTool { name: "bash" });
     let mut manager = AgentManager::new(
         manager_providers,
         tools,

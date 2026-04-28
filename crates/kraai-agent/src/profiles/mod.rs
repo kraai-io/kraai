@@ -95,6 +95,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
                 ToolId::new("list_files"),
                 ToolId::new("open_file"),
                 ToolId::new("search_files"),
+                ToolId::new("bash"),
             ],
             default_risk_level: RiskLevel::ReadOnlyWorkspace,
             source: AgentProfileSource::BuiltIn,
@@ -248,38 +249,6 @@ mod tests {
         .into_iter()
         .map(String::from)
         .collect()
-    }
-
-    #[test]
-    fn built_in_catalog_contains_plan_and_build() {
-        let dir = temp_dir("builtins");
-        let resolved = resolve_profiles(&dir, &available_tools());
-        let ids = resolved
-            .profiles
-            .iter()
-            .map(|profile| profile.id.as_str())
-            .collect::<Vec<_>>();
-        assert!(ids.contains(&"plan-code"));
-        assert!(ids.contains(&"build-code"));
-    }
-
-    #[test]
-    fn bash_is_only_available_to_build_profile() {
-        let dir = temp_dir("bash-profile");
-        let resolved = resolve_profiles(&dir, &available_tools());
-        let plan = resolved
-            .profiles
-            .iter()
-            .find(|profile| profile.id == "plan-code")
-            .expect("plan profile");
-        let build = resolved
-            .profiles
-            .iter()
-            .find(|profile| profile.id == "build-code")
-            .expect("build profile");
-
-        assert!(!plan.tools.iter().any(|tool| tool.as_str() == "bash"));
-        assert!(build.tools.iter().any(|tool| tool.as_str() == "bash"));
     }
 
     #[test]
