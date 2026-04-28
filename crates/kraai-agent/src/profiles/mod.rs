@@ -110,6 +110,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
                 ToolId::new("open_file"),
                 ToolId::new("search_files"),
                 ToolId::new("edit_file"),
+                ToolId::new("bash"),
             ],
             default_risk_level: RiskLevel::UndoableWorkspaceWrite,
             source: AgentProfileSource::BuiltIn,
@@ -238,6 +239,7 @@ mod tests {
     fn available_tools() -> HashSet<String> {
         [
             "close_file",
+            "bash",
             "list_files",
             "open_file",
             "search_files",
@@ -259,6 +261,25 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(ids.contains(&"plan-code"));
         assert!(ids.contains(&"build-code"));
+    }
+
+    #[test]
+    fn bash_is_only_available_to_build_profile() {
+        let dir = temp_dir("bash-profile");
+        let resolved = resolve_profiles(&dir, &available_tools());
+        let plan = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "plan-code")
+            .expect("plan profile");
+        let build = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "build-code")
+            .expect("build profile");
+
+        assert!(!plan.tools.iter().any(|tool| tool.as_str() == "bash"));
+        assert!(build.tools.iter().any(|tool| tool.as_str() == "bash"));
     }
 
     #[test]

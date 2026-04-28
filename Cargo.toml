@@ -10,6 +10,7 @@ members = [
   "crates/llm-providers/kraai-provider-core",
   "crates/llm-providers/kraai-provider-openai-chat-completions",
   "crates/llm-providers/kraai-provider-openai-codex",
+  "crates/tools/kraai-tool-bash",
   "crates/tools/kraai-tool-close-file",
   "crates/tools/kraai-tool-core",
   "crates/tools/kraai-tool-edit-file",
@@ -38,6 +39,7 @@ kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
 kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }
 kraai-provider-openai-codex = { path = "crates/llm-providers/kraai-provider-openai-codex" }
 kraai-runtime = { path = "crates/kraai-runtime" }
+kraai-tool-bash = { path = "crates/tools/kraai-tool-bash" }
 kraai-tool-close-file = { path = "crates/tools/kraai-tool-close-file" }
 kraai-tool-core = { path = "crates/tools/kraai-tool-core" }
 kraai-tool-edit-file = { path = "crates/tools/kraai-tool-edit-file" }

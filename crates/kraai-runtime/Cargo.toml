@@ -12,6 +12,7 @@ kraai-persistence.workspace = true
 kraai-provider-core.workspace = true
 kraai-provider-openai-chat-completions.workspace = true
 kraai-provider-openai-codex.workspace = true
+kraai-tool-bash.workspace = true
 kraai-tool-close-file.workspace = true
 kraai-tool-core.workspace = true
 kraai-tool-edit-file.workspace = true

@@ -7,6 +7,7 @@ use kraai_persistence::agent_state_root;
 use kraai_provider_core::{ProviderManager, ProviderRegistry};
 use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexFactory};
+use kraai_tool_bash::BashTool;
 use kraai_tool_close_file::CloseFileTool;
 use kraai_tool_core::ToolManager;
 use kraai_tool_edit_file::EditFileTool;
@@ -188,6 +189,7 @@ pub(crate) fn build_default_tool_manager() -> ToolManager {
     tools.register_tool(OpenFileTool);
     tools.register_tool(SearchFilesTool);
     tools.register_tool(EditFileTool);
+    tools.register_tool(BashTool);
     tools
 }
 

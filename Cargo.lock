@@ -1885,6 +1885,7 @@ dependencies = [
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
  "kraai-provider-openai-codex",
+ "kraai-tool-bash",
  "kraai-tool-close-file",
  "kraai-tool-core",
  "kraai-tool-edit-file",
@@ -1902,6 +1903,18 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "kraai-tool-bash"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-tool-core",
+ "kraai-toon-schema",
+ "kraai-types",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

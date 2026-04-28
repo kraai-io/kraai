@@ -121,6 +121,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     });
     tools.register_tool(MockTool { name: "read_files" });
     tools.register_tool(MockTool { name: "edit_file" });
+    tools.register_tool(MockTool { name: "bash" });
 
     let manager = AgentManager::new(
         providers,
