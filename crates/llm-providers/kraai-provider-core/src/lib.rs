@@ -41,6 +41,15 @@ pub enum ProviderError {
 
     #[error("Invalid config:\n{0}")]
     ConfigValidationError(String),
+
+    #[error("Failed to refresh model cache for provider(s): {0:?}")]
+    ModelCacheRefreshFailed(Vec<ProviderModelCacheRefreshError>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCacheRefreshError {
+    pub provider_id: ProviderId,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +316,8 @@ impl ProviderRegistry {
 }
 
 impl ProviderManager {
+    const MODEL_CACHE_REFRESH_CONCURRENCY: usize = 8;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -403,10 +414,51 @@ impl ProviderManager {
     }
 
     pub async fn update_models_list(&mut self) -> Result<()> {
-        for provider in self.providers.values() {
-            provider.cache_models().await?;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(
+            Self::MODEL_CACHE_REFRESH_CONCURRENCY,
+        ));
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for (provider_id, provider) in &self.providers {
+            let provider_id = provider_id.clone();
+            let provider = provider.clone();
+            let semaphore = semaphore.clone();
+
+            tasks.spawn(async move {
+                let _permit = semaphore.acquire_owned().await.map_err(|error| {
+                    ProviderModelCacheRefreshError {
+                        provider_id: provider_id.clone(),
+                        message: format!("Failed to acquire model cache refresh permit: {error}"),
+                    }
+                })?;
+
+                provider
+                    .cache_models()
+                    .await
+                    .map_err(|error| ProviderModelCacheRefreshError {
+                        provider_id,
+                        message: error.to_string(),
+                    })
+            });
         }
-        Ok(())
+
+        let mut failures = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(error),
+                Err(error) => failures.push(ProviderModelCacheRefreshError {
+                    provider_id: ProviderId::new("<unknown>"),
+                    message: format!("Model cache refresh task failed: {error}"),
+                }),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ProviderError::ModelCacheRefreshFailed(failures).into())
+        }
     }
 
     pub async fn generate_reply(
@@ -485,12 +537,17 @@ pub struct Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use color_eyre::eyre::eyre;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
 
     struct MockProvider {
         id: ProviderId,
         models: Vec<Model>,
         reply_count: AtomicUsize,
+        cache_count: AtomicUsize,
+        fail_cache: bool,
+        cache_delay: Option<Duration>,
     }
 
     impl MockProvider {
@@ -503,6 +560,16 @@ mod tests {
                     max_context: Some(4096),
                 }],
                 reply_count: AtomicUsize::new(0),
+                cache_count: AtomicUsize::new(0),
+                fail_cache: false,
+                cache_delay: None,
+            }
+        }
+
+        fn failing_cache(id: &str) -> Self {
+            Self {
+                fail_cache: true,
+                ..Self::new(id)
             }
         }
     }
@@ -518,6 +585,13 @@ mod tests {
         }
 
         async fn cache_models(&self) -> Result<()> {
+            self.cache_count.fetch_add(1, Ordering::SeqCst);
+            if let Some(delay) = self.cache_delay {
+                tokio::time::sleep(delay).await;
+            }
+            if self.fail_cache {
+                return Err(eyre!("cache failed for {}", self.id));
+            }
             Ok(())
         }
 
@@ -740,5 +814,106 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn update_models_list_attempts_every_provider_before_returning_failures() {
+        let failing = Arc::new(MockProvider::failing_cache("failing"));
+        let successful = Arc::new(MockProvider::new("successful"));
+
+        let mut manager = ProviderManager::new();
+        manager
+            .providers
+            .insert(ProviderId::new("failing"), failing.clone());
+        manager
+            .providers
+            .insert(ProviderId::new("successful"), successful.clone());
+
+        let error = manager.update_models_list().await.unwrap_err();
+
+        assert_eq!(failing.cache_count.load(Ordering::SeqCst), 1);
+        assert_eq!(successful.cache_count.load(Ordering::SeqCst), 1);
+
+        let refresh_error = error
+            .downcast_ref::<ProviderError>()
+            .expect("expected provider error");
+        assert!(matches!(
+            refresh_error,
+            ProviderError::ModelCacheRefreshFailed(failures)
+                if failures == &vec![ProviderModelCacheRefreshError {
+                    provider_id: ProviderId::new("failing"),
+                    message: "cache failed for failing".to_string(),
+                }]
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_models_list_refreshes_providers_concurrently() {
+        struct ObservedProvider {
+            id: ProviderId,
+            active: Arc<AtomicUsize>,
+            overlap_seen: Arc<AtomicBool>,
+        }
+
+        #[async_trait::async_trait]
+        impl Provider for ObservedProvider {
+            fn get_provider_id(&self) -> ProviderId {
+                self.id.clone()
+            }
+
+            async fn list_models(&self) -> Vec<Model> {
+                Vec::new()
+            }
+
+            async fn cache_models(&self) -> Result<()> {
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                if active > 1 {
+                    self.overlap_seen.store(true, Ordering::SeqCst);
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                self.active.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            }
+
+            async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+                Ok(())
+            }
+
+            async fn generate_reply(
+                &self,
+                _model_id: &ModelId,
+                _messages: Vec<ChatMessage>,
+                _request_context: &ProviderRequestContext,
+            ) -> Result<ChatMessage> {
+                unreachable!("not used by this test")
+            }
+
+            async fn generate_reply_stream(
+                &self,
+                _model_id: &ModelId,
+                _messages: Vec<ChatMessage>,
+                _request_context: &ProviderRequestContext,
+            ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+                unreachable!("not used by this test")
+            }
+        }
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let overlap_seen = Arc::new(AtomicBool::new(false));
+        let mut manager = ProviderManager::new();
+        for id in ["first", "second"] {
+            manager.providers.insert(
+                ProviderId::new(id),
+                Arc::new(ObservedProvider {
+                    id: ProviderId::new(id),
+                    active: active.clone(),
+                    overlap_seen: overlap_seen.clone(),
+                }),
+            );
+        }
+
+        manager.update_models_list().await.unwrap();
+
+        assert!(overlap_seen.load(Ordering::SeqCst));
     }
 }
