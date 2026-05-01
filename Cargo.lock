@@ -1913,6 +1913,7 @@ dependencies = [
  "kraai-tool-core",
  "kraai-toon-schema",
  "kraai-types",
+ "kraai-workspace-hack",
  "serde",
  "tokio",
 ]
