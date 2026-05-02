@@ -366,6 +366,7 @@ impl App {
             } => {
                 self.state.selected_profile_id = Some(profile_id.clone());
                 self.state.status = format!("Selected agent: {profile_id}");
+                self.save_workspace_preferences();
                 if let Some(session_id) = self.state.current_session_id.clone() {
                     self.request(RuntimeRequest::ListSessions);
                     self.request(RuntimeRequest::ListAgentProfiles { session_id });

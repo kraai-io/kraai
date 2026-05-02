@@ -158,11 +158,20 @@ impl Default for AppState {
 
 impl AppState {
     pub(super) fn from_startup_options(startup_options: super::StartupOptions) -> Self {
+        let workspace_preferences = super::WorkspacePreferences::load_for_current_workspace()
+            .unwrap_or_else(|error| {
+                tracing::warn!("Failed to load workspace preferences: {error}");
+                super::WorkspacePreferences::default()
+            });
+
         Self {
-            selected_provider_id: startup_options.provider_id,
-            selected_model_id: startup_options.model_id,
+            selected_provider_id: startup_options
+                .provider_id
+                .or(workspace_preferences.provider_id),
+            selected_model_id: startup_options.model_id.or(workspace_preferences.model_id),
             selected_profile_id: startup_options
                 .agent_profile_id
+                .or(workspace_preferences.agent_profile_id)
                 .or_else(|| Some(String::from(DEFAULT_AGENT_PROFILE_ID))),
             ..Self::default()
         }

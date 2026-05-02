@@ -32,6 +32,7 @@ mod state;
 mod terminal;
 mod types;
 mod ui;
+mod workspace_preferences;
 use self::auth::{
     ProviderAuthState, ProviderAuthStatus, map_openai_codex_auth_status, open_external_target,
     pending_auth_target,
@@ -59,6 +60,7 @@ use self::ui::{
 };
 #[cfg(test)]
 use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
+use self::workspace_preferences::WorkspacePreferences;
 
 const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("agent", "Open agent selector"),

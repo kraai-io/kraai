@@ -2055,6 +2055,7 @@ dependencies = [
  "kraai-workspace-hack",
  "ratatui 0.30.0",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "toon-format",

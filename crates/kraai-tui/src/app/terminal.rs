@@ -339,6 +339,7 @@ impl App {
                     self.state.selected_provider_id = Some(provider_id.clone());
                     self.state.selected_model_id = Some(model.id.clone());
                     self.state.status = format!("Selected model: {} / {}", provider_id, model.name);
+                    self.save_workspace_preferences();
                     self.state.mode = UiMode::Chat;
                 }
             }
@@ -374,6 +375,7 @@ impl App {
                     } else {
                         self.state.selected_profile_id = Some(profile.id.clone());
                         self.state.status = format!("Selected agent: {}", profile.id);
+                        self.save_workspace_preferences();
                         self.state.mode = UiMode::Chat;
                     }
                 }

@@ -174,6 +174,9 @@ impl App {
     }
 
     pub(super) fn ensure_selected_model(&mut self) {
+        let previous_provider_id = self.state.selected_provider_id.clone();
+        let previous_model_id = self.state.selected_model_id.clone();
+
         if let Some(provider_id) = self.state.selected_provider_id.as_ref()
             && let Some(models) = self.state.models_by_provider.get(provider_id)
         {
@@ -185,6 +188,10 @@ impl App {
 
             if let Some(model) = models.first() {
                 self.state.selected_model_id = Some(model.id.clone());
+                self.save_workspace_preferences_if_model_changed(
+                    previous_provider_id,
+                    previous_model_id,
+                );
                 return;
             }
         }
@@ -197,6 +204,10 @@ impl App {
                 .find(|(_, models)| models.iter().any(|model| &model.id == model_id))
         {
             self.state.selected_provider_id = Some(provider_id.clone());
+            self.save_workspace_preferences_if_model_changed(
+                previous_provider_id,
+                previous_model_id,
+            );
             return;
         }
 
@@ -205,6 +216,10 @@ impl App {
         {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.state.selected_model_id = Some(model.id.clone());
+            self.save_workspace_preferences_if_model_changed(
+                previous_provider_id,
+                previous_model_id,
+            );
         }
     }
 
@@ -263,6 +278,35 @@ impl App {
             Err(format!(
                 "Unknown model for provider {provider_id}: {model_id}"
             ))
+        }
+    }
+
+    pub(super) fn save_workspace_preferences(&mut self) {
+        if self.is_ci_mode() {
+            return;
+        }
+
+        let preferences = WorkspacePreferences {
+            provider_id: self.state.selected_provider_id.clone(),
+            model_id: self.state.selected_model_id.clone(),
+            agent_profile_id: self.state.selected_profile_id.clone(),
+        };
+
+        if let Err(error) = preferences.save_for_current_workspace() {
+            tracing::warn!("Failed to save workspace preferences: {error}");
+            self.state.status = format!("Failed saving workspace preferences: {error}");
+        }
+    }
+
+    fn save_workspace_preferences_if_model_changed(
+        &mut self,
+        previous_provider_id: Option<String>,
+        previous_model_id: Option<String>,
+    ) {
+        if previous_provider_id != self.state.selected_provider_id
+            || previous_model_id != self.state.selected_model_id
+        {
+            self.save_workspace_preferences();
         }
     }
 
