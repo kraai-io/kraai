@@ -53,7 +53,49 @@ toon_tool! {
             path: "src/lib.rs",
             create: false,
             edits: [
+                { start_line: 10, end_line: 10, old_text: "let enabled = false;", new_text: "let enabled = true;" }
+            ]
+        },
+        {
+            path: "src/lib.rs",
+            create: false,
+            edits: [
                 { start_line: 10, end_line: 12, old_text: "fn old() {\\n    beta();\\n}", new_text: "fn new() {\\n    gamma();\\n}" }
+            ]
+        },
+        {
+            path: "src/config.rs",
+            create: false,
+            edits: [
+                { start_line: 4, end_line: 4, old_text: "timeout_ms: 1000,", new_text: "timeout_ms: 2500," }
+            ]
+        },
+        {
+            path: "src/lib.rs",
+            create: false,
+            edits: [
+                { start_line: 22, end_line: 22, old_text: "", new_text: "    tracing::debug!(\\\"loading config\\\");" }
+            ]
+        },
+        {
+            path: "src/lib.rs",
+            create: false,
+            edits: [
+                { start_line: 40, end_line: 44, old_text: "if value.is_empty() {\\n    return None;\\n}\\n\\nSome(value.to_string())", new_text: "(!value.is_empty()).then(|| value.to_string())" }
+            ]
+        },
+        {
+            path: "src/service.rs",
+            create: false,
+            edits: [
+                { start_line: 120, end_line: 139, old_text: "pub async fn run_service(config: Config) -> Result<()> {\\n    let listener = TcpListener::bind(config.addr).await?;\\n    let state = AppState::new(config.cache_size);\\n    loop {\\n        let (stream, peer) = listener.accept().await?;\\n        let state = state.clone();\\n        tokio::spawn(async move {\\n            let request = read_request(stream).await;\\n            if let Err(error) = request {\\n                tracing::warn!(%peer, %error, \\\"failed to read request\\\");\\n                return;\\n            }\\n            let response = handle_request(state, request.unwrap()).await;\\n            if let Err(error) = write_response(stream, response).await {\\n                tracing::warn!(%peer, %error, \\\"failed to write response\\\");\\n            }\\n        });\\n    }\\n}", new_text: "pub async fn run_service(config: Config) -> Result<()> {\\n    let listener = TcpListener::bind(config.addr).await?;\\n    let state = AppState::new(config.cache_size);\\n    let shutdown = shutdown_signal();\\n    tokio::pin!(shutdown);\\n\\n    loop {\\n        tokio::select! {\\n            biased;\\n            _ = &mut shutdown => break,\\n            accepted = listener.accept() => {\\n                let (stream, peer) = accepted?;\\n                let state = state.clone();\\n                tokio::spawn(handle_connection(state, stream, peer));\\n            }\\n        }\\n    }\\n\\n    Ok(())\\n}" }
+            ]
+        },
+        {
+            path: "src/empty.rs",
+            create: false,
+            edits: [
+                { start_line: 1, end_line: 1, old_text: "", new_text: "pub const READY: bool = true;\\n" }
             ]
         },
         {
