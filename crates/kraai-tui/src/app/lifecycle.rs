@@ -115,7 +115,7 @@ impl App {
 
             terminal.draw(|frame| {
                 let area = frame.area();
-                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding {
+                if self.state.mode == UiMode::Chat {
                     let input_height = bottom_panel_height(&self.state, area);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),
@@ -143,7 +143,7 @@ impl App {
 
                 frame.render_widget(&self.state, area);
 
-                if self.state.mode == UiMode::Chat && self.state.tool_phase != ToolPhase::Deciding {
+                if self.state.mode == UiMode::Chat {
                     let input_height = bottom_panel_height(&self.state, area);
                     let layout = Layout::vertical([
                         Constraint::Min(area.height.saturating_sub(input_height + 1)),

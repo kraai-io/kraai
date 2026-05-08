@@ -44,12 +44,14 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if self.state.mode != UiMode::Chat || self.state.tool_phase == ToolPhase::Deciding {
+        if self.state.mode != UiMode::Chat {
             return;
         }
 
         match mouse_event.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
+            MouseEventKind::Down(MouseButton::Left)
+                if self.state.tool_phase != ToolPhase::Deciding =>
+            {
                 if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
                 {
                     self.state.selection = Some(ChatSelection {
@@ -60,14 +62,18 @@ impl App {
                     self.clear_chat_selection();
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
+            MouseEventKind::Drag(MouseButton::Left)
+                if self.state.tool_phase != ToolPhase::Deciding =>
+            {
                 if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
                     && let Some(selection) = self.state.selection.as_mut()
                 {
                     selection.focus = position;
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => {
+            MouseEventKind::Up(MouseButton::Left)
+                if self.state.tool_phase != ToolPhase::Deciding =>
+            {
                 if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
                     && let Some(selection) = self.state.selection.as_mut()
                 {
@@ -429,8 +435,10 @@ impl App {
             KeyCode::Left | KeyCode::BackTab => self.select_previous_tool_action(),
             KeyCode::Right | KeyCode::Tab => self.select_next_tool_action(),
             KeyCode::Enter => self.confirm_current_tool_action(),
-            KeyCode::Char('a') => self.submit_tool_decision(true),
-            KeyCode::Char('d') => self.submit_tool_decision(false),
+            KeyCode::PageUp => self.scroll_chat_by(-10),
+            KeyCode::PageDown => self.scroll_chat_by(10),
+            KeyCode::Home => self.scroll_chat_to_top(),
+            KeyCode::End => self.scroll_chat_to_bottom(),
             _ => {}
         }
     }
