@@ -343,8 +343,9 @@ impl ProviderManager {
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
     ) -> Result<()> {
-        let mut providers = BTreeMap::new();
         let mut provider_types = BTreeMap::new();
+        let mut provider_configs = BTreeMap::new();
+        let mut models_by_provider: BTreeMap<ProviderId, Vec<ModelConfig>> = BTreeMap::new();
 
         for provider_config in config.providers {
             let errors = registry
@@ -360,20 +361,10 @@ impl ProviderManager {
             }
 
             provider_types.insert(provider_config.id.clone(), provider_config.type_id.clone());
-            let provider = registry.create_provider(
-                &provider_config.type_id,
-                provider_config.id.clone(),
-                provider_config.config,
-            )?;
-            providers.insert(provider_config.id, provider);
+            provider_configs.insert(provider_config.id.clone(), provider_config);
         }
 
         for model_config in config.models {
-            let provider = providers
-                .get_mut(&model_config.provider_id)
-                .ok_or_else(|| {
-                    ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
-                })?;
             let provider_type = provider_types
                 .get(&model_config.provider_id)
                 .ok_or_else(|| {
@@ -389,7 +380,39 @@ impl ProviderManager {
                     .into(),
                 );
             }
-            provider.register_model(model_config).await?;
+            models_by_provider
+                .entry(model_config.provider_id.clone())
+                .or_default()
+                .push(model_config);
+        }
+
+        let mut providers = BTreeMap::new();
+        let mut failures = Vec::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        for (provider_id, provider_config) in provider_configs {
+            let registry = registry.clone();
+            let models = models_by_provider.remove(&provider_id).unwrap_or_default();
+            tasks.spawn(async move {
+                let mut provider = registry.create_provider(
+                    &provider_config.type_id,
+                    provider_config.id.clone(),
+                    provider_config.config,
+                )?;
+                for model in models {
+                    provider.register_model(model).await?;
+                }
+                Ok::<_, color_eyre::Report>((provider_id, provider))
+            });
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok((provider_id, provider))) => {
+                    providers.insert(provider_id, provider);
+                }
+                Ok(Err(error)) => failures.push(error.to_string()),
+                Err(error) => failures.push(error.to_string()),
+            }
         }
 
         self.providers = providers
@@ -397,8 +420,19 @@ impl ProviderManager {
             .map(|(id, provider)| (id, Arc::from(provider)))
             .collect();
 
-        self.update_models_list().await?;
-        Ok(())
+        if self.providers.is_empty() {
+            if !failures.is_empty() {
+                return Err(ProviderError::ConfigValidationError(failures.join("\n")).into());
+            }
+        } else {
+            self.update_models_list().await?;
+        }
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ProviderError::ConfigValidationError(failures.join("\n")).into())
+        }
     }
 
     pub async fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {

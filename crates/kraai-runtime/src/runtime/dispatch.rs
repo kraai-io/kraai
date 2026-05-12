@@ -4,7 +4,7 @@ use color_eyre::eyre::{Result, eyre};
 
 use super::config::{canonicalize_workspace_dir, map_openai_codex_auth_status};
 use super::core::RuntimeCore;
-use crate::api::{Event, Model, PendingToolInfo, Session, SessionContextUsage, WorkspaceState};
+use crate::api::{Model, PendingToolInfo, Session, SessionContextUsage, WorkspaceState};
 use crate::handle::Command;
 use crate::settings::read_settings_document;
 
@@ -84,9 +84,7 @@ impl RuntimeCore {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
             Command::LoadConfig => {
-                self.load_providers_config().await?;
-                tracing::info!("Loaded config");
-                self.send_event(Event::ConfigLoaded);
+                self.load_providers_config_and_emit().await?;
             }
             Command::SendMessage {
                 session_id,

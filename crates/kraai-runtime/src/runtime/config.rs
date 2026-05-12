@@ -14,7 +14,9 @@ use crate::api::{
     PendingDeviceCodeLogin,
 };
 use crate::handle::Command;
-use crate::settings::{SettingsDocument, write_settings_document};
+use crate::settings::{
+    SettingsDocument, read_settings_document, write_settings_document,
+};
 
 impl RuntimeCore {
     pub(crate) fn spawn_openai_auth_forwarder(&self) {
@@ -101,27 +103,20 @@ impl RuntimeCore {
         });
     }
 
-    pub(crate) async fn load_providers_config(&self) -> Result<()> {
-        let config_loc = &self.provider_config_path;
-        let config = if !config_loc.exists() {
-            ProviderManagerConfig {
+    pub(crate) async fn read_and_validate_provider_config(
+        &self,
+        config_loc: &PathBuf,
+    ) -> Result<ProviderManagerConfig> {
+        if !config_loc.exists() {
+            return Ok(ProviderManagerConfig {
                 providers: Vec::new(),
                 models: Vec::new(),
-            }
-        } else {
-            let config_slice = tokio::fs::read(config_loc).await?;
-            toml::from_slice(&config_slice).wrap_err_with(|| {
-                format!("Failed to parse provider config {}", config_loc.display())
-            })?
-        };
-
-        self.agent_manager
-            .lock()
-            .await
-            .set_providers(config, self.provider_registry.clone())
-            .await?;
-
-        Ok(())
+            });
+        }
+        let _ = read_settings_document(config_loc, &self.provider_registry)?;
+        let config_slice = tokio::fs::read(config_loc).await?;
+        toml::from_slice(&config_slice)
+            .wrap_err_with(|| format!("Failed to parse provider config {}", config_loc.display()))
     }
 
     pub(crate) async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
@@ -131,9 +126,7 @@ impl RuntimeCore {
             &self.provider_registry,
         )
         .await?;
-        self.load_providers_config().await?;
-        tracing::info!("Loaded config");
-        self.send_event(Event::ConfigLoaded);
+        self.load_providers_config_and_emit().await?;
         Ok(())
     }
 }
