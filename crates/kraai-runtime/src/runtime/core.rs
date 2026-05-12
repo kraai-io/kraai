@@ -56,11 +56,8 @@ impl RuntimeCore {
 
         self.spawn_config_watcher();
         self.spawn_openai_auth_forwarder();
-        if let Err(error) = self.load_providers_config().await {
+        if let Err(error) = self.load_providers_config_and_emit().await {
             self.send_error(format!("Failed to load config: {error}"));
-        } else {
-            tracing::info!("Loaded config");
-            self.send_event(Event::ConfigLoaded);
         }
 
         while let Some(command) = command_rx.recv().await {
@@ -70,5 +67,19 @@ impl RuntimeCore {
         }
 
         tracing::info!("Event loop terminated");
+    }
+
+    pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {
+        let config = self
+            .read_and_validate_provider_config(&self.provider_config_path)
+            .await?;
+        self.agent_manager
+            .lock()
+            .await
+            .set_providers(config, self.provider_registry.clone())
+            .await?;
+        tracing::info!("Loaded config");
+        self.send_event(Event::ConfigLoaded);
+        Ok(())
     }
 }

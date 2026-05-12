@@ -318,6 +318,7 @@ impl ProviderRegistry {
 }
 
 impl ProviderManager {
+    const PROVIDER_INITIALIZATION_CONCURRENCY: usize = 8;
     const MODEL_CACHE_REFRESH_CONCURRENCY: usize = 8;
 
     pub fn new() -> Self {
@@ -345,8 +346,9 @@ impl ProviderManager {
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
     ) -> Result<()> {
-        let mut providers = BTreeMap::new();
         let mut provider_types = BTreeMap::new();
+        let mut provider_configs = BTreeMap::new();
+        let mut models_by_provider: BTreeMap<ProviderId, Vec<ModelConfig>> = BTreeMap::new();
 
         for provider_config in config.providers {
             let errors = registry
@@ -362,20 +364,10 @@ impl ProviderManager {
             }
 
             provider_types.insert(provider_config.id.clone(), provider_config.type_id.clone());
-            let provider = registry.create_provider(
-                &provider_config.type_id,
-                provider_config.id.clone(),
-                provider_config.config,
-            )?;
-            providers.insert(provider_config.id, provider);
+            provider_configs.insert(provider_config.id.clone(), provider_config);
         }
 
         for model_config in config.models {
-            let provider = providers
-                .get_mut(&model_config.provider_id)
-                .ok_or_else(|| {
-                    ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
-                })?;
             let provider_type = provider_types
                 .get(&model_config.provider_id)
                 .ok_or_else(|| {
@@ -391,16 +383,59 @@ impl ProviderManager {
                     .into(),
                 );
             }
-            provider.register_model(model_config).await?;
+            models_by_provider
+                .entry(model_config.provider_id.clone())
+                .or_default()
+                .push(model_config);
         }
 
-        self.providers = providers
+        let mut provider_configs = provider_configs.into_iter();
+        let mut providers = BTreeMap::new();
+        let mut failures = Vec::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            while tasks.len() < Self::PROVIDER_INITIALIZATION_CONCURRENCY {
+                let Some((provider_id, provider_config)) = provider_configs.next() else {
+                    break;
+                };
+                let registry = registry.clone();
+                let models = models_by_provider.remove(&provider_id).unwrap_or_default();
+                tasks.spawn(async move {
+                    let mut provider = registry.create_provider(
+                        &provider_config.type_id,
+                        provider_config.id.clone(),
+                        provider_config.config,
+                    )?;
+                    for model in models {
+                        provider.register_model(model).await?;
+                    }
+                    Ok::<_, color_eyre::Report>((provider_id, provider))
+                });
+            }
+
+            let Some(result) = tasks.join_next().await else {
+                break;
+            };
+            match result {
+                Ok(Ok((provider_id, provider))) => {
+                    providers.insert(provider_id, provider);
+                }
+                Ok(Err(error)) => failures.push(error.to_string()),
+                Err(error) => failures.push(error.to_string()),
+            }
+        }
+
+        if !failures.is_empty() {
+            return Err(ProviderError::ConfigValidationError(failures.join("\n")).into());
+        }
+
+        let providers = providers
             .into_iter()
             .map(|(id, provider)| (id, Arc::from(provider)))
             .collect();
 
-        self.update_models_list().await?;
-        Ok(())
+        self.providers = providers;
+        self.update_models_list().await
     }
 
     pub async fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
@@ -416,12 +451,18 @@ impl ProviderManager {
     }
 
     pub async fn update_models_list(&mut self) -> Result<()> {
+        Self::update_models_list_for(&self.providers).await
+    }
+
+    async fn update_models_list_for(
+        providers: &BTreeMap<ProviderId, Arc<dyn Provider>>,
+    ) -> Result<()> {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(
             Self::MODEL_CACHE_REFRESH_CONCURRENCY,
         ));
         let mut tasks = tokio::task::JoinSet::new();
 
-        for (provider_id, provider) in &self.providers {
+        for (provider_id, provider) in providers {
             let provider_id = provider_id.clone();
             let provider = provider.clone();
             let semaphore = semaphore.clone();
@@ -797,6 +838,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_config_bounds_provider_initialization_concurrency() {
+        struct ObservedProvider {
+            id: ProviderId,
+            active_initializations: Arc<AtomicUsize>,
+            peak_initializations: Arc<AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl Provider for ObservedProvider {
+            fn get_provider_id(&self) -> ProviderId {
+                self.id.clone()
+            }
+
+            async fn list_models(&self) -> Vec<Model> {
+                Vec::new()
+            }
+
+            async fn cache_models(&self) -> Result<()> {
+                Ok(())
+            }
+
+            async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+                let active = self.active_initializations.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak_initializations
+                    .fetch_max(active, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                self.active_initializations.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            }
+
+            async fn generate_reply(
+                &self,
+                _model_id: &ModelId,
+                _messages: Vec<ChatMessage>,
+                _request_context: &ProviderRequestContext,
+            ) -> Result<ChatMessage> {
+                unreachable!("not used by this test")
+            }
+
+            async fn generate_reply_stream(
+                &self,
+                _model_id: &ModelId,
+                _messages: Vec<ChatMessage>,
+                _request_context: &ProviderRequestContext,
+            ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+                unreachable!("not used by this test")
+            }
+        }
+
+        let active_initializations = Arc::new(AtomicUsize::new(0));
+        let peak_initializations = Arc::new(AtomicUsize::new(0));
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register_dynamic_factory(
+                "observed",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Observed".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "Records initialization concurrency".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: false,
+                    default_provider_id_prefix: "observed".to_string(),
+                },
+                {
+                    let active_initializations = active_initializations.clone();
+                    let peak_initializations = peak_initializations.clone();
+                    move |id, _config| {
+                        Ok(Box::new(ObservedProvider {
+                            id,
+                            active_initializations: active_initializations.clone(),
+                            peak_initializations: peak_initializations.clone(),
+                        }))
+                    }
+                },
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
+
+        let provider_count = ProviderManager::PROVIDER_INITIALIZATION_CONCURRENCY + 2;
+        let config = ProviderManagerConfig {
+            providers: (0..provider_count)
+                .map(|index| ProviderConfig {
+                    id: ProviderId::new(format!("provider-{index}")),
+                    type_id: "observed".to_string(),
+                    config: DynamicConfig::new(),
+                })
+                .collect(),
+            models: (0..provider_count)
+                .map(|index| ModelConfig {
+                    id: ModelId::new(format!("model-{index}")),
+                    provider_id: ProviderId::new(format!("provider-{index}")),
+                    config: DynamicConfig::new(),
+                })
+                .collect(),
+        };
+
+        ProviderManager::new()
+            .load_config(config, registry)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            peak_initializations.load(Ordering::SeqCst),
+            ProviderManager::PROVIDER_INITIALIZATION_CONCURRENCY
+        );
+    }
+
+    #[tokio::test]
     async fn test_invalid_config() {
         let mut registry = ProviderRegistry::default();
         registry.register_factory::<MockFactory>().unwrap();
@@ -816,6 +968,116 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_config_preserves_active_providers_when_creation_fails() {
+        let mut registry = ProviderRegistry::default();
+        registry.register_factory::<MockFactory>().unwrap();
+        registry
+            .register_dynamic_factory(
+                "failing",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Failing".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "Fails during creation".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: false,
+                    default_provider_id_prefix: "failing".to_string(),
+                },
+                |_id, _config| {
+                    Err(ProviderError::ConfigParseError(
+                        "provider creation failed".to_string(),
+                    ))
+                },
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
+
+        let mut valid_config = DynamicConfig::new();
+        valid_config.insert("token".to_string(), DynamicValue::from("abc"));
+
+        let mut manager = ProviderManager::new();
+        manager.register_provider(
+            ProviderId::new("active"),
+            Box::new(MockProvider::new("active")),
+        );
+
+        let result = manager
+            .load_config(
+                ProviderManagerConfig {
+                    providers: vec![
+                        ProviderConfig {
+                            id: ProviderId::new("valid"),
+                            type_id: "mock".to_string(),
+                            config: valid_config,
+                        },
+                        ProviderConfig {
+                            id: ProviderId::new("invalid"),
+                            type_id: "failing".to_string(),
+                            config: DynamicConfig::new(),
+                        },
+                    ],
+                    models: vec![],
+                },
+                registry,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(manager.list_providers(), vec![ProviderId::new("active")]);
+    }
+
+    #[tokio::test]
+    async fn load_config_replaces_active_providers_when_model_cache_refresh_fails() {
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register_dynamic_factory(
+                "failing-cache",
+                ProviderDefinition {
+                    type_id: String::new(),
+                    display_name: "Failing Cache".to_string(),
+                    protocol_family: "mock".to_string(),
+                    description: "Fails while refreshing its model cache".to_string(),
+                    provider_fields: vec![],
+                    model_fields: vec![],
+                    supports_model_discovery: true,
+                    default_provider_id_prefix: "failing-cache".to_string(),
+                },
+                |id, _config| Ok(Box::new(MockProvider::failing_cache(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
+
+        let mut manager = ProviderManager::new();
+        manager.register_provider(
+            ProviderId::new("active"),
+            Box::new(MockProvider::new("active")),
+        );
+
+        let result = manager
+            .load_config(
+                ProviderManagerConfig {
+                    providers: vec![ProviderConfig {
+                        id: ProviderId::new("replacement"),
+                        type_id: "failing-cache".to_string(),
+                        config: DynamicConfig::new(),
+                    }],
+                    models: vec![],
+                },
+                registry,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            manager.list_providers(),
+            vec![ProviderId::new("replacement")]
+        );
     }
 
     #[tokio::test]
