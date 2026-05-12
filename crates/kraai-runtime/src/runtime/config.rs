@@ -14,9 +14,7 @@ use crate::api::{
     PendingDeviceCodeLogin,
 };
 use crate::handle::Command;
-use crate::settings::{
-    SettingsDocument, read_settings_document, write_settings_document,
-};
+use crate::settings::{SettingsDocument, read_settings_document, write_settings_document};
 
 impl RuntimeCore {
     pub(crate) fn spawn_openai_auth_forwarder(&self) {
