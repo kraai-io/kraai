@@ -74,11 +74,12 @@ impl RuntimeCore {
             .read_and_validate_provider_config(&self.provider_config_path)
             .await?;
         tracing::info!("Loaded config");
-        self.send_event(Event::ConfigLoaded);
         self.agent_manager
             .lock()
             .await
             .set_providers(config, self.provider_registry.clone())
-            .await
+            .await?;
+        self.send_event(Event::ConfigLoaded);
+        Ok(())
     }
 }
