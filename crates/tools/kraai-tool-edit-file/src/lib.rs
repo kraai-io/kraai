@@ -17,7 +17,7 @@ pub struct EditFileTool;
 
 toon_tool! {
     name: "edit_file",
-    description: "Apply one or more deterministic exact line-ranged replacements to a single file",
+    description: "Apply one or more deterministic exact line-ranged replacements to a single file. Prefer the smallest edit that satisfies the request. If the request sounds like a full-document update, still only change the minimum lines unless the user explicitly asks to rewrite the whole file. Many small patches is better than replacing the entire file.",
     types: {
         #[derive(Clone, serde::Deserialize, serde::Serialize)]
         struct EditOperation {
