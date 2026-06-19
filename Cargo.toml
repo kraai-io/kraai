@@ -24,7 +24,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.88.0"
+rust-version = "1.96.0"
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
@@ -53,7 +53,7 @@ kraai-types = { path = "crates/kraai-types" }
 arboard = "3.6.1"
 async-trait = "0.1.89"
 base64 = "0.22.1"
-chrono = { version = "0.4.44", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 crossbeam-channel = "0.5.15"
@@ -62,29 +62,29 @@ futures = "0.3.32"
 grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
-ignore = "0.4.25"
+ignore = "0.4.26"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
 rand = "0.10.1"
-ratatui = { version = "0.30.0", features = [
+ratatui = { version = "0.30.2", features = [
   "all-widgets",
   "macros",
   "scrolling-regions",
   "serde",
 ] }
-regex = "1.12.3"
-reqwest = { features = ["json", "stream"], version = "0.13.3" }
+regex = "1.12.4"
+reqwest = { features = ["json", "stream"], version = "0.13.4" }
 serde = { features = ["derive"], version = "1.0.228" }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 sha2 = "0.11.0"
-syn = { version = "2.0.117", features = ["derive", "full"] }
+syn = { version = "2.0.118", features = ["derive", "full"] }
 tachyonfx = "0.25.0"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
-tokio = { features = ["full"], version = "1.52.1" }
+tokio = { features = ["full"], version = "1.52.3" }
 toml = "1.1.2"
-toon-format = "0.4.5"
+toon-format = "0.5.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
