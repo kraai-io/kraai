@@ -2,3 +2,5 @@ target/
 target
 *.profraw
 crate-sources*
+.codex
+result
