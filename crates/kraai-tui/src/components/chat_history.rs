@@ -149,7 +149,7 @@ impl<'a> ChatHistory<'a> {
                     else {
                         break;
                     };
-                    wrapped.push(format!("{prefix}{grapheme}"));
+                    wrapped.push(Self::fit_to_width(prefix, width));
                     remaining = &remaining[grapheme.len()..];
                 } else {
                     wrapped.push(format!("{prefix}{chunk}"));
@@ -326,10 +326,6 @@ impl<'a> ChatHistory<'a> {
                 take_count += 1;
             }
 
-            if take_count == 0 && idx < total {
-                take_count = 1;
-            }
-
             if take_count > 0 {
                 for (grapheme, style) in &styled_graphemes[idx..idx + take_count] {
                     if let Some(last) = line_spans.last_mut()
@@ -344,6 +340,11 @@ impl<'a> ChatHistory<'a> {
                     });
                 }
                 idx += take_count;
+            } else if idx < total {
+                // A grapheme wider than the remaining line cannot be rendered
+                // without exceeding the viewport. Consume it while retaining
+                // the fitting prefix so the visible view matches the buffer.
+                idx += 1;
             }
 
             lines.push(RenderedLine {
@@ -911,6 +912,18 @@ mod tests {
         assert_eq!(buffer[(5, 0)].symbol(), "好");
         assert_eq!(buffer[(3, 1)].symbol(), "你");
         assert_eq!(buffer[(5, 1)].symbol(), "好");
+    }
+
+    #[test]
+    fn keeps_wide_markdown_graphemes_within_narrow_chat_width() {
+        let assistant = message("1", ChatRole::Assistant, "> 你");
+        let lines = ChatHistory::build_message_lines(&assistant, 6);
+
+        assert!(
+            lines
+                .iter()
+                .all(|line| display_width(&ChatHistory::line_text(line)) <= 6)
+        );
     }
 
     #[test]

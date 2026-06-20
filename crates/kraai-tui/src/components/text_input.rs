@@ -126,34 +126,59 @@ impl<'a> TextInput<'a> {
                 let mut segment_width = 0usize;
                 for (offset, grapheme) in source_line.grapheme_indices(true) {
                     let grapheme_width = display_width(grapheme);
+                    let grapheme_start = line_start + offset;
+                    if grapheme_width > available {
+                        if segment_start < grapheme_start {
+                            wrapped.push(wrapped_segment(
+                                content,
+                                segment_start,
+                                grapheme_start,
+                                grapheme_start,
+                                line_start,
+                                prefix,
+                            ));
+                        }
+
+                        let segment_end = grapheme_start + grapheme.len();
+                        wrapped.push(wrapped_segment(
+                            content,
+                            grapheme_start,
+                            segment_end,
+                            grapheme_start,
+                            line_start,
+                            prefix,
+                        ));
+                        segment_start = segment_end;
+                        segment_width = 0;
+                        continue;
+                    }
+
                     if segment_width > 0 && segment_width + grapheme_width > available {
-                        let segment_end = line_start + offset;
-                        let line_prefix = if segment_start == line_start {
-                            prefix
-                        } else {
-                            CONTINUATION_PREFIX
-                        };
-                        wrapped.push(WrappedSegment {
-                            text: format!("{line_prefix}{}", &content[segment_start..segment_end]),
-                            start: segment_start,
-                            end: segment_end,
-                        });
+                        let segment_end = grapheme_start;
+                        wrapped.push(wrapped_segment(
+                            content,
+                            segment_start,
+                            segment_end,
+                            segment_end,
+                            line_start,
+                            prefix,
+                        ));
                         segment_start = segment_end;
                         segment_width = 0;
                     }
                     segment_width += grapheme_width;
                 }
 
-                let line_prefix = if segment_start == line_start {
-                    prefix
-                } else {
-                    CONTINUATION_PREFIX
-                };
-                wrapped.push(WrappedSegment {
-                    text: format!("{line_prefix}{}", &content[segment_start..line_end]),
-                    start: segment_start,
-                    end: line_end,
-                });
+                if segment_start < line_end {
+                    wrapped.push(wrapped_segment(
+                        content,
+                        segment_start,
+                        line_end,
+                        line_end,
+                        line_start,
+                        prefix,
+                    ));
+                }
             }
 
             let Some(newline_index) = next_newline else {
@@ -236,6 +261,26 @@ struct WrappedSegment {
     text: String,
     start: usize,
     end: usize,
+}
+
+fn wrapped_segment(
+    content: &str,
+    start: usize,
+    end: usize,
+    rendered_end: usize,
+    line_start: usize,
+    first_prefix: &str,
+) -> WrappedSegment {
+    let prefix = if start == line_start {
+        first_prefix
+    } else {
+        CONTINUATION_PREFIX
+    };
+    WrappedSegment {
+        text: format!("{prefix}{}", &content[start..rendered_end]),
+        start,
+        end,
+    }
 }
 
 fn line_cursor(
@@ -328,6 +373,16 @@ mod tests {
             TextInput::new(input, input.len()).get_cursor_position(area),
             (5, 2)
         );
+    }
+
+    #[test]
+    fn keeps_an_overwide_first_grapheme_inside_the_input_width() {
+        let input = "你";
+        assert_eq!(TextInput::wrap_text(input, 3), vec!["> "]);
+
+        let area = Rect::new(0, 0, 5, 3);
+        let cursor = TextInput::new(input, input.len()).get_cursor_position(area);
+        assert!(cursor.0 < area.right());
     }
 
     #[test]

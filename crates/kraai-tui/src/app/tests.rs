@@ -1575,6 +1575,32 @@ fn selection_overlay_uses_terminal_cells_for_wide_graphemes() {
     assert_eq!(buffer[(2, 0)].bg, Color::Cyan);
     assert_ne!(buffer[(3, 0)].bg, Color::Cyan);
 }
+
+#[test]
+fn selection_overlay_expands_to_cover_wide_graphemes() {
+    let area = Rect::new(0, 0, 4, 1);
+    let view = visible_chat_view(&["a你b"], area);
+    let mut buffer = Buffer::empty(area);
+    for x in 0..area.width {
+        buffer[(x, 0)]
+            .set_char(' ')
+            .set_style(Style::default().fg(Color::White));
+    }
+
+    render_chat_selection_overlay(
+        Some(&view),
+        Some(ChatSelection {
+            anchor: ChatCellPosition { line: 0, column: 2 },
+            focus: ChatCellPosition { line: 0, column: 2 },
+        }),
+        &mut buffer,
+    );
+
+    assert_ne!(buffer[(0, 0)].bg, Color::Cyan);
+    assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
+    assert_eq!(buffer[(2, 0)].bg, Color::Cyan);
+    assert_ne!(buffer[(3, 0)].bg, Color::Cyan);
+}
 #[test]
 fn tab_cycles_slash_command_and_enter_executes_selected_command() {
     let mut harness = test_harness();

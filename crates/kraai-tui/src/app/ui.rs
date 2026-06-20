@@ -125,7 +125,22 @@ pub(super) fn render_chat_selection_overlay(
             line_width.saturating_sub(1)
         };
 
-        for column in start_col..=end_col {
+        let mut expanded_start = start_col;
+        let mut expanded_end = end_col;
+        let mut cell_start = 0;
+        for grapheme in
+            unicode_segmentation::UnicodeSegmentation::graphemes(line.text.as_str(), true)
+        {
+            let grapheme_width = display_width(grapheme);
+            let cell_end = cell_start + grapheme_width;
+            if grapheme_width > 0 && cell_start <= end_col && cell_end > start_col {
+                expanded_start = expanded_start.min(cell_start);
+                expanded_end = expanded_end.max(cell_end.saturating_sub(1));
+            }
+            cell_start = cell_end;
+        }
+
+        for column in expanded_start..=expanded_end {
             let x = view.area.x + column as u16;
             let y = line.y;
             let cell = &mut buf[(x, y)];
