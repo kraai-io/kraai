@@ -1,22 +1,22 @@
 [workspace]
 members = [
-    "crates/kraai-agent",
-    "crates/kraai-persistence",
-    "crates/kraai-runtime",
-    "crates/kraai-toon-schema",
-    "crates/kraai-tui",
-    "crates/kraai-types",
-    "crates/llm-providers/kraai-provider-core",
-    "crates/llm-providers/kraai-provider-openai-chat-completions",
-    "crates/llm-providers/kraai-provider-openai-codex",
-    "crates/tools/kraai-tool-bash",
-    "crates/tools/kraai-tool-close-file",
-    "crates/tools/kraai-tool-core",
-    "crates/tools/kraai-tool-edit-file",
-    "crates/tools/kraai-tool-list-files",
-    "crates/tools/kraai-tool-open-file",
-    "crates/tools/kraai-tool-read-file",
-    "crates/tools/kraai-tool-search-files",
+  "crates/kraai-agent",
+  "crates/kraai-persistence",
+  "crates/kraai-runtime",
+  "crates/kraai-toon-schema",
+  "crates/kraai-tui",
+  "crates/kraai-types",
+  "crates/llm-providers/kraai-provider-core",
+  "crates/llm-providers/kraai-provider-openai-chat-completions",
+  "crates/llm-providers/kraai-provider-openai-codex",
+  "crates/tools/kraai-tool-bash",
+  "crates/tools/kraai-tool-close-file",
+  "crates/tools/kraai-tool-core",
+  "crates/tools/kraai-tool-edit-file",
+  "crates/tools/kraai-tool-list-files",
+  "crates/tools/kraai-tool-open-file",
+  "crates/tools/kraai-tool-read-file",
+  "crates/tools/kraai-tool-search-files",
 ]
 resolver = "3"
 
@@ -67,10 +67,10 @@ proc-macro2 = "1.0.106"
 quote = "1.0.45"
 rand = "0.10.1"
 ratatui = { version = "0.30.2", features = [
-    "all-widgets",
-    "macros",
-    "scrolling-regions",
-    "serde",
+  "all-widgets",
+  "macros",
+  "scrolling-regions",
+  "serde",
 ] }
 regex = "1.12.4"
 reqwest = { features = ["json", "stream"], version = "0.13.4" }
