@@ -119,6 +119,7 @@ where
                 },
             );
         }
+        drop(cache);
 
         Ok(())
     }
@@ -136,7 +137,7 @@ where
             .and_then(DynamicValue::as_integer)
             .map(usize::try_from)
             .transpose()
-            .map_err(|_| eyre!("Invalid max_context"))?;
+            .map_err(|error| eyre!("Invalid max_context: {error}"))?;
 
         self.model_configs
             .insert(model.id, ModelMetadata { name, max_context });
@@ -346,6 +347,13 @@ impl ProviderFactory for OpenAiFactory {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "provider tests use direct assertions for local HTTP fixtures"
+)]
 mod tests {
     use super::*;
     use std::collections::VecDeque;

@@ -221,8 +221,14 @@ fn is_retryable_error(error: &reqwest::Error) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::panic_in_result_fn,
+    reason = "fallible network fixture setup is combined with direct assertions"
+)]
 mod tests {
     use super::*;
+    use color_eyre::{Result, eyre::eyre};
     use std::collections::VecDeque;
     use std::net::{SocketAddr, TcpListener as StdTcpListener};
     use std::sync::{Arc, Mutex};
@@ -297,9 +303,9 @@ mod tests {
         },
     }
 
-    async fn spawn_server(script: Vec<ScriptedResponse>) -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+    async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<SocketAddr> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
         let script = Arc::new(tokio::sync::Mutex::new(VecDeque::from(script)));
 
         tokio::spawn(async move {
@@ -326,7 +332,7 @@ mod tests {
                         headers,
                         body,
                     } => {
-                        write_response(&mut stream, status_line, &headers, body).await;
+                        let _ = write_response(&mut stream, status_line, &headers, body).await;
                     }
                     ScriptedResponse::DelayedStatus {
                         delay,
@@ -335,13 +341,13 @@ mod tests {
                         body,
                     } => {
                         tokio::time::sleep(delay).await;
-                        write_response(&mut stream, status_line, &headers, body).await;
+                        let _ = write_response(&mut stream, status_line, &headers, body).await;
                     }
                 }
             }
         });
 
-        address
+        Ok(address)
     }
 
     async fn write_response(
@@ -349,7 +355,7 @@ mod tests {
         status_line: &str,
         headers: &[(&str, String)],
         body: &str,
-    ) {
+    ) -> std::io::Result<()> {
         let mut response = format!(
             "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n",
             body.len()
@@ -363,8 +369,8 @@ mod tests {
         response.push_str("\r\n");
         response.push_str(body);
 
-        stream.write_all(response.as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
+        stream.write_all(response.as_bytes()).await?;
+        stream.shutdown().await
     }
 
     fn test_policy() -> HttpRetryPolicy {
@@ -374,15 +380,15 @@ mod tests {
         }
     }
 
-    fn closed_port_url() -> String {
-        let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+    fn closed_port_url() -> std::io::Result<String> {
+        let listener = StdTcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
         drop(listener);
-        format!("http://{address}/")
+        Ok(format!("http://{address}/"))
     }
 
     #[tokio::test]
-    async fn retries_500_then_succeeds() {
+    async fn retries_500_then_succeeds() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "500 Internal Server Error",
@@ -395,9 +401,9 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -406,14 +412,14 @@ mod tests {
             &ProviderRequestContext::default(),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn retries_429_then_succeeds() {
+    async fn retries_429_then_succeeds() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "429 Too Many Requests",
@@ -426,9 +432,9 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -437,14 +443,14 @@ mod tests {
             &ProviderRequestContext::default(),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn retries_408_then_succeeds() {
+    async fn retries_408_then_succeeds() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "408 Request Timeout",
@@ -457,9 +463,9 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -468,14 +474,14 @@ mod tests {
             &ProviderRequestContext::default(),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn retries_409_then_succeeds() {
+    async fn retries_409_then_succeeds() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "409 Conflict",
@@ -488,9 +494,9 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -499,23 +505,23 @@ mod tests {
             &ProviderRequestContext::default(),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn does_not_retry_400() {
+    async fn does_not_retry_400() -> Result<()> {
         let address = spawn_server(vec![ScriptedResponse::Status {
             status_line: "400 Bad Request",
             headers: Vec::new(),
             body: "bad request",
         }])
-        .await;
+        .await?;
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -524,24 +530,24 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(collector.snapshot().is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn does_not_retry_401() {
+    async fn does_not_retry_401() -> Result<()> {
         let address = spawn_server(vec![ScriptedResponse::Status {
             status_line: "401 Unauthorized",
             headers: Vec::new(),
             body: "nope",
         }])
-        .await;
+        .await?;
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -550,25 +556,25 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(collector.snapshot().is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn retries_transport_connect_failure() {
+    async fn retries_transport_connect_failure() -> Result<()> {
         let ok_address = spawn_server(vec![ScriptedResponse::Status {
             status_line: "200 OK",
             headers: Vec::new(),
             body: "ok",
         }])
-        .await;
-        let closed_url = closed_port_url();
+        .await?;
+        let closed_url = closed_port_url()?;
         let ok_url = format!("http://{ok_address}/");
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
         let attempt = Arc::new(Mutex::new(0usize));
 
@@ -584,6 +590,7 @@ mod tests {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let current = *guard;
                     *guard += 1;
+                    drop(guard);
                     if current == 0 {
                         closed_url.clone()
                     } else {
@@ -593,33 +600,33 @@ mod tests {
                 client.get(url).send()
             },
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn retries_transport_timeout() {
+    async fn retries_transport_timeout() -> Result<()> {
         let slow_address = spawn_server(vec![ScriptedResponse::DelayedStatus {
             delay: Duration::from_millis(50),
             status_line: "200 OK",
             headers: Vec::new(),
             body: "slow",
         }])
-        .await;
+        .await?;
         let ok_address = spawn_server(vec![ScriptedResponse::Status {
             status_line: "200 OK",
             headers: Vec::new(),
             body: "ok",
         }])
-        .await;
+        .await?;
         let slow_url = format!("http://{slow_address}/");
         let ok_url = format!("http://{ok_address}/");
         let Some(client) = test_client_from_builder_or_skip(
             reqwest::Client::builder().timeout(Duration::from_millis(10)),
         ) else {
-            return;
+            return Ok(());
         };
         let attempt = Arc::new(Mutex::new(0usize));
 
@@ -635,6 +642,7 @@ mod tests {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let current = *guard;
                     *guard += 1;
+                    drop(guard);
                     if current == 0 {
                         slow_url.clone()
                     } else {
@@ -644,14 +652,14 @@ mod tests {
                 client.get(url).send()
             },
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn stops_after_max_attempts() {
+    async fn stops_after_max_attempts() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "500 Internal Server Error",
@@ -669,14 +677,14 @@ mod tests {
                 body: "3",
             },
         ])
-        .await;
+        .await?;
         let policy = HttpRetryPolicy {
             max_attempts: 3,
             initial_backoff: Duration::from_millis(1),
         };
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -685,15 +693,15 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(collector.snapshot().len(), 2);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn emits_retry_events_with_exact_number_and_delay() {
+    async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "500 Internal Server Error",
@@ -711,14 +719,14 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let policy = HttpRetryPolicy {
             max_attempts: 3,
             initial_backoff: Duration::from_millis(7),
         };
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -727,22 +735,25 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
 
         let events = collector.snapshot();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].operation, "responses");
-        assert_eq!(events[0].retry_number, 1);
-        assert_eq!(events[0].delay, Duration::from_millis(7));
-        assert_eq!(events[1].retry_number, 2);
-        assert_eq!(events[1].delay, Duration::from_millis(14));
+        let [first, second] = events.as_slice() else {
+            return Err(eyre!("expected two retry events"));
+        };
+        assert_eq!(first.operation, "responses");
+        assert_eq!(first.retry_number, 1);
+        assert_eq!(first.delay, Duration::from_millis(7));
+        assert_eq!(second.retry_number, 2);
+        assert_eq!(second.delay, Duration::from_millis(14));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn uses_retry_after_when_parseable() {
+    async fn uses_retry_after_when_parseable() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "429 Too Many Requests",
@@ -755,10 +766,10 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -767,15 +778,19 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(collector.snapshot()[0].delay, Duration::ZERO);
+        let events = collector.snapshot();
+        let [event] = events.as_slice() else {
+            return Err(eyre!("expected one retry event"));
+        };
+        assert_eq!(event.delay, Duration::ZERO);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn falls_back_when_retry_after_is_invalid() {
+    async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "503 Service Unavailable",
@@ -788,14 +803,14 @@ mod tests {
                 body: "ok",
             },
         ])
-        .await;
+        .await?;
         let collector = Arc::new(RetryCollector::default());
         let policy = HttpRetryPolicy {
             max_attempts: 2,
             initial_backoff: Duration::from_millis(11),
         };
         let Some(client) = test_client_or_skip() else {
-            return;
+            return Ok(());
         };
 
         let response = send_with_retry(
@@ -804,10 +819,14 @@ mod tests {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(format!("http://{address}/")).send(),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(collector.snapshot()[0].delay, Duration::from_millis(11));
+        let events = collector.snapshot();
+        let [event] = events.as_slice() else {
+            return Err(eyre!("expected one retry event"));
+        };
+        assert_eq!(event.delay, Duration::from_millis(11));
+        Ok(())
     }
 }

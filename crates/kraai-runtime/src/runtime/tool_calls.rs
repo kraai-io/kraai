@@ -86,7 +86,7 @@ impl RuntimeCore {
 
         let stream_request = {
             let mut agent = self.agent_manager.lock().await;
-            match agent
+            let result = agent
                 .prepare_start_stream_with_options(
                     &session_id,
                     message,
@@ -94,9 +94,11 @@ impl RuntimeCore {
                     provider_id,
                     auto_approve,
                 )
-                .await
-            {
-                Ok(result) => Some((agent.cloned_provider_manager(), result)),
+                .await;
+            let providers = agent.cloned_provider_manager();
+            drop(agent);
+            match result {
+                Ok(result) => Some((providers, result)),
                 Err(error) => {
                     self.send_event(Event::Error(error.to_string()));
                     None
@@ -149,7 +151,7 @@ impl RuntimeCore {
 
             let stream_request = {
                 let mut agent = self.agent_manager.lock().await;
-                match agent
+                let result = agent
                     .prepare_start_stream_with_options(
                         &session_id,
                         next_message.message,
@@ -157,9 +159,11 @@ impl RuntimeCore {
                         next_message.provider_id,
                         next_message.auto_approve,
                     )
-                    .await
-                {
-                    Ok(result) => Some((agent.cloned_provider_manager(), result)),
+                    .await;
+                let providers = agent.cloned_provider_manager();
+                drop(agent);
+                match result {
+                    Ok(result) => Some((providers, result)),
                     Err(error) => {
                         self.send_event(Event::Error(error.to_string()));
                         None
@@ -186,7 +190,7 @@ impl RuntimeCore {
             .await;
     }
 
-    pub(crate) async fn handle_execute_tools(&self, session_id: String) {
+    pub(crate) fn handle_execute_tools(&self, session_id: String) {
         let runtime = self.clone();
 
         tokio::spawn(async move {

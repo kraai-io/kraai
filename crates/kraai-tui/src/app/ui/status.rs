@@ -28,9 +28,11 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
 
 fn statusline_activity_label(state: &AppState) -> String {
     if state.runtime_is_active() {
+        let frame_index = state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len();
         return STATUSLINE_STREAMING_FRAMES
-            [state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len()]
-        .to_string();
+            .get(frame_index)
+            .unwrap_or(&"streaming")
+            .to_string();
     }
     if state.status == "Stream cancelled" {
         return String::from("cancelled");

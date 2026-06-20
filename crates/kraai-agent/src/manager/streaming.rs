@@ -169,9 +169,8 @@ impl AgentManager {
             return Ok(None);
         }
 
-        let tip_id = match self.get_tip(session_id).await? {
-            Some(id) => id,
-            None => return Ok(None),
+        let Some(tip_id) = self.get_tip(session_id).await? else {
+            return Ok(None);
         };
 
         let context = self.get_history_context(&tip_id).await?;
@@ -375,8 +374,10 @@ impl AgentManager {
             && let Some(generation) = state.message.generation.as_mut()
         {
             generation.usage = Some(usage);
+            drop(streaming);
             return true;
         }
+        drop(streaming);
         false
     }
 
@@ -494,9 +495,8 @@ impl AgentManager {
     pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
         let mut result = BTreeMap::new();
 
-        let tip_id = match self.get_tip(session_id).await? {
-            Some(id) => id,
-            None => return Ok(result),
+        let Some(tip_id) = self.get_tip(session_id).await? else {
+            return Ok(result);
         };
 
         let context = self.get_history_context(&tip_id).await?;
@@ -505,11 +505,14 @@ impl AgentManager {
         }
 
         let streaming = self.streaming_messages.read().await;
-        for (message_id, state) in streaming.iter() {
-            if state.session_id == session_id {
-                result.insert(message_id.clone(), state.message.clone());
-            }
-        }
+        let mut streaming_messages: Vec<_> = streaming
+            .iter()
+            .filter(|(_, state)| state.session_id == session_id)
+            .map(|(message_id, state)| (message_id.clone(), state.message.clone()))
+            .collect();
+        drop(streaming);
+        streaming_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
+        result.extend(streaming_messages);
 
         Ok(result)
     }

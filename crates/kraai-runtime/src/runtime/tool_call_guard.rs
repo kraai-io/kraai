@@ -66,10 +66,9 @@ impl ToolCallStreamGuard {
                         continue;
                     }
 
-                    let ch = remaining
-                        .chars()
-                        .next()
-                        .expect("remaining content should have a character");
+                    let Some(ch) = remaining.chars().next() else {
+                        break;
+                    };
                     accepted.push(ch);
                     cursor += ch.len_utf8();
                 }
@@ -87,10 +86,9 @@ impl ToolCallStreamGuard {
                         break;
                     }
 
-                    let ch = remaining
-                        .chars()
-                        .next()
-                        .expect("remaining content should have a character");
+                    let Some(ch) = remaining.chars().next() else {
+                        break;
+                    };
                     accepted.push(ch);
                     cursor += ch.len_utf8();
                 }
@@ -287,10 +285,9 @@ fn is_possible_think_tag_prefix(input: &str, closing: bool) -> bool {
     }
 
     let remainder = &name[letters_len..];
-    let next = remainder
-        .chars()
-        .next()
-        .expect("remainder should contain a character");
+    let Some(next) = remainder.chars().next() else {
+        return false;
+    };
     let matched_full_name = ["think", "thinking"]
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(letters));

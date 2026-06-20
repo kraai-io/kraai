@@ -156,9 +156,8 @@ impl AgentManager {
         message_id: &MessageId,
     ) -> Result<Vec<DetectedToolCall>> {
         let history = self.get_chat_history(session_id).await?;
-        let message = match history.get(message_id) {
-            Some(message) => message,
-            None => return Ok(vec![]),
+        let Some(message) = history.get(message_id) else {
+            return Ok(vec![]);
         };
 
         let (detected, failed) = self

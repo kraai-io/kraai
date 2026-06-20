@@ -94,12 +94,16 @@ async fn flush_event(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "fallible channel setup is combined with direct assertions"
+)]
 mod tests {
     use super::*;
     use futures::stream;
 
     #[tokio::test]
-    async fn emits_final_event_without_trailing_newline() {
+    async fn emits_final_event_without_trailing_newline() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(4);
 
         forward_sse_events(
@@ -110,12 +114,17 @@ mod tests {
         )
         .await;
 
-        assert_eq!(rx.recv().await.unwrap().unwrap(), "final payload");
+        let event = rx
+            .recv()
+            .await
+            .ok_or_else(|| eyre!("missing final event"))??;
+        assert_eq!(event, "final payload");
         assert!(rx.recv().await.is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn emits_final_event_when_last_line_is_split_across_chunks() {
+    async fn emits_final_event_when_last_line_is_split_across_chunks() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(4);
 
         forward_sse_events(
@@ -127,7 +136,12 @@ mod tests {
         )
         .await;
 
-        assert_eq!(rx.recv().await.unwrap().unwrap(), "split payload");
+        let event = rx
+            .recv()
+            .await
+            .ok_or_else(|| eyre!("missing split event"))??;
+        assert_eq!(event, "split payload");
         assert!(rx.recv().await.is_none());
+        Ok(())
     }
 }

@@ -70,9 +70,12 @@ impl TypedTool for BashTool {
             ));
         }
 
-        let mut command = Command::new(&args.command[0]);
+        let Some(program) = args.command.first() else {
+            return ToolCallResult::error(String::from("command must contain at least one item"));
+        };
+        let mut command = Command::new(program);
         command
-            .args(&args.command[1..])
+            .args(args.command.get(1..).unwrap_or_default())
             .current_dir(&ctx.global_config.workspace_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -84,7 +87,7 @@ impl TypedTool for BashTool {
             Err(error) => {
                 return ToolCallResult::error(format!(
                     "unable to spawn command '{}': {error}",
-                    args.command[0]
+                    program
                 ));
             }
         };
@@ -120,6 +123,12 @@ impl TypedTool for BashTool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests use direct assertions for process output fixtures"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};

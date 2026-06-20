@@ -78,6 +78,10 @@ pub fn normalize_chat_messages(messages: Vec<ChatMessage>) -> Result<NormalizedR
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "tests use direct assertions for normalized message fixtures"
+)]
 mod tests {
     use super::*;
     use kraai_types::ChatRole;

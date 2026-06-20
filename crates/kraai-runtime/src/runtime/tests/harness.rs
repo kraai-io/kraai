@@ -758,10 +758,9 @@ default_risk_level = \"undoable_workspace_write\"\n"
         let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
 
         Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-            .await
     }
 
-    async fn new_with_stores_and_parts(
+    fn new_with_stores_and_parts(
         providers: ProviderManager,
         mut tools: ToolManager,
         message_store: Arc<dyn MessageStore>,
@@ -899,7 +898,6 @@ default_risk_level = \"undoable_workspace_write\"\n"
             Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
 
         Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-            .await
     }
 
     pub(super) async fn new_with_provider_and_session_store<F>(
@@ -959,7 +957,6 @@ default_risk_level = \"undoable_workspace_write\"\n"
         let session_store = configure_session_store(base_session_store);
 
         Self::new_with_stores_and_parts(providers, tools, message_store, session_store, data_dir)
-            .await
     }
 
     pub(super) async fn shutdown(self) {

@@ -3,11 +3,10 @@ use serde_json::Value;
 use std::sync::LazyLock;
 use toon_format::{ToonError, decode_default};
 
-static TOOL_CALL_BLOCK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
-static THINK_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)</?(?:think|thinking)\b[^>]*>").expect("valid think tag regex")
-});
+static TOOL_CALL_BLOCK_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").ok());
+static THINK_TAG_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"(?i)</?(?:think|thinking)\b[^>]*>").ok());
 
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {
@@ -71,7 +70,7 @@ fn strip_thinking_blocks(text: &str) -> (String, Vec<ParseFailure>) {
     let mut cursor = 0usize;
     let mut thinking_start = None;
 
-    for matched in THINK_TAG_RE.find_iter(text) {
+    for matched in THINK_TAG_RE.iter().flat_map(|regex| regex.find_iter(text)) {
         let tag = matched.as_str();
         let is_closing = tag.starts_with("</");
 
@@ -104,7 +103,8 @@ fn strip_thinking_blocks(text: &str) -> (String, Vec<ParseFailure>) {
 
 fn extract_tool_call_blocks(text: &str) -> Vec<String> {
     TOOL_CALL_BLOCK_RE
-        .captures_iter(text)
+        .iter()
+        .flat_map(|regex| regex.captures_iter(text))
         .filter_map(|caps| caps.get(1).map(|content| content.as_str().to_string()))
         .collect()
 }
@@ -136,6 +136,10 @@ fn parse_single_tool_call(toon_content: &str) -> Result<ParsedToolCall, ParseErr
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "parser tests use direct assertions for expected parse results"
+)]
 mod tests {
     use super::*;
 

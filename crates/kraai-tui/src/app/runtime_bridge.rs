@@ -13,9 +13,8 @@ pub(super) fn spawn_event_bridge(
     let (event_tx, event_rx) = unbounded();
 
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(_) => return,
+        let Ok(rt) = tokio::runtime::Runtime::new() else {
+            return;
         };
 
         rt.block_on(async move {

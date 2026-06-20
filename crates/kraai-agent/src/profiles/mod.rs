@@ -209,8 +209,8 @@ fn load_layer(
 
 fn upsert_profiles(existing: &mut Vec<AgentProfile>, layer: Vec<AgentProfile>) {
     for profile in layer {
-        if let Some(index) = existing.iter().position(|current| current.id == profile.id) {
-            existing[index] = profile;
+        if let Some(current) = existing.iter_mut().find(|current| current.id == profile.id) {
+            *current = profile;
         } else {
             existing.push(profile);
         }
@@ -218,6 +218,11 @@ fn upsert_profiles(existing: &mut Vec<AgentProfile>, layer: Vec<AgentProfile>) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "tests use direct assertions for temporary profile setup and lookup"
+)]
 mod tests {
     use std::collections::HashSet;
     use std::fs;

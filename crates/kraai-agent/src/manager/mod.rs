@@ -28,6 +28,13 @@ mod streaming;
 mod tool_calls;
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic_in_result_fn,
+    reason = "integration-style manager tests use direct assertions and fixtures"
+)]
 mod tests;
 
 const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";

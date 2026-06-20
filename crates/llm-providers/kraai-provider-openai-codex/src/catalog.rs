@@ -132,6 +132,10 @@ pub(crate) fn title_case_effort(effort: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test verifies the catalog contains a known hidden model"
+)]
 mod tests {
     use super::*;
 

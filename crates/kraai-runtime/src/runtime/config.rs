@@ -177,6 +177,10 @@ pub(crate) fn map_openai_codex_auth_status(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "config path tests assert known platform-independent paths"
+)]
 mod tests {
     use std::path::PathBuf;
 

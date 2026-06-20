@@ -171,6 +171,7 @@ impl Provider for OpenAiCodexProvider {
         for model in models {
             cache.insert(model.id.clone(), model);
         }
+        drop(cache);
 
         Ok(())
     }
@@ -188,7 +189,7 @@ impl Provider for OpenAiCodexProvider {
             .and_then(DynamicValue::as_integer)
             .map(usize::try_from)
             .transpose()
-            .map_err(|_| eyre!("Invalid max_context"))?;
+            .map_err(|error| eyre!("Invalid max_context: {error}"))?;
 
         self.model_configs
             .insert(model.id, ModelMetadata { name, max_context });
@@ -433,7 +434,7 @@ impl OpenAiCodexProvider {
         build: F,
     ) -> Result<Response>
     where
-        F: Fn(RequestAuth) -> RequestBuilder,
+        F: Fn(RequestAuth) -> RequestBuilder + Send + Sync,
     {
         let auth = self.auth.get_request_auth().await?;
         let response = send_http_with_retry(
@@ -599,6 +600,12 @@ fn extract_response_text(output: ResponsesOutput) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests use direct assertions for model and request fixtures"
+)]
 mod tests {
     use super::*;
     use crate::auth::OpenAiCodexAuthControllerOptions;

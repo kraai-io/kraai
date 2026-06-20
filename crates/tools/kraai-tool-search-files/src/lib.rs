@@ -8,7 +8,8 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_read_path, resolve_tool_path,
+    ToolCallResult, ToolContext, TypedTool, assess_read_path, path_is_within_workspace,
+    resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
 use kraai_types::ToolCallAssessment;
@@ -109,7 +110,12 @@ impl TypedTool for SearchFilesTool {
         let search_result = if metadata.is_file() {
             search_file(resolved.path(), &matcher, &mut state)
         } else if metadata.is_dir() {
-            search_directory(resolved.path(), &matcher, &mut state)
+            search_directory(
+                resolved.path(),
+                &ctx.global_config.workspace_dir,
+                &matcher,
+                &mut state,
+            )
         } else {
             return ToolCallResult::error(format!(
                 "path is neither a file nor a directory: {}",
@@ -144,6 +150,7 @@ impl TypedTool for SearchFilesTool {
 
 fn search_directory(
     dir: &Path,
+    workspace_root: &Path,
     matcher: &RegexMatcher,
     state: &mut SearchState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -154,11 +161,7 @@ fn search_directory(
 
     for entry in builder.build() {
         let entry = entry?;
-        if !entry
-            .file_type()
-            .map(|file_type| file_type.is_file())
-            .unwrap_or(false)
-        {
+        if !is_searchable_file(entry.path(), entry.file_type(), workspace_root) {
             continue;
         }
 
@@ -174,6 +177,21 @@ fn search_directory(
     }
 
     Ok(())
+}
+
+fn is_searchable_file(
+    path: &Path,
+    file_type: Option<std::fs::FileType>,
+    workspace_root: &Path,
+) -> bool {
+    let Some(file_type) = file_type else {
+        return false;
+    };
+    if file_type.is_symlink() && !path_is_within_workspace(workspace_root, path) {
+        return false;
+    }
+
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
 fn search_file(
@@ -214,6 +232,12 @@ fn search_file(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests use direct assertions to keep result-shape checks readable"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -331,6 +355,120 @@ mod tests {
         }
 
         cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn skips_directory_symlinks_without_aborting_directory_search() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_dir = make_temp_dir("skips_directory_symlinks");
+        fs::write(workspace_dir.join("match.txt"), "needle\n").expect("write matching file");
+        let target_dir = workspace_dir.join("target");
+        fs::create_dir(&target_dir).expect("create symlink target directory");
+        symlink(&target_dir, workspace_dir.join("directory-link"))
+            .expect("create directory symlink");
+
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let output = tool
+            .call(
+                search_args("needle", Option::<String>::None),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                let matches = data["matches"].as_array().expect("matches array");
+                assert_eq!(matches.len(), 1);
+                assert!(
+                    matches[0]["path"]
+                        .as_str()
+                        .expect("path")
+                        .ends_with("match.txt")
+                );
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn searches_file_symlinks_that_resolve_within_the_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_dir = make_temp_dir("searches_internal_file_symlinks");
+        fs::write(workspace_dir.join("target.txt"), "needle\n").expect("write target file");
+        symlink("target.txt", workspace_dir.join("link.txt")).expect("create file symlink");
+
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let output = tool
+            .call(
+                search_args("needle", Option::<String>::None),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                let matches = data["matches"].as_array().expect("matches array");
+                assert_eq!(matches.len(), 2);
+                assert!(matches.iter().any(|entry| {
+                    entry["path"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with("link.txt"))
+                }));
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn skips_file_symlinks_that_resolve_outside_the_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_dir = make_temp_dir("skips_external_file_symlinks");
+        let outside_dir = make_temp_dir("external_file_symlink_target");
+        fs::write(workspace_dir.join("workspace.txt"), "needle\n").expect("write workspace file");
+        let outside_file = outside_dir.join("secret.txt");
+        fs::write(&outside_file, "needle\n").expect("write outside file");
+        symlink(&outside_file, workspace_dir.join("external-link.txt"))
+            .expect("create external file symlink");
+
+        let tool = SearchFilesTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let output = tool
+            .call(
+                search_args("needle", Option::<String>::None),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                let matches = data["matches"].as_array().expect("matches array");
+                assert_eq!(matches.len(), 1);
+                assert!(
+                    matches[0]["path"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with("workspace.txt"))
+                );
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+        cleanup_temp_dir(&outside_dir);
     }
 
     #[tokio::test]

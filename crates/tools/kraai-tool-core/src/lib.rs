@@ -347,14 +347,22 @@ pub fn normalize_tool_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
 
 pub fn resolve_tool_path(workspace_root: &Path, raw_path: &str) -> ResolvedToolPath {
     let path = normalize_tool_path(workspace_root, raw_path);
-    let within_workspace = canonicalize_for_workspace_check(workspace_root)
-        .zip(canonicalize_for_workspace_check(&path))
-        .map(|(workspace_root, candidate)| candidate.starts_with(workspace_root))
-        .unwrap_or_else(|| path.starts_with(workspace_root));
+    let within_workspace = path_is_within_workspace(workspace_root, &path);
     ResolvedToolPath {
         path,
         within_workspace,
     }
+}
+
+/// Returns whether `candidate` resolves within `workspace_root`.
+///
+/// Existing symlinks are resolved before comparison so a path lexically inside
+/// the workspace cannot escape through a symlink.
+pub fn path_is_within_workspace(workspace_root: &Path, candidate: &Path) -> bool {
+    canonicalize_for_workspace_check(workspace_root)
+        .zip(canonicalize_for_workspace_check(candidate))
+        .map(|(workspace_root, candidate)| candidate.starts_with(workspace_root))
+        .unwrap_or_else(|| candidate.starts_with(workspace_root))
 }
 
 fn canonicalize_for_workspace_check(path: &Path) -> Option<PathBuf> {
@@ -459,6 +467,11 @@ pub fn format_text_with_line_numbers(contents: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tool-core tests use direct assertions for filesystem and manager fixtures"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -707,9 +720,9 @@ mod tests {
     #[test]
     fn prepare_tool_returns_not_found_for_unknown_tool() {
         let manager = ToolManager::new();
-        let error = match manager.prepare_tool(&kraai_types::ToolId::new("missing"), json!({})) {
-            Ok(_) => panic!("missing tool should fail"),
-            Err(error) => error,
+        let Err(error) = manager.prepare_tool(&kraai_types::ToolId::new("missing"), json!({}))
+        else {
+            panic!("missing tool should fail");
         };
 
         match error {
@@ -725,9 +738,9 @@ mod tests {
             lifecycle_counter: Arc::new(AtomicUsize::new(0)),
         });
 
-        let error = match manager.prepare_tool(&kraai_types::ToolId::new("spy_tool"), json!({})) {
-            Ok(_) => panic!("invalid args should fail"),
-            Err(error) => error,
+        let Err(error) = manager.prepare_tool(&kraai_types::ToolId::new("spy_tool"), json!({}))
+        else {
+            panic!("invalid args should fail");
         };
 
         match error {

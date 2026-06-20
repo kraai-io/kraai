@@ -393,8 +393,10 @@ impl RuntimeCore {
         let rollback_result = agent.abort_streaming_message(message_id).await?;
         if rollback_result.is_some() {
             agent.clear_active_turn(session_id);
+            drop(agent);
             Ok(true)
         } else {
+            drop(agent);
             Ok(false)
         }
     }

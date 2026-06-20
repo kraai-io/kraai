@@ -92,6 +92,12 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "TUI tests use direct assertions for buffered output and request ordering"
+)]
 mod tests;
 
 impl App {

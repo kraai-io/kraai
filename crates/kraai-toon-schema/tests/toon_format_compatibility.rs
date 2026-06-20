@@ -1,3 +1,9 @@
+#![expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "compatibility tests inspect fixed format fixture positions directly"
+)]
+
 use kraai_toon_schema::toon_tool;
 use serde_json::json;
 

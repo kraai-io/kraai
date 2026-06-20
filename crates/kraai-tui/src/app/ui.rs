@@ -266,14 +266,20 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         Constraint::Length(height),
         Constraint::Min(0),
     ])
-    .split(area)[1];
+    .split(area)
+    .get(1)
+    .copied()
+    .unwrap_or(area);
 
     Layout::horizontal([
         Constraint::Length((area.width.saturating_sub(width)) / 2),
         Constraint::Length(width),
         Constraint::Min(0),
     ])
-    .split(popup)[1]
+    .split(popup)
+    .get(1)
+    .copied()
+    .unwrap_or(popup)
 }
 
 fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {

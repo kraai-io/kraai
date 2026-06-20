@@ -1,3 +1,8 @@
+#![expect(
+    clippy::expect_used,
+    reason = "module-level regex constants are statically validated during development"
+)]
+
 use kraai_types::{ChatRole, Message};
 use ratatui::{
     buffer::Buffer,
@@ -187,9 +192,8 @@ impl<'a> ChatHistory<'a> {
         let mut cursor = 0usize;
 
         for caps in INLINE_CODE_RE.captures_iter(text) {
-            let full = match caps.get(0) {
-                Some(m) => m,
-                None => continue,
+            let Some(full) = caps.get(0) else {
+                continue;
             };
             let before = &text[cursor..full.start()];
             let before_plain = Self::strip_non_code_inline_markdown(before);
@@ -288,7 +292,9 @@ impl<'a> ChatHistory<'a> {
             let mut take_count = 0;
             let mut used_width = 0;
             while idx + take_count < total {
-                let (grapheme, _) = styled_graphemes[idx + take_count];
+                let Some((grapheme, _)) = styled_graphemes.get(idx + take_count) else {
+                    break;
+                };
                 let grapheme_width = display_width(grapheme);
                 if used_width + grapheme_width > available {
                     break;
@@ -298,7 +304,10 @@ impl<'a> ChatHistory<'a> {
             }
 
             if take_count > 0 {
-                for (grapheme, style) in &styled_graphemes[idx..idx + take_count] {
+                for (grapheme, style) in styled_graphemes
+                    .get(idx..idx + take_count)
+                    .unwrap_or_default()
+                {
                     if let Some(last) = line_spans.last_mut()
                         && last.style == *style
                     {
@@ -475,9 +484,8 @@ impl<'a> ChatHistory<'a> {
         let mut found_tool_call = false;
 
         for caps in TOOL_CALL_RE.captures_iter(content) {
-            let full_match = match caps.get(0) {
-                Some(m) => m,
-                None => continue,
+            let Some(full_match) = caps.get(0) else {
+                continue;
             };
             found_tool_call = true;
 
@@ -686,7 +694,12 @@ impl<'a> ChatHistory<'a> {
             .saturating_add(area.height as usize)
             .min(lines.len());
 
-        for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
+        for (visual_idx, line) in lines
+            .get(start_idx..end_idx)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
             let y = area.y + visual_idx as u16;
             Self::render_line(line, area, y, buf);
         }
@@ -788,6 +801,10 @@ impl<'a> Widget for ChatHistory<'a> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "render tests directly inspect expected visual lines"
+)]
 mod tests {
     use super::*;
     use kraai_types::{MessageId, MessageStatus};

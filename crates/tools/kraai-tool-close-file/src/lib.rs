@@ -81,6 +81,10 @@ impl TypedTool for CloseFileTool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test inspects the single expected tool-state delta"
+)]
 mod tests {
     use std::path::{Path, PathBuf};
 

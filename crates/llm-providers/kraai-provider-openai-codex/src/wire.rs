@@ -111,6 +111,11 @@ pub struct ResponseContentItem {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "tests use direct assertions for serialized wire payloads"
+)]
 mod tests {
     use super::*;
     use crate::messages::ResponsesRequestMessage;

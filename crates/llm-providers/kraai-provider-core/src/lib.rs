@@ -442,8 +442,7 @@ impl ProviderManager {
         join_all(
             self.providers
                 .iter()
-                .map(|(id, provider)| async { (id.clone(), provider.list_models().await) })
-                .collect::<Vec<_>>(),
+                .map(|(id, provider)| async { (id.clone(), provider.list_models().await) }),
         )
         .await
         .into_iter()
@@ -578,6 +577,10 @@ pub struct Model {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "fallible provider setup is combined with direct assertions"
+)]
 mod tests {
     use super::*;
     use color_eyre::eyre::eyre;
@@ -714,106 +717,107 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_registration() {
+    fn test_registry_registration() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry.register_factory::<MockFactory>().unwrap();
+        registry.register_factory::<MockFactory>()?;
         assert!(registry.has_factory("mock"));
         assert_eq!(
-            registry.get_definition("mock").unwrap().display_name,
+            registry
+                .get_definition("mock")
+                .ok_or_else(|| eyre!("mock factory definition missing"))?
+                .display_name,
             "Mock".to_string()
         );
+        Ok(())
     }
 
     #[test]
-    fn test_dynamic_registry_registration() {
+    fn test_dynamic_registry_registration() -> Result<()> {
         let mut registry = ProviderRegistry::default();
         let create_count = Arc::new(AtomicUsize::new(0));
         let create_count_for_factory = Arc::clone(&create_count);
 
-        registry
-            .register_dynamic_factory(
-                "dynamic-mock",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Dynamic Mock".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "Mock provider built from closures".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: true,
-                    default_provider_id_prefix: "dynamic-mock".to_string(),
-                },
-                move |id, _config| {
-                    create_count_for_factory.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(MockProvider::new(id.as_str())))
-                },
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap();
+        registry.register_dynamic_factory(
+            "dynamic-mock",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Dynamic Mock".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "Mock provider built from closures".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: true,
+                default_provider_id_prefix: "dynamic-mock".to_string(),
+            },
+            move |id, _config| {
+                create_count_for_factory.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(MockProvider::new(id.as_str())))
+            },
+            |_| Vec::new(),
+            |_| Vec::new(),
+        )?;
 
-        let provider = registry
-            .create_provider(
-                "dynamic-mock",
-                ProviderId::new("dynamic-mock"),
-                DynamicConfig::new(),
-            )
-            .unwrap();
+        let provider = registry.create_provider(
+            "dynamic-mock",
+            ProviderId::new("dynamic-mock"),
+            DynamicConfig::new(),
+        )?;
         assert_eq!(provider.get_provider_id(), ProviderId::new("dynamic-mock"));
         assert_eq!(create_count.load(Ordering::SeqCst), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_dynamic_registry_rejects_duplicates() {
+    fn test_dynamic_registry_rejects_duplicates() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry
-            .register_dynamic_factory(
-                "duplicate",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Duplicate".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "duplicate".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: false,
-                    default_provider_id_prefix: "duplicate".to_string(),
-                },
-                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap();
+        registry.register_dynamic_factory(
+            "duplicate",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Duplicate".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "duplicate".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: false,
+                default_provider_id_prefix: "duplicate".to_string(),
+            },
+            |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+            |_| Vec::new(),
+            |_| Vec::new(),
+        )?;
 
-        let error = registry
-            .register_dynamic_factory(
-                "duplicate",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Duplicate".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "duplicate".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: false,
-                    default_provider_id_prefix: "duplicate".to_string(),
-                },
-                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap_err();
+        let result = registry.register_dynamic_factory(
+            "duplicate",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Duplicate".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "duplicate".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: false,
+                default_provider_id_prefix: "duplicate".to_string(),
+            },
+            |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+            |_| Vec::new(),
+            |_| Vec::new(),
+        );
+        let Err(error) = result else {
+            return Err(eyre!("duplicate factory registration succeeded"));
+        };
 
         assert!(matches!(
             error,
             ProviderError::FactoryAlreadyRegistered(provider_type) if provider_type == "duplicate"
         ));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_load_config() {
+    async fn test_load_config() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry.register_factory::<MockFactory>().unwrap();
+        registry.register_factory::<MockFactory>()?;
 
         let mut config = DynamicConfig::new();
         config.insert("token".to_string(), DynamicValue::from("abc"));
@@ -831,14 +835,14 @@ mod tests {
                 },
                 registry,
             )
-            .await
-            .unwrap();
+            .await?;
 
         assert!(manager.has_provider(&ProviderId::new("mock")));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn load_config_bounds_provider_initialization_concurrency() {
+    async fn load_config_bounds_provider_initialization_concurrency() -> Result<()> {
         struct ObservedProvider {
             id: ProviderId,
             active_initializations: Arc<AtomicUsize>,
@@ -890,34 +894,32 @@ mod tests {
         let active_initializations = Arc::new(AtomicUsize::new(0));
         let peak_initializations = Arc::new(AtomicUsize::new(0));
         let mut registry = ProviderRegistry::default();
-        registry
-            .register_dynamic_factory(
-                "observed",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Observed".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "Records initialization concurrency".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: false,
-                    default_provider_id_prefix: "observed".to_string(),
-                },
-                {
-                    let active_initializations = active_initializations.clone();
-                    let peak_initializations = peak_initializations.clone();
-                    move |id, _config| {
-                        Ok(Box::new(ObservedProvider {
-                            id,
-                            active_initializations: active_initializations.clone(),
-                            peak_initializations: peak_initializations.clone(),
-                        }))
-                    }
-                },
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap();
+        registry.register_dynamic_factory(
+            "observed",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Observed".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "Records initialization concurrency".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: false,
+                default_provider_id_prefix: "observed".to_string(),
+            },
+            {
+                let active_initializations = active_initializations.clone();
+                let peak_initializations = peak_initializations.clone();
+                move |id, _config| {
+                    Ok(Box::new(ObservedProvider {
+                        id,
+                        active_initializations: active_initializations.clone(),
+                        peak_initializations: peak_initializations.clone(),
+                    }))
+                }
+            },
+            |_| Vec::new(),
+            |_| Vec::new(),
+        )?;
 
         let provider_count = ProviderManager::PROVIDER_INITIALIZATION_CONCURRENCY + 2;
         let config = ProviderManagerConfig {
@@ -937,21 +939,19 @@ mod tests {
                 .collect(),
         };
 
-        ProviderManager::new()
-            .load_config(config, registry)
-            .await
-            .unwrap();
+        ProviderManager::new().load_config(config, registry).await?;
 
         assert_eq!(
             peak_initializations.load(Ordering::SeqCst),
             ProviderManager::PROVIDER_INITIALIZATION_CONCURRENCY
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_invalid_config() {
+    async fn test_invalid_config() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry.register_factory::<MockFactory>().unwrap();
+        registry.register_factory::<MockFactory>()?;
 
         let result = ProviderManager::new()
             .load_config(
@@ -968,34 +968,33 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn load_config_preserves_active_providers_when_creation_fails() {
+    async fn load_config_preserves_active_providers_when_creation_fails() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry.register_factory::<MockFactory>().unwrap();
-        registry
-            .register_dynamic_factory(
-                "failing",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Failing".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "Fails during creation".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: false,
-                    default_provider_id_prefix: "failing".to_string(),
-                },
-                |_id, _config| {
-                    Err(ProviderError::ConfigParseError(
-                        "provider creation failed".to_string(),
-                    ))
-                },
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap();
+        registry.register_factory::<MockFactory>()?;
+        registry.register_dynamic_factory(
+            "failing",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Failing".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "Fails during creation".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: false,
+                default_provider_id_prefix: "failing".to_string(),
+            },
+            |_id, _config| {
+                Err(ProviderError::ConfigParseError(
+                    "provider creation failed".to_string(),
+                ))
+            },
+            |_| Vec::new(),
+            |_| Vec::new(),
+        )?;
 
         let mut valid_config = DynamicConfig::new();
         valid_config.insert("token".to_string(), DynamicValue::from("abc"));
@@ -1029,29 +1028,28 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(manager.list_providers(), vec![ProviderId::new("active")]);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn load_config_replaces_active_providers_when_model_cache_refresh_fails() {
+    async fn load_config_replaces_active_providers_when_model_cache_refresh_fails() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        registry
-            .register_dynamic_factory(
-                "failing-cache",
-                ProviderDefinition {
-                    type_id: String::new(),
-                    display_name: "Failing Cache".to_string(),
-                    protocol_family: "mock".to_string(),
-                    description: "Fails while refreshing its model cache".to_string(),
-                    provider_fields: vec![],
-                    model_fields: vec![],
-                    supports_model_discovery: true,
-                    default_provider_id_prefix: "failing-cache".to_string(),
-                },
-                |id, _config| Ok(Box::new(MockProvider::failing_cache(id.as_str()))),
-                |_| Vec::new(),
-                |_| Vec::new(),
-            )
-            .unwrap();
+        registry.register_dynamic_factory(
+            "failing-cache",
+            ProviderDefinition {
+                type_id: String::new(),
+                display_name: "Failing Cache".to_string(),
+                protocol_family: "mock".to_string(),
+                description: "Fails while refreshing its model cache".to_string(),
+                provider_fields: vec![],
+                model_fields: vec![],
+                supports_model_discovery: true,
+                default_provider_id_prefix: "failing-cache".to_string(),
+            },
+            |id, _config| Ok(Box::new(MockProvider::failing_cache(id.as_str()))),
+            |_| Vec::new(),
+            |_| Vec::new(),
+        )?;
 
         let mut manager = ProviderManager::new();
         manager.register_provider(
@@ -1078,10 +1076,11 @@ mod tests {
             manager.list_providers(),
             vec![ProviderId::new("replacement")]
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn update_models_list_attempts_every_provider_before_returning_failures() {
+    async fn update_models_list_attempts_every_provider_before_returning_failures() -> Result<()> {
         let failing = Arc::new(MockProvider::failing_cache("failing"));
         let successful = Arc::new(MockProvider::new("successful"));
 
@@ -1093,14 +1092,17 @@ mod tests {
             .providers
             .insert(ProviderId::new("successful"), successful.clone());
 
-        let error = manager.update_models_list().await.unwrap_err();
+        let result = manager.update_models_list().await;
+        let Err(error) = result else {
+            return Err(eyre!("model cache refresh unexpectedly succeeded"));
+        };
 
         assert_eq!(failing.cache_count.load(Ordering::SeqCst), 1);
         assert_eq!(successful.cache_count.load(Ordering::SeqCst), 1);
 
         let refresh_error = error
             .downcast_ref::<ProviderError>()
-            .expect("expected provider error");
+            .ok_or_else(|| eyre!("expected provider error"))?;
         assert!(matches!(
             refresh_error,
             ProviderError::ModelCacheRefreshFailed(failures)
@@ -1109,10 +1111,11 @@ mod tests {
                     message: "cache failed for failing".to_string(),
                 }]
         ));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn update_models_list_refreshes_providers_concurrently() {
+    async fn update_models_list_refreshes_providers_concurrently() -> Result<()> {
         struct ObservedProvider {
             id: ProviderId,
             active: Arc<AtomicUsize>,
@@ -1176,8 +1179,9 @@ mod tests {
             );
         }
 
-        manager.update_models_list().await.unwrap();
+        manager.update_models_list().await?;
 
         assert!(overlap_seen.load(Ordering::SeqCst));
+        Ok(())
     }
 }

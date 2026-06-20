@@ -112,6 +112,10 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "CLI tests use direct assertions for parsing outcomes"
+)]
 mod tests {
     use clap::{Parser, error::ErrorKind};
 

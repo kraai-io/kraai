@@ -28,7 +28,7 @@ pub fn resolve_snapshot_from_history(history: &[Message]) -> ToolStateSnapshot {
         .map(|index| index + 1)
         .unwrap_or(0);
 
-    for message in &history[start_index..] {
+    for message in history.get(start_index..).unwrap_or_default() {
         apply_deltas(&mut snapshot, &message.tool_state_deltas);
     }
 
@@ -127,6 +127,10 @@ fn apply_opened_file_delta(snapshot: &mut ToolStateSnapshot, delta: &ToolStateDe
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "tests use direct assertions for temporary workspace setup"
+)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;

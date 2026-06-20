@@ -83,6 +83,12 @@ impl TypedTool for OpenFileTool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests use direct assertions for tool output fixtures"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};

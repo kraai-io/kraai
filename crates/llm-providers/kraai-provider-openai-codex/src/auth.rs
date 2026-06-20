@@ -1018,7 +1018,10 @@ fn generate_state() -> String {
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<String> {
     let mut buffer = [0u8; 4096];
     let size = stream.read(&mut buffer).await?;
-    String::from_utf8(buffer[..size].to_vec()).map_err(io::Error::other)
+    let request = buffer
+        .get(..size)
+        .ok_or_else(|| io::Error::other("request length exceeds buffer capacity"))?;
+    String::from_utf8(request.to_vec()).map_err(io::Error::other)
 }
 
 async fn write_http_response(
@@ -1054,6 +1057,11 @@ fn unix_now() -> u64 {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "tests use direct assertions for auth fixture setup and inspection"
+)]
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;

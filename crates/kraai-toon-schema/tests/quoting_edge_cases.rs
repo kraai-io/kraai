@@ -1,3 +1,9 @@
+#![expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "format fixture tests inspect fixed tool-call delimiters directly"
+)]
+
 use kraai_toon_schema::toon_tool;
 use serde_json::json;
 

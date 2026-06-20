@@ -263,7 +263,9 @@ impl App {
             0
         };
 
-        let command = matches[selected_idx].0;
+        let Some((command, _)) = matches.get(selected_idx) else {
+            return false;
+        };
         self.state.input.clear();
         self.state.input_cursor = 0;
         self.state.command_popup_dismissed = false;

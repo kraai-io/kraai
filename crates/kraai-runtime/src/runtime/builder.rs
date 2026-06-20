@@ -165,7 +165,7 @@ impl RuntimeBuilder {
 
         TRACING_INIT_RESULT
             .lock()
-            .map_err(|_| eyre!("Tracing init mutex poisoned"))?
+            .map_err(|error| eyre!("Tracing init mutex poisoned: {error}"))?
             .as_ref()
             .map(|result| match result {
                 Ok(()) => Ok(()),

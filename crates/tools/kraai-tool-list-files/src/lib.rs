@@ -125,6 +125,12 @@ fn read_entries(dir: &Path) -> std::io::Result<Vec<ListFilesEntry>> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests use direct assertions for filesystem listing fixtures"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};

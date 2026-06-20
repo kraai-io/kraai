@@ -261,8 +261,9 @@ fn apply_edits(path: &Path, contents: &str, edits: &[EditOperation]) -> Result<S
 
     pending.sort_by_key(|edit| (edit.start_line, edit.end_line));
     for window in pending.windows(2) {
-        let previous = window[0];
-        let current = window[1];
+        let [previous, current] = window else {
+            continue;
+        };
         if current.start_line <= previous.end_line {
             return Err(format!(
                 "edit_file {} edit ranges overlap: lines {}-{} and lines {}-{}",
@@ -292,17 +293,17 @@ fn validate_edit<'a>(
     edit: &'a EditOperation,
 ) -> Result<PendingEdit<'a>, String> {
     let edit_index = index + 1;
-    let start_line = usize::try_from(edit.start_line).map_err(|_| {
+    let start_line = usize::try_from(edit.start_line).map_err(|error| {
         format!(
-            "edit_file {} edit {} has an invalid start_line {}",
+            "edit_file {} edit {} has an invalid start_line {}: {error}",
             path.display(),
             edit_index,
             edit.start_line
         )
     })?;
-    let end_line = usize::try_from(edit.end_line).map_err(|_| {
+    let end_line = usize::try_from(edit.end_line).map_err(|error| {
         format!(
-            "edit_file {} edit {} has an invalid end_line {}",
+            "edit_file {} edit {} has an invalid end_line {}: {error}",
             path.display(),
             edit_index,
             edit.end_line
@@ -376,8 +377,12 @@ fn validate_edit<'a>(
         ));
     }
 
-    let start_span = lines[start_line - 1];
-    let end_span = lines[end_line - 1];
+    let start_span = *lines
+        .get(start_line - 1)
+        .ok_or_else(|| format!("edit_file {} start line is out of bounds", path.display()))?;
+    let end_span = *lines
+        .get(end_line - 1)
+        .ok_or_else(|| format!("edit_file {} end line is out of bounds", path.display()))?;
     Ok(PendingEdit {
         start_line,
         end_line,
@@ -395,11 +400,15 @@ fn render_logical_range(
 ) -> String {
     let mut rendered = String::new();
 
-    for (index, line_number) in (start_line..=end_line).enumerate() {
+    for (index, span) in lines
+        .iter()
+        .skip(start_line.saturating_sub(1))
+        .take(end_line - start_line + 1)
+        .enumerate()
+    {
         if index > 0 {
             rendered.push('\n');
         }
-        let span = lines[line_number - 1];
         rendered.push_str(&contents[span.content_start..span.content_end]);
     }
 
@@ -416,7 +425,7 @@ fn index_lines(contents: &str) -> Vec<LineSpan> {
             continue;
         }
 
-        let content_end = if index > line_start && bytes[index - 1] == b'\r' {
+        let content_end = if index > line_start && bytes.get(index - 1) == Some(&b'\r') {
             index - 1
         } else {
             index
@@ -439,6 +448,11 @@ fn index_lines(contents: &str) -> Vec<LineSpan> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "edit tests use direct assertions for filesystem fixtures and toon inputs"
+)]
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1034,9 +1048,8 @@ mod tests {
         .expect("decode native toon edit args");
         let mut manager = kraai_tool_core::ToolManager::new();
         manager.register_tool(EditFileTool);
-        let error = match manager.prepare_tool(&kraai_types::ToolId::new("edit_file"), args) {
-            Ok(_) => panic!("missing line numbers should fail validation"),
-            Err(error) => error,
+        let Err(error) = manager.prepare_tool(&kraai_types::ToolId::new("edit_file"), args) else {
+            panic!("missing line numbers should fail validation");
         };
         assert!(error.to_string().contains("missing field `start_line`"));
     }

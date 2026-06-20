@@ -273,6 +273,7 @@ impl FileSessionStore {
 
         let mut loaded = self.sessions.write().await;
         *loaded = sessions;
+        drop(loaded);
 
         Ok(())
     }
@@ -321,8 +322,11 @@ impl FileSessionStore {
     pub async fn gc_orphaned_messages(&self, deleted_tree: HashSet<MessageId>) -> Result<()> {
         let still_referenced = self.collect_all_referenced_messages().await?;
 
+        let mut deleted_messages: Vec<_> = deleted_tree.into_iter().collect();
+        deleted_messages.sort();
+
         let mut errors = Vec::new();
-        for msg_id in deleted_tree {
+        for msg_id in deleted_messages {
             if !still_referenced.contains(&msg_id)
                 && let Err(e) = self.message_store.delete(&msg_id).await
             {
@@ -351,8 +355,7 @@ impl FileSessionStore {
 #[async_trait::async_trait]
 impl SessionStore for FileSessionStore {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
-        let sessions = self.sessions.read().await;
-        let mut list: Vec<_> = sessions.values().cloned().collect();
+        let mut list: Vec<_> = self.sessions.read().await.values().cloned().collect();
         list.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         Ok(list)
     }
@@ -372,6 +375,7 @@ impl SessionStore for FileSessionStore {
 
         let mut sessions = self.sessions.write().await;
         *sessions = next_sessions;
+        drop(sessions);
         Ok(())
     }
 
@@ -462,6 +466,11 @@ pub async fn init() -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "persistence tests use direct assertions for fixture and failure-path setup"
+)]
 mod tests {
     use super::*;
     use kraai_types::{ChatRole, MessageStatus};

@@ -3,27 +3,31 @@ help:
 
 clippy-flags := "\
 -D warnings \
+-D clippy::all \
+-D clippy::allow_attributes \
+-D clippy::dbg_macro \
+-D clippy::print_stderr \
+-D clippy::await_holding_lock \
+-D clippy::large_futures \
+-D clippy::todo \
+-D clippy::indexing_slicing \
+-D clippy::future_not_send \
+-D clippy::significant_drop_tightening \
+-D clippy::panic_in_result_fn \
+-D clippy::unwrap_used \
+-D clippy::expect_used \
+-D clippy::unimplemented \
+-D clippy::unused_async \
+-D clippy::needless_collect \
+-D clippy::large_stack_arrays \
+-D clippy::filetype_is_file \
+-D clippy::manual_let_else \
+-D clippy::readonly_write_lock \
+-D clippy::mutex_atomic \
+-D clippy::map_err_ignore \
+-D clippy::iter_over_hash_type \
+-D clippy::panic \
 "
-
-# -D clippy::all \
-# -D clippy::panic \
-# -D clippy::panic_in_result_fn \
-# -D clippy::print_stdout \
-# -D clippy::print_stderr \
-# -D clippy::dbg_macro \
-# -D clippy::indexing_slicing \
-# -D clippy::nursery \
-# -D clippy::pedantic \
-# -D clippy::allow_attributes \
-# -D clippy::unwrap_used \
-# -D clippy::expect_used \
-# -D clippy::await_holding_lock \
-# -D clippy::large_futures \
-# -D clippy::todo \
-# -A clippy::struct_field_names \
-# -A clippy::cast_precision_loss \
-# -A clippy::unused_self \
-# -A clippy::future_not_send \
 
 update-rust-deps:
     cargo upgrade

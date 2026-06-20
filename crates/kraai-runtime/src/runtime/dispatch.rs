@@ -9,6 +9,10 @@ use crate::handle::Command;
 use crate::settings::read_settings_document;
 
 impl RuntimeCore {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a dropped one-shot response receiver carries no recoverable payload"
+    )]
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
         match command {
             Command::ListModels { response } => {
@@ -126,6 +130,7 @@ impl RuntimeCore {
                         ..Session::from_session_meta(session)
                     })
                     .collect();
+                drop(agent);
                 response
                     .send(sessions)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -306,7 +311,7 @@ impl RuntimeCore {
                 self.start_continuation(session_id).await;
             }
             Command::ExecuteApprovedTools { session_id } => {
-                self.handle_execute_tools(session_id).await;
+                self.handle_execute_tools(session_id);
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 response
