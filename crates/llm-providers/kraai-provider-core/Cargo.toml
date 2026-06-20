@@ -10,7 +10,7 @@ version = "0.1.0"
 async-trait = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
-httpdate = "1.0.3"
+httpdate = { workspace = true }
 kraai-types = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

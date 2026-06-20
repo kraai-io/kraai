@@ -22,6 +22,7 @@
           cargo-geiger
           cargo-crev
           cargo-flamegraph
+          cargo-autoinherit
           samply
           (rust-bin.stable.latest.default.override {
             extensions = ["llvm-tools-preview"];
