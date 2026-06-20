@@ -173,30 +173,6 @@ pub(super) struct UsageModelKey {
     pub(super) model_id: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ChatCellPosition {
-    pub(super) line: usize,
-    pub(super) column: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ChatSelection {
-    pub(super) anchor: ChatCellPosition,
-    pub(super) focus: ChatCellPosition,
-}
-
-impl ChatSelection {
-    pub(super) fn normalized(self) -> (ChatCellPosition, ChatCellPosition) {
-        if self.anchor.line < self.focus.line
-            || (self.anchor.line == self.focus.line && self.anchor.column <= self.focus.column)
-        {
-            (self.anchor, self.focus)
-        } else {
-            (self.focus, self.anchor)
-        }
-    }
-}
-
 pub(super) enum RuntimeRequest {
     ListModels,
     ListAgentProfiles {

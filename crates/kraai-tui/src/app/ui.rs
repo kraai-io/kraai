@@ -6,21 +6,18 @@ use color_eyre::eyre::Result;
 use kraai_runtime::{FieldDefinition, ModelSettings, ProviderSettings};
 use ratatui::{
     buffer::Buffer,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use crate::components::{
-    ChatHistory, TextInput, VisibleChatView, display_width, text_in_cell_range,
-};
+use crate::components::{ChatHistory, TextInput};
 
 use super::{
-    ActiveSettingsEditor, AppState, ChatCellPosition, ChatSelection, ProviderAuthState,
-    ProvidersAdvancedFocus, ProvidersView, SettingsModelField, SettingsProviderField, ToolPhase,
-    UiMode, field_value_display, flatten_models_map, provider_definition_rank,
+    ActiveSettingsEditor, AppState, ProviderAuthState, ProvidersAdvancedFocus, ProvidersView,
+    SettingsModelField, SettingsProviderField, ToolPhase, UiMode, field_value_display,
+    flatten_models_map, provider_definition_rank,
 };
 
 mod command_popup;
@@ -67,8 +64,6 @@ impl Widget for &AppState {
                 self.auto_scroll,
             );
         }
-        render_chat_selection_overlay(self.visible_chat_view.as_ref(), self.selection, buf);
-
         Paragraph::new(statusline_line(self))
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
@@ -90,127 +85,6 @@ impl Widget for &AppState {
             UiMode::Help => render_help_menu(area, buf),
             UiMode::Chat => {}
         }
-    }
-}
-
-pub(super) fn render_chat_selection_overlay(
-    visible_chat_view: Option<&VisibleChatView>,
-    selection: Option<ChatSelection>,
-    buf: &mut Buffer,
-) {
-    let (Some(view), Some(selection)) = (visible_chat_view, selection) else {
-        return;
-    };
-    let Some((start, end)) = normalized_selection_range(view, selection) else {
-        return;
-    };
-
-    for line_index in start.line..=end.line {
-        let Some(line) = view.lines.get(line_index) else {
-            continue;
-        };
-        let line_width = display_width(&line.text);
-        if line_width == 0 {
-            continue;
-        }
-
-        let start_col = if line_index == start.line {
-            start.column.min(line_width.saturating_sub(1))
-        } else {
-            0
-        };
-        let end_col = if line_index == end.line {
-            end.column.min(line_width.saturating_sub(1))
-        } else {
-            line_width.saturating_sub(1)
-        };
-
-        let mut expanded_start = start_col;
-        let mut expanded_end = end_col;
-        let mut cell_start = 0;
-        for grapheme in
-            unicode_segmentation::UnicodeSegmentation::graphemes(line.text.as_str(), true)
-        {
-            let grapheme_width = display_width(grapheme);
-            let cell_end = cell_start + grapheme_width;
-            if grapheme_width > 0 && cell_start <= end_col && cell_end > start_col {
-                expanded_start = expanded_start.min(cell_start);
-                expanded_end = expanded_end.max(cell_end.saturating_sub(1));
-            }
-            cell_start = cell_end;
-        }
-
-        for column in expanded_start..=expanded_end {
-            let x = view.area.x + column as u16;
-            let y = line.y;
-            let cell = &mut buf[(x, y)];
-            cell.set_fg(Color::Black);
-            cell.set_bg(Color::Cyan);
-        }
-    }
-}
-
-fn normalized_selection_range(
-    view: &VisibleChatView,
-    selection: ChatSelection,
-) -> Option<(ChatCellPosition, ChatCellPosition)> {
-    let (mut start, mut end) = selection.normalized();
-    let start_width = display_width(&view.lines.get(start.line)?.text);
-    let end_width = display_width(&view.lines.get(end.line)?.text);
-
-    if start_width > 0 {
-        start.column = start.column.min(start_width.saturating_sub(1));
-    } else {
-        start.column = 0;
-    }
-
-    if end_width > 0 {
-        end.column = end.column.min(end_width.saturating_sub(1));
-    } else {
-        end.column = 0;
-    }
-
-    Some((start, end))
-}
-
-pub(super) fn selection_text(view: &VisibleChatView, selection: ChatSelection) -> Option<String> {
-    let (start, end) = normalized_selection_range(view, selection)?;
-    let mut selected_lines = Vec::new();
-
-    for line_index in start.line..=end.line {
-        let line = view.lines.get(line_index)?;
-        let line_width = display_width(&line.text);
-
-        let text = if line_width == 0 {
-            String::new()
-        } else {
-            let start_col = if line_index == start.line {
-                start.column.min(line_width.saturating_sub(1))
-            } else {
-                0
-            };
-            let end_col = if line_index == end.line {
-                end.column.min(line_width.saturating_sub(1))
-            } else {
-                line_width.saturating_sub(1)
-            };
-            text_in_cell_range(&line.text, start_col, end_col)
-        };
-
-        selected_lines.push(text);
-    }
-
-    Some(selected_lines.join("\n"))
-}
-
-pub(super) fn is_copy_shortcut(key_event: KeyEvent) -> bool {
-    match key_event.code {
-        KeyCode::Char(c) => {
-            key_event.modifiers.contains(KeyModifiers::CONTROL)
-                && (key_event.modifiers.contains(KeyModifiers::SHIFT) || c.is_ascii_uppercase())
-                && c.eq_ignore_ascii_case(&'c')
-        }
-        _ => false,
     }
 }
 
@@ -1177,8 +1051,6 @@ fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("PgUp/PgDn  Scroll faster"),
         Line::raw("End        Jump to latest"),
         Line::raw("Home       Jump to top"),
-        Line::raw("Drag mouse Select chat text"),
-        Line::raw("Ctrl+Shift+C Copy selection"),
         Line::raw(""),
         Line::raw("Esc closes menus."),
     ];

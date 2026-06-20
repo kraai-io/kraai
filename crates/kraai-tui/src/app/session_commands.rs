@@ -82,8 +82,6 @@ impl App {
                 self.state.exit = true;
             }
             "model" => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
             }
@@ -93,8 +91,6 @@ impl App {
                         String::from("Cannot change agent while the current turn is active");
                     return;
                 }
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::AgentMenu;
                 if let Some(session_id) = self.state.current_session_id.clone() {
                     self.request(RuntimeRequest::ListAgentProfiles { session_id });
@@ -118,8 +114,6 @@ impl App {
                 self.state.status = String::from("Unknown command: /settings. Use /providers");
             }
             "providers" => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::ProvidersMenu;
                 self.state.providers_view = ProvidersView::List;
                 self.state.status = String::from("Loading providers");
@@ -128,8 +122,6 @@ impl App {
                 self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
             }
             "sessions" => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::SessionsMenu;
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -163,8 +155,6 @@ impl App {
                 self.request(RuntimeRequest::ContinueSession { session_id });
             }
             "help" => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.mode = UiMode::Help;
             }
             _ => {

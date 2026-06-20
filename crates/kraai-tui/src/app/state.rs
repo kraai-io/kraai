@@ -9,13 +9,13 @@ use kraai_runtime::{
 };
 use kraai_types::{ChatRole, Message, MessageId, MessageStatus};
 
-use crate::components::{ChatHistory, RenderedLine, VisibleChatView};
+use crate::components::{ChatHistory, RenderedLine};
 
 use super::auth::ProviderAuthStatus;
 use super::types::{
-    ActiveSettingsEditor, ChatSelection, DEFAULT_AGENT_PROFILE_ID, ExitUsageTotals,
-    OptimisticMessage, OptimisticToolMessage, PendingSubmit, PendingTool, ProvidersAdvancedFocus,
-    ProvidersView, SettingsFocus, ToolApprovalAction, ToolPhase, UiMode, default_agent_profiles,
+    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, ExitUsageTotals, OptimisticMessage,
+    OptimisticToolMessage, PendingSubmit, PendingTool, ProvidersAdvancedFocus, ProvidersView,
+    SettingsFocus, ToolApprovalAction, ToolPhase, UiMode, default_agent_profiles,
 };
 
 pub(super) struct AppState {
@@ -36,8 +36,6 @@ pub(super) struct AppState {
     pub(super) chat_viewport_height: u16,
     pub(super) scroll: u16,
     pub(super) auto_scroll: bool,
-    pub(super) selection: Option<ChatSelection>,
-    pub(super) visible_chat_view: Option<VisibleChatView>,
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,
     pub(super) status: String,
@@ -105,8 +103,6 @@ impl Default for AppState {
             chat_viewport_height: 0,
             scroll: 0,
             auto_scroll: true,
-            selection: None,
-            visible_chat_view: None,
             config_loaded: false,
             mode: UiMode::Chat,
             status: String::from("Type /help for commands"),

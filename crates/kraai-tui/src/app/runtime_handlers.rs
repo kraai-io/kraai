@@ -290,8 +290,6 @@ impl App {
                 self.state.status = format!("Failed loading provider definitions: {err}");
             }
             RuntimeResponse::Settings(Ok(settings)) => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
                 self.state.settings_draft = Some(settings);
                 self.state.settings_errors.clear();
                 self.state.settings_focus = SettingsFocus::ProviderList;

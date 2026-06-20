@@ -1,85 +1,6 @@
 use super::*;
-use crate::components::display_width;
 
 impl App {
-    pub(super) fn clear_chat_selection(&mut self) {
-        self.state.selection = None;
-    }
-
-    pub(super) fn hit_test_chat_cell(&self, column: u16, row: u16) -> Option<ChatCellPosition> {
-        let view = self.state.visible_chat_view.as_ref()?;
-        if column < view.area.x
-            || row < view.area.y
-            || column >= view.area.x.saturating_add(view.area.width)
-            || row >= view.area.y.saturating_add(view.area.height)
-        {
-            return None;
-        }
-
-        let line_index = row.saturating_sub(view.area.y) as usize;
-        let line = view.lines.get(line_index)?;
-        let line_width = display_width(&line.text);
-        if line_width == 0 {
-            return Some(ChatCellPosition {
-                line: line_index,
-                column: 0,
-            });
-        }
-
-        let local_x = column.saturating_sub(view.area.x) as usize;
-        Some(ChatCellPosition {
-            line: line_index,
-            column: local_x.min(line_width.saturating_sub(1)),
-        })
-    }
-
-    pub(super) fn selected_chat_text(&self) -> Option<String> {
-        let selection = self.state.selection?;
-        let view = self.state.visible_chat_view.as_ref()?;
-        selection_text(view, selection)
-    }
-
-    pub(super) fn copy_selection_to_clipboard(&mut self) {
-        let result = self.copy_selection_to_clipboard_inner();
-
-        self.state.status = match result {
-            Ok(true) => String::from("Copied selection to clipboard"),
-            Ok(false) => String::from("No selection to copy"),
-            Err(err) => format!("Copy failed: {err}"),
-        };
-    }
-
-    pub(super) fn copy_selection_to_clipboard_inner(&mut self) -> Result<bool, String> {
-        let Some(text) = self.selected_chat_text() else {
-            return Ok(false);
-        };
-        if text.is_empty() {
-            return Ok(false);
-        }
-
-        let mut errors = Vec::new();
-        let mut copied = false;
-
-        match copy_via_osc52(&text) {
-            Ok(()) => copied = true,
-            Err(err) => errors.push(format!("terminal clipboard failed: {err}")),
-        }
-
-        match self.clipboard_mut() {
-            Ok(clipboard) => match clipboard.set_text(text) {
-                Ok(()) => copied = true,
-                Err(err) => errors.push(format!("clipboard write failed: {err}")),
-            },
-            Err(err) => errors.push(err),
-        }
-
-        if copied {
-            Ok(true)
-        } else {
-            Err(errors.join("; "))
-        }
-    }
-
     pub(super) fn copy_text_to_clipboard(&mut self, text: &str) -> Result<(), String> {
         let mut errors = Vec::new();
         let mut copied = false;
@@ -102,22 +23,6 @@ impl App {
         } else {
             Err(errors.join("; "))
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn copy_selection_with<F>(&mut self, copy: F) -> Result<bool, String>
-    where
-        F: FnOnce(&str) -> Result<(), String>,
-    {
-        let Some(text) = self.selected_chat_text() else {
-            return Ok(false);
-        };
-        if text.is_empty() {
-            return Ok(false);
-        }
-
-        copy(&text)?;
-        Ok(true)
     }
 
     pub(super) fn clipboard_mut(&mut self) -> Result<&mut arboard::Clipboard, String> {
@@ -341,8 +246,6 @@ impl App {
     }
 
     pub(super) fn enter_tool_decision_phase(&mut self) {
-        self.clear_chat_selection();
-        self.state.visible_chat_view = None;
         self.state.mode = UiMode::Chat;
         self.state.tool_phase = ToolPhase::Deciding;
         self.state.tool_approval_action = ToolApprovalAction::Allow;
@@ -518,8 +421,6 @@ impl App {
 
     pub(super) fn invalidate_chat_cache(&mut self) {
         self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
-        self.clear_chat_selection();
-        self.state.visible_chat_view = None;
     }
 
     pub(super) fn reconcile_optimistic_messages(&mut self) {

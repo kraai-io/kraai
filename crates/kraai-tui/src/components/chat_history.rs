@@ -50,35 +50,6 @@ pub(crate) struct RenderedLine {
     bg: Option<Color>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VisibleChatLine {
-    pub y: u16,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VisibleChatView {
-    pub area: Rect,
-    pub lines: Vec<VisibleChatLine>,
-}
-
-impl VisibleChatView {
-    #[cfg(test)]
-    pub(crate) fn from_strings(area: Rect, lines: &[&str]) -> Self {
-        Self {
-            area,
-            lines: lines
-                .iter()
-                .enumerate()
-                .map(|(idx, line)| VisibleChatLine {
-                    y: area.y + idx as u16,
-                    text: (*line).to_string(),
-                })
-                .collect(),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct RenderedSpan {
     text: String,
@@ -763,56 +734,6 @@ impl<'a> ChatHistory<'a> {
             }
             consumed += section_len;
         }
-    }
-
-    pub(crate) fn visible_view_from_sections(
-        sections: &[Arc<Vec<RenderedLine>>],
-        total_lines: u16,
-        area: Rect,
-        scroll: u16,
-        auto_scroll: bool,
-    ) -> VisibleChatView {
-        if area.width == 0 || area.height == 0 || total_lines == 0 {
-            return VisibleChatView {
-                area,
-                lines: Vec::new(),
-            };
-        }
-
-        let scroll = Self::resolve_scroll(total_lines, area.height, scroll, auto_scroll);
-
-        let start_idx = scroll as usize;
-        let mut consumed = 0usize;
-        let mut visual_idx = 0usize;
-        let mut lines = Vec::new();
-
-        for section in sections {
-            if visual_idx >= area.height as usize {
-                break;
-            }
-
-            let section_len = section.len();
-            if consumed + section_len <= start_idx {
-                consumed += section_len;
-                continue;
-            }
-
-            let local_start = start_idx.saturating_sub(consumed);
-            for line in section.iter().skip(local_start) {
-                if visual_idx >= area.height as usize {
-                    break;
-                }
-
-                lines.push(VisibleChatLine {
-                    y: area.y + visual_idx as u16,
-                    text: Self::line_text(line),
-                });
-                visual_idx += 1;
-            }
-            consumed += section_len;
-        }
-
-        VisibleChatView { area, lines }
     }
 
     pub(crate) fn resolve_scroll(

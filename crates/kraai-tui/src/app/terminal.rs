@@ -34,11 +34,7 @@ impl App {
                 self.handle_paste(text);
                 true
             }
-            CrosstermEvent::Resize(_, _) => {
-                self.clear_chat_selection();
-                self.state.visible_chat_view = None;
-                true
-            }
+            CrosstermEvent::Resize(_, _) => true,
             _ => false,
         }
     }
@@ -49,37 +45,6 @@ impl App {
         }
 
         match mouse_event.kind {
-            MouseEventKind::Down(MouseButton::Left)
-                if self.state.tool_phase != ToolPhase::Deciding =>
-            {
-                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
-                {
-                    self.state.selection = Some(ChatSelection {
-                        anchor: position,
-                        focus: position,
-                    });
-                } else {
-                    self.clear_chat_selection();
-                }
-            }
-            MouseEventKind::Drag(MouseButton::Left)
-                if self.state.tool_phase != ToolPhase::Deciding =>
-            {
-                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
-                    && let Some(selection) = self.state.selection.as_mut()
-                {
-                    selection.focus = position;
-                }
-            }
-            MouseEventKind::Up(MouseButton::Left)
-                if self.state.tool_phase != ToolPhase::Deciding =>
-            {
-                if let Some(position) = self.hit_test_chat_cell(mouse_event.column, mouse_event.row)
-                    && let Some(selection) = self.state.selection.as_mut()
-                {
-                    selection.focus = position;
-                }
-            }
             MouseEventKind::ScrollUp => {
                 self.scroll_chat_by(-1);
             }
@@ -119,8 +84,6 @@ impl App {
                 self.handle_providers_escape();
                 return;
             }
-            self.clear_chat_selection();
-            self.state.visible_chat_view = None;
             self.state.mode = UiMode::Chat;
             return;
         }
@@ -133,7 +96,6 @@ impl App {
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
             UiMode::Help => {
                 if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
-                    self.clear_chat_selection();
                     self.state.mode = UiMode::Chat;
                 }
             }
@@ -147,11 +109,6 @@ impl App {
         }
 
         self.state.ctrl_c_exit_armed = false;
-
-        if is_copy_shortcut(key_event) {
-            self.copy_selection_to_clipboard();
-            return;
-        }
 
         match key_event.code {
             KeyCode::Enter => {
@@ -248,8 +205,6 @@ impl App {
     pub(super) fn clear_chat_transient_state(&mut self) {
         self.state.input.clear();
         self.state.input_cursor = 0;
-        self.clear_chat_selection();
-        self.state.visible_chat_view = None;
         self.state.command_popup_dismissed = false;
         self.reset_completion_cycle();
     }

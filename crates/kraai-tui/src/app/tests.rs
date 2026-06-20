@@ -1,13 +1,11 @@
 use super::{
-    ActiveSettingsEditor, App, AppState, ChatCellPosition, ChatSelection, OptimisticMessage,
-    OptimisticToolMessage, PendingSubmit, PendingTool, ProviderAuthState, ProviderAuthStatus,
-    ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse,
-    STATUSLINE_ANIMATION_INTERVAL, SettingsModelField, SettingsProviderField, StartupOptions,
-    ToolPhase, UiMode, default_agent_profiles, is_copy_shortcut, menu_scroll_offset,
-    model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
-    selection_text,
+    ActiveSettingsEditor, App, AppState, OptimisticMessage, OptimisticToolMessage, PendingSubmit,
+    PendingTool, ProviderAuthState, ProviderAuthStatus, ProvidersAdvancedFocus, ProvidersView,
+    RuntimeRequest, RuntimeResponse, STATUSLINE_ANIMATION_INTERVAL, SettingsModelField,
+    SettingsProviderField, StartupOptions, ToolPhase, UiMode, default_agent_profiles,
+    menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
 };
-use crate::components::{TextInput, VisibleChatView};
+use crate::components::TextInput;
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
@@ -24,7 +22,6 @@ use ratatui::{
         MouseEventKind,
     },
     layout::Rect,
-    style::{Color, Style},
     widgets::Widget,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -109,9 +106,6 @@ fn key(code: KeyCode) -> KeyEvent {
 }
 fn shift_key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::SHIFT)
-}
-fn ctrl_shift_key(code: KeyCode) -> KeyEvent {
-    KeyEvent::new(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
 }
 fn ctrl_key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::CONTROL)
@@ -426,9 +420,6 @@ fn assert_buffer_has_no_control_characters(buffer: &Buffer) {
             .iter()
             .all(|cell| !cell.symbol().chars().any(char::is_control))
     );
-}
-fn visible_chat_view(lines: &[&str], area: Rect) -> VisibleChatView {
-    VisibleChatView::from_strings(area, lines)
 }
 fn assert_snapshot(actual: &str, expected: &str) {
     if actual != expected {
@@ -1380,55 +1371,6 @@ fn renders_help_menu_snapshot() {
     );
 }
 #[test]
-fn selection_text_preserves_visible_line_breaks() {
-    let view = visible_chat_view(&["alpha", "", "beta"], Rect::new(0, 0, 10, 3));
-    let selection = ChatSelection {
-        anchor: ChatCellPosition { line: 0, column: 2 },
-        focus: ChatCellPosition { line: 2, column: 2 },
-    };
-    assert_eq!(
-        selection_text(&view, selection),
-        Some(String::from("pha\n\nbet"))
-    );
-}
-#[test]
-fn selection_text_uses_terminal_cells_for_wide_graphemes() {
-    let view = visible_chat_view(&["a你b"], Rect::new(0, 0, 4, 1));
-    let selection = ChatSelection {
-        anchor: ChatCellPosition { line: 0, column: 2 },
-        focus: ChatCellPosition { line: 0, column: 2 },
-    };
-
-    assert_eq!(selection_text(&view, selection), Some(String::from("你")));
-}
-#[test]
-fn copy_shortcut_requires_control_and_shift() {
-    assert!(is_copy_shortcut(ctrl_shift_key(KeyCode::Char('c'))));
-    assert!(!is_copy_shortcut(KeyEvent::new(
-        KeyCode::Char('c'),
-        KeyModifiers::CONTROL
-    )));
-}
-#[test]
-fn copy_selection_uses_rendered_chat_text() {
-    let mut harness = test_harness();
-    harness.app.state.visible_chat_view = Some(visible_chat_view(
-        &["alpha beta", "gamma"],
-        Rect::new(0, 0, 12, 2),
-    ));
-    harness.app.state.selection = Some(ChatSelection {
-        anchor: ChatCellPosition { line: 0, column: 6 },
-        focus: ChatCellPosition { line: 1, column: 2 },
-    });
-    let mut copied = None;
-    let result = harness.app.copy_selection_with(|text| {
-        copied = Some(text.to_string());
-        Ok(())
-    });
-    assert_eq!(result, Ok(true));
-    assert_eq!(copied, Some(String::from("beta\ngam")));
-}
-#[test]
 fn first_ctrl_c_clears_chat_input_without_exiting() {
     let mut harness = test_harness();
     harness.app.state.input = String::from("/s");
@@ -1436,19 +1378,11 @@ fn first_ctrl_c_clears_chat_input_without_exiting() {
     harness.app.state.command_popup_dismissed = true;
     harness.app.state.command_completion_prefix = Some(String::from("s"));
     harness.app.state.command_completion_index = 1;
-    harness.app.state.selection = Some(ChatSelection {
-        anchor: ChatCellPosition { line: 0, column: 0 },
-        focus: ChatCellPosition { line: 0, column: 1 },
-    });
-    harness.app.state.visible_chat_view =
-        Some(visible_chat_view(&["alpha"], Rect::new(0, 0, 10, 1)));
     harness.app.handle_key_event(ctrl_key(KeyCode::Char('c')));
     assert!(!harness.app.state.exit);
     assert!(harness.app.state.ctrl_c_exit_armed);
     assert!(harness.app.state.input.is_empty());
     assert_eq!(harness.app.state.input_cursor, 0);
-    assert_eq!(harness.app.state.selection, None);
-    assert_eq!(harness.app.state.visible_chat_view, None);
     assert!(!harness.app.state.command_popup_dismissed);
     assert_eq!(harness.app.state.command_completion_prefix, None);
     assert_eq!(harness.app.state.command_completion_index, 0);
@@ -1491,12 +1425,12 @@ fn ctrl_c_in_non_chat_mode_preserves_existing_behavior() {
     assert!(!harness.app.state.ctrl_c_exit_armed);
 }
 #[test]
-fn mouse_drag_updates_selection_in_chat_view() {
+fn left_mouse_events_do_not_change_chat_state() {
     let mut harness = test_harness();
-    harness.app.state.visible_chat_view = Some(visible_chat_view(
-        &["alpha", "beta"],
-        Rect::new(0, 0, 10, 2),
-    ));
+    harness.set_chat_metrics(20, 8);
+    harness.app.state.auto_scroll = false;
+    harness.app.state.scroll = 4;
+
     harness.app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 1,
@@ -1509,97 +1443,10 @@ fn mouse_drag_updates_selection_in_chat_view() {
         row: 1,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(
-        harness.app.state.selection,
-        Some(ChatSelection {
-            anchor: ChatCellPosition { line: 0, column: 1 },
-            focus: ChatCellPosition { line: 1, column: 2 },
-        })
-    );
-}
-#[test]
-fn mouse_selection_uses_terminal_cells_for_wide_graphemes() {
-    let mut harness = test_harness();
-    harness.app.state.visible_chat_view = Some(visible_chat_view(&["a你b"], Rect::new(0, 0, 4, 1)));
 
-    assert_eq!(
-        harness.app.hit_test_chat_cell(2, 0),
-        Some(ChatCellPosition { line: 0, column: 2 })
-    );
-}
-#[test]
-fn selection_overlay_marks_buffer_cells() {
-    let area = Rect::new(0, 0, 8, 2);
-    let view = visible_chat_view(&["alpha", "beta"], area);
-    let mut buffer = Buffer::empty(area);
-    for y in 0..area.height {
-        for x in 0..area.width {
-            buffer[(x, y)]
-                .set_char(' ')
-                .set_style(Style::default().fg(Color::White));
-        }
-    }
-    render_chat_selection_overlay(
-        Some(&view),
-        Some(ChatSelection {
-            anchor: ChatCellPosition { line: 0, column: 1 },
-            focus: ChatCellPosition { line: 1, column: 1 },
-        }),
-        &mut buffer,
-    );
-    assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
-    assert_eq!(buffer[(1, 0)].fg, Color::Black);
-    assert_eq!(buffer[(1, 1)].bg, Color::Cyan);
-}
-#[test]
-fn selection_overlay_uses_terminal_cells_for_wide_graphemes() {
-    let area = Rect::new(0, 0, 4, 1);
-    let view = visible_chat_view(&["a你b"], area);
-    let mut buffer = Buffer::empty(area);
-    for x in 0..area.width {
-        buffer[(x, 0)]
-            .set_char(' ')
-            .set_style(Style::default().fg(Color::White));
-    }
-
-    render_chat_selection_overlay(
-        Some(&view),
-        Some(ChatSelection {
-            anchor: ChatCellPosition { line: 0, column: 1 },
-            focus: ChatCellPosition { line: 0, column: 2 },
-        }),
-        &mut buffer,
-    );
-
-    assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
-    assert_eq!(buffer[(2, 0)].bg, Color::Cyan);
-    assert_ne!(buffer[(3, 0)].bg, Color::Cyan);
-}
-
-#[test]
-fn selection_overlay_expands_to_cover_wide_graphemes() {
-    let area = Rect::new(0, 0, 4, 1);
-    let view = visible_chat_view(&["a你b"], area);
-    let mut buffer = Buffer::empty(area);
-    for x in 0..area.width {
-        buffer[(x, 0)]
-            .set_char(' ')
-            .set_style(Style::default().fg(Color::White));
-    }
-
-    render_chat_selection_overlay(
-        Some(&view),
-        Some(ChatSelection {
-            anchor: ChatCellPosition { line: 0, column: 2 },
-            focus: ChatCellPosition { line: 0, column: 2 },
-        }),
-        &mut buffer,
-    );
-
-    assert_ne!(buffer[(0, 0)].bg, Color::Cyan);
-    assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
-    assert_eq!(buffer[(2, 0)].bg, Color::Cyan);
-    assert_ne!(buffer[(3, 0)].bg, Color::Cyan);
+    assert_eq!(harness.app.state.scroll, 4);
+    assert!(!harness.app.state.auto_scroll);
+    assert!(harness.drain_requests().is_empty());
 }
 #[test]
 fn tab_cycles_slash_command_and_enter_executes_selected_command() {

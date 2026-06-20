@@ -27,19 +27,16 @@ impl App {
             .min(max_scroll);
         self.state.scroll = next_scroll;
         self.state.auto_scroll = delta > 0 && next_scroll == max_scroll;
-        self.clear_chat_selection();
     }
 
     pub(super) fn scroll_chat_to_top(&mut self) {
         self.state.auto_scroll = false;
         self.state.scroll = 0;
-        self.clear_chat_selection();
     }
 
     pub(super) fn scroll_chat_to_bottom(&mut self) {
         self.state.auto_scroll = true;
         self.state.scroll = self.state.chat_max_scroll();
-        self.clear_chat_selection();
     }
 
     pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
@@ -126,19 +123,6 @@ impl App {
                     let [chat_area, _, _] = layout.areas(area);
                     self.state.refresh_chat_render_cache(chat_area.width);
                     self.update_chat_viewport(chat_area.height);
-                    let view = {
-                        let cache = self.state.chat_render_cache.borrow();
-                        ChatHistory::visible_view_from_sections(
-                            &cache.sections,
-                            cache.total_lines,
-                            chat_area,
-                            self.state.scroll,
-                            self.state.auto_scroll,
-                        )
-                    };
-                    self.state.visible_chat_view = Some(view);
-                } else {
-                    self.state.visible_chat_view = None;
                 }
 
                 frame.render_widget(&self.state, area);

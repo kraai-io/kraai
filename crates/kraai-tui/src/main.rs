@@ -4,10 +4,7 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 use color_eyre::eyre::Result;
 use kraai_runtime::RuntimeBuilder;
 use ratatui::crossterm::{
-    event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-    },
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
 };
 use std::io::stdout;
@@ -98,21 +95,11 @@ fn main() -> Result<()> {
     }
 
     let terminal = ratatui::init();
-    execute!(
-        stdout(),
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-    )?;
+    execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
 
     let result = app.run(terminal);
 
-    execute!(
-        stdout(),
-        DisableMouseCapture,
-        DisableBracketedPaste,
-        PopKeyboardEnhancementFlags
-    )?;
+    execute!(stdout(), DisableMouseCapture, DisableBracketedPaste)?;
     ratatui::restore();
 
     if result.is_ok()

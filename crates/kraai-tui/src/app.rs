@@ -11,13 +11,13 @@ use kraai_runtime::{
 use kraai_types::ChatRole;
 use ratatui::{
     crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-        MouseEvent, MouseEventKind,
+        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+        MouseEventKind,
     },
     layout::{Constraint, Flex, Layout},
 };
 
-use crate::components::{ChatHistory, TextInput};
+use crate::components::TextInput;
 
 mod auth;
 mod chat_tools;
@@ -46,20 +46,18 @@ use self::state::{AppState, build_tip_chain};
 pub use self::types::StartupOptions;
 use self::types::default_agent_profiles;
 use self::types::{
-    ActiveSettingsEditor, ChatCellPosition, ChatSelection, DEFAULT_AGENT_PROFILE_ID,
-    OptimisticMessage, OptimisticToolMessage, PendingSubmit, PendingTool, ProviderDetailAction,
-    ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, SettingsFocus,
-    SettingsModelField, SettingsProviderField, ToolApprovalAction, ToolPhase, UiMode,
-    UsageModelKey,
-};
-use self::ui::{
-    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
-    copy_via_osc52, format_token_count, is_copy_shortcut, is_known_slash_command,
-    model_menu_next_index, model_menu_previous_index, parse_settings_errors, selection_text,
-    slash_command_matches,
+    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, OptimisticMessage, OptimisticToolMessage,
+    PendingSubmit, PendingTool, ProviderDetailAction, ProvidersAdvancedFocus, ProvidersView,
+    RuntimeRequest, RuntimeResponse, SettingsFocus, SettingsModelField, SettingsProviderField,
+    ToolApprovalAction, ToolPhase, UiMode, UsageModelKey,
 };
 #[cfg(test)]
-use self::ui::{menu_scroll_offset, render_chat_selection_overlay};
+use self::ui::menu_scroll_offset;
+use self::ui::{
+    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
+    copy_via_osc52, format_token_count, is_known_slash_command, model_menu_next_index,
+    model_menu_previous_index, parse_settings_errors, slash_command_matches,
+};
 use self::workspace_preferences::WorkspacePreferences;
 
 const SLASH_COMMANDS: [(&str, &str); 9] = [
