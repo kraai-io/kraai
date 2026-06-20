@@ -9,7 +9,9 @@ jobs:
   autofix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: cachix/install-nix-action@b97f05dcb019ddea06450a50ef6203d2fdc19fee # v31
       - run: nix fmt
+      - run: nix develop --command cargo hakari generate
+      - run: nix develop --command cargo hakari manage-deps
       - uses: autofix-ci/action@635ffb0c9798bd160680f18fd73371e355b85f27
