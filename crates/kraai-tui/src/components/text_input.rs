@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -5,8 +7,10 @@ use ratatui::{
     widgets::Widget,
 };
 
+use super::{normalize_terminal_text, normalized_byte_len};
+
 pub struct TextInput<'a> {
-    input: &'a str,
+    input: Cow<'a, str>,
     cursor: usize,
 }
 
@@ -28,7 +32,10 @@ const INPUT_STYLE: Style = Style::new()
 
 impl<'a> TextInput<'a> {
     pub fn new(input: &'a str, cursor: usize) -> Self {
-        Self { input, cursor }
+        Self {
+            input: normalize_terminal_text(input),
+            cursor: normalized_cursor(input, cursor),
+        }
     }
 
     fn wrap_text(content: &str, max_width: usize) -> Vec<String> {
@@ -44,14 +51,15 @@ impl<'a> TextInput<'a> {
         max_width: u16,
     ) -> CursorNavigation {
         let max_width = max_width.saturating_sub(H_PADDING * 2) as usize;
-        let segments = Self::wrap_segments(input, max_width);
-        let safe_cursor = previous_char_boundary(input, cursor.min(input.len()));
+        let normalized_input = normalize_terminal_text(input);
+        let segments = Self::wrap_segments(&normalized_input, max_width);
+        let safe_cursor = normalized_cursor(input, cursor);
         let current_line = segments
             .iter()
             .enumerate()
             .find(|(_, segment)| safe_cursor >= segment.start && safe_cursor <= segment.end)
             .map(|(index, segment)| {
-                let column = input[segment.start..safe_cursor.min(segment.end)]
+                let column = normalized_input[segment.start..safe_cursor.min(segment.end)]
                     .chars()
                     .count();
                 (index, column)
@@ -62,8 +70,19 @@ impl<'a> TextInput<'a> {
         CursorNavigation {
             can_move_up: line_index > 0,
             can_move_down: line_index + 1 < segments.len(),
-            cursor_above: line_cursor(input, &segments, line_index.saturating_sub(1), column),
-            cursor_below: line_cursor(input, &segments, line_index + 1, column),
+            cursor_above: source_cursor(
+                input,
+                line_cursor(
+                    &normalized_input,
+                    &segments,
+                    line_index.saturating_sub(1),
+                    column,
+                ),
+            ),
+            cursor_below: source_cursor(
+                input,
+                line_cursor(&normalized_input, &segments, line_index + 1, column),
+            ),
         }
     }
 
@@ -151,14 +170,14 @@ impl<'a> TextInput<'a> {
 
     pub fn get_height(&self, max_width: u16) -> u16 {
         let content_width = max_width.saturating_sub(H_PADDING * 2) as usize;
-        Self::wrap_text(self.input, content_width).len().max(1) as u16 + (V_PADDING * 2)
+        Self::wrap_text(&self.input, content_width).len().max(1) as u16 + (V_PADDING * 2)
     }
 
     pub fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
         let safe_cursor = self
             .cursor
             .min(self.input.len())
-            .min(next_char_boundary(self.input, self.cursor));
+            .min(next_char_boundary(&self.input, self.cursor));
         let max_width = area.width.saturating_sub(H_PADDING * 2) as usize;
         let lines = Self::wrap_text(&self.input[..safe_cursor], max_width);
 
@@ -186,17 +205,18 @@ impl<'a> Widget for TextInput<'a> {
         }
 
         let max_width = area.width.saturating_sub(H_PADDING * 2) as usize;
-        let lines = Self::wrap_text(self.input, max_width);
+        let lines = Self::wrap_text(&self.input, max_width);
 
         for (i, line) in lines.iter().enumerate() {
             let y = area.y + V_PADDING + i as u16;
-            for (j, ch) in line.chars().enumerate() {
-                let x = area.x + H_PADDING + j as u16;
-                if x < area.x + area.width.saturating_sub(H_PADDING) && y < area.y + area.height {
-                    let cell = &mut buf[(x, y)];
-                    cell.set_char(ch);
-                    cell.set_style(INPUT_STYLE);
-                }
+            if y < area.y + area.height {
+                buf.set_stringn(
+                    area.x + H_PADDING,
+                    y,
+                    line,
+                    area.width.saturating_sub(H_PADDING * 2) as usize,
+                    INPUT_STYLE,
+                );
             }
         }
     }
@@ -252,4 +272,24 @@ fn previous_char_boundary(s: &str, idx: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+fn normalized_cursor(input: &str, cursor: usize) -> usize {
+    let cursor = previous_char_boundary(input, cursor.min(input.len()));
+    input[..cursor].chars().map(normalized_byte_len).sum()
+}
+
+fn source_cursor(input: &str, normalized_cursor: usize) -> usize {
+    let mut normalized_offset = 0usize;
+    for (source_offset, ch) in input.char_indices() {
+        if normalized_cursor <= normalized_offset {
+            return source_offset;
+        }
+
+        normalized_offset += normalized_byte_len(ch);
+        if normalized_cursor <= normalized_offset {
+            return source_offset + ch.len_utf8();
+        }
+    }
+    input.len()
 }

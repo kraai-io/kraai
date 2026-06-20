@@ -7,7 +7,7 @@ use super::{
     model_menu_next_index, model_menu_previous_index, render_chat_selection_overlay,
     selection_text,
 };
-use crate::components::VisibleChatView;
+use crate::components::{TextInput, VisibleChatView};
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
@@ -417,6 +417,15 @@ fn buffer_to_snapshot(buffer: &Buffer) -> String {
         }
     }
     lines.join("\n")
+}
+
+fn assert_buffer_has_no_control_characters(buffer: &Buffer) {
+    assert!(
+        buffer
+            .content()
+            .iter()
+            .all(|cell| !cell.symbol().chars().any(char::is_control))
+    );
 }
 fn visible_chat_view(lines: &[&str], area: Rect) -> VisibleChatView {
     VisibleChatView::from_strings(area, lines)
@@ -1788,6 +1797,35 @@ fn paste_with_newlines_in_chat_inserts_text_without_submitting() {
     );
     assert!(harness.drain_requests().is_empty());
 }
+
+#[test]
+fn paste_normalizes_tabs_and_other_control_characters() {
+    let mut harness = test_harness();
+    let changed = harness
+        .app
+        .handle_terminal_event(CrosstermEvent::Paste(String::from(
+            "one\ttwo\u{1b}[31m\u{7}",
+        )));
+
+    assert!(changed);
+    assert_eq!(harness.app.state.input, "one\ttwo\u{1b}[31m\u{7}");
+    assert_eq!(
+        harness.app.state.input_cursor,
+        harness.app.state.input.len()
+    );
+
+    let area = Rect::new(0, 0, 40, 6);
+    assert_eq!(
+        TextInput::new(&harness.app.state.input, harness.app.state.input_cursor)
+            .get_cursor_position(area),
+        (17, 1)
+    );
+    let mut buffer = Buffer::empty(area);
+    TextInput::new(&harness.app.state.input, harness.app.state.input_cursor)
+        .render(area, &mut buffer);
+    assert_buffer_has_no_control_characters(&buffer);
+}
+
 #[test]
 fn paste_inserts_text_at_cursor_position() {
     let mut harness = test_harness();

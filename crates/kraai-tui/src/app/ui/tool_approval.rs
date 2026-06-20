@@ -1,3 +1,4 @@
+use crate::components::normalize_terminal_text;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -45,23 +46,27 @@ pub(super) fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut
 
     let mut lines = vec![
         Line::styled(
-            &tool.description,
+            normalize_terminal_text(&tool.description).into_owned(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Line::styled(
-            format!("tool: {}  risk: {}", tool.tool_id, tool.risk_level),
+            normalize_terminal_text(&format!(
+                "tool: {}  risk: {}",
+                tool.tool_id, tool.risk_level
+            ))
+            .into_owned(),
             Style::default().fg(Color::Gray),
         ),
     ];
     for reason in &tool.reasons {
         lines.push(Line::styled(
-            format!("why: {reason}"),
+            normalize_terminal_text(&format!("why: {reason}")).into_owned(),
             Style::default().fg(Color::Gray),
         ));
     }
     lines.push(Line::raw(String::new()));
     lines.push(Line::styled("args", Style::default().fg(Color::Gray)));
-    lines.push(Line::raw(tool.args.clone()));
+    lines.push(Line::raw(normalize_terminal_text(&tool.args).into_owned()));
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: false })
         .render(body_area, buf);

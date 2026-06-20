@@ -9,6 +9,8 @@ use regex::Regex;
 use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
+use super::normalize_terminal_text;
+
 static IMAGE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex"));
 static LINK_RE: LazyLock<Regex> =
@@ -620,6 +622,7 @@ impl<'a> ChatHistory<'a> {
             return Vec::new();
         }
 
+        let content = normalize_terminal_text(&msg.content);
         let content_width = width.saturating_sub(MESSAGE_GUTTER_WIDTH);
         match msg.role {
             ChatRole::User => {
@@ -629,7 +632,7 @@ impl<'a> ChatHistory<'a> {
 
                 let mut lines = vec![Self::single_span_line(String::new(), user_style)];
 
-                for line in Self::wrap_with_prefix(&msg.content, content_width, "", "") {
+                for line in Self::wrap_with_prefix(&content, content_width, "", "") {
                     lines.push(Self::single_span_line(line, user_style));
                 }
 
@@ -637,16 +640,15 @@ impl<'a> ChatHistory<'a> {
                 Self::add_message_gutter(lines, '>')
             }
             ChatRole::Assistant => Self::add_message_gutter(
-                Self::render_assistant_message(&msg.content, content_width),
+                Self::render_assistant_message(&content, content_width),
                 '•',
             ),
             ChatRole::Tool => {
-                if !Self::should_render_tool_message(&msg.content) {
+                if !Self::should_render_tool_message(&content) {
                     Vec::new()
                 } else {
                     let mut lines = Vec::new();
-                    for line in
-                        Self::wrap_with_prefix(&msg.content, content_width, "tool: ", "      ")
+                    for line in Self::wrap_with_prefix(&content, content_width, "tool: ", "      ")
                     {
                         lines.push(Self::single_span_line(
                             line,
@@ -696,28 +698,7 @@ impl<'a> ChatHistory<'a> {
 
         for (visual_idx, line) in lines[start_idx..end_idx].iter().enumerate() {
             let y = area.y + visual_idx as u16;
-            let row_style = match line.bg {
-                Some(bg) => Style::default().bg(bg),
-                None => Style::default(),
-            };
-
-            for x_offset in 0..area.width {
-                buf[(area.x + x_offset, y)]
-                    .set_char(' ')
-                    .set_style(row_style);
-            }
-
-            let mut char_idx = 0usize;
-            'outer: for span in &line.spans {
-                for ch in span.text.chars() {
-                    let x = area.x + char_idx as u16;
-                    if x >= area.x + area.width {
-                        break 'outer;
-                    }
-                    buf[(x, y)].set_char(ch).set_style(span.style);
-                    char_idx += 1;
-                }
-            }
+            Self::render_line(line, area, y, buf);
         }
     }
 
@@ -757,28 +738,7 @@ impl<'a> ChatHistory<'a> {
                 }
 
                 let y = area.y + visual_idx as u16;
-                let row_style = match line.bg {
-                    Some(bg) => Style::default().bg(bg),
-                    None => Style::default(),
-                };
-
-                for x_offset in 0..area.width {
-                    buf[(area.x + x_offset, y)]
-                        .set_char(' ')
-                        .set_style(row_style);
-                }
-
-                let mut char_idx = 0usize;
-                'outer: for span in &line.spans {
-                    for ch in span.text.chars() {
-                        let x = area.x + char_idx as u16;
-                        if x >= area.x + area.width {
-                            break 'outer;
-                        }
-                        buf[(x, y)].set_char(ch).set_style(span.style);
-                        char_idx += 1;
-                    }
-                }
+                Self::render_line(line, area, y, buf);
 
                 visual_idx += 1;
             }
@@ -849,6 +809,32 @@ impl<'a> ChatHistory<'a> {
             scroll.min(max_scroll)
         }
     }
+
+    fn render_line(line: &RenderedLine, area: Rect, y: u16, buf: &mut Buffer) {
+        let row_style = match line.bg {
+            Some(bg) => Style::default().bg(bg),
+            None => Style::default(),
+        };
+        for x in area.x..area.right() {
+            buf[(x, y)].set_char(' ').set_style(row_style);
+        }
+
+        let mut x = area.x;
+        for span in &line.spans {
+            if x >= area.right() {
+                break;
+            }
+            let remaining_width = area.right().saturating_sub(x) as usize;
+            let (next_x, _) = buf.set_stringn(
+                x,
+                y,
+                normalize_terminal_text(&span.text),
+                remaining_width,
+                span.style,
+            );
+            x = next_x;
+        }
+    }
 }
 
 impl<'a> Widget for ChatHistory<'a> {
@@ -885,6 +871,41 @@ mod tests {
         let wrapped = ChatHistory::wrap_with_prefix("hello 👋 world", 8, "", "");
         assert!(!wrapped.is_empty());
         assert!(wrapped.iter().all(|line| line.chars().count() <= 8));
+    }
+
+    #[test]
+    fn normalizes_control_characters_before_rendering_chat_history() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "\tlet value = 1;\n\u{1b}[31mred\u{7}",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(80);
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("    let value = 1;"))
+        );
+        assert!(rendered.iter().any(|line| line.contains("[31mred")));
+        assert!(
+            rendered
+                .iter()
+                .all(|line| !line.chars().any(char::is_control))
+        );
+
+        let area = Rect::new(0, 0, 80, 4);
+        let mut buffer = Buffer::empty(area);
+        history.render(area, &mut buffer);
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .all(|cell| !cell.symbol().chars().any(char::is_control))
+        );
     }
 
     #[test]
