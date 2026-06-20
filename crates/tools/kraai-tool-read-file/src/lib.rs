@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, file_read_refresh_delta, format_text_with_line_numbers,
-    read_text_file, resolve_tool_path,
+    ToolCallResult, ToolContext, TypedTool, format_text_with_line_numbers, read_text_file,
+    resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
 use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
@@ -76,19 +76,16 @@ impl TypedTool for ReadFileTool {
 
     async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
         let mut files_out = Vec::with_capacity(args.files.len());
-        let mut tool_state_deltas = Vec::with_capacity(args.files.len());
-
         for file in args.files {
             let read = match read_text_file(&ctx.global_config.workspace_dir, &file) {
                 Ok(read) => read,
                 Err(error) => return ToolCallResult::error(error),
             };
             files_out.push(format_text_with_line_numbers(read.contents()));
-            tool_state_deltas.push(file_read_refresh_delta(read.path(), read.sha256()));
         }
 
         let out = ReadFileToolOutput { files: files_out };
-        ToolCallResult::success_with_deltas(out, tool_state_deltas)
+        ToolCallResult::success(out)
     }
 
     fn describe(&self, args: &Self::Args) -> String {
@@ -104,7 +101,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use kraai_tool_core::{FILE_READS_NAMESPACE, ToolContext, ToolOutput, TypedTool};
+    use kraai_tool_core::{ToolContext, ToolOutput, TypedTool};
     use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{ReadFileTool, ReadFileToolArgs};
@@ -169,8 +166,7 @@ mod tests {
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
-        assert_eq!(output.tool_state_deltas.len(), 1);
-        assert_eq!(output.tool_state_deltas[0].namespace, FILE_READS_NAMESPACE);
+        assert!(output.tool_state_deltas.is_empty());
 
         cleanup_temp_dir(&workspace_dir);
     }
@@ -202,7 +198,7 @@ mod tests {
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
-        assert_eq!(output.tool_state_deltas.len(), 2);
+        assert!(output.tool_state_deltas.is_empty());
 
         cleanup_temp_dir(&workspace_dir);
     }

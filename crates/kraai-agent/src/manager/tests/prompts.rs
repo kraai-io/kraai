@@ -59,11 +59,6 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
         snapshot.entries["opened_files"]["paths"][0].as_str(),
         Some(file_path_str.as_str())
     );
-    assert!(
-        snapshot.entries["file_reads"]["by_path"][file_path_str.as_str()]
-            .as_str()
-            .is_some()
-    );
 
     let system_prompt = request
         .provider_messages
@@ -351,11 +346,6 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
     assert_eq!(
         snapshot.entries["opened_files"]["paths"][0].as_str(),
         Some(file_path_str.as_str())
-    );
-    assert!(
-        snapshot.entries["file_reads"]["by_path"][file_path_str.as_str()]
-            .as_str()
-            .is_some()
     );
 
     let system_prompt = request

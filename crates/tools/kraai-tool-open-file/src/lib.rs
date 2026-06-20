@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_read_path, file_read_refresh_delta,
-    read_text_file,
-};
+use kraai_tool_core::{ToolCallResult, ToolContext, TypedTool, assess_read_path, read_text_file};
 use kraai_toon_schema::toon_tool;
 use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolStateDelta};
 use serde::Serialize;
@@ -72,14 +69,11 @@ impl TypedTool for OpenFileTool {
                 success: true,
                 path: read.path().display().to_string(),
             },
-            vec![
-                ToolStateDelta {
-                    namespace: String::from(OPENED_FILES_NAMESPACE),
-                    operation: String::from(OPEN_OPERATION),
-                    payload: serde_json::json!({ "path": read.path().display().to_string() }),
-                },
-                file_read_refresh_delta(read.path(), read.sha256()),
-            ],
+            vec![ToolStateDelta {
+                namespace: String::from(OPENED_FILES_NAMESPACE),
+                operation: String::from(OPEN_OPERATION),
+                payload: serde_json::json!({ "path": read.path().display().to_string() }),
+            }],
         )
     }
 
@@ -94,7 +88,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use kraai_tool_core::{FILE_READS_NAMESPACE, ToolContext, ToolOutput, TypedTool};
+    use kraai_tool_core::{ToolContext, ToolOutput, TypedTool};
     use kraai_types::{RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{OpenFileTool, OpenFileToolArgs};
@@ -157,9 +151,8 @@ mod tests {
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
 
-        assert_eq!(output.tool_state_deltas.len(), 2);
+        assert_eq!(output.tool_state_deltas.len(), 1);
         assert_eq!(output.tool_state_deltas[0].operation, "open");
-        assert_eq!(output.tool_state_deltas[1].namespace, FILE_READS_NAMESPACE);
 
         cleanup_temp_dir(&workspace_dir);
     }

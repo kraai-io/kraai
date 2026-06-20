@@ -14,7 +14,6 @@ kraai-workspace-hack = { version = "0.1", path = "../../kraai-workspace-hack" }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 thiserror = { workspace = true }
 toon-format = { workspace = true }
 

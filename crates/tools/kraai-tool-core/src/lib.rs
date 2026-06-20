@@ -5,7 +5,6 @@ pub mod toon_parser;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -17,11 +16,7 @@ use kraai_types::{
     ToolStateSnapshot,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
-
-pub const FILE_READS_NAMESPACE: &str = "file_reads";
-pub const FILE_READS_OPERATION_REFRESH: &str = "refresh";
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -141,7 +136,6 @@ impl ResolvedToolPath {
 pub struct TextFileRead {
     path: PathBuf,
     contents: String,
-    sha256: String,
 }
 
 impl TextFileRead {
@@ -152,16 +146,6 @@ impl TextFileRead {
     pub fn contents(&self) -> &str {
         &self.contents
     }
-
-    pub fn sha256(&self) -> &str {
-        &self.sha256
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct FileReadsState {
-    #[serde(default)]
-    by_path: BTreeMap<String, String>,
 }
 
 #[async_trait]
@@ -410,12 +394,10 @@ pub fn read_text_path(path: &Path) -> Result<TextFileRead, String> {
 
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("unable to read file {}: {}", path.display(), error))?;
-    let sha256 = sha256_hex(contents.as_bytes());
 
     Ok(TextFileRead {
         path: path.to_path_buf(),
         contents,
-        sha256,
     })
 }
 
@@ -474,35 +456,6 @@ pub fn format_text_with_line_numbers(contents: &str) -> String {
         .map(|(index, line)| format!("{}|{}", index + 1, line))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-pub fn file_read_refresh_delta(path: &Path, sha256: &str) -> ToolStateDelta {
-    ToolStateDelta {
-        namespace: String::from(FILE_READS_NAMESPACE),
-        operation: String::from(FILE_READS_OPERATION_REFRESH),
-        payload: serde_json::json!({
-            "path": path.display().to_string(),
-            "sha256": sha256,
-        }),
-    }
-}
-
-pub fn file_read_sha256(snapshot: &ToolStateSnapshot, path: &Path) -> Option<String> {
-    snapshot
-        .entries
-        .get(FILE_READS_NAMESPACE)
-        .cloned()
-        .and_then(|value| serde_json::from_value::<FileReadsState>(value).ok())
-        .and_then(|state| state.by_path.get(&path.display().to_string()).cloned())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
 }
 
 #[cfg(test)]

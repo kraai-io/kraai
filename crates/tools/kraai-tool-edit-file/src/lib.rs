@@ -5,11 +5,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_write_path, file_read_sha256, read_text_path,
-    resolve_tool_path,
+    ToolCallResult, ToolContext, TypedTool, assess_write_path, read_text_path, resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
-use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment, ToolStateSnapshot};
+use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
 use serde::Serialize;
 
 #[derive(Clone, Copy)]
@@ -168,9 +167,7 @@ impl TypedTool for EditFileTool {
         let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
         let result = match validate_args(&args) {
             Ok(ValidatedArgs::Create { contents }) => create_file(resolved.path(), contents),
-            Ok(ValidatedArgs::Edit { edits }) => {
-                edit_file(resolved.path(), edits, ctx.tool_state_snapshot)
-            }
+            Ok(ValidatedArgs::Edit { edits }) => edit_file(resolved.path(), edits),
             Err(error) => Err(error),
         };
 
@@ -246,35 +243,12 @@ fn create_file(path: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| format!("unable to create file {}: {}", path.display(), error))
 }
 
-fn edit_file(
-    path: &Path,
-    edits: &[EditOperation],
-    tool_state_snapshot: &ToolStateSnapshot,
-) -> Result<(), String> {
+fn edit_file(path: &Path, edits: &[EditOperation]) -> Result<(), String> {
     let original = read_text_path(path)?;
-    ensure_file_was_read_in_current_state(path, original.sha256(), tool_state_snapshot)?;
     let updated = apply_edits(path, original.contents(), edits)?;
 
     fs::write(path, updated)
         .map_err(|error| format!("unable to write file {}: {}", path.display(), error))
-}
-
-fn ensure_file_was_read_in_current_state(
-    path: &Path,
-    current_sha256: &str,
-    tool_state_snapshot: &ToolStateSnapshot,
-) -> Result<(), String> {
-    match file_read_sha256(tool_state_snapshot, path) {
-        Some(previous_sha256) if previous_sha256 == current_sha256 => Ok(()),
-        Some(_) => Err(format!(
-            "file changed since it was last read; read it again before editing: {}",
-            path.display()
-        )),
-        None => Err(format!(
-            "edit_file requires the current file contents to be read first: {}",
-            path.display()
-        )),
-    }
 }
 
 fn apply_edits(path: &Path, contents: &str, edits: &[EditOperation]) -> Result<String, String> {
@@ -470,9 +444,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use kraai_tool_core::{
-        FILE_READS_NAMESPACE, ToolContext, ToolOutput, TypedTool, read_text_path,
-    };
+    use kraai_tool_core::{ToolContext, ToolOutput, TypedTool};
     use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
     use serde_json::json;
     use toon_format::decode_default;
@@ -492,20 +464,6 @@ mod tests {
         ToolContext {
             global_config: config,
             tool_state_snapshot: snapshot,
-        }
-    }
-
-    fn snapshot_for_path(path: &Path) -> ToolStateSnapshot {
-        let read = read_text_path(path).expect("read file for snapshot");
-        ToolStateSnapshot {
-            entries: std::collections::BTreeMap::from([(
-                String::from(FILE_READS_NAMESPACE),
-                json!({
-                    "by_path": {
-                        path.display().to_string(): read.sha256(),
-                    }
-                }),
-            )]),
         }
     }
 
@@ -587,7 +545,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(2, 2, "beta", "gamma")]),
@@ -615,7 +573,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args(
@@ -646,7 +604,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(2, 2, "", "beta")]),
@@ -674,7 +632,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(1, 1, "", "alpha")]),
@@ -699,7 +657,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(2, 2, "missing", "gamma")]),
@@ -729,7 +687,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(3, 3, "gamma", "delta")]),
@@ -757,7 +715,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args("notes.txt", &[(2, 1, "beta", "gamma")]),
@@ -781,7 +739,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args(
@@ -815,7 +773,7 @@ mod tests {
 
         let tool = EditFileTool;
         let config = tool_config(&workspace_dir);
-        let snapshot = snapshot_for_path(&path);
+        let snapshot = ToolStateSnapshot::default();
         let output = tool
             .call(
                 edit_args(
@@ -970,8 +928,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_mode_requires_prior_read_of_current_contents() {
-        let workspace_dir = make_temp_dir("edit_mode_requires_prior_read_of_current_contents");
+    async fn edit_mode_allows_edit_without_prior_read() {
+        let workspace_dir = make_temp_dir("edit_mode_allows_edit_without_prior_read");
         let path = workspace_dir.join("notes.txt");
         fs::write(&path, "alpha\nbeta\n").expect("write file");
 
@@ -986,50 +944,13 @@ mod tests {
             .await;
 
         match output.output {
-            ToolOutput::Error { message } => {
-                assert_eq!(
-                    message,
-                    format!(
-                        "edit_file requires the current file contents to be read first: {}",
-                        path.display()
-                    )
-                );
-            }
-            ToolOutput::Success { .. } => panic!("expected error"),
+            ToolOutput::Success { data } => assert_eq!(data, json!({ "success": true })),
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
-
-        cleanup_temp_dir(&workspace_dir);
-    }
-
-    #[tokio::test]
-    async fn edit_mode_fails_when_file_changed_since_snapshot() {
-        let workspace_dir = make_temp_dir("edit_mode_fails_when_file_changed_since_snapshot");
-        let path = workspace_dir.join("notes.txt");
-        fs::write(&path, "alpha\nbeta\n").expect("write file");
-        let snapshot = snapshot_for_path(&path);
-        fs::write(&path, "alpha\ndelta\n").expect("rewrite file");
-
-        let tool = EditFileTool;
-        let config = tool_config(&workspace_dir);
-        let output = tool
-            .call(
-                edit_args("notes.txt", &[(2, 2, "delta", "gamma")]),
-                &tool_context(&config, &snapshot),
-            )
-            .await;
-
-        match output.output {
-            ToolOutput::Error { message } => {
-                assert_eq!(
-                    message,
-                    format!(
-                        "file changed since it was last read; read it again before editing: {}",
-                        path.display()
-                    )
-                );
-            }
-            ToolOutput::Success { .. } => panic!("expected error"),
-        }
+        assert_eq!(
+            fs::read_to_string(&path).expect("read file"),
+            "alpha\ngamma\n"
+        );
 
         cleanup_temp_dir(&workspace_dir);
     }
