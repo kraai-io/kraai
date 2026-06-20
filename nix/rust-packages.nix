@@ -15,6 +15,7 @@
         ../Cargo.toml
         ../crates
         ../deny.toml
+        ../justfile
       ];
     };
 
@@ -96,7 +97,7 @@
       clippy = mkCargoCheck {
         name = "clippy";
         command = ''
-          cargo clippy --workspace --all-targets -- --deny warnings
+          ${pkgs.just}/bin/just lint
         '';
       };
 
