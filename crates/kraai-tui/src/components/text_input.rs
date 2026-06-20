@@ -6,6 +6,8 @@ use ratatui::{
     style::{Color, Style},
     widgets::Widget,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::{normalize_terminal_text, normalized_byte_len};
 
@@ -59,9 +61,8 @@ impl<'a> TextInput<'a> {
             .enumerate()
             .find(|(_, segment)| safe_cursor >= segment.start && safe_cursor <= segment.end)
             .map(|(index, segment)| {
-                let column = normalized_input[segment.start..safe_cursor.min(segment.end)]
-                    .chars()
-                    .count();
+                let column =
+                    display_width(&normalized_input[segment.start..safe_cursor.min(segment.end)]);
                 (index, column)
             })
             .unwrap_or((0, 0));
@@ -107,7 +108,7 @@ impl<'a> TextInput<'a> {
             } else {
                 CONTINUATION_PREFIX
             };
-            let prefix_width = prefix.chars().count();
+            let prefix_width = display_width(prefix);
             let available = max_width.saturating_sub(prefix_width);
 
             if source_line.is_empty() {
@@ -123,28 +124,38 @@ impl<'a> TextInput<'a> {
                     end: line_start,
                 });
             } else {
-                let char_indices: Vec<(usize, char)> = source_line.char_indices().collect();
-                let mut start_char = 0usize;
-                while start_char < char_indices.len() {
-                    let end_char = (start_char + available).min(char_indices.len());
-                    let segment_start = line_start + char_indices[start_char].0;
-                    let segment_end = if end_char < char_indices.len() {
-                        line_start + char_indices[end_char].0
-                    } else {
-                        line_end
-                    };
-                    let line_prefix = if start_char == 0 {
-                        prefix
-                    } else {
-                        CONTINUATION_PREFIX
-                    };
-                    wrapped.push(WrappedSegment {
-                        text: format!("{line_prefix}{}", &content[segment_start..segment_end]),
-                        start: segment_start,
-                        end: segment_end,
-                    });
-                    start_char = end_char;
+                let mut segment_start = line_start;
+                let mut segment_width = 0usize;
+                for (offset, grapheme) in source_line.grapheme_indices(true) {
+                    let grapheme_width = grapheme.width();
+                    if segment_width > 0 && segment_width + grapheme_width > available {
+                        let segment_end = line_start + offset;
+                        let line_prefix = if segment_start == line_start {
+                            prefix
+                        } else {
+                            CONTINUATION_PREFIX
+                        };
+                        wrapped.push(WrappedSegment {
+                            text: format!("{line_prefix}{}", &content[segment_start..segment_end]),
+                            start: segment_start,
+                            end: segment_end,
+                        });
+                        segment_start = segment_end;
+                        segment_width = 0;
+                    }
+                    segment_width += grapheme_width;
                 }
+
+                let line_prefix = if segment_start == line_start {
+                    prefix
+                } else {
+                    CONTINUATION_PREFIX
+                };
+                wrapped.push(WrappedSegment {
+                    text: format!("{line_prefix}{}", &content[segment_start..line_end]),
+                    start: segment_start,
+                    end: line_end,
+                });
             }
 
             let Some(newline_index) = next_newline else {
@@ -186,7 +197,7 @@ impl<'a> TextInput<'a> {
         let last_line = lines.last().unwrap_or(&empty);
 
         let cursor_line_idx = (line_count.saturating_sub(1)) as u16;
-        let cursor_x = area.x + H_PADDING + last_line.chars().count() as u16;
+        let cursor_x = area.x + H_PADDING + display_width(last_line) as u16;
         let cursor_y = area.y + V_PADDING + cursor_line_idx;
 
         (cursor_x, cursor_y)
@@ -239,11 +250,22 @@ fn line_cursor(
         return input.len();
     };
 
-    input[segment.start..segment.end]
-        .char_indices()
-        .map(|(idx, _)| segment.start + idx)
-        .nth(column)
-        .unwrap_or(segment.end)
+    let mut width = 0usize;
+    for (idx, grapheme) in input[segment.start..segment.end].grapheme_indices(true) {
+        let grapheme_width = grapheme.width();
+        if width + grapheme_width > column {
+            return segment.start + idx;
+        }
+        width += grapheme_width;
+        if width == column {
+            return segment.start + idx + grapheme.len();
+        }
+    }
+    segment.end
+}
+
+fn display_width(text: &str) -> usize {
+    text.width()
 }
 
 fn next_char_boundary(s: &str, idx: usize) -> usize {
@@ -292,4 +314,34 @@ fn source_cursor(input: &str, normalized_cursor: usize) -> usize {
         }
     }
     input.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wraps_wide_graphemes_without_rendering_truncation() {
+        let input = "你好你好";
+        assert_eq!(TextInput::wrap_text(input, 8), vec!["> 你好你", "  好"]);
+
+        let area = Rect::new(0, 0, 10, 4);
+        let mut buffer = Buffer::empty(area);
+        TextInput::new(input, input.len()).render(area, &mut buffer);
+
+        assert_eq!(buffer[(3, 2)].symbol(), "好");
+        assert_eq!(
+            TextInput::new(input, input.len()).get_cursor_position(area),
+            (5, 2)
+        );
+    }
+
+    #[test]
+    fn vertical_navigation_uses_display_columns_for_wide_graphemes() {
+        let input = "你好你好";
+        let navigation = TextInput::cursor_navigation(input, "你好你".len(), 10);
+
+        assert!(navigation.can_move_down);
+        assert_eq!(navigation.cursor_below, input.len());
+    }
 }
