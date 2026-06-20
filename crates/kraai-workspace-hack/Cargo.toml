@@ -55,7 +55,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 crossterm = { version = "0.29.0", features = ["serde"] }
 linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "system", "xdp"] }
-miniz_oxide = { version = "0.8.9", features = ["simd"] }
+miniz_oxide = { version = "0.9.1", features = ["simd"] }
 mio = { version = "1.2.1", features = ["net", "os-ext"] }
 num-traits = { version = "0.2.19" }
 rustix = { version = "1.1.4", default-features = false, features = ["event", "fs", "net", "std", "stdio", "system", "termios"] }
@@ -66,7 +66,7 @@ smallvec = { version = "1.15.2", default-features = false, features = ["const_ne
 cc = { version = "1.2.65", default-features = false, features = ["parallel"] }
 crossterm = { version = "0.29.0", features = ["serde"] }
 linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "system", "xdp"] }
-miniz_oxide = { version = "0.8.9", features = ["simd"] }
+miniz_oxide = { version = "0.9.1", features = ["simd"] }
 mio = { version = "1.2.1", features = ["net", "os-ext"] }
 num-traits = { version = "0.2.19" }
 rustix = { version = "1.1.4", default-features = false, features = ["event", "fs", "net", "std", "stdio", "system", "termios"] }
