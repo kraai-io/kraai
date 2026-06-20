@@ -11,7 +11,6 @@
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
-        ../.config
         ../Cargo.lock
         ../Cargo.toml
         ../crates
