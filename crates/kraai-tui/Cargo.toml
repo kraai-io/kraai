@@ -18,7 +18,6 @@ color-eyre = { workspace = true }
 crossbeam-channel = { workspace = true }
 kraai-runtime = { workspace = true }
 kraai-types = { workspace = true }
-kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
 ratatui = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

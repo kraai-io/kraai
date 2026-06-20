@@ -10,7 +10,6 @@ version = "0.1.0"
 async-trait = { workspace = true }
 kraai-toon-schema = { workspace = true }
 kraai-types = { workspace = true }
-kraai-workspace-hack = { version = "0.1", path = "../../kraai-workspace-hack" }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

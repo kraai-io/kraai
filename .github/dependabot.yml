@@ -5,8 +5,6 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    exclude-paths:
-      - "crates/kraai-workspace-hack"
     cooldown:
       default-days: 7
   - package-ecosystem: github-actions

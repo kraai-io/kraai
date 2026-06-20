@@ -17,7 +17,6 @@
           cargo-watch
           cargo-audit
           cargo-deny
-          cargo-hakari
           cargo-nextest
           cargo-llvm-cov
           cargo-geiger

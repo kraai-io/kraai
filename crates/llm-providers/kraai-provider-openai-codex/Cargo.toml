@@ -14,7 +14,6 @@ directories = { workspace = true }
 futures = { workspace = true }
 kraai-provider-core = { workspace = true }
 kraai-types = { workspace = true }
-kraai-workspace-hack = { version = "0.1", path = "../../kraai-workspace-hack" }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

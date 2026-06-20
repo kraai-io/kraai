@@ -11,7 +11,6 @@ async-trait = { workspace = true }
 kraai-tool-core = { workspace = true }
 kraai-toon-schema = { workspace = true }
 kraai-types = { workspace = true }
-kraai-workspace-hack = { version = "0.1", path = "../../kraai-workspace-hack" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

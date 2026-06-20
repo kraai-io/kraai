@@ -132,16 +132,6 @@
           cargo nextest run --workspace --no-tests=pass
         '';
       };
-
-      hakari = mkCargoCheck {
-        name = "hakari";
-        nativeBuildInputs = [pkgs.cargo-hakari];
-        command = ''
-          cargo hakari generate --diff  # kraai-workspace-hack Cargo.toml is up-to-date
-          cargo hakari manage-deps --dry-run  # all workspace crates depend on kraai-workspace-hack
-          cargo hakari verify
-        '';
-      };
     };
   };
 }

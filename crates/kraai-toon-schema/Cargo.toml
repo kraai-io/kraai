@@ -10,7 +10,6 @@ version = "0.1.0"
 proc-macro = true
 
 [dependencies]
-kraai-workspace-hack = { version = "0.1", path = "../kraai-workspace-hack" }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 serde_json = { workspace = true }

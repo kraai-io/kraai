@@ -4,12 +4,10 @@ help:
 update-rust-deps:
     cargo upgrade
     cargo update
-    cargo hakari generate
 
 update-rust-deps-full:
     cargo upgrade --incompatible
     cargo update
-    cargo hakari generate
 
 test:
     cargo nextest run
