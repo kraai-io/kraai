@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use super::{display_width, normalize_terminal_text, normalized_byte_len};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -7,9 +8,6 @@ use ratatui::{
     widgets::Widget,
 };
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-
-use super::{normalize_terminal_text, normalized_byte_len};
 
 pub struct TextInput<'a> {
     input: Cow<'a, str>,
@@ -127,7 +125,7 @@ impl<'a> TextInput<'a> {
                 let mut segment_start = line_start;
                 let mut segment_width = 0usize;
                 for (offset, grapheme) in source_line.grapheme_indices(true) {
-                    let grapheme_width = grapheme.width();
+                    let grapheme_width = display_width(grapheme);
                     if segment_width > 0 && segment_width + grapheme_width > available {
                         let segment_end = line_start + offset;
                         let line_prefix = if segment_start == line_start {
@@ -252,7 +250,7 @@ fn line_cursor(
 
     let mut width = 0usize;
     for (idx, grapheme) in input[segment.start..segment.end].grapheme_indices(true) {
-        let grapheme_width = grapheme.width();
+        let grapheme_width = display_width(grapheme);
         if width + grapheme_width > column {
             return segment.start + idx;
         }
@@ -262,10 +260,6 @@ fn line_cursor(
         }
     }
     segment.end
-}
-
-fn display_width(text: &str) -> usize {
-    text.width()
 }
 
 fn next_char_boundary(s: &str, idx: usize) -> usize {

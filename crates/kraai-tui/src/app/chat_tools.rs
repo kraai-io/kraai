@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::display_width;
 
 impl App {
     pub(super) fn clear_chat_selection(&mut self) {
@@ -17,7 +18,7 @@ impl App {
 
         let line_index = row.saturating_sub(view.area.y) as usize;
         let line = view.lines.get(line_index)?;
-        let line_width = line.text.chars().count();
+        let line_width = display_width(&line.text);
         if line_width == 0 {
             return Some(ChatCellPosition {
                 line: line_index,

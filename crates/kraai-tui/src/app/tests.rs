@@ -1392,6 +1392,16 @@ fn selection_text_preserves_visible_line_breaks() {
     );
 }
 #[test]
+fn selection_text_uses_terminal_cells_for_wide_graphemes() {
+    let view = visible_chat_view(&["a你b"], Rect::new(0, 0, 4, 1));
+    let selection = ChatSelection {
+        anchor: ChatCellPosition { line: 0, column: 2 },
+        focus: ChatCellPosition { line: 0, column: 2 },
+    };
+
+    assert_eq!(selection_text(&view, selection), Some(String::from("你")));
+}
+#[test]
 fn copy_shortcut_requires_control_and_shift() {
     assert!(is_copy_shortcut(ctrl_shift_key(KeyCode::Char('c'))));
     assert!(!is_copy_shortcut(KeyEvent::new(
@@ -1508,6 +1518,16 @@ fn mouse_drag_updates_selection_in_chat_view() {
     );
 }
 #[test]
+fn mouse_selection_uses_terminal_cells_for_wide_graphemes() {
+    let mut harness = test_harness();
+    harness.app.state.visible_chat_view = Some(visible_chat_view(&["a你b"], Rect::new(0, 0, 4, 1)));
+
+    assert_eq!(
+        harness.app.hit_test_chat_cell(2, 0),
+        Some(ChatCellPosition { line: 0, column: 2 })
+    );
+}
+#[test]
 fn selection_overlay_marks_buffer_cells() {
     let area = Rect::new(0, 0, 8, 2);
     let view = visible_chat_view(&["alpha", "beta"], area);
@@ -1530,6 +1550,30 @@ fn selection_overlay_marks_buffer_cells() {
     assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
     assert_eq!(buffer[(1, 0)].fg, Color::Black);
     assert_eq!(buffer[(1, 1)].bg, Color::Cyan);
+}
+#[test]
+fn selection_overlay_uses_terminal_cells_for_wide_graphemes() {
+    let area = Rect::new(0, 0, 4, 1);
+    let view = visible_chat_view(&["a你b"], area);
+    let mut buffer = Buffer::empty(area);
+    for x in 0..area.width {
+        buffer[(x, 0)]
+            .set_char(' ')
+            .set_style(Style::default().fg(Color::White));
+    }
+
+    render_chat_selection_overlay(
+        Some(&view),
+        Some(ChatSelection {
+            anchor: ChatCellPosition { line: 0, column: 1 },
+            focus: ChatCellPosition { line: 0, column: 2 },
+        }),
+        &mut buffer,
+    );
+
+    assert_eq!(buffer[(1, 0)].bg, Color::Cyan);
+    assert_eq!(buffer[(2, 0)].bg, Color::Cyan);
+    assert_ne!(buffer[(3, 0)].bg, Color::Cyan);
 }
 #[test]
 fn tab_cycles_slash_command_and_enter_executes_selected_command() {

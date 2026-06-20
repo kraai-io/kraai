@@ -9,7 +9,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
-use super::normalize_terminal_text;
+use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 static IMAGE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex"));
@@ -115,8 +115,8 @@ impl<'a> ChatHistory<'a> {
         };
 
         for source_line in source_lines {
-            let mut chars: Vec<char> = source_line.chars().collect();
-            if chars.is_empty() {
+            let mut remaining = source_line;
+            if remaining.is_empty() {
                 let prefix = if first_visual_line {
                     first_prefix
                 } else {
@@ -133,21 +133,31 @@ impl<'a> ChatHistory<'a> {
                 } else {
                     cont_prefix
                 };
-                let prefix_width = prefix.chars().count();
+                let prefix_width = display_width(prefix);
                 let available = width.saturating_sub(prefix_width);
 
                 if available == 0 {
                     wrapped.push(Self::fit_to_width(prefix, width));
-                    first_visual_line = false;
-                    continue;
+                    break;
                 }
 
-                let take_count = available.min(chars.len());
-                let chunk: String = chars.drain(0..take_count).collect();
-                wrapped.push(format!("{prefix}{chunk}"));
+                let (chunk, _) = fitting_prefix(remaining, available);
+                if chunk.is_empty() {
+                    let Some(grapheme) =
+                        unicode_segmentation::UnicodeSegmentation::graphemes(remaining, true)
+                            .next()
+                    else {
+                        break;
+                    };
+                    wrapped.push(format!("{prefix}{grapheme}"));
+                    remaining = &remaining[grapheme.len()..];
+                } else {
+                    wrapped.push(format!("{prefix}{chunk}"));
+                    remaining = &remaining[chunk.len()..];
+                }
                 first_visual_line = false;
 
-                if chars.is_empty() {
+                if remaining.is_empty() {
                     break;
                 }
             }
@@ -161,7 +171,7 @@ impl<'a> ChatHistory<'a> {
     }
 
     fn fit_to_width(content: &str, width: usize) -> String {
-        content.chars().take(width).collect()
+        fitting_prefix(content, width).0.to_string()
     }
 
     fn push_wrapped_lines(
@@ -262,15 +272,17 @@ impl<'a> ChatHistory<'a> {
             return;
         }
 
-        let mut styled_chars = Vec::new();
+        let mut styled_graphemes = Vec::new();
         for span in spans {
-            for ch in span.text.chars() {
-                styled_chars.push((ch, span.style));
+            for grapheme in
+                unicode_segmentation::UnicodeSegmentation::graphemes(span.text.as_str(), true)
+            {
+                styled_graphemes.push((grapheme, span.style));
             }
         }
 
         let mut idx = 0usize;
-        let total = styled_chars.len();
+        let total = styled_graphemes.len();
         let mut first_visual_line = true;
 
         loop {
@@ -283,7 +295,7 @@ impl<'a> ChatHistory<'a> {
             } else {
                 cont_prefix
             };
-            let prefix_width = prefix.chars().count();
+            let prefix_width = display_width(prefix);
             let available = width.saturating_sub(prefix_width);
 
             let mut line_spans = Vec::new();
@@ -299,29 +311,35 @@ impl<'a> ChatHistory<'a> {
                     spans: line_spans,
                     bg: base_style.bg,
                 });
-                first_visual_line = false;
-                if total == 0 {
-                    break;
-                }
-                continue;
+                break;
             }
 
-            let take_count = if total == 0 {
-                0
-            } else {
-                available.min(total.saturating_sub(idx))
-            };
+            let mut take_count = 0;
+            let mut used_width = 0;
+            while idx + take_count < total {
+                let (grapheme, _) = styled_graphemes[idx + take_count];
+                let grapheme_width = display_width(grapheme);
+                if used_width + grapheme_width > available {
+                    break;
+                }
+                used_width += grapheme_width;
+                take_count += 1;
+            }
+
+            if take_count == 0 && idx < total {
+                take_count = 1;
+            }
 
             if take_count > 0 {
-                for (ch, style) in &styled_chars[idx..idx + take_count] {
+                for (grapheme, style) in &styled_graphemes[idx..idx + take_count] {
                     if let Some(last) = line_spans.last_mut()
                         && last.style == *style
                     {
-                        last.text.push(*ch);
+                        last.text.push_str(grapheme);
                         continue;
                     }
                     line_spans.push(RenderedSpan {
-                        text: ch.to_string(),
+                        text: (*grapheme).to_string(),
                         style: *style,
                     });
                 }
@@ -868,9 +886,31 @@ mod tests {
 
     #[test]
     fn wraps_unicode_without_panicking() {
-        let wrapped = ChatHistory::wrap_with_prefix("hello 👋 world", 8, "", "");
-        assert!(!wrapped.is_empty());
-        assert!(wrapped.iter().all(|line| line.chars().count() <= 8));
+        let wrapped = ChatHistory::wrap_with_prefix("你好你好", 4, "", "");
+        assert_eq!(wrapped, ["你好", "你好"]);
+        assert!(wrapped.iter().all(|line| display_width(line) <= 4));
+    }
+
+    #[test]
+    fn wraps_wide_assistant_content_without_omitting_graphemes() {
+        let assistant = message("1", ChatRole::Assistant, "你好你好");
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let rendered = history
+            .build_rendered_lines(7)
+            .iter()
+            .map(ChatHistory::line_text)
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, [" • 你好", "   你好"]);
+
+        let area = Rect::new(0, 0, 7, 2);
+        let mut buffer = Buffer::empty(area);
+        history.render(area, &mut buffer);
+        assert_eq!(buffer[(3, 0)].symbol(), "你");
+        assert_eq!(buffer[(5, 0)].symbol(), "好");
+        assert_eq!(buffer[(3, 1)].symbol(), "你");
+        assert_eq!(buffer[(5, 1)].symbol(), "好");
     }
 
     #[test]

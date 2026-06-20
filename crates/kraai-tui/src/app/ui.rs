@@ -13,7 +13,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use crate::components::{ChatHistory, TextInput, VisibleChatView};
+use crate::components::{
+    ChatHistory, TextInput, VisibleChatView, display_width, text_in_cell_range,
+};
 
 use super::{
     ActiveSettingsEditor, AppState, ChatCellPosition, ChatSelection, ProviderAuthState,
@@ -107,7 +109,7 @@ pub(super) fn render_chat_selection_overlay(
         let Some(line) = view.lines.get(line_index) else {
             continue;
         };
-        let line_width = line.text.chars().count();
+        let line_width = display_width(&line.text);
         if line_width == 0 {
             continue;
         }
@@ -138,8 +140,8 @@ fn normalized_selection_range(
     selection: ChatSelection,
 ) -> Option<(ChatCellPosition, ChatCellPosition)> {
     let (mut start, mut end) = selection.normalized();
-    let start_width = view.lines.get(start.line)?.text.chars().count();
-    let end_width = view.lines.get(end.line)?.text.chars().count();
+    let start_width = display_width(&view.lines.get(start.line)?.text);
+    let end_width = display_width(&view.lines.get(end.line)?.text);
 
     if start_width > 0 {
         start.column = start.column.min(start_width.saturating_sub(1));
@@ -162,8 +164,7 @@ pub(super) fn selection_text(view: &VisibleChatView, selection: ChatSelection) -
 
     for line_index in start.line..=end.line {
         let line = view.lines.get(line_index)?;
-        let chars: Vec<char> = line.text.chars().collect();
-        let line_width = chars.len();
+        let line_width = display_width(&line.text);
 
         let text = if line_width == 0 {
             String::new()
@@ -178,7 +179,7 @@ pub(super) fn selection_text(view: &VisibleChatView, selection: ChatSelection) -
             } else {
                 line_width.saturating_sub(1)
             };
-            chars[start_col..=end_col].iter().collect()
+            text_in_cell_range(&line.text, start_col, end_col)
         };
 
         selected_lines.push(text);
