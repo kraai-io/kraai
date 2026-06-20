@@ -6,7 +6,7 @@ use futures::{StreamExt, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
     ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ProviderStreamEvent,
-    ValidationError, send_with_retry as send_http_with_retry,
+    ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
@@ -223,7 +223,7 @@ impl Provider for OpenAiCodexProvider {
         let response = self
             .send_responses_request(model_id, messages, true, request_context)
             .await?;
-        let stream = crate::sse::stream_sse_data(response)
+        let stream = stream_sse_data(response)
             .filter_map(|event| async move {
                 match event {
                     Ok(payload) => {

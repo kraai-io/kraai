@@ -49,12 +49,44 @@ impl AgentManager {
     pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
+                let session = self.recover_interrupted_stream(session).await?;
                 self.ensure_runtime_state(session_id, &session.workspace_dir);
                 self.cleanup_hot_cache_for_session(&session).await?;
                 Ok(true)
             }
             None => Ok(false),
         }
+    }
+
+    /// Roll back an assistant placeholder left by a process that stopped during a stream.
+    ///
+    /// Provider streams are not resumable. Keeping an incomplete assistant message in the
+    /// conversation would make the next request include a response the provider never finished,
+    /// so recovery restores the last durable parent message instead.
+    pub(super) async fn recover_interrupted_stream(
+        &self,
+        mut session: SessionMeta,
+    ) -> Result<SessionMeta> {
+        // A loaded background session can legitimately have a streaming tip. Only recover a
+        // placeholder when this process has no corresponding active stream.
+        if self.session_has_active_stream(&session.id).await {
+            return Ok(session);
+        }
+        let Some(tip_id) = session.tip_id.clone() else {
+            return Ok(session);
+        };
+        let Some(tip) = self.message_store.get(&tip_id).await? else {
+            return Ok(session);
+        };
+        if !matches!(tip.status, MessageStatus::Streaming { .. }) {
+            return Ok(session);
+        }
+
+        session.tip_id = tip.parent_id.clone();
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await?;
+        self.message_store.delete(&tip_id).await?;
+        Ok(session)
     }
 
     pub(super) async fn cleanup_hot_cache_for_session(&self, session: &SessionMeta) -> Result<()> {

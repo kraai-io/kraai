@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, send_with_retry,
+    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, send_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -16,7 +16,6 @@ use crate::messages::{normalize_chat_messages, role_from_wire};
 use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
-use crate::sse::stream_sse_data;
 use crate::wire::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionStreamOptions, ChatCompletionUsage, ListModelsResponse,

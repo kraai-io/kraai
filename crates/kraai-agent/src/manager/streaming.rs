@@ -20,7 +20,9 @@ impl AgentManager {
         provider_id: ProviderId,
         auto_approve: bool,
     ) -> Result<PendingStreamRequest> {
-        let session = self.require_session(session_id).await?;
+        let session = self
+            .recover_interrupted_stream(self.require_session(session_id).await?)
+            .await?;
         let profile = self.resolve_selected_profile(&session)?;
         let workspace_dir = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
@@ -131,7 +133,9 @@ impl AgentManager {
         &mut self,
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
-        let session = self.require_session(session_id).await?;
+        let session = self
+            .recover_interrupted_stream(self.require_session(session_id).await?)
+            .await?;
         let selected_profile = self.resolve_selected_profile(&session)?;
         let (model_id, provider_id, profile, workspace_dir) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
@@ -320,8 +324,20 @@ impl AgentManager {
             generation,
         };
 
-        let mut streaming = self.streaming_messages.write().await;
-        streaming.insert(
+        // Persist the placeholder before advancing the durable session tip. A crash between
+        // these writes leaves either an orphan (which startup GC removes) or a recoverable
+        // streaming tip, never a tip that references a missing message.
+        self.message_store.save(&message).await?;
+        if let Err(error) = self.set_tip(session_id, Some(message_id.clone())).await {
+            if let Err(delete_error) = self.message_store.delete(&message_id).await {
+                tracing::error!(
+                    "Failed to clean up unreferenced streaming placeholder {message_id}: {delete_error}"
+                );
+            }
+            return Err(error);
+        }
+
+        self.streaming_messages.write().await.insert(
             message_id.clone(),
             StreamingMessageState {
                 session_id: session_id.to_string(),
@@ -329,9 +345,6 @@ impl AgentManager {
                 message,
             },
         );
-        drop(streaming);
-
-        self.set_tip(session_id, Some(message_id.clone())).await?;
         Ok(message_id)
     }
 
@@ -402,6 +415,7 @@ impl AgentManager {
                 .insert(message_id.clone(), original_state);
             return Err(error);
         }
+        self.message_store.delete(message_id).await?;
         Ok(Some(state.session_id))
     }
 
@@ -420,6 +434,7 @@ impl AgentManager {
             self.message_store.save(&state.message).await?;
         } else {
             self.set_tip(&state.session_id, state.previous_tip).await?;
+            self.message_store.delete(message_id).await?;
         }
 
         Ok(Some(CancelledStreamResult {

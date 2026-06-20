@@ -4,6 +4,7 @@ use futures::{StreamExt, stream};
 use reqwest::Response;
 use tokio::sync::mpsc;
 
+/// Convert an HTTP server-sent-events response into decoded `data:` payloads.
 pub fn stream_sse_data(response: Response) -> BoxStream<'static, Result<String>> {
     let (tx, rx) = mpsc::channel(16);
 

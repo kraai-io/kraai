@@ -9,7 +9,7 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Text},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
@@ -17,10 +17,17 @@ use crate::components::{ChatHistory, TextInput, VisibleChatView};
 
 use super::{
     ActiveSettingsEditor, AppState, ChatCellPosition, ChatSelection, ProviderAuthState,
-    ProvidersAdvancedFocus, ProvidersView, SettingsModelField, SettingsProviderField,
-    ToolApprovalAction, ToolPhase, UiMode, field_value_display, flatten_models_map,
-    provider_definition_rank,
+    ProvidersAdvancedFocus, ProvidersView, SettingsModelField, SettingsProviderField, ToolPhase,
+    UiMode, field_value_display, flatten_models_map, provider_definition_rank,
 };
+
+mod command_popup;
+mod status;
+mod tool_approval;
+use command_popup::render_command_popup;
+pub(super) use status::format_token_count;
+use status::statusline_line;
+use tool_approval::render_tool_approval_panel;
 
 pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
@@ -81,140 +88,6 @@ impl Widget for &AppState {
             UiMode::Help => render_help_menu(area, buf),
             UiMode::Chat => {}
         }
-    }
-}
-
-fn statusline_line(state: &AppState) -> Line<'static> {
-    let separator = Span::styled(" · ", Style::default().fg(Color::DarkGray));
-    let mut spans = vec![
-        Span::styled(
-            statusline_activity_label(state),
-            Style::default().fg(statusline_activity_color(state)),
-        ),
-        separator.clone(),
-        Span::raw(statusline_model_label(state)),
-        separator.clone(),
-        Span::raw(statusline_agent_label(state)),
-    ];
-
-    spans.push(separator.clone());
-    spans.push(Span::raw(statusline_context_label(state)));
-
-    spans.push(separator);
-    spans.push(Span::raw(state.status.clone()));
-    Line::from(spans)
-}
-
-fn statusline_activity_label(state: &AppState) -> String {
-    if state.runtime_is_active() {
-        return STATUSLINE_STREAMING_FRAMES
-            [state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len()]
-        .to_string();
-    }
-
-    if state.status == "Stream cancelled" {
-        return String::from("cancelled");
-    }
-
-    String::from("idle")
-}
-
-fn statusline_activity_color(state: &AppState) -> Color {
-    if state.runtime_is_active() {
-        Color::Cyan
-    } else if state.status == "Stream cancelled" {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    }
-}
-
-fn statusline_model_label(state: &AppState) -> String {
-    let Some(provider_id) = state.selected_provider_id.as_deref() else {
-        return String::from("none");
-    };
-    let Some(model_id) = state.selected_model_id.as_deref() else {
-        return String::from("none");
-    };
-
-    let model_name = state
-        .models_by_provider
-        .get(provider_id)
-        .and_then(|models| models.iter().find(|model| model.id == model_id))
-        .map(|model| model.name.as_str())
-        .unwrap_or(model_id);
-
-    format!("{provider_id}/{model_name}")
-}
-
-fn statusline_agent_label(state: &AppState) -> String {
-    let Some(profile_id) = state.selected_profile_id.as_deref() else {
-        return String::from("none");
-    };
-
-    state
-        .agent_profiles
-        .iter()
-        .find(|profile| profile.id == profile_id)
-        .map(|profile| profile.display_name.clone())
-        .unwrap_or_else(|| profile_id.to_string())
-}
-
-fn statusline_context_label(state: &AppState) -> String {
-    format_context_label(
-        state
-            .context_usage
-            .as_ref()
-            .map(|usage| usage.used_context_tokens()),
-        state
-            .context_usage
-            .as_ref()
-            .and_then(|usage| usage.max_context)
-            .or_else(|| selected_model_max_context(state)),
-    )
-}
-
-fn selected_model_max_context(state: &AppState) -> Option<usize> {
-    let provider_id = state.selected_provider_id.as_deref()?;
-    let model_id = state.selected_model_id.as_deref()?;
-
-    state
-        .models_by_provider
-        .get(provider_id)?
-        .iter()
-        .find(|model| model.id == model_id)
-        .and_then(|model| model.max_context)
-}
-
-pub(super) fn format_token_count(value: usize) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().rev().enumerate() {
-        if index != 0 && index % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out.chars().rev().collect()
-}
-
-pub(super) fn format_context_label(
-    used_context_tokens: Option<usize>,
-    max_context: Option<usize>,
-) -> String {
-    let used_context_tokens = used_context_tokens.unwrap_or_default();
-    let used = format_token_count(used_context_tokens);
-
-    match max_context {
-        Some(max_context) if max_context > 0 => format!(
-            "ctx {used}/{} ({}%)",
-            format_token_count(max_context),
-            used_context_tokens
-                .saturating_mul(100)
-                .checked_div(max_context)
-                .unwrap_or_default()
-        ),
-        _ => format!("ctx {used}"),
     }
 }
 
@@ -495,68 +368,6 @@ pub(super) fn parse_settings_errors(message: &str) -> HashMap<String, String> {
         }
     }
     errors
-}
-
-fn render_command_popup(state: &AppState, area: Rect, input_area: Rect, buf: &mut Buffer) {
-    if state.command_popup_dismissed {
-        return;
-    }
-    let Some(prefix) = active_command_prefix(&state.input) else {
-        return;
-    };
-    let matches = slash_command_matches(prefix);
-    if matches.is_empty() {
-        return;
-    }
-
-    let visible_count = matches.len().min(6);
-    let popup_height = (visible_count as u16).saturating_add(2);
-    let popup_width = area.width.saturating_mul(3) / 5;
-    let popup_y = input_area.y.saturating_sub(popup_height);
-    let popup_area = Rect::new(
-        area.x + 1,
-        popup_y,
-        popup_width.max(24),
-        popup_height.max(3),
-    );
-
-    let selected_idx = if state.command_completion_prefix.as_deref() == Some(prefix) {
-        state
-            .command_completion_index
-            .min(matches.len().saturating_sub(1))
-    } else {
-        0
-    };
-    let visible_lines = popup_area.height.saturating_sub(2) as usize;
-    let scroll_offset = menu_scroll_offset(selected_idx, matches.len(), visible_lines);
-
-    let mut lines = Vec::new();
-    for (idx, (command, description)) in matches
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_count)
-    {
-        let selected = idx == selected_idx;
-        let marker = if selected { ">" } else { " " };
-        lines.push(Line::styled(
-            format!("{marker} /{command:<9} {description}"),
-            if selected {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default()
-            },
-        ));
-    }
-
-    Clear.render(popup_area, buf);
-    Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title("Command (Tab/Down next, Shift-Tab/Up prev, Enter run)")
-                .borders(Borders::ALL),
-        )
-        .render(popup_area, buf);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -1320,99 +1131,6 @@ fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         .block(Block::default().title("/sessions").borders(Borders::ALL))
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
-}
-
-fn render_tool_approval_panel(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let Some(tool) = state
-        .pending_tools
-        .iter()
-        .find(|tool| tool.approved.is_none())
-    else {
-        return;
-    };
-
-    let block = Block::default()
-        .title(" Permission required ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    Clear.render(area, buf);
-    block.render(area, buf);
-
-    for y in area.y..area.y + area.height {
-        let cell = &mut buf[(area.x, y)];
-        cell.set_char(' ').set_bg(Color::Yellow);
-    }
-
-    let inner = area.inner(ratatui::layout::Margin {
-        vertical: 1,
-        horizontal: 2,
-    });
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let footer_height = 1;
-    let body_height = inner.height.saturating_sub(footer_height + 1);
-    let [body_area, _spacer, footer_area] = Layout::vertical([
-        Constraint::Length(body_height),
-        Constraint::Length(inner.height.saturating_sub(body_height + footer_height)),
-        Constraint::Length(footer_height),
-    ])
-    .areas(inner);
-
-    let mut lines = vec![
-        Line::styled(
-            &tool.description,
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Line::styled(
-            format!("tool: {}  risk: {}", tool.tool_id, tool.risk_level),
-            Style::default().fg(Color::Gray),
-        ),
-    ];
-
-    for reason in &tool.reasons {
-        lines.push(Line::styled(
-            format!("why: {reason}"),
-            Style::default().fg(Color::Gray),
-        ));
-    }
-
-    lines.push(Line::raw(String::new()));
-    lines.push(Line::styled("args", Style::default().fg(Color::Gray)));
-    lines.push(Line::raw(tool.args.clone()));
-
-    Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: false })
-        .render(body_area, buf);
-
-    let allow_style = if state.tool_approval_action == ToolApprovalAction::Allow {
-        Style::default().fg(Color::Black).bg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-    let reject_style = if state.tool_approval_action == ToolApprovalAction::Reject {
-        Style::default().fg(Color::Black).bg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let footer = Line::from(vec![
-        Span::raw(" "),
-        Span::styled("Allow", allow_style),
-        Span::raw("   "),
-        Span::styled("Reject", reject_style),
-        Span::raw(" ".repeat(footer_area.width.saturating_sub(33) as usize)),
-        Span::styled(
-            "select <->  confirm Enter",
-            Style::default().fg(Color::Gray),
-        ),
-    ]);
-
-    Paragraph::new(footer)
-        .style(Style::default().bg(Color::DarkGray))
-        .render(footer_area, buf);
 }
 
 fn render_help_menu(area: Rect, buf: &mut Buffer) {

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod http_retry;
+mod sse;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ pub use http_retry::{
     DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderRequestContext, ProviderRetryEvent,
     ProviderRetryObserver, send_with_retry,
 };
+pub use sse::stream_sse_data;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderStreamEvent {

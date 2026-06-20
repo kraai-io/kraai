@@ -532,3 +532,71 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
     cleanup_dir(data_dir).await;
     Ok(())
 }
+
+#[tokio::test]
+async fn loading_session_recovers_persisted_interrupted_stream() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+
+    let session_id = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("preserve this prompt"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+
+    // Simulate process loss: the in-memory active-stream map and hot cache vanish, while the
+    // persisted session still points at the durable streaming placeholder.
+    manager.streaming_messages.write().await.clear();
+    manager.message_store.unload(&request.message_id).await;
+
+    assert!(manager.prepare_session(&session_id).await?);
+
+    let history = manager.get_chat_history(&session_id).await?;
+    assert_eq!(history.len(), 1);
+    let user_message = history
+        .values()
+        .find(|message| message.role == ChatRole::User && message.content == "preserve this prompt")
+        .expect("persisted user message");
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(user_message.id.clone())
+    );
+    assert!(
+        manager
+            .message_store
+            .get(&request.message_id)
+            .await?
+            .is_none()
+    );
+
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+
+    let session_id = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("still streaming"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+
+    assert!(manager.prepare_session(&session_id).await?);
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(request.message_id)
+    );
+    assert!(manager.session_has_active_stream(&session_id).await);
+
+    cleanup_dir(data_dir).await;
+    Ok(())
+}

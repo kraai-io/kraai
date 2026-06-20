@@ -95,6 +95,35 @@ impl FileMessageStore {
     }
 }
 
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
+    fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("Failed to create directory: {parent:?}"))?;
+
+    let temp_path = temp_write_path(path);
+    fs::write(&temp_path, content)
+        .await
+        .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
+
+    if let Err(error) = fs::rename(&temp_path, path).await {
+        let _ = fs::remove_file(&temp_path).await;
+        return Err(error).with_context(|| format!("Failed to rename temp file to: {path:?}"));
+    }
+
+    Ok(())
+}
+
+fn temp_write_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| String::from("state"));
+    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()))
+}
+
 #[async_trait::async_trait]
 impl MessageStore for FileMessageStore {
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
@@ -135,9 +164,9 @@ impl MessageStore for FileMessageStore {
         let content = serde_json::to_string_pretty(message)
             .with_context(|| format!("Failed to serialize message: {}", message.id))?;
 
-        fs::write(&path, &content)
+        atomic_write(&path, content.as_bytes())
             .await
-            .with_context(|| format!("Failed to write message file: {:?}", path))?;
+            .with_context(|| format!("Failed to write message file: {path:?}"))?;
 
         // Add to hot cache
         {
@@ -253,26 +282,7 @@ impl FileSessionStore {
         let content = serde_json::to_string_pretty(sessions)
             .with_context(|| "Failed to serialize sessions")?;
 
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("Failed to create directory: {:?}", parent))?;
-        }
-
-        // Write to a unique temp file in the same directory, then rename for atomicity.
-        let temp_path = temp_session_write_path(path);
-        fs::write(&temp_path, &content)
-            .await
-            .with_context(|| format!("Failed to write temp file: {:?}", temp_path))?;
-
-        if let Err(error) = fs::rename(&temp_path, path).await {
-            let _ = fs::remove_file(&temp_path).await;
-            return Err(error)
-                .with_context(|| format!("Failed to rename temp file to: {:?}", path));
-        }
-
-        Ok(())
+        atomic_write(path, content.as_bytes()).await
     }
 
     /// Collect all message IDs in a session's tree (from tip to root)
@@ -398,14 +408,6 @@ impl SessionStore for FileSessionStore {
     }
 }
 
-fn temp_session_write_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("sessions.json"));
-    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()))
-}
-
 /// Get the data directory for the application
 pub fn agent_state_root() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new().context("Failed to determine home directory")?;
@@ -479,8 +481,8 @@ mod tests {
     fn session_temp_write_paths_are_unique_and_adjacent_to_destination() {
         let path = PathBuf::from("/tmp/kraai-data/sessions.json");
 
-        let first = temp_session_write_path(&path);
-        let second = temp_session_write_path(&path);
+        let first = temp_write_path(&path);
+        let second = temp_write_path(&path);
 
         assert_ne!(first, second);
         assert_eq!(first.parent(), path.parent());

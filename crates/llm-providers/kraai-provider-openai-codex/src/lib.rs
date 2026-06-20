@@ -4,7 +4,6 @@ mod auth;
 mod catalog;
 mod messages;
 mod provider;
-mod sse;
 mod wire;
 
 pub use auth::{
