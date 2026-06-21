@@ -13,3 +13,6 @@ kraai-toon-schema = { workspace = true }
 kraai-types = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

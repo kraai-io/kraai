@@ -24,19 +24,26 @@ toon_tool! {
 
             #[toon_schema(description = "Maximum execution time in seconds")]
             timeout_seconds: u32,
+
+            #[serde(default)]
+            #[toon_schema(description = "Include stdout in the result. Disabled by default; exit code and stderr are always returned")]
+            include_stdout: bool,
         }
     },
     root: BashToolArgs,
     examples: [
-        { command: ["git", "status", "--short"], timeout_seconds: 10 },
+        { command: ["git", "status", "--short"], timeout_seconds: 10, include_stdout: true },
         { command: ["cargo", "test", "-p", "package"], timeout_seconds: 120 },
+        { command: ["echo", "an argument with spaces"], timeout_seconds: 10, include_stdout: true },
+        { command: ["rg", "-n", "tool call", "crates"], timeout_seconds: 10, include_stdout: true },
     ]
 }
 
 #[derive(Serialize)]
 struct BashToolOutput {
     exit_code: Option<i32>,
-    stdout: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdout: Option<String>,
     stderr: String,
 }
 
@@ -78,7 +85,11 @@ impl TypedTool for BashTool {
             .args(args.command.get(1..).unwrap_or_default())
             .current_dir(&ctx.global_config.workspace_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(if args.include_stdout {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
@@ -108,7 +119,9 @@ impl TypedTool for BashTool {
 
         ToolCallResult::success(BashToolOutput {
             exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stdout: args
+                .include_stdout
+                .then(|| String::from_utf8_lossy(&output.stdout).into_owned()),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
@@ -176,7 +189,29 @@ mod tests {
         BashToolArgs {
             command: command.iter().map(|item| item.to_string()).collect(),
             timeout_seconds,
+            include_stdout: false,
         }
+    }
+
+    fn bash_args_with_stdout(command: &[&str], timeout_seconds: u32) -> BashToolArgs {
+        BashToolArgs {
+            include_stdout: true,
+            ..bash_args(command, timeout_seconds)
+        }
+    }
+
+    #[test]
+    fn stdout_is_opt_in() {
+        let args: BashToolArgs = serde_json::from_value(serde_json::json!({
+            "command": ["true"],
+            "timeout_seconds": 5,
+        }))
+        .expect("args deserialize");
+
+        assert!(!args.include_stdout);
+        assert!(
+            BashToolArgs::toon_schema().contains("include_stdout[1:1]: boolean # default: default")
+        );
     }
 
     #[tokio::test]
@@ -208,7 +243,10 @@ mod tests {
         let snapshot = ToolStateSnapshot::default();
 
         let output = tool
-            .call(bash_args(&["pwd"], 5), &tool_context(&config, &snapshot))
+            .call(
+                bash_args_with_stdout(&["pwd"], 5),
+                &tool_context(&config, &snapshot),
+            )
             .await;
 
         match output.output {
@@ -243,6 +281,33 @@ mod tests {
             ToolOutput::Success { data } => {
                 assert_eq!(data["exit_code"].as_i64(), Some(7));
                 assert_eq!(data["stderr"].as_str(), Some("failed"));
+                assert!(data.get("stdout").is_none());
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[tokio::test]
+    async fn returns_stdout_when_requested() {
+        let workspace_dir = make_temp_dir("returns-stdout-when-requested");
+        let tool = BashTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+
+        let output = tool
+            .call(
+                bash_args_with_stdout(&["sh", "-c", "printf output; printf diagnostic >&2"], 5),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                assert_eq!(data["exit_code"].as_i64(), Some(0));
+                assert_eq!(data["stdout"].as_str(), Some("output"));
+                assert_eq!(data["stderr"].as_str(), Some("diagnostic"));
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }

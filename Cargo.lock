@@ -1916,6 +1916,7 @@ dependencies = [
  "kraai-toon-schema",
  "kraai-types",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
