@@ -107,6 +107,20 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         .expect("system prompt should be present");
     assert!(!system_prompt.content.contains("Workspace Instructions"));
     assert!(!system_prompt.content.contains(AGENTS_MD_FILE_NAME));
+    let protocol_offset = system_prompt
+        .content
+        .find("# Tool Execution Protocol")
+        .expect("tool execution protocol");
+    let first_tool_offset = system_prompt
+        .content
+        .find("mock schema")
+        .expect("tool definition");
+    assert!(protocol_offset < first_tool_offset);
+    assert!(
+        system_prompt
+            .content
+            .contains("A `<tool_call>` block is the tool invocation.")
+    );
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;

@@ -1,11 +1,18 @@
 use super::*;
 
+const TOOL_EXECUTION_PROTOCOL_PROMPT: &str = "# Tool Execution Protocol\nYou have executable tools in this environment. Invoke them by emitting a `<tool_call>` block in the TOON format documented below. The runtime executes each block and returns its result in a later message.\n\nDo not claim that tools are unavailable, that this is a final-only context, or that you cannot emit a tool invocation. A `<tool_call>` block is the tool invocation.";
+
 impl AgentManager {
     pub(super) fn build_system_prompt(&self, profile: &AgentProfile) -> Result<String> {
         let tool_prompt = self
             .tools
             .generate_system_prompt_for_tools(&profile.tools)
             .map_err(|error| eyre!(error.to_string()))?;
+        let tool_prompt = if tool_prompt.is_empty() {
+            String::new()
+        } else {
+            format!("{TOOL_EXECUTION_PROTOCOL_PROMPT}\n\n{tool_prompt}")
+        };
         if profile.system_prompt.is_empty() {
             Ok(tool_prompt)
         } else if tool_prompt.is_empty() {
