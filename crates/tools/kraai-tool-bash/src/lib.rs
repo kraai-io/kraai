@@ -77,9 +77,7 @@ impl TypedTool for BashTool {
             ));
         }
 
-        let Some(program) = args.command.first() else {
-            return ToolCallResult::error(String::from("command must contain at least one item"));
-        };
+        let program = &args.command[0];
         let mut command = Command::new(program);
         command
             .args(args.command.get(1..).unwrap_or_default())
