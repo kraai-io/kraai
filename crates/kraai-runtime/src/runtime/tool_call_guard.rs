@@ -112,13 +112,12 @@ impl ToolCallStreamGuard {
                     cursor += safe_len;
                 }
                 ToolCallStreamPhase::AfterToolCall => {
-                    let whitespace_len = remaining
+                    let whitespace_len: usize = remaining
                         .chars()
                         .take_while(|ch| ch.is_whitespace())
                         .map(char::len_utf8)
                         .sum();
                     if whitespace_len > 0 {
-                        accepted.push_str(&remaining[..whitespace_len]);
                         cursor += whitespace_len;
                         continue;
                     }
@@ -310,7 +309,7 @@ mod tests {
         assert!(result.should_stop);
         assert_eq!(
             result.accepted,
-            "before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>\n"
+            "before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>"
         );
         assert!(guard.finish().is_empty());
     }
@@ -324,14 +323,14 @@ mod tests {
         assert!(!first.should_stop);
         assert_eq!(
             first.accepted,
-            "before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>\n"
+            "before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>"
         );
 
         let second = guard.ingest_chunk("ol_call>\ntool: auto_tool\nvalue: beta\n</tool_call>\n");
         assert!(!second.should_stop);
         assert_eq!(
             second.accepted,
-            "<tool_call>\ntool: auto_tool\nvalue: beta\n</tool_call>\n"
+            "<tool_call>\ntool: auto_tool\nvalue: beta\n</tool_call>"
         );
         assert!(guard.finish().is_empty());
     }
@@ -359,7 +358,7 @@ value: beta\n\
 <tool_call>\n\
 tool: auto_tool\n\
 value: alpha\n\
-</tool_call>\n"
+</tool_call>"
         );
         assert!(guard.finish().is_empty());
     }
@@ -394,7 +393,7 @@ before\n\
 <tool_call>\n\
 tool: auto_tool\n\
 value: alpha\n\
-</tool_call>\n"
+</tool_call>"
         );
     }
 
@@ -408,7 +407,22 @@ value: alpha\n\
         assert!(!result.should_stop);
         assert_eq!(
             result.accepted,
-            "<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>\n"
+            "<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>"
+        );
+        assert!(guard.finish().is_empty());
+    }
+
+    #[test]
+    fn tool_call_stream_guard_drops_trailing_whitespace_after_tool_call() {
+        let mut guard = ToolCallStreamGuard::default();
+
+        let result =
+            guard.ingest_chunk("<tool_call>\ntool: auto_tool\n</tool_call>\n       \n\n   ");
+
+        assert!(!result.should_stop);
+        assert_eq!(
+            result.accepted,
+            "<tool_call>\ntool: auto_tool\n</tool_call>"
         );
         assert!(guard.finish().is_empty());
     }

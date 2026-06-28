@@ -90,7 +90,7 @@ hallucinated tool result",
 <tool_call>\n\
 tool: auto_tool\n\
 value: alpha\n\
-</tool_call>\n"
+</tool_call>"
     );
     assert!(
         !history
@@ -268,7 +268,7 @@ value: beta\n\
 <tool_call>\n\
 tool: mock_tool\n\
 value: alpha\n\
-</tool_call>\n"
+</tool_call>"
     );
     assert!(!assistant.content.contains("value: beta"));
     assert!(!assistant.content.contains("not allowed"));
@@ -347,7 +347,7 @@ value: alpha\n\
 <tool_call>\n\
 tool: auto_tool\n\
 value: alpha\n\
-</tool_call>\n"
+</tool_call>"
     );
     assert!(
         !history

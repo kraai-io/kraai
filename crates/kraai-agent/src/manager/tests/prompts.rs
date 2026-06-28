@@ -128,6 +128,52 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
 }
 
 #[tokio::test]
+async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+
+    let session_id = manager.create_session().await?;
+    manager
+        .set_session_profile(&session_id, String::from("build-code"))
+        .await?;
+
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("follow up"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+
+    let system_prompt = request
+        .provider_messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ChatRole::System)
+        .expect("system prompt should be present");
+
+    assert!(system_prompt.content.contains("Final answers"));
+    assert!(
+        system_prompt
+            .content
+            .contains("Lead with the result, not a recap of every step.")
+    );
+    assert!(
+        system_prompt
+            .content
+            .contains("Do not include a mandatory \"think-ahead suggestion\"")
+    );
+    assert!(
+        !system_prompt
+            .content
+            .contains("Offer at least one suggestion")
+    );
+
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-present");

@@ -313,7 +313,7 @@ impl<'a> ChatHistory<'a> {
             found_tool_call = true;
 
             let before = &content[cursor..full_match.start()];
-            if !before.is_empty() {
+            if !before.trim().is_empty() {
                 let mut before_lines = markdown::render_message(before, width, normal_style);
                 lines.append(&mut before_lines);
             }
@@ -341,7 +341,7 @@ impl<'a> ChatHistory<'a> {
             lines.append(&mut parsed);
         } else {
             let tail = &content[cursor..];
-            if !tail.is_empty() {
+            if !tail.trim().is_empty() {
                 let mut parsed = markdown::render_message(tail, width, normal_style);
                 lines.append(&mut parsed);
             }
@@ -926,6 +926,21 @@ mod tests {
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert_eq!(rendered.first().map(String::as_str), Some(" • read_file"));
+    }
+
+    #[test]
+    fn skips_whitespace_only_tail_after_assistant_tool_call() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
+        );
+        let refs = [&assistant];
+        let history = ChatHistory::new(&refs, 0, true);
+        let lines = history.build_rendered_lines(120);
+        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec![" • read_file", "     files[1]: /tmp/a.txt"]);
     }
 
     #[test]
