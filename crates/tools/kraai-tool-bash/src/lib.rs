@@ -68,9 +68,6 @@ impl TypedTool for BashTool {
     }
 
     async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
-        if args.command.is_empty() {
-            return ToolCallResult::error(String::from("command must contain at least one item"));
-        }
         if args.timeout_seconds == 0 {
             return ToolCallResult::error(String::from(
                 "timeout_seconds must be greater than zero",
