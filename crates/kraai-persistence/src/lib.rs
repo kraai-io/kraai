@@ -11,6 +11,10 @@ use tokio::fs;
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
+mod turns;
+
+pub use turns::{AppendMessageRequest, AppendedMessage, ConversationStore};
+
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {

@@ -1,8 +1,49 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
-use color_eyre::eyre::Result;
+use async_trait::async_trait;
+use color_eyre::eyre::{Result, eyre};
+use kraai_persistence::MessageStore;
 use kraai_types::{ExecutionPolicy, MessageStatus};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+struct FailOnUserSnapshotMessageStore {
+    inner: Arc<dyn MessageStore>,
+}
+
+#[async_trait]
+impl MessageStore for FailOnUserSnapshotMessageStore {
+    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+        self.inner.get(id).await
+    }
+
+    async fn save(&self, message: &Message) -> Result<()> {
+        if message.role == ChatRole::User && message.tool_state_snapshot.is_some() {
+            return Err(eyre!("intentional user snapshot save failure"));
+        }
+        self.inner.save(message).await
+    }
+
+    async fn unload(&self, id: &MessageId) {
+        self.inner.unload(id).await;
+    }
+
+    async fn delete(&self, id: &MessageId) -> Result<()> {
+        self.inner.delete(id).await
+    }
+
+    async fn exists(&self, id: &MessageId) -> Result<bool> {
+        self.inner.exists(id).await
+    }
+
+    async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<MessageId>> {
+        self.inner.list_all_on_disk().await
+    }
+
+    async fn list_hot(&self) -> Result<std::collections::HashSet<MessageId>> {
+        self.inner.list_hot().await
+    }
+}
 
 #[tokio::test]
 async fn create_session_returns_usable_session_id() -> Result<()> {
@@ -99,6 +140,58 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
     manager
         .set_session_profile(&session_id, String::from("build-code"))
         .await?;
+
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepare_start_stream_rolls_back_user_message_after_snapshot_failure() -> Result<()> {
+    let data_dir = super::common::test_dir("snapshot-rollback");
+    tokio::fs::create_dir_all(&data_dir).await.unwrap();
+
+    let base_message_store: Arc<dyn MessageStore> =
+        Arc::new(kraai_persistence::FileMessageStore::new(&data_dir));
+    let message_store: Arc<dyn MessageStore> = Arc::new(FailOnUserSnapshotMessageStore {
+        inner: base_message_store.clone(),
+    });
+    let session_store = Arc::new(kraai_persistence::FileSessionStore::new(
+        &data_dir,
+        message_store.clone(),
+    ));
+    let mut tools = ToolManager::new();
+    tools.register_tool(super::common::MockTool { name: "close_file" });
+    tools.register_tool(super::common::MockTool { name: "list_files" });
+    tools.register_tool(super::common::MockTool { name: "open_file" });
+    tools.register_tool(super::common::MockTool {
+        name: "search_files",
+    });
+    tools.register_tool(super::common::MockTool { name: "read_files" });
+    tools.register_tool(super::common::MockTool { name: "edit_file" });
+    tools.register_tool(super::common::MockTool { name: "bash" });
+    let mut manager = AgentManager::new(
+        ProviderManager::new(),
+        tools,
+        PathBuf::from("/tmp/default-workspace"),
+        message_store,
+        session_store,
+    );
+
+    let session_id = manager.create_session().await?;
+    let result = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("should not survive"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(manager.get_tip(&session_id).await?, None);
+    assert!(manager.get_chat_history(&session_id).await?.is_empty());
+    assert!(base_message_store.list_all_on_disk().await?.is_empty());
+    assert!(!manager.is_turn_active(&session_id));
 
     cleanup_dir(data_dir).await;
     Ok(())

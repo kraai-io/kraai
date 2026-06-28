@@ -8,10 +8,13 @@ impl AgentManager {
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
     ) -> Self {
+        let conversation_store =
+            ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
             providers,
             tools,
             default_workspace_dir,
+            conversation_store,
             message_store,
             session_store,
             session_states: HashMap::new(),
@@ -82,10 +85,15 @@ impl AgentManager {
             return Ok(session);
         }
 
+        self.conversation_store
+            .restore_tip_title_and_delete_message(
+                &session.id,
+                &tip_id,
+                tip.parent_id.clone(),
+                session.title.clone(),
+            )
+            .await?;
         session.tip_id = tip.parent_id.clone();
-        session.updated_at = current_unix_timestamp();
-        self.session_store.save(&session).await?;
-        self.message_store.delete(&tip_id).await?;
         Ok(session)
     }
 
@@ -259,28 +267,6 @@ impl AgentManager {
         }
 
         Ok(())
-    }
-
-    pub(super) async fn maybe_set_title_from_first_user_message(
-        &self,
-        session_id: &str,
-        title: Option<String>,
-    ) -> Result<()> {
-        let Some(mut session) = self.session_store.get(session_id).await? else {
-            return Ok(());
-        };
-
-        if session.title.is_some() {
-            return Ok(());
-        }
-
-        let Some(title) = title else {
-            return Ok(());
-        };
-
-        session.title = Some(title);
-        session.updated_at = current_unix_timestamp();
-        self.session_store.save(&session).await
     }
 
     pub(super) async fn persist_tool_state_snapshot(

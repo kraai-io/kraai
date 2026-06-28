@@ -40,35 +40,64 @@ impl AgentManager {
         };
         self.last_used_profile_id = Some(profile.id.clone());
 
-        let user_msg_id = match self
-            .add_message(
+        let user_message = match self
+            .append_message_with_tool_state(
                 session_id,
                 ChatRole::User,
                 message,
                 Some(profile.id.clone()),
+                None,
+                Vec::new(),
             )
             .await
         {
-            Ok(message_id) => message_id,
+            Ok(appended) => appended,
             Err(error) => {
                 self.clear_active_turn(session_id);
                 return Err(error);
             }
         };
+        let user_msg_id = user_message.message.id.clone();
         let context = match self.get_history_context(&user_msg_id).await {
             Ok(context) => context,
             Err(error) => {
                 self.clear_active_turn(session_id);
+                if let Err(rollback_error) = self
+                    .conversation_store
+                    .restore_appended_message(session_id, &user_message)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to roll back user message {} after context preparation failure: {rollback_error}",
+                        user_msg_id
+                    );
+                }
                 return Err(error);
             }
         };
         let mut tool_state_snapshot = resolve_snapshot_from_history(&context);
-        let system_prompt = self.build_turn_system_prompt(
+        let system_prompt = match self.build_turn_system_prompt(
             session_id,
             &profile,
             &workspace_dir,
             &mut tool_state_snapshot,
-        )?;
+        ) {
+            Ok(system_prompt) => system_prompt,
+            Err(error) => {
+                self.clear_active_turn(session_id);
+                if let Err(rollback_error) = self
+                    .conversation_store
+                    .restore_appended_message(session_id, &user_message)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to roll back user message {} after system prompt failure: {rollback_error}",
+                        user_msg_id
+                    );
+                }
+                return Err(error);
+            }
+        };
         if let Some(state) = self.session_states.get_mut(session_id) {
             state.active_turn_tool_state_snapshot = Some(tool_state_snapshot.clone());
         }
@@ -77,6 +106,16 @@ impl AgentManager {
             .await
         {
             self.clear_active_turn(session_id);
+            if let Err(rollback_error) = self
+                .conversation_store
+                .restore_appended_message(session_id, &user_message)
+                .await
+            {
+                tracing::error!(
+                    "Failed to roll back user message {} after tool-state snapshot failure: {rollback_error}",
+                    user_msg_id
+                );
+            }
             return Err(error);
         }
 
@@ -117,6 +156,16 @@ impl AgentManager {
             Ok(message_id) => message_id,
             Err(error) => {
                 self.clear_active_turn(session_id);
+                if let Err(rollback_error) = self
+                    .conversation_store
+                    .restore_appended_message(session_id, &user_message)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to roll back user message {} after assistant placeholder failure: {rollback_error}",
+                        user_msg_id
+                    );
+                }
                 return Err(error);
             }
         };
@@ -229,6 +278,7 @@ impl AgentManager {
         }))
     }
 
+    #[cfg(test)]
     pub(super) async fn add_message(
         &mut self,
         session_id: &str,
@@ -256,42 +306,59 @@ impl AgentManager {
         tool_state_snapshot: Option<ToolStateSnapshot>,
         tool_state_deltas: Vec<kraai_types::ToolStateDelta>,
     ) -> Result<MessageId> {
-        self.require_session(session_id).await?;
+        Ok(self
+            .append_message_with_tool_state(
+                session_id,
+                role,
+                content,
+                agent_profile_id,
+                tool_state_snapshot,
+                tool_state_deltas,
+            )
+            .await?
+            .message
+            .id)
+    }
 
-        let message_id = MessageId::new(Ulid::new());
-        let parent_id = self.get_tip(session_id).await?;
-        let session_title = if role == ChatRole::User && parent_id.is_none() {
+    pub(super) async fn append_message_with_tool_state(
+        &mut self,
+        session_id: &str,
+        role: ChatRole,
+        content: String,
+        agent_profile_id: Option<String>,
+        tool_state_snapshot: Option<ToolStateSnapshot>,
+        tool_state_deltas: Vec<kraai_types::ToolStateDelta>,
+    ) -> Result<AppendedMessage> {
+        let title_if_first_message = if role == ChatRole::User {
             title_from_user_prompt(&content)
         } else {
             None
         };
 
-        tracing::debug!(
-            "Adding message: session={}, id={}, role={:?}, parent={:?}",
-            session_id,
-            message_id,
-            role,
-            parent_id
-        );
-
-        let message = Message {
-            id: message_id.clone(),
-            parent_id,
-            role,
-            content,
-            status: MessageStatus::Complete,
-            agent_profile_id,
-            tool_state_snapshot,
-            tool_state_deltas,
-            generation: None,
-        };
-
-        self.message_store.save(&message).await?;
-        self.set_tip(session_id, Some(message_id.clone())).await?;
-        self.maybe_set_title_from_first_user_message(session_id, session_title)
+        let appended = self
+            .conversation_store
+            .append_message(AppendMessageRequest {
+                session_id: session_id.to_string(),
+                role,
+                content,
+                status: MessageStatus::Complete,
+                agent_profile_id,
+                tool_state_snapshot,
+                tool_state_deltas,
+                generation: None,
+                title_if_first_message,
+            })
             .await?;
 
-        Ok(message_id)
+        tracing::debug!(
+            "Added message: session={}, id={}, role={:?}, parent={:?}",
+            session_id,
+            appended.message.id,
+            appended.message.role,
+            appended.previous_tip
+        );
+
+        Ok(appended)
     }
 
     pub(super) async fn start_streaming_message(
@@ -308,40 +375,29 @@ impl AgentManager {
             return Err(eyre!("Session already has an active stream: {session_id}"));
         }
 
-        let message_id = MessageId::new(Ulid::new());
-        let previous_tip = self.get_tip(session_id).await?;
-
-        let message = Message {
-            id: message_id.clone(),
-            parent_id: previous_tip.clone(),
-            role,
-            content: String::new(),
-            status: MessageStatus::Streaming { call_id },
-            agent_profile_id,
-            tool_state_snapshot: None,
-            tool_state_deltas: Vec::new(),
-            generation,
-        };
-
-        // Persist the placeholder before advancing the durable session tip. A crash between
-        // these writes leaves either an orphan (which startup GC removes) or a recoverable
-        // streaming tip, never a tip that references a missing message.
-        self.message_store.save(&message).await?;
-        if let Err(error) = self.set_tip(session_id, Some(message_id.clone())).await {
-            if let Err(delete_error) = self.message_store.delete(&message_id).await {
-                tracing::error!(
-                    "Failed to clean up unreferenced streaming placeholder {message_id}: {delete_error}"
-                );
-            }
-            return Err(error);
-        }
+        let appended = self
+            .conversation_store
+            .append_message(AppendMessageRequest {
+                session_id: session_id.to_string(),
+                role,
+                content: String::new(),
+                status: MessageStatus::Streaming { call_id },
+                agent_profile_id,
+                tool_state_snapshot: None,
+                tool_state_deltas: Vec::new(),
+                generation,
+                title_if_first_message: None,
+            })
+            .await?;
+        let message_id = appended.message.id.clone();
 
         self.streaming_messages.write().await.insert(
             message_id.clone(),
             StreamingMessageState {
                 session_id: session_id.to_string(),
-                previous_tip,
-                message,
+                previous_tip: appended.previous_tip,
+                previous_title: appended.previous_title,
+                message: appended.message,
             },
         );
         Ok(message_id)
@@ -407,7 +463,13 @@ impl AgentManager {
         let original_state = state.clone();
 
         if let Err(error) = self
-            .set_tip(&state.session_id, state.previous_tip.clone())
+            .conversation_store
+            .restore_tip_title_and_delete_message(
+                &state.session_id,
+                message_id,
+                state.previous_tip.clone(),
+                state.previous_title.clone(),
+            )
             .await
         {
             self.streaming_messages
@@ -416,7 +478,6 @@ impl AgentManager {
                 .insert(message_id.clone(), original_state);
             return Err(error);
         }
-        self.message_store.delete(message_id).await?;
         Ok(Some(state.session_id))
     }
 
@@ -434,8 +495,14 @@ impl AgentManager {
             state.message.status = MessageStatus::Complete;
             self.message_store.save(&state.message).await?;
         } else {
-            self.set_tip(&state.session_id, state.previous_tip).await?;
-            self.message_store.delete(message_id).await?;
+            self.conversation_store
+                .restore_tip_title_and_delete_message(
+                    &state.session_id,
+                    message_id,
+                    state.previous_tip,
+                    state.previous_title,
+                )
+                .await?;
         }
 
         Ok(Some(CancelledStreamResult {

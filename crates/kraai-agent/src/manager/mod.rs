@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::{MessageStore, SessionMeta, SessionStore};
+use kraai_persistence::{
+    AppendMessageRequest, AppendedMessage, ConversationStore, MessageStore, SessionMeta,
+    SessionStore,
+};
 use kraai_provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
 use kraai_tool_core::{
     PreparedToolCall, ToolManager,
@@ -191,6 +194,7 @@ impl SessionRuntimeState {
 struct StreamingMessageState {
     session_id: String,
     previous_tip: Option<MessageId>,
+    previous_title: Option<String>,
     message: Message,
 }
 
@@ -198,6 +202,7 @@ pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
     default_workspace_dir: PathBuf,
+    conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     session_states: HashMap<String, SessionRuntimeState>,
