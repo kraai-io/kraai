@@ -304,9 +304,7 @@ mod tests {
     #[tokio::test]
     async fn prepared_tool_call_reuses_typed_args_across_lifecycle() {
         let (prepared, lifecycle_counter) = prepare_spy_tool();
-        let config = ToolCallGlobalConfig {
-            workspace_dir: PathBuf::from("/tmp/workspace"),
-        };
+        let config = ToolCallGlobalConfig::new(PathBuf::from("/tmp/workspace"));
         let snapshot = ToolStateSnapshot::default();
         let ctx = ToolContext {
             global_config: &config,

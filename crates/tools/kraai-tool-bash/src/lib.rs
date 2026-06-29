@@ -1,14 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use kraai_command_runner::{CommandRequest, run_command};
 use kraai_tool_core::{ToolCallResult, ToolContext, TypedTool};
 use kraai_toon_schema::toon_tool;
-use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
+use kraai_types::{
+    ExecutionPolicy, RiskLevel, SandboxMode, SandboxPermissions, ToolCallAssessment,
+};
 use serde::Serialize;
-use tokio::process::Command;
 
 #[derive(Clone, Copy)]
 pub struct BashTool;
@@ -28,6 +29,10 @@ toon_tool! {
             #[serde(default)]
             #[toon_schema(description = "Include stdout and stderr when the command succeeds. Disabled by default; failing commands always return stdout and stderr")]
             include_success_output: bool,
+
+            #[serde(default)]
+            #[toon_schema(description = "Sandbox permission override: use_default, require_escalated, or with_additional_permissions")]
+            sandbox_permissions: Option<String>,
         }
     },
     root: BashToolArgs,
@@ -37,6 +42,7 @@ toon_tool! {
         { command: ["echo", "an argument with spaces"], timeout_seconds: 10, include_success_output: true },
         { command: ["rg", "-n", "tool call", "crates"], timeout_seconds: 10, include_success_output: true },
         { command: ["sed", "-n", "1,20p", "crates/tools/kraai-tool-bash/src/lib.rs"], timeout_seconds: 10, include_success_output: true },
+        { command: ["git", "status", "--short"], timeout_seconds: 10, sandbox_permissions: "require_escalated", include_success_output: true },
     ]
 }
 
@@ -47,6 +53,8 @@ struct BashToolOutput {
     stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stderr: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    sandbox_denied: bool,
 }
 
 #[async_trait]
@@ -61,11 +69,55 @@ impl TypedTool for BashTool {
         BashToolArgs::toon_schema()
     }
 
-    fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+    fn assess(&self, args: &Self::Args, ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        let Ok(sandbox_permissions) = parse_sandbox_permissions(args) else {
+            return ToolCallAssessment {
+                risk: RiskLevel::WriteOutsideWorkspace,
+                policy: ExecutionPolicy::NeverAllow,
+                reasons: vec![format!(
+                    "Invalid sandbox permission override for command: {}",
+                    args.command.join(" ")
+                )],
+            };
+        };
+
+        if sandbox_permissions == SandboxPermissions::WithAdditionalPermissions {
+            return ToolCallAssessment {
+                risk: RiskLevel::WriteOutsideWorkspace,
+                policy: ExecutionPolicy::NeverAllow,
+                reasons: vec![String::from(
+                    "sandbox_permissions=with_additional_permissions is not supported yet",
+                )],
+            };
+        }
+
+        if sandbox_permissions.requires_escalated_permissions()
+            || ctx.global_config.sandbox.mode == SandboxMode::DangerFullAccess
+        {
+            return ToolCallAssessment {
+                risk: RiskLevel::WriteOutsideWorkspace,
+                policy: ExecutionPolicy::AlwaysAsk,
+                reasons: vec![format!(
+                    "Runs command without sandbox: {}",
+                    args.command.join(" ")
+                )],
+            };
+        }
+
+        let risk = match ctx.global_config.sandbox.mode {
+            SandboxMode::ReadOnly => RiskLevel::ReadOnlyWorkspace,
+            SandboxMode::WorkspaceWrite => RiskLevel::UndoableWorkspaceWrite,
+            SandboxMode::DangerFullAccess => RiskLevel::WriteOutsideWorkspace,
+        };
+
         ToolCallAssessment {
-            risk: RiskLevel::WriteOutsideWorkspace,
-            policy: ExecutionPolicy::AlwaysAsk,
-            reasons: vec![format!("Runs command: {}", args.command.join(" "))],
+            risk,
+            policy: ExecutionPolicy::AutonomousUpTo(risk),
+            reasons: vec![format!(
+                "Runs sandboxed command in {} mode: {}",
+                ctx.global_config.sandbox.mode.as_str(),
+                args.command.join(" ")
+            )],
         }
     }
 
@@ -76,52 +128,34 @@ impl TypedTool for BashTool {
             ));
         }
 
-        let Some(program) = args.command.first() else {
-            return ToolCallResult::error(String::from("command must contain at least one item"));
-        };
-        let mut command = Command::new(program);
-        command
-            .args(args.command.get(1..).unwrap_or_default())
-            .current_dir(&ctx.global_config.workspace_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                return ToolCallResult::error(format!(
-                    "unable to spawn command '{}': {error}",
-                    program
-                ));
-            }
+        let sandbox_permissions = match parse_sandbox_permissions(&args) {
+            Ok(permission) => permission,
+            Err(message) => return ToolCallResult::error(message),
         };
 
         let timeout = Duration::from_secs(u64::from(args.timeout_seconds));
-        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => {
-                return ToolCallResult::error(format!("unable to wait for command: {error}"));
-            }
-            Err(_) => {
-                return ToolCallResult::error(format!(
-                    "command timed out after {} second(s)",
-                    args.timeout_seconds
-                ));
-            }
+        let output = match run_command(CommandRequest {
+            command: args.command.clone(),
+            cwd: ctx.global_config.workspace_dir.clone(),
+            sandbox: ctx.global_config.sandbox.clone(),
+            sandbox_permissions,
+            timeout,
+        })
+        .await
+        {
+            Ok(output) => output,
+            Err(error) => return ToolCallResult::error(error.to_string()),
         };
 
-        let should_include_output = !output.status.success() || args.include_success_output;
-        let stdout =
-            should_include_output.then(|| String::from_utf8_lossy(&output.stdout).into_owned());
-        let stderr =
-            should_include_output.then(|| String::from_utf8_lossy(&output.stderr).into_owned());
+        let should_include_output = output.exit_code != Some(0) || args.include_success_output;
+        let stdout = should_include_output.then_some(output.stdout);
+        let stderr = should_include_output.then_some(output.stderr);
 
         ToolCallResult::success(BashToolOutput {
-            exit_code: output.status.code(),
+            exit_code: output.exit_code,
             stdout,
             stderr,
+            sandbox_denied: output.sandbox_denied,
         })
     }
 
@@ -132,6 +166,22 @@ impl TypedTool for BashTool {
             args.command.join(" ")
         )
     }
+}
+
+fn parse_sandbox_permissions(args: &BashToolArgs) -> Result<SandboxPermissions, String> {
+    let Some(value) = args.sandbox_permissions.as_deref() else {
+        return Ok(SandboxPermissions::UseDefault);
+    };
+
+    SandboxPermissions::parse(value).ok_or_else(|| {
+        String::from(
+            "sandbox_permissions must be one of: use_default, require_escalated, with_additional_permissions",
+        )
+    })
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -147,14 +197,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use kraai_tool_core::{ToolContext, ToolOutput, TypedTool};
-    use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
+    use kraai_types::{
+        ExecutionPolicy, RiskLevel, SandboxMode, ToolCallGlobalConfig, ToolStateSnapshot,
+    };
 
     use super::{BashTool, BashToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
-        ToolCallGlobalConfig {
-            workspace_dir: workspace_dir.to_path_buf(),
-        }
+        let mut config = ToolCallGlobalConfig::new(workspace_dir.to_path_buf());
+        config.sandbox.mode = SandboxMode::DangerFullAccess;
+        config
     }
 
     fn tool_context<'a>(
@@ -189,6 +241,7 @@ mod tests {
             command: command.iter().map(|item| item.to_string()).collect(),
             timeout_seconds,
             include_success_output: false,
+            sandbox_permissions: None,
         }
     }
 
@@ -208,10 +261,15 @@ mod tests {
         .expect("args deserialize");
 
         assert!(!args.include_success_output);
+        assert_eq!(args.sandbox_permissions, None);
         assert!(!BashToolArgs::toon_schema().contains("include_stdout"));
         assert!(
             BashToolArgs::toon_schema()
                 .contains("include_success_output[1:1]: boolean # default: default")
+        );
+        assert!(
+            BashToolArgs::toon_schema()
+                .contains("sandbox_permissions[0:1]: string # default: default")
         );
         assert!(BashToolArgs::toon_schema().contains("\"1,20p\""));
     }
@@ -371,10 +429,27 @@ mod tests {
     }
 
     #[test]
-    fn assessment_is_always_ask_write_outside_workspace() {
+    fn assessment_for_escalated_command_is_always_ask_write_outside_workspace() {
         let workspace_dir = make_temp_dir("assessment");
         let tool = BashTool;
         let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let mut args = bash_args(&["git", "status"], 5);
+        args.sandbox_permissions = Some(String::from("require_escalated"));
+
+        let assessment = tool.assess(&args, &tool_context(&config, &snapshot));
+
+        assert_eq!(assessment.risk, RiskLevel::WriteOutsideWorkspace);
+        assert_eq!(assessment.policy, ExecutionPolicy::AlwaysAsk);
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[test]
+    fn assessment_for_default_workspace_write_sandbox_is_autonomous_workspace_write() {
+        let workspace_dir = make_temp_dir("sandbox-assessment");
+        let tool = BashTool;
+        let config = ToolCallGlobalConfig::new(workspace_dir.clone());
         let snapshot = ToolStateSnapshot::default();
 
         let assessment = tool.assess(
@@ -382,8 +457,49 @@ mod tests {
             &tool_context(&config, &snapshot),
         );
 
+        assert_eq!(assessment.risk, RiskLevel::UndoableWorkspaceWrite);
+        assert_eq!(
+            assessment.policy,
+            ExecutionPolicy::AutonomousUpTo(RiskLevel::UndoableWorkspaceWrite)
+        );
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_sandbox_permission() {
+        let workspace_dir = make_temp_dir("invalid-sandbox-permission");
+        let tool = BashTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let mut args = bash_args(&["true"], 1);
+        args.sandbox_permissions = Some(String::from("root_please"));
+
+        let output = tool.call(args, &tool_context(&config, &snapshot)).await;
+
+        match output.output {
+            ToolOutput::Error { message } => {
+                assert!(message.contains("sandbox_permissions must be one of"));
+            }
+            ToolOutput::Success { .. } => panic!("expected invalid permission error"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[test]
+    fn assessment_rejects_unsupported_additional_permissions() {
+        let workspace_dir = make_temp_dir("unsupported-additional-permissions");
+        let tool = BashTool;
+        let config = ToolCallGlobalConfig::new(workspace_dir.clone());
+        let snapshot = ToolStateSnapshot::default();
+        let mut args = bash_args(&["true"], 1);
+        args.sandbox_permissions = Some(String::from("with_additional_permissions"));
+
+        let assessment = tool.assess(&args, &tool_context(&config, &snapshot));
+
         assert_eq!(assessment.risk, RiskLevel::WriteOutsideWorkspace);
-        assert_eq!(assessment.policy, ExecutionPolicy::AlwaysAsk);
+        assert_eq!(assessment.policy, ExecutionPolicy::NeverAllow);
 
         cleanup_temp_dir(&workspace_dir);
     }

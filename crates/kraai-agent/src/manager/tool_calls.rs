@@ -73,8 +73,12 @@ impl AgentManager {
                 tool_state_snapshot: &active_turn_tool_state_snapshot,
             });
             let description = prepared.describe();
-            let requires_confirmation = !active_turn_auto_approve
-                && !assessment.is_auto_approved(active_turn_profile.default_risk_level);
+            let is_approved = if active_turn_auto_approve {
+                assessment.is_autonomous_policy_approved()
+            } else {
+                assessment.is_auto_approved(active_turn_profile.default_risk_level)
+            };
+            let requires_confirmation = !is_approved;
 
             let call = ToolCall {
                 call_id: call_id.clone(),

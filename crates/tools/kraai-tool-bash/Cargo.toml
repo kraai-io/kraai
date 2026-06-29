@@ -8,6 +8,7 @@ version = "0.1.0"
 
 [dependencies]
 async-trait = { workspace = true }
+kraai-command-runner = { workspace = true }
 kraai-tool-core = { workspace = true }
 kraai-toon-schema = { workspace = true }
 kraai-types = { workspace = true }

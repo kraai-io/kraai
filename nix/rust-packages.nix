@@ -81,6 +81,12 @@
       };
 
     kraai = cargoNix.workspaceMembers."kraai-tui".build.overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
+      postInstall =
+        (old.postInstall or "")
+        + ''
+          wrapProgram "$out/bin/kraai" --prefix PATH : ${lib.makeBinPath [pkgs.bubblewrap]}
+        '';
       meta =
         (old.meta or {})
         // {

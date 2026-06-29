@@ -237,6 +237,44 @@ impl TypedTool for AutonomousTool {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct HighRiskAutonomousTool;
+
+#[async_trait]
+impl TypedTool for HighRiskAutonomousTool {
+    type Args = ValueArgs;
+
+    fn name(&self) -> &'static str {
+        "high_risk_auto_tool"
+    }
+
+    fn schema(&self) -> &'static str {
+        "high_risk_auto_tool(value: string)"
+    }
+
+    fn assess(&self, args: &Self::Args, _ctx: &ToolContext<'_>) -> ToolCallAssessment {
+        ToolCallAssessment {
+            risk: RiskLevel::WriteOutsideWorkspace,
+            policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::WriteOutsideWorkspace),
+            reasons: vec![format!(
+                "high_risk_auto_tool can run autonomously for {:?}",
+                args.value
+            )],
+        }
+    }
+
+    async fn call(&self, args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
+        ToolCallResult::success(serde_json::json!({
+            "tool": "high_risk_auto_tool",
+            "value": args.value,
+        }))
+    }
+
+    fn describe(&self, args: &Self::Args) -> String {
+        format!("High risk autonomous tool for {}", args.value)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct BlockingApprovalTool {
     pub(super) started: Arc<tokio::sync::Notify>,
@@ -704,6 +742,7 @@ impl RuntimeTestHarness {
         let mut tools = ToolManager::new();
         tools.register_tool(ApprovalTool);
         tools.register_tool(AutonomousTool);
+        tools.register_tool(HighRiskAutonomousTool);
         configure_tools(&mut tools);
 
         Self::new_with_parts(providers, tools).await

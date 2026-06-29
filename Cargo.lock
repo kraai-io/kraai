@@ -1805,6 +1805,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-command-runner"
+version = "0.1.0"
+dependencies = [
+ "kraai-types",
+ "libc",
+ "tokio",
+]
+
+[[package]]
 name = "kraai-persistence"
 version = "0.1.0"
 dependencies = [
@@ -1912,6 +1921,7 @@ name = "kraai-tool-bash"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kraai-command-runner",
  "kraai-tool-core",
  "kraai-toon-schema",
  "kraai-types",

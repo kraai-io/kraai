@@ -32,6 +32,7 @@
           just
 
           ripgrep
+          bubblewrap
           pkg-config
           openssl
         ];

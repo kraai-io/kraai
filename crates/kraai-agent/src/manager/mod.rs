@@ -162,7 +162,7 @@ struct SessionRuntimeState {
 impl SessionRuntimeState {
     fn new(workspace_dir: PathBuf) -> Self {
         Self {
-            active_tool_config: kraai_types::ToolCallGlobalConfig { workspace_dir },
+            active_tool_config: kraai_types::ToolCallGlobalConfig::new(workspace_dir),
             pending_tool_config: None,
             pending_tool_calls: HashMap::new(),
             in_flight_tool_calls: HashMap::new(),

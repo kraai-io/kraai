@@ -407,9 +407,7 @@ async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
                     policy: ExecutionPolicy::AlwaysAsk,
                     reasons: Vec::new(),
                 },
-                config: kraai_types::ToolCallGlobalConfig {
-                    workspace_dir: PathBuf::from("/tmp/workspace-a"),
-                },
+                config: kraai_types::ToolCallGlobalConfig::new(PathBuf::from("/tmp/workspace-a")),
                 tool_state_snapshot: ToolStateSnapshot::default(),
                 status: PermissionStatus::Pending,
                 queue_order: 0,

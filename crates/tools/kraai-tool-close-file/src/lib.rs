@@ -94,9 +94,7 @@ mod tests {
     use super::{CloseFileTool, CloseFileToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
-        ToolCallGlobalConfig {
-            workspace_dir: workspace_dir.to_path_buf(),
-        }
+        ToolCallGlobalConfig::new(workspace_dir.to_path_buf())
     }
 
     #[tokio::test]

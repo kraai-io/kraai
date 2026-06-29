@@ -97,6 +97,102 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallGlobalConfig {
     pub workspace_dir: PathBuf,
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+}
+
+impl ToolCallGlobalConfig {
+    pub fn new(workspace_dir: PathBuf) -> Self {
+        Self {
+            workspace_dir,
+            sandbox: SandboxConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    #[serde(default)]
+    pub mode: SandboxMode,
+    #[serde(default)]
+    pub network_access: NetworkAccess,
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            mode: SandboxMode::WorkspaceWrite,
+            network_access: NetworkAccess::Restricted,
+            writable_roots: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    ReadOnly,
+    #[default]
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::DangerFullAccess => "danger-full-access",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkAccess {
+    #[default]
+    Restricted,
+    Enabled,
+}
+
+impl NetworkAccess {
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPermissions {
+    #[default]
+    UseDefault,
+    RequireEscalated,
+    WithAdditionalPermissions,
+}
+
+impl SandboxPermissions {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "use_default" => Some(Self::UseDefault),
+            "require_escalated" => Some(Self::RequireEscalated),
+            "with_additional_permissions" => Some(Self::WithAdditionalPermissions),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UseDefault => "use_default",
+            Self::RequireEscalated => "require_escalated",
+            Self::WithAdditionalPermissions => "with_additional_permissions",
+        }
+    }
+
+    pub fn requires_escalated_permissions(self) -> bool {
+        matches!(self, Self::RequireEscalated)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -189,12 +285,14 @@ pub struct ToolCallAssessment {
 
 impl ToolCallAssessment {
     pub fn is_auto_approved(&self, threshold: RiskLevel) -> bool {
-        match self.policy {
-            ExecutionPolicy::AutonomousUpTo(max_risk) => {
-                self.risk <= max_risk && self.risk <= threshold
-            }
-            ExecutionPolicy::AlwaysAsk | ExecutionPolicy::NeverAllow => false,
-        }
+        self.is_autonomous_policy_approved() && self.risk <= threshold
+    }
+
+    pub fn is_autonomous_policy_approved(&self) -> bool {
+        matches!(
+            self.policy,
+            ExecutionPolicy::AutonomousUpTo(max_risk) if self.risk <= max_risk
+        )
     }
 }
 

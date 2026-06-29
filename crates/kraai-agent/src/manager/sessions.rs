@@ -171,7 +171,7 @@ impl AgentManager {
         self.session_store.save(&session).await?;
 
         self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_tool_config = Some(kraai_types::ToolCallGlobalConfig { workspace_dir });
+            .pending_tool_config = Some(kraai_types::ToolCallGlobalConfig::new(workspace_dir));
         Ok(())
     }
 

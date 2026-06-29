@@ -129,11 +129,11 @@ value: beta\n\
 }
 
 #[tokio::test]
-async fn auto_approve_option_bypasses_manual_tool_confirmation() -> Result<()> {
+async fn auto_approve_option_bypasses_profile_threshold_for_autonomous_tools() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
             "<tool_call>\n\
-tool: mock_tool\n\
+tool: high_risk_auto_tool\n\
 value: beta\n\
 </tool_call>",
         )],
@@ -149,7 +149,7 @@ value: beta\n\
         .handle
         .send_message_with_options(
             session_id.clone(),
-            String::from("run manual tool without confirmation"),
+            String::from("run high risk autonomous tool without confirmation"),
             String::from("mock-model"),
             String::from("mock"),
             true,
@@ -158,24 +158,27 @@ value: beta\n\
 
     harness
         .events
-        .wait_for("manual tool auto-approved by option", |events| {
-            let tool_result_ready = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        tool_id,
-                        success,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && tool_id == "mock_tool"
-                        && *success
-                        && !denied
-                )
-            });
-            tool_result_ready && stream_complete_count(events, &session_id) == 2
-        })
+        .wait_for(
+            "high risk autonomous tool auto-approved by option",
+            |events| {
+                let tool_result_ready = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            tool_id,
+                            success,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "high_risk_auto_tool"
+                            && *success
+                            && !denied
+                    )
+                });
+                tool_result_ready && stream_complete_count(events, &session_id) == 2
+            },
+        )
         .await;
 
     let events = harness.events.snapshot();
@@ -183,6 +186,66 @@ value: beta\n\
         matches!(
             event,
             Event::ToolCallDetected {
+                session_id: event_session,
+                tool_id,
+                ..
+            } if event_session == &session_id && tool_id == "high_risk_auto_tool"
+        )
+    }));
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_approve_option_does_not_bypass_always_ask_tools() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
+        "<tool_call>\n\
+tool: mock_tool\n\
+value: beta\n\
+</tool_call>",
+    )]])
+    .await
+    else {
+        return Ok(());
+    };
+
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message_with_options(
+            session_id.clone(),
+            String::from("run explicit approval tool"),
+            String::from("mock-model"),
+            String::from("mock"),
+            true,
+        )
+        .await?;
+
+    let events = harness
+        .events
+        .wait_for(
+            "always ask tool remains pending under auto-approve",
+            |events| {
+                events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolCallDetected {
+                            session_id: event_session,
+                            tool_id,
+                            ..
+                        } if event_session == &session_id
+                            && tool_id == "mock_tool"
+                    )
+                })
+            },
+        )
+        .await;
+
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event,
+            Event::ToolResultReady {
                 session_id: event_session,
                 tool_id,
                 ..

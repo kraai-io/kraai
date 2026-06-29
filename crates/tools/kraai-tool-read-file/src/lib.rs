@@ -113,9 +113,7 @@ mod tests {
     use super::{ReadFileTool, ReadFileToolArgs};
 
     fn tool_config(workspace_dir: &Path) -> ToolCallGlobalConfig {
-        ToolCallGlobalConfig {
-            workspace_dir: workspace_dir.to_path_buf(),
-        }
+        ToolCallGlobalConfig::new(workspace_dir.to_path_buf())
     }
 
     fn tool_context<'a>(
