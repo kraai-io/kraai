@@ -26,16 +26,17 @@ toon_tool! {
             timeout_seconds: u32,
 
             #[serde(default)]
-            #[toon_schema(description = "Include stdout in the result. Disabled by default; exit code and stderr are always returned")]
-            include_stdout: bool,
+            #[toon_schema(description = "Include stdout and stderr when the command succeeds. Disabled by default; failing commands always return stdout and stderr")]
+            include_success_output: bool,
         }
     },
     root: BashToolArgs,
     examples: [
-        { command: ["git", "status", "--short"], timeout_seconds: 10, include_stdout: true },
+        { command: ["git", "status", "--short"], timeout_seconds: 10, include_success_output: true },
         { command: ["cargo", "test", "-p", "package"], timeout_seconds: 120 },
-        { command: ["echo", "an argument with spaces"], timeout_seconds: 10, include_stdout: true },
-        { command: ["rg", "-n", "tool call", "crates"], timeout_seconds: 10, include_stdout: true },
+        { command: ["echo", "an argument with spaces"], timeout_seconds: 10, include_success_output: true },
+        { command: ["rg", "-n", "tool call", "crates"], timeout_seconds: 10, include_success_output: true },
+        { command: ["sed", "-n", "1,20p", "crates/tools/kraai-tool-bash/src/lib.rs"], timeout_seconds: 10, include_success_output: true },
     ]
 }
 
@@ -44,7 +45,8 @@ struct BashToolOutput {
     exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stdout: Option<String>,
-    stderr: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
 }
 
 #[async_trait]
@@ -82,11 +84,7 @@ impl TypedTool for BashTool {
             .args(args.command.get(1..).unwrap_or_default())
             .current_dir(&ctx.global_config.workspace_dir)
             .stdin(Stdio::null())
-            .stdout(if args.include_stdout {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
@@ -114,12 +112,16 @@ impl TypedTool for BashTool {
             }
         };
 
+        let should_include_output = !output.status.success() || args.include_success_output;
+        let stdout =
+            should_include_output.then(|| String::from_utf8_lossy(&output.stdout).into_owned());
+        let stderr =
+            should_include_output.then(|| String::from_utf8_lossy(&output.stderr).into_owned());
+
         ToolCallResult::success(BashToolOutput {
             exit_code: output.status.code(),
-            stdout: args
-                .include_stdout
-                .then(|| String::from_utf8_lossy(&output.stdout).into_owned()),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stdout,
+            stderr,
         })
     }
 
@@ -186,29 +188,32 @@ mod tests {
         BashToolArgs {
             command: command.iter().map(|item| item.to_string()).collect(),
             timeout_seconds,
-            include_stdout: false,
+            include_success_output: false,
         }
     }
 
-    fn bash_args_with_stdout(command: &[&str], timeout_seconds: u32) -> BashToolArgs {
+    fn bash_args_with_success_output(command: &[&str], timeout_seconds: u32) -> BashToolArgs {
         BashToolArgs {
-            include_stdout: true,
+            include_success_output: true,
             ..bash_args(command, timeout_seconds)
         }
     }
 
     #[test]
-    fn stdout_is_opt_in() {
+    fn success_output_is_opt_in() {
         let args: BashToolArgs = serde_json::from_value(serde_json::json!({
             "command": ["true"],
             "timeout_seconds": 5,
         }))
         .expect("args deserialize");
 
-        assert!(!args.include_stdout);
+        assert!(!args.include_success_output);
+        assert!(!BashToolArgs::toon_schema().contains("include_stdout"));
         assert!(
-            BashToolArgs::toon_schema().contains("include_stdout[1:1]: boolean # default: default")
+            BashToolArgs::toon_schema()
+                .contains("include_success_output[1:1]: boolean # default: default")
         );
+        assert!(BashToolArgs::toon_schema().contains("\"1,20p\""));
     }
 
     #[tokio::test]
@@ -241,7 +246,7 @@ mod tests {
 
         let output = tool
             .call(
-                bash_args_with_stdout(&["pwd"], 5),
+                bash_args_with_success_output(&["pwd"], 5),
                 &tool_context(&config, &snapshot),
             )
             .await;
@@ -269,7 +274,7 @@ mod tests {
 
         let output = tool
             .call(
-                bash_args(&["sh", "-c", "printf failed >&2; exit 7"], 5),
+                bash_args(&["sh", "-c", "printf output; printf failed >&2; exit 7"], 5),
                 &tool_context(&config, &snapshot),
             )
             .await;
@@ -277,8 +282,8 @@ mod tests {
         match output.output {
             ToolOutput::Success { data } => {
                 assert_eq!(data["exit_code"].as_i64(), Some(7));
+                assert_eq!(data["stdout"].as_str(), Some("output"));
                 assert_eq!(data["stderr"].as_str(), Some("failed"));
-                assert!(data.get("stdout").is_none());
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }
@@ -287,15 +292,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_stdout_when_requested() {
-        let workspace_dir = make_temp_dir("returns-stdout-when-requested");
+    async fn suppresses_success_output_by_default() {
+        let workspace_dir = make_temp_dir("suppresses-success-output-by-default");
         let tool = BashTool;
         let config = tool_config(&workspace_dir);
         let snapshot = ToolStateSnapshot::default();
 
         let output = tool
             .call(
-                bash_args_with_stdout(&["sh", "-c", "printf output; printf diagnostic >&2"], 5),
+                bash_args(&["sh", "-c", "printf output; printf diagnostic >&2"], 5),
+                &tool_context(&config, &snapshot),
+            )
+            .await;
+
+        match output.output {
+            ToolOutput::Success { data } => {
+                assert_eq!(data["exit_code"].as_i64(), Some(0));
+                assert!(data.get("stdout").is_none());
+                assert!(data.get("stderr").is_none());
+            }
+            ToolOutput::Error { message } => panic!("unexpected error: {message}"),
+        }
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[tokio::test]
+    async fn returns_success_output_when_requested() {
+        let workspace_dir = make_temp_dir("returns-success-output-when-requested");
+        let tool = BashTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+
+        let output = tool
+            .call(
+                bash_args_with_success_output(
+                    &["sh", "-c", "printf output; printf diagnostic >&2"],
+                    5,
+                ),
                 &tool_context(&config, &snapshot),
             )
             .await;
