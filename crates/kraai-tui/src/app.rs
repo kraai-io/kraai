@@ -8,7 +8,7 @@ use kraai_runtime::{
     AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
-use kraai_types::ChatRole;
+use kraai_types::{ChatRole, MessageId, MessageStatus};
 use ratatui::{
     crossterm::event::{
         self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -83,12 +83,14 @@ pub struct App {
     startup_options: StartupOptions,
     startup_message_sent: bool,
     ci_error: Option<String>,
+    stream_event_content: HashMap<MessageId, String>,
     state: AppState,
-    last_stream_refresh: Option<Instant>,
+    last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
+const STREAM_HISTORY_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_millis(50);
 const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[cfg(test)]
@@ -158,4 +160,109 @@ impl App {
                 .saturating_add(usage.cache_read_tokens);
         }
     }
+
+    pub(super) fn append_stream_chunk_to_cached_message(
+        &mut self,
+        message_id: &str,
+        chunk: &str,
+    ) -> bool {
+        let message_id = MessageId::new(message_id);
+        if self
+            .state
+            .chat_history
+            .get(&message_id)
+            .is_some_and(|message| !matches!(message.status, MessageStatus::Streaming { .. }))
+        {
+            return true;
+        }
+
+        let event_content = self
+            .stream_event_content
+            .entry(message_id.clone())
+            .or_default();
+        event_content.push_str(chunk);
+
+        let Some(message) = self.state.chat_history.get_mut(&message_id) else {
+            return false;
+        };
+        let changed =
+            merge_stream_chunk_into_cached_content(&mut message.content, event_content, chunk);
+        if changed {
+            self.invalidate_chat_cache();
+            self.clamp_chat_scroll();
+        }
+        true
+    }
+
+    pub(super) fn request_stream_history_sync(&mut self, session_id: &str, now: Instant) {
+        let should_request = self
+            .last_stream_history_request
+            .is_none_or(|last| now.duration_since(last) >= STREAM_HISTORY_SYNC_FALLBACK_INTERVAL);
+        if !should_request {
+            return;
+        }
+
+        self.last_stream_history_request = Some(now);
+        self.request(RuntimeRequest::GetCurrentTip {
+            session_id: session_id.to_string(),
+        });
+        self.request(RuntimeRequest::GetChatHistory {
+            session_id: session_id.to_string(),
+        });
+    }
+
+    pub(super) fn merge_local_streaming_content(
+        &mut self,
+        history: &mut std::collections::BTreeMap<MessageId, kraai_types::Message>,
+    ) {
+        for (message_id, incoming) in history {
+            if !matches!(incoming.status, MessageStatus::Streaming { .. }) {
+                self.stream_event_content.remove(message_id);
+                continue;
+            }
+
+            if let Some(current) = self.state.chat_history.get(message_id)
+                && matches!(current.status, MessageStatus::Streaming { .. })
+            {
+                merge_newer_streaming_prefix(&mut incoming.content, &current.content);
+            }
+
+            if let Some(event_content) = self.stream_event_content.get(message_id) {
+                merge_newer_streaming_prefix(&mut incoming.content, event_content);
+            }
+        }
+    }
+}
+
+fn merge_newer_streaming_prefix(incoming_content: &mut String, candidate_content: &str) {
+    if candidate_content.len() > incoming_content.len()
+        && candidate_content.starts_with(incoming_content.as_str())
+    {
+        incoming_content.clear();
+        incoming_content.push_str(candidate_content);
+    }
+}
+
+fn merge_stream_chunk_into_cached_content(
+    cached_content: &mut String,
+    event_content: &mut String,
+    chunk: &str,
+) -> bool {
+    if cached_content.starts_with(event_content.as_str()) {
+        return false;
+    }
+
+    if event_content.starts_with(cached_content.as_str()) {
+        cached_content.clone_from(event_content);
+        return true;
+    }
+
+    if cached_content.ends_with(chunk) {
+        event_content.clone_from(cached_content);
+        return false;
+    }
+
+    cached_content.push_str(chunk);
+    event_content.clone_from(cached_content);
+    true
 }

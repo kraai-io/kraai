@@ -333,6 +333,7 @@ impl App {
         self.state.context_usage = None;
         self.state.optimistic_messages.clear();
         self.state.optimistic_tool_messages.clear();
+        self.stream_event_content.clear();
         self.state.pending_tools.clear();
         self.state.agent_profiles = if has_session {
             Vec::new()
@@ -355,6 +356,7 @@ impl App {
         self.state.retry_waiting = false;
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
+        self.last_stream_history_request = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
         self.state.status = status.to_string();

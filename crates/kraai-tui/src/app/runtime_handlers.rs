@@ -14,7 +14,10 @@ impl App {
                 self.state.status = format!("Runtime error: {msg}");
                 self.fail_ci(format!("Runtime error: {msg}"));
             }
-            Event::StreamStart { session_id, .. } => {
+            Event::StreamStart {
+                session_id,
+                message_id,
+            } => {
                 self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
@@ -28,11 +31,15 @@ impl App {
                 self.state.profile_locked = true;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
-                self.last_stream_refresh = None;
-                self.request(RuntimeRequest::GetCurrentTip { session_id });
+                self.last_stream_history_request = None;
+                self.stream_event_content
+                    .insert(MessageId::new(message_id), String::new());
+                self.request_stream_history_sync(&session_id, Instant::now());
             }
             Event::StreamChunk {
-                session_id, chunk, ..
+                session_id,
+                message_id,
+                chunk,
             } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
@@ -40,23 +47,16 @@ impl App {
                 if self.is_ci_mode() {
                     self.write_ci_output(&chunk);
                 }
-                let now = Instant::now();
-                let should_refresh = self
-                    .last_stream_refresh
-                    .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(50));
-                if should_refresh {
-                    self.last_stream_refresh = Some(now);
-                    self.request(RuntimeRequest::GetCurrentTip {
-                        session_id: session_id.clone(),
-                    });
-                    self.request(RuntimeRequest::GetChatHistory { session_id });
+                if !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
+                    self.request_stream_history_sync(&session_id, Instant::now());
                 }
             }
             Event::StreamComplete {
                 session_id,
                 message_id,
             } => {
-                self.mark_exit_usage_message_completed(kraai_types::MessageId::new(message_id));
+                let message_id = MessageId::new(message_id);
+                self.mark_exit_usage_message_completed(message_id.clone());
                 self.request(RuntimeRequest::ListUserInputHistory {
                     limit: INPUT_HISTORY_LIMIT,
                 });
@@ -68,7 +68,8 @@ impl App {
                     self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
-                    self.last_stream_refresh = None;
+                    self.last_stream_history_request = None;
+                    self.stream_event_content.remove(&message_id);
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
                         && self.state.pending_tools.is_empty()
@@ -83,15 +84,20 @@ impl App {
                 self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamError {
-                session_id, error, ..
+                session_id,
+                message_id,
+                error,
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
                     self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
-                    self.last_stream_refresh = None;
+                    self.last_stream_history_request = None;
+                    self.stream_event_content
+                        .remove(&MessageId::new(message_id));
                     self.state.status = format!("Stream error: {error}");
+                    self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
                         && self.state.pending_tools.is_empty()
                     {
@@ -101,13 +107,18 @@ impl App {
                 self.fail_ci(format!("Stream error: {error}"));
                 self.request(RuntimeRequest::ListSessions);
             }
-            Event::StreamCancelled { session_id, .. } => {
+            Event::StreamCancelled {
+                session_id,
+                message_id,
+            } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
                     self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
-                    self.last_stream_refresh = None;
+                    self.last_stream_history_request = None;
+                    self.stream_event_content
+                        .remove(&MessageId::new(message_id));
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -136,7 +147,7 @@ impl App {
                     self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
-                    self.last_stream_refresh = None;
+                    self.last_stream_history_request = None;
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -414,7 +425,8 @@ impl App {
                 self.state.status = format!("Failed saving settings: {err}");
             }
             RuntimeResponse::ChatHistory { session_id, result } => match result {
-                Ok(history) => {
+                Ok(mut history) => {
+                    self.merge_local_streaming_content(&mut history);
                     self.accumulate_exit_usage_from_history(&history);
                     if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                         self.state.chat_history = history;

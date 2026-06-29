@@ -55,8 +55,9 @@ impl App {
             startup_options,
             startup_message_sent: false,
             ci_error: None,
+            stream_event_content: HashMap::new(),
             state,
-            last_stream_refresh: None,
+            last_stream_history_request: None,
             last_statusline_animation_tick: None,
         };
 

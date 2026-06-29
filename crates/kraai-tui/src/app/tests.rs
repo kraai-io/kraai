@@ -64,8 +64,9 @@ fn test_harness() -> TestHarness {
             startup_options: StartupOptions::default(),
             startup_message_sent: false,
             ci_error: None,
+            stream_event_content: HashMap::new(),
             state: AppState::default(),
-            last_stream_refresh: None,
+            last_stream_history_request: None,
             last_statusline_animation_tick: None,
         },
         requests_rx,
@@ -122,6 +123,14 @@ fn message(id: &str, parent_id: Option<&str>, role: ChatRole, content: &str) -> 
         tool_state_deltas: Vec::new(),
         generation: None,
     }
+}
+
+fn streaming_message(id: &str, parent_id: Option<&str>, content: &str) -> Message {
+    let mut msg = message(id, parent_id, ChatRole::Assistant, content);
+    msg.status = MessageStatus::Streaming {
+        call_id: kraai_types::CallId::new(format!("call-{id}")),
+    };
+    msg
 }
 
 fn assistant_message_with_usage(
@@ -809,6 +818,127 @@ fn non_ci_and_stale_chunks_do_not_print_terminal_output() {
     });
     assert_eq!(captured_output(&stale_output), "");
 }
+
+#[test]
+fn stream_chunk_updates_cached_streaming_message_without_history_request() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.current_tip_id = Some(String::from("m2"));
+    harness.app.state.chat_history = BTreeMap::from([
+        (
+            MessageId::new("m1"),
+            message("m1", None, ChatRole::User, "hello?"),
+        ),
+        (
+            MessageId::new("m2"),
+            streaming_message("m2", Some("m1"), "hello"),
+        ),
+    ]);
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+        chunk: String::from(" world"),
+    });
+
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("m2"))
+        .expect("streaming message should remain cached");
+    assert_eq!(message.content, "hello world");
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
+fn stream_start_requests_initial_history_sync() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+    harness.app.handle_runtime_event(Event::StreamStart {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+    });
+
+    let requests = harness.drain_requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListSessions))
+    );
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetCurrentTip { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2"
+    )));
+}
+
+#[test]
+fn delayed_stream_chunks_do_not_duplicate_history_content() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+    harness.app.handle_runtime_event(Event::StreamStart {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+    });
+    harness.drain_requests();
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("sess-2"),
+            result: Ok(BTreeMap::from([
+                (
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello?"),
+                ),
+                (
+                    MessageId::new("m2"),
+                    streaming_message("m2", Some("m1"), "hello world"),
+                ),
+            ])),
+        });
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+        chunk: String::from("hello"),
+    });
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+        chunk: String::from(" world"),
+    });
+
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("m2"))
+        .expect("streaming message should remain cached");
+    assert_eq!(message.content, "hello world");
+    assert!(harness.drain_requests().is_empty());
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+        chunk: String::from(" world"),
+    });
+
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("m2"))
+        .expect("streaming message should remain cached");
+    assert_eq!(message.content, "hello world world");
+}
+
 #[test]
 fn ci_tool_call_detection_fails_immediately() {
     let mut harness = test_harness_with_startup_options(StartupOptions {
@@ -2336,6 +2466,93 @@ fn stale_chat_history_response_is_ignored() {
             .contains_key(&MessageId::new("m-stale"))
     );
 }
+
+#[test]
+fn stale_streaming_history_response_preserves_locally_appended_chunk() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.current_tip_id = Some(String::from("m2"));
+    harness.app.state.chat_history = BTreeMap::from([
+        (
+            MessageId::new("m1"),
+            message("m1", None, ChatRole::User, "hello?"),
+        ),
+        (
+            MessageId::new("m2"),
+            streaming_message("m2", Some("m1"), "hello world"),
+        ),
+    ]);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("sess-2"),
+            result: Ok(BTreeMap::from([
+                (
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello?"),
+                ),
+                (
+                    MessageId::new("m2"),
+                    streaming_message("m2", Some("m1"), "hello"),
+                ),
+            ])),
+        });
+
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("m2"))
+        .expect("streaming message should remain cached");
+    assert_eq!(message.content, "hello world");
+}
+
+#[test]
+fn stale_event_content_does_not_replace_newer_cached_streaming_history() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.current_tip_id = Some(String::from("m2"));
+    harness
+        .app
+        .stream_event_content
+        .insert(MessageId::new("m2"), String::from("hello world"));
+    harness.app.state.chat_history = BTreeMap::from([
+        (
+            MessageId::new("m1"),
+            message("m1", None, ChatRole::User, "hello?"),
+        ),
+        (
+            MessageId::new("m2"),
+            streaming_message("m2", Some("m1"), "hello world!"),
+        ),
+    ]);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("sess-2"),
+            result: Ok(BTreeMap::from([
+                (
+                    MessageId::new("m1"),
+                    message("m1", None, ChatRole::User, "hello?"),
+                ),
+                (
+                    MessageId::new("m2"),
+                    streaming_message("m2", Some("m1"), "hello"),
+                ),
+            ])),
+        });
+
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("m2"))
+        .expect("streaming message should remain cached");
+    assert_eq!(message.content, "hello world!");
+}
+
 #[test]
 fn stale_current_tip_response_is_ignored() {
     let mut harness = test_harness();
@@ -2662,6 +2879,38 @@ fn stream_cancelled_event_refreshes_foreground_session_and_sessions_list() {
     });
     assert!(!harness.app.state.is_streaming);
     assert_eq!(harness.app.state.status, "Stream cancelled");
+    let requests = harness.drain_requests();
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetCurrentTip { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2"
+    )));
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListSessions))
+    );
+}
+
+#[test]
+fn stream_error_event_refreshes_foreground_session_and_sessions_list() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.handle_runtime_event(Event::StreamError {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m-error"),
+        error: String::from("provider failed"),
+    });
+    assert!(!harness.app.state.is_streaming);
+    assert_eq!(harness.app.state.status, "Stream error: provider failed");
     let requests = harness.drain_requests();
     assert!(requests.iter().any(|request| matches!(
         request,
