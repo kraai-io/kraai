@@ -323,7 +323,7 @@ impl App {
                     model_menu_next_index(self.state.agent_menu_index, len);
             }
             KeyCode::Enter => {
-                if self.state.profile_locked {
+                if self.state.turn_blocks_user_commands() {
                     self.state.status =
                         String::from("Cannot change agent while the current turn is active");
                     self.state.mode = UiMode::Chat;

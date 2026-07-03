@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
     FieldValueKind, Model, ModelSettings, ProviderDefinition, ProviderSettings, Session,
-    SettingsDocument, SettingsValue,
+    SettingsDocument, SettingsValue, ToolBatchOutcome,
 };
 use kraai_types::{
     ChatRole, Message, MessageGeneration, MessageId, MessageStatus, ModelId, ProviderId, TokenUsage,
@@ -2825,6 +2825,148 @@ fn failed_tool_result_for_current_session_adds_optimistic_tool_message() {
             .contains("\"error\": \"boom\"")
     );
 }
+
+#[test]
+fn manual_continuation_outcome_finishes_denied_tool_batch() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.pending_tools = vec![sample_pending_tools()[0].clone()];
+    harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+    harness.app.state.tool_batch_execution_started = true;
+    harness.app.state.profile_locked = true;
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(7));
+
+    harness.app.handle_runtime_event(Event::ToolResultReady {
+        session_id: String::from("sess-2"),
+        call_id: String::from("call-1"),
+        tool_id: String::from("read_file"),
+        success: false,
+        output: String::from("{\"error\":\"Permission denied by user\"}"),
+        denied: true,
+    });
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::ExecutingBatch);
+
+    harness.app.handle_runtime_event(Event::ToolBatchFinished {
+        session_id: String::from("sess-2"),
+        outcome: ToolBatchOutcome::ManualContinuationRequired,
+    });
+
+    assert_eq!(
+        harness.app.state.tool_phase,
+        ToolPhase::AwaitingManualContinuation
+    );
+    assert!(!harness.app.state.runtime_is_active());
+    assert!(harness.app.state.pending_tools.is_empty());
+    assert!(!harness.app.state.tool_batch_execution_started);
+    assert!(!harness.app.state.profile_locked);
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .last_duration()
+            .is_some_and(|duration| duration >= Duration::from_secs(7))
+    );
+    assert_eq!(
+        harness.app.state.status,
+        "Tool denied: read_file; use /continue to ask the assistant to continue"
+    );
+
+    harness.app.state.profile_locked = true;
+    harness.app.handle_command("continue");
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [
+            RuntimeRequest::GetCurrentTip { .. },
+            RuntimeRequest::GetChatHistory { .. },
+            RuntimeRequest::GetSessionContextUsage { .. },
+            RuntimeRequest::GetPendingTools { .. },
+            RuntimeRequest::ListAgentProfiles { .. },
+            RuntimeRequest::ListSessions,
+            RuntimeRequest::ContinueSession { session_id },
+        ] if session_id == "sess-2"
+    ));
+}
+
+#[test]
+fn submit_after_manual_continuation_outcome_sends_without_queueing() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+    harness.app.state.tool_phase = ToolPhase::AwaitingManualContinuation;
+
+    harness.app.submit_message(String::from("new direction"));
+
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+    assert!(harness.app.state.is_streaming);
+    assert!(!harness.app.state.optimistic_messages[0].is_queued);
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::SendMessage { session_id, message, .. }]
+            if session_id == "sess-2" && message == "new direction"
+    ));
+}
+
+#[test]
+fn pending_tools_remaining_outcome_returns_to_decision_phase() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.pending_tools = sample_pending_tools();
+    harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+    harness.app.state.tool_batch_execution_started = true;
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(7));
+
+    harness.app.handle_runtime_event(Event::ToolResultReady {
+        session_id: String::from("sess-2"),
+        call_id: String::from("call-1"),
+        tool_id: String::from("read_file"),
+        success: true,
+        output: String::from("{\"ok\":true}"),
+        denied: false,
+    });
+    harness.app.handle_runtime_event(Event::ToolBatchFinished {
+        session_id: String::from("sess-2"),
+        outcome: ToolBatchOutcome::PendingToolsRemaining,
+    });
+
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Deciding);
+    assert_eq!(harness.app.state.pending_tools.len(), 1);
+    assert!(!harness.app.state.tool_batch_execution_started);
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .elapsed(Instant::now())
+            .is_some()
+    );
+    assert_eq!(harness.app.state.status, "1 tool call(s) pending");
+
+    let _sync_requests = harness.drain_requests();
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ApproveTool {
+            call_id: String::from("call-2"),
+            result: Ok(()),
+        });
+
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::ExecuteApprovedTools { session_id }] if session_id == "sess-2"
+    ));
+}
+
 #[test]
 fn tool_result_for_background_session_does_not_cache_tool_message() {
     let mut harness = test_harness();

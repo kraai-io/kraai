@@ -30,6 +30,7 @@ impl App {
                 self.state.is_streaming = true;
                 self.state.retry_waiting = false;
                 self.state.profile_locked = true;
+                self.clear_manual_continuation_phase();
                 self.start_or_resume_turn_timer(Instant::now());
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
@@ -255,6 +256,7 @@ impl App {
                     if self.state.pending_tools.is_empty()
                         && self.state.tool_phase == ToolPhase::ExecutingBatch
                         && !self.state.is_streaming
+                        && !denied
                     {
                         self.state.status = format!("Waiting for assistant after {tool_id}");
                     } else {
@@ -262,6 +264,41 @@ impl App {
                     }
                 } else {
                     self.request(RuntimeRequest::ListSessions);
+                }
+            }
+            Event::ToolBatchFinished {
+                session_id,
+                outcome,
+            } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    self.request(RuntimeRequest::ListSessions);
+                    return;
+                }
+
+                match outcome {
+                    ToolBatchOutcome::ContinuationScheduled => {
+                        self.state.tool_phase = ToolPhase::ExecutingBatch;
+                        self.state.tool_batch_execution_started = false;
+                        self.state.status = String::from("Waiting for assistant after tools");
+                        self.start_or_resume_turn_timer(Instant::now());
+                    }
+                    ToolBatchOutcome::ManualContinuationRequired => {
+                        self.enter_manual_continuation_phase();
+                        self.request_sync_for_session(&session_id);
+                        self.request(RuntimeRequest::ListSessions);
+                        self.maybe_finish_ci_run();
+                    }
+                    ToolBatchOutcome::PendingToolsRemaining => {
+                        self.state.tool_batch_execution_started = false;
+                        self.pause_turn_timer(Instant::now());
+                        self.sync_tool_phase_from_pending_tools();
+                        self.state.status = if self.state.pending_tools.is_empty() {
+                            String::from("Tool approval pending")
+                        } else {
+                            format!("{} tool call(s) pending", self.state.pending_tools.len())
+                        };
+                        self.request_sync_for_session(&session_id);
+                    }
                 }
             }
         }
@@ -636,6 +673,7 @@ impl App {
                 self.state.status = format!("Failed cancelling stream: {err}");
             }
             RuntimeResponse::ContinueSession(Ok(())) => {
+                self.clear_manual_continuation_phase();
                 self.start_or_resume_turn_timer(Instant::now());
                 self.state.status = String::from("Continuing session");
             }

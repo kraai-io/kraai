@@ -102,6 +102,14 @@ pub struct OpenAiCodexAuthStatus {
     pub error: Option<String>,
 }
 
+/// Tool batch outcome after tool results have been persisted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolBatchOutcome {
+    ContinuationScheduled,
+    ManualContinuationRequired,
+    PendingToolsRemaining,
+}
+
 /// Streaming events sent from the runtime to clients
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -170,6 +178,10 @@ pub enum Event {
         success: bool,
         output: String,
         denied: bool,
+    },
+    ToolBatchFinished {
+        session_id: String,
+        outcome: ToolBatchOutcome,
     },
     ContinuationFailed {
         session_id: String,

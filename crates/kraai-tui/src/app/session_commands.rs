@@ -86,7 +86,7 @@ impl App {
                 self.request(RuntimeRequest::ListModels);
             }
             "agent" => {
-                if self.state.profile_locked {
+                if self.state.turn_blocks_user_commands() {
                     self.state.status =
                         String::from("Cannot change agent while the current turn is active");
                     return;
@@ -133,8 +133,7 @@ impl App {
                     self.state.status = String::from("No session to undo");
                     return;
                 };
-                if self.state.is_streaming || self.state.retry_waiting || self.state.profile_locked
-                {
+                if self.state.turn_blocks_user_commands() {
                     self.state.status =
                         String::from("Cannot undo while the current turn is active");
                     return;
@@ -146,8 +145,7 @@ impl App {
                     self.state.status = String::from("No session to continue");
                     return;
                 };
-                if self.state.is_streaming || self.state.retry_waiting || self.state.profile_locked
-                {
+                if self.state.turn_blocks_user_commands() {
                     self.state.status =
                         String::from("Cannot continue while the current turn is active");
                     return;

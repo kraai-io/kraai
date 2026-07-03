@@ -4,7 +4,7 @@ use kraai_types::{ModelId, ProviderId};
 
 use super::core::{QueuedMessage, RuntimeCore, emit_event};
 use super::streaming::StreamJobKind;
-use crate::api::Event;
+use crate::api::{Event, ToolBatchOutcome};
 use crate::handle::Command;
 
 async fn execute_tool_requests(
@@ -210,6 +210,10 @@ impl RuntimeCore {
             }
 
             let results = execute_tool_requests(executions).await;
+            if results.is_empty() {
+                return;
+            }
+            let has_denied_result = results.iter().any(|result| result.permission_denied);
 
             for result in &results {
                 let success = result.output.get("error").is_none();
@@ -264,6 +268,40 @@ impl RuntimeCore {
                 },
             );
 
+            if has_denied_result {
+                let has_unfinished_tools = {
+                    runtime
+                        .agent_manager
+                        .lock()
+                        .await
+                        .has_unfinished_tools(&session_id)
+                };
+                if !has_unfinished_tools {
+                    {
+                        let mut agent = runtime.agent_manager.lock().await;
+                        agent.clear_active_turn(&session_id);
+                    }
+                    emit_event(
+                        &runtime.event_tx,
+                        Event::ToolBatchFinished {
+                            session_id: session_id.clone(),
+                            outcome: ToolBatchOutcome::ManualContinuationRequired,
+                        },
+                    );
+                    runtime.schedule_queue_drain(&session_id).await;
+                } else {
+                    emit_event(
+                        &runtime.event_tx,
+                        Event::ToolBatchFinished {
+                            session_id: session_id.clone(),
+                            outcome: ToolBatchOutcome::PendingToolsRemaining,
+                        },
+                    );
+                }
+                return;
+            }
+
+            let mut source_messages_ready_for_continuation = Vec::new();
             for source_message_id in completed_source_message_ids {
                 let has_pending_tools = {
                     runtime
@@ -276,6 +314,23 @@ impl RuntimeCore {
                     continue;
                 }
 
+                source_messages_ready_for_continuation.push(source_message_id);
+            }
+
+            let continuation_scheduled = !source_messages_ready_for_continuation.is_empty();
+            emit_event(
+                &runtime.event_tx,
+                Event::ToolBatchFinished {
+                    session_id: session_id.clone(),
+                    outcome: if continuation_scheduled {
+                        ToolBatchOutcome::ContinuationScheduled
+                    } else {
+                        ToolBatchOutcome::PendingToolsRemaining
+                    },
+                },
+            );
+
+            for _ in source_messages_ready_for_continuation {
                 runtime.spawn_continuation(session_id.clone());
             }
         });

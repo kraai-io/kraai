@@ -262,7 +262,10 @@ impl App {
         if !self.state.pending_tools.is_empty() {
             self.state.mode = UiMode::Chat;
             self.state.tool_phase = ToolPhase::ExecutingBatch;
-        } else if self.state.tool_phase != ToolPhase::ExecutingBatch {
+        } else if !matches!(
+            self.state.tool_phase,
+            ToolPhase::ExecutingBatch | ToolPhase::AwaitingManualContinuation
+        ) {
             self.state.tool_phase = ToolPhase::Idle;
             self.state.tool_batch_execution_started = false;
         }
@@ -294,6 +297,34 @@ impl App {
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
         self.sync_turn_timer_with_activity(Instant::now());
+    }
+
+    pub(super) fn enter_manual_continuation_phase(&mut self) {
+        self.state.pending_tools.clear();
+        self.state.tool_phase = ToolPhase::AwaitingManualContinuation;
+        self.state.tool_batch_execution_started = false;
+        self.state.is_streaming = false;
+        self.state.retry_waiting = false;
+        self.state.profile_locked = false;
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.statusline_animation_frame = 0;
+        self.last_statusline_animation_tick = None;
+        self.last_stream_history_request = None;
+        self.finish_turn_timer(Instant::now());
+        self.state.status = if self.state.status.starts_with("Tool denied:") {
+            format!(
+                "{}; use /continue to ask the assistant to continue",
+                self.state.status
+            )
+        } else {
+            String::from("Tool denied; use /continue to ask the assistant to continue")
+        };
+    }
+
+    pub(super) fn clear_manual_continuation_phase(&mut self) {
+        if self.state.tool_phase == ToolPhase::AwaitingManualContinuation {
+            self.state.tool_phase = ToolPhase::Idle;
+        }
     }
 
     pub(super) fn request_sync(&self) {
@@ -401,6 +432,7 @@ impl App {
         if is_queued {
             self.update_queued_status();
         } else {
+            self.clear_manual_continuation_phase();
             self.start_turn_timer(Instant::now());
             self.state.is_streaming = true;
             self.state.statusline_animation_frame = 0;

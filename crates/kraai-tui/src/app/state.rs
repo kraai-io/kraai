@@ -184,7 +184,20 @@ impl AppState {
             || self.tool_phase == ToolPhase::ExecutingBatch
             || (self.profile_locked
                 && !self.profile_lock_stale_after_terminal_event
-                && self.tool_phase != ToolPhase::Deciding)
+                && !matches!(
+                    self.tool_phase,
+                    ToolPhase::Deciding | ToolPhase::AwaitingManualContinuation
+                ))
+    }
+
+    pub(super) fn turn_blocks_user_commands(&self) -> bool {
+        self.is_streaming
+            || self.retry_waiting
+            || self.tool_phase == ToolPhase::ExecutingBatch
+            || self.tool_phase == ToolPhase::Deciding
+            || (self.profile_locked
+                && !self.profile_lock_stale_after_terminal_event
+                && self.tool_phase != ToolPhase::AwaitingManualContinuation)
     }
 
     pub(super) fn chat_max_scroll(&self) -> u16 {

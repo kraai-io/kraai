@@ -4,10 +4,10 @@ use super::harness::{
     RuntimeTestHarness, ScriptedChunk, call_id_for_queue_order, create_session_with_profile,
     stream_complete_count, stream_start_count,
 };
-use crate::Event;
+use crate::{Event, ToolBatchOutcome};
 
 #[tokio::test]
-async fn denied_tool_finishes_before_single_continuation_starts() -> Result<()> {
+async fn denied_tool_does_not_start_continuation_until_requested() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
             "<tool_call>\n\
@@ -70,23 +70,49 @@ value: beta\n\
 
     harness
         .events
-        .wait_for("denied tool result and continuation", |events| {
-            let denied_result = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        call_id,
-                        tool_id,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && call_id == &denied_call_id
-                        && tool_id == "mock_tool"
-                        && *denied
-                )
-            });
-            denied_result && stream_complete_count(events, &session_id) == 2
+        .wait_for(
+            "denied tool result without automatic continuation",
+            |events| {
+                let denied_result = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolResultReady {
+                            session_id: event_session,
+                            call_id,
+                            tool_id,
+                            denied,
+                            ..
+                        } if event_session == &session_id
+                            && call_id == &denied_call_id
+                            && tool_id == "mock_tool"
+                            && *denied
+                    )
+                });
+                let manual_continuation_required = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::ToolBatchFinished {
+                            session_id: event_session,
+                            outcome: ToolBatchOutcome::ManualContinuationRequired,
+                        } if event_session == &session_id
+                    )
+                });
+                denied_result
+                    && manual_continuation_required
+                    && stream_complete_count(events, &session_id) == 1
+            },
+        )
+        .await;
+
+    let events_after_denial = harness.events.snapshot();
+    assert_eq!(stream_start_count(&events_after_denial, &session_id), 1);
+    assert_eq!(stream_complete_count(&events_after_denial, &session_id), 1);
+
+    harness.handle.continue_session(session_id.clone()).await?;
+    harness
+        .events
+        .wait_for("manual continuation after denied tool", |events| {
+            stream_complete_count(events, &session_id) == 2
         })
         .await;
 
@@ -102,7 +128,7 @@ value: beta\n\
             _ => None,
         })
         .nth(1)
-        .expect("continuation stream should start once");
+        .expect("continuation stream should start once requested");
     let denied_result_index = final_events
         .iter()
         .position(|event| {
@@ -119,8 +145,22 @@ value: beta\n\
             )
         })
         .expect("denied tool result should exist");
+    let manual_required_index = final_events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                Event::ToolBatchFinished {
+                    session_id: event_session,
+                    outcome: ToolBatchOutcome::ManualContinuationRequired,
+                } if event_session == &session_id
+            )
+        })
+        .expect("manual continuation outcome should exist");
 
     assert!(denied_result_index < continuation_start_index);
+    assert!(denied_result_index < manual_required_index);
+    assert!(manual_required_index < continuation_start_index);
     assert_eq!(stream_start_count(&final_events, &session_id), 2);
     assert_eq!(stream_complete_count(&final_events, &session_id), 2);
 
@@ -454,11 +494,61 @@ value: beta\n\
                     } if event_session == &session_id && call_id == &first_call_id
                 )
             });
-            first_result && stream_complete_count(events, &session_id) == 2
+            let continuation_scheduled = events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ToolBatchFinished {
+                        session_id: event_session,
+                        outcome: ToolBatchOutcome::ContinuationScheduled,
+                    } if event_session == &session_id
+                )
+            });
+            first_result
+                && continuation_scheduled
+                && stream_complete_count(events, &session_id) == 2
         })
         .await;
 
     let final_events = harness.events.snapshot();
+    let tool_result_index = final_events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                Event::ToolResultReady {
+                    session_id: event_session,
+                    call_id,
+                    ..
+                } if event_session == &session_id && call_id == &first_call_id
+            )
+        })
+        .expect("tool result should exist");
+    let continuation_scheduled_index = final_events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                Event::ToolBatchFinished {
+                    session_id: event_session,
+                    outcome: ToolBatchOutcome::ContinuationScheduled,
+                } if event_session == &session_id
+            )
+        })
+        .expect("continuation scheduled outcome should exist");
+    let continuation_start_index = final_events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            Event::StreamStart {
+                session_id: event_session,
+                ..
+            } if event_session == &session_id => Some(index),
+            _ => None,
+        })
+        .nth(1)
+        .expect("continuation should start");
+    assert!(tool_result_index < continuation_scheduled_index);
+    assert!(continuation_scheduled_index < continuation_start_index);
     assert_eq!(stream_start_count(&final_events, &session_id), 2);
     assert_eq!(stream_complete_count(&final_events, &session_id), 2);
 

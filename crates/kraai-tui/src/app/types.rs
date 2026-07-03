@@ -79,6 +79,7 @@ pub(super) enum ToolPhase {
     Idle,
     Deciding,
     ExecutingBatch,
+    AwaitingManualContinuation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

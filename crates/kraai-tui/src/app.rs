@@ -6,7 +6,7 @@ use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
 use kraai_runtime::{
     AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
-    ProviderSettings, RuntimeHandle, SettingsValue,
+    ProviderSettings, RuntimeHandle, SettingsValue, ToolBatchOutcome,
 };
 use kraai_types::{ChatRole, MessageId, MessageStatus};
 use ratatui::{
