@@ -39,6 +39,57 @@ impl App {
         self.state.scroll = self.state.chat_max_scroll();
     }
 
+    pub(super) fn start_turn_timer(&mut self, now: Instant) {
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.turn_timer.start(now);
+    }
+
+    pub(super) fn start_or_resume_turn_timer(&mut self, now: Instant) {
+        self.state.profile_lock_stale_after_terminal_event = false;
+        if self.state.turn_timer.has_started() {
+            self.state.turn_timer.resume(now);
+        } else {
+            self.state.turn_timer.start(now);
+        }
+    }
+
+    pub(super) fn pause_turn_timer(&mut self, now: Instant) {
+        self.state.turn_timer.pause(now);
+    }
+
+    pub(super) fn finish_turn_timer(&mut self, now: Instant) {
+        self.state.turn_timer.finish(now);
+    }
+
+    pub(super) fn finish_terminal_turn_timer(&mut self, now: Instant) {
+        if self.state.profile_locked {
+            self.state.profile_lock_stale_after_terminal_event = true;
+        }
+        self.finish_turn_timer(now);
+    }
+
+    pub(super) fn clear_turn_timer(&mut self) {
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.turn_timer.clear();
+    }
+
+    pub(super) fn sync_turn_timer_with_activity(&mut self, now: Instant) {
+        if self.state.runtime_is_active() {
+            self.start_or_resume_turn_timer(now);
+            return;
+        }
+
+        if !self.state.turn_timer.has_started() {
+            return;
+        }
+
+        if self.state.profile_locked && self.state.tool_phase == ToolPhase::Deciding {
+            self.state.turn_timer.pause(now);
+        } else {
+            self.state.turn_timer.finish(now);
+        }
+    }
+
     pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
         let event_rx = spawn_event_bridge(runtime.subscribe());
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);

@@ -249,6 +249,7 @@ impl App {
         self.state.mode = UiMode::Chat;
         self.state.tool_phase = ToolPhase::Deciding;
         self.state.tool_approval_action = ToolApprovalAction::Allow;
+        self.pause_turn_timer(Instant::now());
     }
 
     pub(super) fn sync_tool_phase_from_pending_tools(&mut self) {
@@ -276,23 +277,23 @@ impl App {
             return;
         }
 
-        let Some(session_id) = &self.state.current_session_id else {
+        let Some(session_id) = self.state.current_session_id.clone() else {
             return;
         };
 
         self.state.tool_batch_execution_started = true;
+        self.start_or_resume_turn_timer(Instant::now());
         self.state.status = format!(
             "Executing {} decided tool call(s)",
             self.state.pending_tools.len()
         );
-        self.request(RuntimeRequest::ExecuteApprovedTools {
-            session_id: session_id.clone(),
-        });
+        self.request(RuntimeRequest::ExecuteApprovedTools { session_id });
     }
 
     pub(super) fn finish_tool_batch_execution(&mut self) {
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
+        self.sync_turn_timer_with_activity(Instant::now());
     }
 
     pub(super) fn request_sync(&self) {
@@ -349,11 +350,13 @@ impl App {
                 .get_or_insert_with(|| String::from(DEFAULT_AGENT_PROFILE_ID));
         }
         self.state.profile_locked = false;
+        self.state.profile_lock_stale_after_terminal_event = false;
         self.state.tool_approval_action = ToolApprovalAction::Allow;
         self.state.tool_phase = ToolPhase::Idle;
         self.state.tool_batch_execution_started = false;
         self.state.is_streaming = false;
         self.state.retry_waiting = false;
+        self.clear_turn_timer();
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.last_stream_history_request = None;
@@ -398,6 +401,7 @@ impl App {
         if is_queued {
             self.update_queued_status();
         } else {
+            self.start_turn_timer(Instant::now());
             self.state.is_streaming = true;
             self.state.statusline_animation_frame = 0;
             self.last_statusline_animation_tick = None;

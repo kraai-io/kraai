@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -29,15 +31,42 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
 fn statusline_activity_label(state: &AppState) -> String {
     if state.runtime_is_active() {
         let frame_index = state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len();
-        return STATUSLINE_STREAMING_FRAMES
+        let frame = STATUSLINE_STREAMING_FRAMES
             .get(frame_index)
             .unwrap_or(&"streaming")
             .to_string();
+        return state
+            .turn_timer
+            .elapsed(Instant::now())
+            .map(|elapsed| format!(" {frame} {}", format_turn_duration(elapsed)))
+            .unwrap_or_else(|| format!(" {frame}"));
     }
     if state.status == "Stream cancelled" {
-        return String::from("cancelled");
+        return statusline_terminal_activity_label("cancelled", state);
     }
-    String::from("idle")
+    statusline_terminal_activity_label("idle", state)
+}
+
+fn statusline_terminal_activity_label(label: &str, state: &AppState) -> String {
+    state
+        .turn_timer
+        .last_duration()
+        .map(|elapsed| format!("{label} {}", format_turn_duration(elapsed)))
+        .unwrap_or_else(|| label.to_string())
+}
+
+fn format_turn_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{}m{:02}s", minutes, seconds % 60);
+    }
+
+    format!("{}h{:02}m", minutes / 60, minutes % 60)
 }
 
 fn statusline_activity_color(state: &AppState) -> Color {

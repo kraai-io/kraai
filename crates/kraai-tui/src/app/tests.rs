@@ -26,7 +26,7 @@ use ratatui::{
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 struct TestHarness {
     app: App,
     requests_rx: Receiver<RuntimeRequest>,
@@ -667,6 +667,146 @@ fn ci_stream_complete_waits_for_turn_to_unlock() {
     assert!(harness.app.ci_turn_completion_pending);
 }
 #[test]
+fn stream_complete_finishes_turn_timer_after_profile_unlock() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.state.profile_locked = true;
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(9));
+
+    harness.app.handle_runtime_event(Event::StreamComplete {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+    });
+
+    assert!(harness.app.state.turn_timer.last_duration().is_none());
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::AgentProfiles {
+            session_id: String::from("sess-2"),
+            result: Ok(AgentProfilesState {
+                profiles: default_agent_profiles(),
+                warnings: Vec::new(),
+                selected_profile_id: Some(String::from("plan-code")),
+                profile_locked: false,
+            }),
+        });
+
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .last_duration()
+            .is_some_and(|duration| duration >= Duration::from_secs(9))
+    );
+}
+#[test]
+fn stream_cancelled_pending_tools_sync_keeps_finished_turn_duration() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.state.profile_locked = true;
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(9));
+
+    harness.app.handle_runtime_event(Event::StreamCancelled {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+    });
+
+    assert!(harness.app.state.profile_locked);
+    assert!(!harness.app.state.runtime_is_active());
+    let finished_duration = harness.app.state.turn_timer.last_duration();
+    assert!(finished_duration.is_some_and(|duration| duration >= Duration::from_secs(9)));
+
+    let mut sessions = sample_sessions();
+    for session in &mut sessions {
+        if session.id == "sess-2" {
+            session.profile_locked = true;
+        }
+    }
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(sessions)));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::PendingTools {
+            session_id: String::from("sess-2"),
+            result: Ok(Vec::new()),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::AgentProfiles {
+            session_id: String::from("sess-2"),
+            result: Ok(AgentProfilesState {
+                profiles: default_agent_profiles(),
+                warnings: Vec::new(),
+                selected_profile_id: Some(String::from("plan-code")),
+                profile_locked: false,
+            }),
+        });
+
+    assert_eq!(
+        harness.app.state.turn_timer.last_duration(),
+        finished_duration
+    );
+}
+#[test]
+fn stream_error_pending_tools_sync_keeps_finished_turn_duration() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.state.profile_locked = true;
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(9));
+
+    harness.app.handle_runtime_event(Event::StreamError {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        error: String::from("provider failed"),
+    });
+
+    assert!(harness.app.state.profile_locked);
+    assert!(!harness.app.state.runtime_is_active());
+    let finished_duration = harness.app.state.turn_timer.last_duration();
+    assert!(finished_duration.is_some_and(|duration| duration >= Duration::from_secs(9)));
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::PendingTools {
+            session_id: String::from("sess-2"),
+            result: Ok(Vec::new()),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::AgentProfiles {
+            session_id: String::from("sess-2"),
+            result: Ok(AgentProfilesState {
+                profiles: default_agent_profiles(),
+                warnings: Vec::new(),
+                selected_profile_id: Some(String::from("plan-code")),
+                profile_locked: false,
+            }),
+        });
+
+    assert_eq!(
+        harness.app.state.turn_timer.last_duration(),
+        finished_duration
+    );
+}
+#[test]
 fn ci_finishes_after_synced_state_shows_turn_is_idle() {
     let mut harness = test_harness_with_startup_options(StartupOptions {
         ci: true,
@@ -841,6 +981,35 @@ fn stream_start_requests_initial_history_sync() {
 }
 
 #[test]
+fn stream_start_without_running_timer_starts_fresh_turn_timer() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    let completed_at = Instant::now();
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(completed_at - Duration::from_secs(8));
+    harness.app.state.turn_timer.finish(completed_at);
+    assert!(harness.app.state.turn_timer.last_duration().is_some());
+
+    harness.app.handle_runtime_event(Event::StreamStart {
+        session_id: String::from("sess-2"),
+        message_id: String::from("m2"),
+    });
+
+    assert!(harness.app.state.turn_timer.last_duration().is_none());
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .elapsed(Instant::now())
+            .is_some()
+    );
+}
+
+#[test]
 fn delayed_stream_chunks_do_not_duplicate_history_content() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(String::from("sess-2"));
@@ -938,9 +1107,12 @@ fn renders_cancelled_statusline_snapshot() {
 fn renders_retrying_statusline_snapshot() {
     let mut state = populated_state();
     state.retry_waiting = true;
+    state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(6));
     state.status = String::from("Provider error, retry #6 in 27s");
     let rendered = render_state_snapshot(&state, 120, 18);
-    assert!(rendered.contains("⠋"));
+    assert!(rendered.contains(" ⠋ 6s"));
     assert!(rendered.contains("Provider error, retry #6 in 27s"));
 }
 #[test]
@@ -949,11 +1121,37 @@ fn renders_tool_execution_statusline_snapshot() {
     state.pending_tools = vec![sample_pending_tools()[0].clone()];
     state.tool_phase = ToolPhase::ExecutingBatch;
     state.tool_batch_execution_started = true;
+    state
+        .turn_timer
+        .start(Instant::now() - Duration::from_secs(65));
     state.status = String::from("Executing 1 decided tool call(s)");
     let rendered = render_state_snapshot(&state, 140, 18);
     assert!(rendered.contains(
-            "⠋ · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Executing 1 decided tool call(s)"
+            " ⠋ 1m05s · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Executing 1 decided tool call(s)"
         ));
+}
+#[test]
+fn renders_cancelled_statusline_with_turn_duration_snapshot() {
+    let mut state = populated_state();
+    let now = Instant::now();
+    state.turn_timer.start(now - Duration::from_secs(12));
+    state.turn_timer.finish(now);
+    state.status = String::from("Stream cancelled");
+    let rendered = render_state_snapshot(&state, 120, 18);
+    assert!(rendered.contains(
+            "cancelled 12s · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Stream cancelled"
+        ));
+}
+#[test]
+fn renders_idle_statusline_with_completed_turn_duration_snapshot() {
+    let mut state = populated_state();
+    let now = Instant::now();
+    state.turn_timer.start(now - Duration::from_secs(3720));
+    state.turn_timer.finish(now);
+    let rendered = render_state_snapshot(&state, 120, 18);
+    assert!(rendered.contains(
+        "idle 1h02m · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Ready"
+    ));
 }
 #[test]
 fn renders_statusline_with_context_usage_snapshot() {
@@ -1576,6 +1774,26 @@ fn submit_sends_message_request_and_tracks_optimistic_message() {
     }
 }
 #[test]
+fn submit_sends_message_starts_turn_timer() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+    harness.app.state.input = String::from("hello world");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+    harness.app.handle_key_event(key(KeyCode::Enter));
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .elapsed(Instant::now())
+            .is_some()
+    );
+}
+#[test]
 fn submit_propagates_auto_approve_startup_option() {
     let mut harness = test_harness_with_startup_options(StartupOptions {
         auto_approve: true,
@@ -1902,6 +2120,12 @@ fn submit_while_streaming_queues_message_and_requests_send() {
     let mut harness = test_harness();
     harness.app.state.config_loaded = true;
     harness.app.state.is_streaming = true;
+    let timer_start = Instant::now();
+    harness
+        .app
+        .state
+        .turn_timer
+        .start(timer_start - Duration::from_secs(10));
     harness.app.state.current_session_id = Some(String::from("sess-2"));
     harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
     harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
@@ -1917,6 +2141,15 @@ fn submit_while_streaming_queues_message_and_requests_send() {
         "keep this draft"
     );
     assert!(harness.app.state.optimistic_messages[0].is_queued);
+    assert_eq!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .elapsed(timer_start)
+            .map(|elapsed| elapsed.as_secs()),
+        Some(10)
+    );
     let requests = harness.drain_requests();
     assert!(matches!(
         requests.as_slice(),

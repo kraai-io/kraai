@@ -11,6 +11,7 @@ impl App {
             Event::Error(msg) => {
                 self.state.is_streaming = false;
                 self.state.retry_waiting = false;
+                self.finish_terminal_turn_timer(Instant::now());
                 self.state.status = format!("Runtime error: {msg}");
                 self.fail_ci(format!("Runtime error: {msg}"));
             }
@@ -29,6 +30,7 @@ impl App {
                 self.state.is_streaming = true;
                 self.state.retry_waiting = false;
                 self.state.profile_locked = true;
+                self.start_or_resume_turn_timer(Instant::now());
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
                 self.last_stream_history_request = None;
@@ -80,6 +82,7 @@ impl App {
                         self.finish_ci_output_line();
                         self.ci_turn_completion_pending = true;
                     }
+                    self.sync_turn_timer_with_activity(Instant::now());
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -96,6 +99,7 @@ impl App {
                     self.last_stream_history_request = None;
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
+                    self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = format!("Stream error: {error}");
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -119,6 +123,7 @@ impl App {
                     self.last_stream_history_request = None;
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
+                    self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -137,6 +142,7 @@ impl App {
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.retry_waiting = true;
+                    self.start_or_resume_turn_timer(Instant::now());
                     self.state.status =
                         format!("Provider error, retry #{retry_number} in {delay_seconds}s");
                 }
@@ -148,6 +154,7 @@ impl App {
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_history_request = None;
+                    self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
                     if self.state.tool_phase == ToolPhase::ExecutingBatch
@@ -287,6 +294,7 @@ impl App {
                     return;
                 }
                 self.apply_agent_profiles_state(state);
+                self.sync_turn_timer_with_activity(Instant::now());
                 self.maybe_finish_ci_run();
             }
             RuntimeResponse::AgentProfiles {
@@ -398,6 +406,7 @@ impl App {
                 result: Err(err), ..
             } => {
                 self.state.pending_submit = None;
+                self.clear_turn_timer();
                 self.state.status = format!("Failed changing agent: {err}");
                 self.fail_ci(format!("Failed changing agent: {err}"));
             }
@@ -409,6 +418,7 @@ impl App {
                     self.invalidate_chat_cache();
                 }
                 self.state.is_streaming = false;
+                self.clear_turn_timer();
                 self.state.status = format!("Send failed: {err}");
                 self.fail_ci(format!("Send failed: {err}"));
             }
@@ -526,6 +536,7 @@ impl App {
                             self.maybe_start_tool_batch_execution();
                         }
                         self.maybe_finish_ci_run();
+                        self.sync_turn_timer_with_activity(Instant::now());
                     }
                     Err(err) => {
                         self.state.status = format!("Failed loading pending tools: {err}");
@@ -555,6 +566,7 @@ impl App {
                     self.state.sessions_menu_index = self.state.sessions.len();
                 }
                 self.sync_current_session_profile_from_sessions();
+                self.sync_turn_timer_with_activity(Instant::now());
                 self.maybe_finish_ci_run();
             }
             RuntimeResponse::Sessions(Err(err)) => {
@@ -624,16 +636,19 @@ impl App {
                 self.state.status = format!("Failed cancelling stream: {err}");
             }
             RuntimeResponse::ContinueSession(Ok(())) => {
+                self.start_or_resume_turn_timer(Instant::now());
                 self.state.status = String::from("Continuing session");
             }
             RuntimeResponse::ContinueSession(Err(err)) => {
                 self.state.status = format!("Failed continuing session: {err}");
             }
             RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
+                self.start_or_resume_turn_timer(Instant::now());
                 self.state.status = String::from("Executing decided tool calls");
             }
             RuntimeResponse::ExecuteApprovedTools(Err(err)) => {
                 self.state.tool_batch_execution_started = false;
+                self.finish_turn_timer(Instant::now());
                 self.state.status = format!("Failed executing tools: {err}");
             }
         }

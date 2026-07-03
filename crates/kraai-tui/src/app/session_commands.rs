@@ -361,6 +361,7 @@ impl App {
         self.state.agent_profile_warnings = state.warnings;
         self.state.selected_profile_id = state.selected_profile_id;
         self.state.profile_locked = state.profile_locked;
+        self.state.profile_lock_stale_after_terminal_event = false;
         if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
             && let Some(index) = self
                 .state

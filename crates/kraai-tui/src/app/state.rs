@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, ProviderDefinition, Session,
@@ -41,6 +42,7 @@ pub(super) struct AppState {
     pub(super) status: String,
     pub(super) is_streaming: bool,
     pub(super) retry_waiting: bool,
+    pub(super) turn_timer: TurnTimer,
     pub(super) statusline_animation_frame: usize,
     pub(super) models_by_provider: HashMap<String, Vec<Model>>,
     pub(super) agent_profiles: Vec<AgentProfileSummary>,
@@ -48,6 +50,7 @@ pub(super) struct AppState {
     pub(super) provider_definitions: Vec<ProviderDefinition>,
     pub(super) selected_profile_id: Option<String>,
     pub(super) profile_locked: bool,
+    pub(super) profile_lock_stale_after_terminal_event: bool,
     pub(super) selected_provider_id: Option<String>,
     pub(super) selected_model_id: Option<String>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
@@ -108,6 +111,7 @@ impl Default for AppState {
             status: String::from("Type /help for commands"),
             is_streaming: false,
             retry_waiting: false,
+            turn_timer: TurnTimer::default(),
             statusline_animation_frame: 0,
             models_by_provider: HashMap::new(),
             agent_profiles: default_agent_profiles(),
@@ -115,6 +119,7 @@ impl Default for AppState {
             provider_definitions: Vec::new(),
             selected_profile_id: Some(String::from(DEFAULT_AGENT_PROFILE_ID)),
             profile_locked: false,
+            profile_lock_stale_after_terminal_event: false,
             selected_provider_id: None,
             selected_model_id: None,
             context_usage: None,
@@ -177,7 +182,9 @@ impl AppState {
         self.is_streaming
             || self.retry_waiting
             || self.tool_phase == ToolPhase::ExecutingBatch
-            || (self.profile_locked && self.tool_phase != ToolPhase::Deciding)
+            || (self.profile_locked
+                && !self.profile_lock_stale_after_terminal_event
+                && self.tool_phase != ToolPhase::Deciding)
     }
 
     pub(super) fn chat_max_scroll(&self) -> u16 {
@@ -275,6 +282,66 @@ impl AppState {
         cache.message_cache = next_entries;
         cache.width = width;
         cache.epoch = self.chat_epoch;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct TurnTimer {
+    started_at: Option<Instant>,
+    accumulated: Duration,
+    last_duration: Option<Duration>,
+}
+
+impl TurnTimer {
+    pub(super) fn start(&mut self, now: Instant) {
+        self.started_at = Some(now);
+        self.accumulated = Duration::ZERO;
+        self.last_duration = None;
+    }
+
+    pub(super) fn resume(&mut self, now: Instant) {
+        if self.started_at.is_some() {
+            return;
+        }
+        self.started_at = Some(now);
+    }
+
+    pub(super) fn pause(&mut self, now: Instant) {
+        if let Some(started_at) = self.started_at.take() {
+            self.accumulated = self
+                .accumulated
+                .saturating_add(now.saturating_duration_since(started_at));
+        }
+    }
+
+    pub(super) fn finish(&mut self, now: Instant) {
+        self.pause(now);
+        if self.accumulated > Duration::ZERO {
+            self.last_duration = Some(self.accumulated);
+        }
+        self.accumulated = Duration::ZERO;
+    }
+
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(super) fn has_started(&self) -> bool {
+        self.started_at.is_some() || self.accumulated > Duration::ZERO
+    }
+
+    pub(super) fn elapsed(&self, now: Instant) -> Option<Duration> {
+        self.has_started().then(|| {
+            self.accumulated.saturating_add(
+                self.started_at
+                    .map(|started_at| now.saturating_duration_since(started_at))
+                    .unwrap_or_default(),
+            )
+        })
+    }
+
+    pub(super) fn last_duration(&self) -> Option<Duration> {
+        self.last_duration
     }
 }
 
