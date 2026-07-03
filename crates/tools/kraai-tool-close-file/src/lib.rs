@@ -16,7 +16,7 @@ pub struct CloseFileTool;
 
 toon_tool! {
     name: "close_file",
-    description: "Close a previously opened file so it stops being injected into future turns",
+    description: "Close one or more previously opened files so they stop being injected into future turns.\nUse this to clean up files that are no longer needed.\nDo NOT close a file while your current task, conclusion, edit, or review still depends on its contents.\nPrefer closing files after you have finished the reasoning/report that used them, not before.\nRule of thumb: if you would need to re-open the file to answer a follow-up about your current conclusion, keep it open.",
     types: {
         #[derive(Clone, serde::Deserialize, serde::Serialize)]
         pub struct CloseFileToolArgs {
