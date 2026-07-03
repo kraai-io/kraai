@@ -160,9 +160,11 @@ async fn prepare_start_stream_rolls_back_user_message_after_snapshot_failure() -
         message_store.clone(),
     ));
     let mut tools = ToolManager::new();
-    tools.register_tool(super::common::MockTool { name: "close_file" });
+    tools.register_tool(super::common::MockTool {
+        name: "close_files",
+    });
     tools.register_tool(super::common::MockTool { name: "list_files" });
-    tools.register_tool(super::common::MockTool { name: "open_file" });
+    tools.register_tool(super::common::MockTool { name: "open_files" });
     tools.register_tool(super::common::MockTool {
         name: "search_files",
     });
@@ -560,9 +562,11 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
     ));
     let manager_providers = ProviderManager::new();
     let mut tools = ToolManager::new();
-    tools.register_tool(super::common::MockTool { name: "close_file" });
+    tools.register_tool(super::common::MockTool {
+        name: "close_files",
+    });
     tools.register_tool(super::common::MockTool { name: "list_files" });
-    tools.register_tool(super::common::MockTool { name: "open_file" });
+    tools.register_tool(super::common::MockTool { name: "open_files" });
     tools.register_tool(super::common::MockTool {
         name: "search_files",
     });

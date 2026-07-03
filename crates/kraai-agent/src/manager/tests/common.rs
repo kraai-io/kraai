@@ -113,9 +113,11 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     );
 
     let mut tools = ToolManager::new();
-    tools.register_tool(MockTool { name: "close_file" });
+    tools.register_tool(MockTool {
+        name: "close_files",
+    });
     tools.register_tool(MockTool { name: "list_files" });
-    tools.register_tool(MockTool { name: "open_file" });
+    tools.register_tool(MockTool { name: "open_files" });
     tools.register_tool(MockTool {
         name: "search_files",
     });

@@ -13,26 +13,26 @@ const OPEN_OPERATION: &str = "open";
 pub struct OpenFileTool;
 
 toon_tool! {
-    name: "open_file",
+    name: "open_files",
     description: "Open one or more files for ongoing context injection in future turns.\nOpened files are freshly read from disk before every turn and are authoritative.\nKeep files open while actively reasoning from them; close them only when they are no longer needed.",
     types: {
         #[derive(Clone, serde::Deserialize, serde::Serialize)]
         pub struct OpenFileToolArgs {
-            #[toon_schema(description = "File path to keep open for future turns")]
-            path: String,
+            #[toon_schema(description = "File paths to keep open for future turns")]
+            paths: Vec<String>,
         }
     },
     root: OpenFileToolArgs,
     examples: [
-        { path: "/path/to/file.txt" },
-        { path: "src/lib.rs" },
+        { paths: ["/path/to/file.txt"] },
+        { paths: ["src/lib.rs", "src/main.rs"] },
     ]
 }
 
 #[derive(Serialize)]
 struct OpenFileToolOutput {
     success: bool,
-    path: String,
+    paths: Vec<String>,
 }
 
 #[async_trait]
@@ -48,37 +48,56 @@ impl TypedTool for OpenFileTool {
     }
 
     fn assess(&self, args: &Self::Args, ctx: &ToolContext<'_>) -> ToolCallAssessment {
-        let mut assessment = assess_read_path(
-            &ctx.global_config.workspace_dir,
-            &args.path,
-            "Opens workspace file",
-            "Opens file outside workspace",
-        );
-        assessment.policy = ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace);
-        assessment
+        let mut reasons = Vec::with_capacity(args.paths.len());
+        let mut risk = RiskLevel::ReadOnlyWorkspace;
+        for path in &args.paths {
+            let assessment = assess_read_path(
+                &ctx.global_config.workspace_dir,
+                path,
+                "Opens workspace file",
+                "Opens file outside workspace",
+            );
+            if assessment.risk > risk {
+                risk = assessment.risk;
+            }
+            reasons.extend(assessment.reasons);
+        }
+
+        ToolCallAssessment {
+            risk,
+            policy: ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace),
+            reasons,
+        }
     }
 
     async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
-        let read = match read_text_file(&ctx.global_config.workspace_dir, &args.path) {
-            Ok(read) => read,
-            Err(error) => return ToolCallResult::error(error),
-        };
+        let mut paths = Vec::with_capacity(args.paths.len());
+        let mut deltas = Vec::with_capacity(args.paths.len());
+        for path in &args.paths {
+            let read = match read_text_file(&ctx.global_config.workspace_dir, path) {
+                Ok(read) => read,
+                Err(error) => return ToolCallResult::error(error),
+            };
+            let path = read.path().display().to_string();
+            paths.push(path.clone());
+            deltas.push(ToolStateDelta {
+                namespace: String::from(OPENED_FILES_NAMESPACE),
+                operation: String::from(OPEN_OPERATION),
+                payload: serde_json::json!({ "path": path }),
+            });
+        }
 
         ToolCallResult::success_with_deltas(
             OpenFileToolOutput {
                 success: true,
-                path: read.path().display().to_string(),
+                paths,
             },
-            vec![ToolStateDelta {
-                namespace: String::from(OPENED_FILES_NAMESPACE),
-                operation: String::from(OPEN_OPERATION),
-                payload: serde_json::json!({ "path": read.path().display().to_string() }),
-            }],
+            deltas,
         )
     }
 
     fn describe(&self, args: &Self::Args) -> String {
-        format!("Open file for future context: {}", args.path)
+        format!("Open files for future context: {}", args.paths.join(", "))
     }
 }
 
@@ -140,7 +159,7 @@ mod tests {
         let snapshot = ToolStateSnapshot::default();
         let ctx = tool_context(&config, &snapshot);
         let args = OpenFileToolArgs {
-            path: String::from("notes.txt"),
+            paths: vec![String::from("notes.txt")],
         };
 
         let assessment = tool.assess(&args, &ctx);
@@ -150,7 +169,7 @@ mod tests {
         match output.output {
             ToolOutput::Success { data } => {
                 let expected_path = workspace_dir.join("notes.txt").display().to_string();
-                assert_eq!(data["path"].as_str(), Some(expected_path.as_str()));
+                assert_eq!(data["paths"][0].as_str(), Some(expected_path.as_str()));
             }
             ToolOutput::Error { message } => panic!("unexpected error: {message}"),
         }

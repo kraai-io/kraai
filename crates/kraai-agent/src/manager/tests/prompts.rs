@@ -28,8 +28,8 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
             &session_id,
             vec![ToolResult {
                 call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_file"),
-                output: json!({ "success": true, "path": file_path_str.clone() }),
+                tool_id: ToolId::new("open_files"),
+                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
                 permission_denied: false,
                 tool_state_deltas: vec![open_file_state_delta(&file_path)],
             }],
@@ -374,8 +374,8 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
             &session_id,
             vec![ToolResult {
                 call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_file"),
-                output: json!({ "success": true, "path": file_path_str.clone() }),
+                tool_id: ToolId::new("open_files"),
+                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
                 permission_denied: false,
                 tool_state_deltas: vec![open_file_state_delta(&file_path)],
             }],

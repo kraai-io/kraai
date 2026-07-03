@@ -91,9 +91,9 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             description: String::from("Read-only planning and investigation agent"),
             system_prompt: include_str!("plan_code.md").trim().to_string(),
             tools: vec![
-                ToolId::new("close_file"),
+                ToolId::new("close_files"),
                 ToolId::new("list_files"),
-                ToolId::new("open_file"),
+                ToolId::new("open_files"),
                 ToolId::new("search_files"),
                 ToolId::new("bash"),
             ],
@@ -106,9 +106,9 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             description: String::from("Implementation agent with workspace write access"),
             system_prompt: include_str!("build_code.md").trim().to_string(),
             tools: vec![
-                ToolId::new("close_file"),
+                ToolId::new("close_files"),
                 ToolId::new("list_files"),
-                ToolId::new("open_file"),
+                ToolId::new("open_files"),
                 ToolId::new("search_files"),
                 ToolId::new("edit_file"),
                 ToolId::new("bash"),
@@ -244,10 +244,10 @@ mod tests {
 
     fn available_tools() -> HashSet<String> {
         [
-            "close_file",
+            "close_files",
             "bash",
             "list_files",
-            "open_file",
+            "open_files",
             "search_files",
             "edit_file",
         ]
