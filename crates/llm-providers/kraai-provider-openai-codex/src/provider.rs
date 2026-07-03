@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{error, warn};
 
 use crate::auth::{OpenAiCodexAuthController, RequestAuth};
-use crate::catalog::{CatalogModel, all_catalog_models, title_case_effort, visible_catalog_models};
+use crate::catalog::{CatalogModel, all_catalog_models, visible_catalog_models};
 use crate::messages::normalize_chat_messages;
 use crate::wire::{
     ListModelEntry, ListModelsResponse, ResponsesOutput, ResponsesReasoning, ResponsesRequest,
@@ -388,9 +388,9 @@ impl OpenAiCodexProvider {
                         .and_then(|entry| entry.name.clone())
                         .unwrap_or_else(|| {
                             format!(
-                                "{} ({})",
+                                "{} {}",
                                 display_name(catalog_model, remote.title.as_deref()),
-                                title_case_effort(effort.effort)
+                                effort.effort
                             )
                         }),
                     max_context,
@@ -720,18 +720,21 @@ mod tests {
         let Some(provider) = provider() else {
             return;
         };
-        let discovered = provider.discovered_models(None);
-        let ids = discovered
+        let models = provider
+            .discovered_models(None)
             .into_iter()
-            .map(|model| model.id.to_string())
-            .collect::<Vec<_>>();
+            .map(|model| (model.id.to_string(), model.name))
+            .collect::<BTreeMap<_, _>>();
 
-        assert!(ids.contains(&"gpt-5.5-low".to_string()));
-        assert!(ids.contains(&"gpt-5.5-medium".to_string()));
-        assert!(ids.contains(&"gpt-5.5-high".to_string()));
-        assert!(ids.contains(&"gpt-5.5-xhigh".to_string()));
-        assert!(ids.contains(&"gpt-5.4-mini-medium".to_string()));
-        assert!(!ids.contains(&"codex-auto-review-medium".to_string()));
+        assert!(models.contains_key("gpt-5.5-low"));
+        assert!(models.contains_key("gpt-5.5-medium"));
+        assert!(models.contains_key("gpt-5.5-high"));
+        assert_eq!(
+            models.get("gpt-5.5-xhigh").map(String::as_str),
+            Some("gpt-5.5 xhigh")
+        );
+        assert!(models.contains_key("gpt-5.4-mini-medium"));
+        assert!(!models.contains_key("codex-auto-review-medium"));
     }
 
     #[test]

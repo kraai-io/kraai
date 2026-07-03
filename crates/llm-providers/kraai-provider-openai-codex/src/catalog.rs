@@ -119,18 +119,6 @@ pub(crate) fn visible_catalog_models() -> impl Iterator<Item = &'static CatalogM
         .filter(|model| model.visibility == CatalogVisibility::List)
 }
 
-pub(crate) fn title_case_effort(effort: &str) -> String {
-    let mut chars = effort.chars();
-    match chars.next() {
-        Some(first) => {
-            let mut output = first.to_ascii_uppercase().to_string();
-            output.push_str(chars.as_str());
-            output
-        }
-        None => String::new(),
-    }
-}
-
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
