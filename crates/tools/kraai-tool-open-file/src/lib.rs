@@ -14,7 +14,7 @@ pub struct OpenFileTool;
 
 toon_tool! {
     name: "open_file",
-    description: "Open a file for ongoing context injection in future turns without returning its full contents in chat history",
+    description: "Open one or more files for ongoing context injection in future turns.\nOpened files are freshly read from disk before every turn and are authoritative.\nKeep files open while actively reasoning from them; close them only when they are no longer needed.",
     types: {
         #[derive(Clone, serde::Deserialize, serde::Serialize)]
         pub struct OpenFileToolArgs {
