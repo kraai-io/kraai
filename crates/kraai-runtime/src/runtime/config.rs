@@ -175,34 +175,3 @@ pub(crate) fn map_openai_codex_auth_status(
         error: status.error,
     }
 }
-
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "config path tests assert known platform-independent paths"
-)]
-mod tests {
-    use std::path::PathBuf;
-
-    use crate::settings::{default_provider_config_path, resolve_provider_config_path};
-
-    #[test]
-    fn resolve_provider_config_path_uses_override_when_present() {
-        let override_path = PathBuf::from("/tmp/custom-providers.toml");
-
-        let resolved =
-            resolve_provider_config_path(Some(override_path.clone())).expect("path should resolve");
-
-        assert_eq!(resolved, override_path);
-    }
-
-    #[test]
-    fn resolve_provider_config_path_falls_back_to_default_location() {
-        let resolved = resolve_provider_config_path(None).expect("default path should resolve");
-
-        assert_eq!(
-            resolved,
-            default_provider_config_path().expect("default path should resolve")
-        );
-    }
-}

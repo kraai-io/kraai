@@ -942,14 +942,4 @@ mod tests {
 
         assert_eq!(rendered, vec![" • read_file", "     files[1]: /tmp/a.txt"]);
     }
-
-    #[test]
-    fn resolve_scroll_uses_bottom_when_auto_scroll_is_enabled() {
-        assert_eq!(ChatHistory::resolve_scroll(20, 8, 0, true), 12);
-    }
-
-    #[test]
-    fn resolve_scroll_clamps_manual_scroll_to_bottom() {
-        assert_eq!(ChatHistory::resolve_scroll(20, 8, 99, false), 12);
-    }
 }

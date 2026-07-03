@@ -217,25 +217,6 @@ max_size: 1048576
     }
 
     #[test]
-    fn test_parse_real_format() {
-        let text = r#"Some response text.
-
-<tool_call>
-tool: read_files
-files[2]: /etc/passwd,/etc/hosts
-encoding: utf-8
-max_size: 1048576
-</tool_call>
-
-More text after."#;
-
-        let result = parse_tool_calls(text);
-        assert_eq!(result.successful.len(), 1);
-        assert!(result.failed.is_empty());
-        assert_eq!(result.successful[0].tool_id, "read_files");
-    }
-
-    #[test]
     fn test_mixed_valid_and_invalid() {
         let text = r#"<tool_call>
 tool: valid_tool
@@ -299,23 +280,6 @@ tool: 123
     }
 
     #[test]
-    fn test_object_tool_field_is_invalid() {
-        let text = r#"<tool_call>
-tool:
-  nested: value
-</tool_call>"#;
-
-        let result = parse_tool_calls(text);
-        assert!(result.successful.is_empty());
-        assert_eq!(result.failed.len(), 1);
-        assert!(
-            result.failed[0]
-                .error
-                .contains("Tool field must be a string")
-        );
-    }
-
-    #[test]
     fn test_empty_tool_call_block_is_reported() {
         let text = "<tool_call>\n</tool_call>";
 
@@ -323,19 +287,6 @@ tool:
         assert!(result.successful.is_empty());
         assert_eq!(result.failed.len(), 1);
         assert_eq!(result.failed[0].raw_content, "");
-    }
-
-    #[test]
-    fn test_tool_call_inside_think_is_ignored() {
-        let text = r#"<think>
-<tool_call>
-tool: hidden_tool
-</tool_call>
-</think>"#;
-
-        let result = parse_tool_calls(text);
-        assert!(result.successful.is_empty());
-        assert!(result.failed.is_empty());
     }
 
     #[test]

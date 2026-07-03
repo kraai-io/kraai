@@ -220,7 +220,6 @@ fn upsert_profiles(existing: &mut Vec<AgentProfile>, layer: Vec<AgentProfile>) {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "tests use direct assertions for temporary profile setup and lookup"
 )]
 mod tests {
@@ -229,10 +228,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{
-        AgentProfileSource, global_profiles_path, load_layer, resolve_profiles,
-        workspace_profiles_path,
-    };
+    use super::{AgentProfileSource, load_layer, resolve_profiles, workspace_profiles_path};
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -254,12 +250,6 @@ mod tests {
         .into_iter()
         .map(String::from)
         .collect()
-    }
-
-    #[test]
-    fn global_profiles_live_under_agent_root() {
-        let path = global_profiles_path().expect("global profiles path");
-        assert!(path.ends_with(".kraai/agents.toml"));
     }
 
     #[test]

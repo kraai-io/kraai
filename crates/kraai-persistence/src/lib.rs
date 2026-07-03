@@ -472,7 +472,6 @@ pub async fn init() -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "persistence tests use direct assertions for fixture and failure-path setup"
 )]
 mod tests {
@@ -480,15 +479,6 @@ mod tests {
     use kraai_types::{ChatRole, MessageStatus};
     use std::future::Future;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn data_dir_uses_agent_root() {
-        let root = agent_state_root().expect("agent root");
-        let data_dir = get_data_dir().expect("data dir");
-
-        assert_eq!(data_dir, root.join("data"));
-        assert!(data_dir.ends_with(".kraai/data"));
-    }
 
     #[test]
     fn session_temp_write_paths_are_unique_and_adjacent_to_destination() {

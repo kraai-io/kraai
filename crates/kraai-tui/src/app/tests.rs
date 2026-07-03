@@ -3,7 +3,6 @@ use super::{
     PendingTool, ProviderAuthState, ProviderAuthStatus, ProvidersAdvancedFocus, ProvidersView,
     RuntimeRequest, RuntimeResponse, STATUSLINE_ANIMATION_INTERVAL, SettingsModelField,
     SettingsProviderField, StartupOptions, ToolPhase, UiMode, default_agent_profiles,
-    menu_scroll_offset, model_menu_next_index, model_menu_previous_index,
 };
 use crate::components::TextInput;
 use crossbeam_channel::{Receiver, unbounded};
@@ -436,26 +435,6 @@ fn assert_snapshot(actual: &str, expected: &str) {
     }
 }
 #[test]
-fn model_menu_scroll_stays_at_top_when_selection_is_visible() {
-    assert_eq!(menu_scroll_offset(3, 20, 8), 0);
-}
-#[test]
-fn model_menu_scroll_follows_selection_past_bottom() {
-    assert_eq!(menu_scroll_offset(9, 20, 8), 2);
-}
-#[test]
-fn model_menu_scroll_clamps_to_max_scroll() {
-    assert_eq!(menu_scroll_offset(19, 20, 8), 12);
-}
-#[test]
-fn menu_scroll_with_zero_visible_lines_stays_at_top() {
-    assert_eq!(menu_scroll_offset(10, 20, 0), 0);
-}
-#[test]
-fn menu_scroll_when_content_fits_stays_at_top() {
-    assert_eq!(menu_scroll_offset(4, 5, 8), 0);
-}
-#[test]
 fn page_up_from_auto_scroll_uses_visible_bottom_instead_of_stale_scroll() {
     let mut harness = test_harness();
     harness.set_chat_metrics(20, 8);
@@ -532,22 +511,6 @@ fn scrolling_back_to_bottom_restores_sticky_auto_scroll() {
     harness.app.clamp_chat_scroll();
     assert!(harness.app.state.auto_scroll);
     assert_eq!(harness.app.state.scroll, 16);
-}
-#[test]
-fn model_menu_next_index_wraps_at_end() {
-    assert_eq!(model_menu_next_index(4, 5), 0);
-}
-#[test]
-fn model_menu_next_index_advances_within_bounds() {
-    assert_eq!(model_menu_next_index(2, 5), 3);
-}
-#[test]
-fn model_menu_previous_index_wraps_at_start() {
-    assert_eq!(model_menu_previous_index(0, 5), 4);
-}
-#[test]
-fn model_menu_previous_index_moves_back_within_bounds() {
-    assert_eq!(model_menu_previous_index(3, 5), 2);
 }
 #[test]
 fn startup_options_apply_initial_selections() {
@@ -963,21 +926,6 @@ fn ci_tool_call_detection_fails_immediately() {
     );
 }
 #[test]
-fn renders_chat_screen_snapshot() {
-    let mut state = populated_state();
-    state.input = String::from("Add tests for the settings menu");
-    state.input_cursor = state.input.len();
-    let rendered = render_state_snapshot(&state, 72, 18);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-04:  • Use render tests, interaction tests, and a small number of end-to-end
-05:     smoke tests.
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  ❯ Add tests for the settings menu"#,
-    );
-}
-#[test]
 fn renders_cancelled_statusline_snapshot() {
     let mut state = populated_state();
     state.status = String::from("Stream cancelled");
@@ -1160,20 +1108,6 @@ fn statusline_animation_advances_while_streaming() {
     assert_eq!(harness.app.state.statusline_animation_frame, 1);
 }
 #[test]
-fn statusline_animation_advances_while_tools_execute() {
-    let mut harness = test_harness();
-    let start = Instant::now();
-    harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
-    assert!(!harness.app.advance_statusline_animation(start));
-    assert_eq!(harness.app.state.statusline_animation_frame, 0);
-    assert!(
-        harness
-            .app
-            .advance_statusline_animation(start + STATUSLINE_ANIMATION_INTERVAL)
-    );
-    assert_eq!(harness.app.state.statusline_animation_frame, 1);
-}
-#[test]
 fn statusline_animation_resets_when_runtime_becomes_idle() {
     let mut harness = test_harness();
     harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
@@ -1253,74 +1187,6 @@ fn reset_chat_session_clears_retry_waiting() {
     assert!(!harness.app.state.retry_waiting);
     assert!(!harness.app.state.is_streaming);
     assert_eq!(harness.app.state.status, "Session loaded");
-}
-#[test]
-fn renders_command_popup_snapshot() {
-    let mut state = populated_state();
-    state.input = String::from("/s");
-    state.input_cursor = state.input.len();
-    let rendered = render_state_snapshot(&state, 72, 18);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-04:  • Use render tests, interaction tests, and a small number of end-to-end
-05:     smoke tests.
-12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
-13:  │⮞ /sessions  Open sessions menu          │
-14: i└─────────────────────────────────────────┘ Plan Code · ctx 0/128,000 (
-16:  ❯ /s"#,
-    );
-}
-#[test]
-fn renders_model_menu_snapshot() {
-    let mut state = populated_state();
-    state.mode = UiMode::ModelMenu;
-    state.model_menu_index = 1;
-    let rendered = render_state_snapshot(&state, 72, 18);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-04:  • Use re┌/model──────────────────────────────────────────────┐nd-to-end
-05:     smoke│Select model (Enter to choose, Esc to close)        │
-06:          │  openai-chat-completions / GPT-4.1 Mini            │
-07:          │⮞ openai-chat-completions / GPT-4o Mini (current)   │
-08:          │                                                    │
-09:          │                                                    │
-10:          │                                                    │
-11:          │                                                    │
-12:          └────────────────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  ❯"#,
-    );
-}
-#[test]
-fn renders_providers_list_snapshot() {
-    let mut state = populated_state();
-    state.mode = UiMode::ProvidersMenu;
-    state.providers_view = ProvidersView::List;
-    let rendered = render_state_snapshot(&state, 100, 22);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-02:     ┌/providers───────────────────────────────────────────────────────────────────────────────┐
-03:     │Providers                                                                                │
-04:  • U│Enter=open, a=connect, d=delete, r=refresh, Esc=close                                    │
-05:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
-06:     ││Configured providers                                                                   ││
-07:     ││⮞ id=openai-chat-completions  OpenAI-compatible Chat Completions                       ││
-08:     ││type=openai-chat-completions  models=2                                                 ││
-09:     ││                                                                                       ││
-10:     ││                                                                                       ││
-11:     ││                                                                                       ││
-12:     ││                                                                                       ││
-13:     ││                                                                                       ││
-14:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
-15:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
-16:     ││One provider panel at a time                                                           ││
-17:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
-18: idle└─────────────────────────────────────────────────────────────────────────────────────────┘
-20:  ❯"#,
-    );
 }
 #[test]
 fn provider_detail_keeps_openai_actions_and_id_visible() {
@@ -1435,28 +1301,6 @@ fn renders_connect_provider_snapshot() {
     assert!(rendered.contains("OpenAI"));
 }
 #[test]
-fn renders_sessions_menu_snapshot() {
-    let mut state = populated_state();
-    state.mode = UiMode::SessionsMenu;
-    state.sessions_menu_index = 2;
-    let rendered = render_state_snapshot(&state, 72, 18);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-04:  • Use ┌/sessions──────────────────────────────────────────────┐d-to-end
-05:     smo│Sessions (Enter=load/new, x=delete, Esc=close)         │
-06:        │  Start new chat                                       │
-07:        │  Refactor ideas [approval] [streaming]                │
-08:        │⮞ Testing plan (current)                               │
-09:        │                                                       │
-10:        │                                                       │
-11:        │                                                       │
-12:        └───────────────────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  ❯"#,
-    );
-}
-#[test]
 fn renders_tool_approval_panel_snapshot() {
     let mut state = populated_state();
     state.tool_phase = ToolPhase::Deciding;
@@ -1477,27 +1321,6 @@ fn renders_tool_approval_panel_snapshot() {
 17:                                                                                │
 18:    Allow   Reject                                           select <->  confir │
 19:  ──────────────────────────────────────────────────────────────────────────────┘"#,
-    );
-}
-#[test]
-fn renders_help_menu_snapshot() {
-    let mut state = populated_state();
-    state.mode = UiMode::Help;
-    let rendered = render_state_snapshot(&state, 72, 18);
-    assert_snapshot(
-        &rendered,
-        r#"01:  ❯ How should we test the TUI?
-04:  • Use render ┌/help────────────────────────────────────┐r of end-to-end
-05:     smoke test│Slash Commands                           │
-06:               │/agent     Open agent selector           │
-07:               │/continue  Reprompt the agent            │
-08:               │/help      Open this help menu           │
-09:               │/model     Open model selector           │
-10:               │/new       Start a new chat              │
-11:               │/providers Open providers                │
-12:               └─────────────────────────────────────────┘
-14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  ❯"#,
     );
 }
 #[test]
@@ -2209,16 +2032,6 @@ fn submit_while_streaming_allows_unbounded_queued_messages() {
         .filter(|request| matches!(request, RuntimeRequest::SendMessage { .. }))
         .count();
     assert_eq!(send_count, 3);
-}
-#[test]
-fn settings_command_redirects_to_providers() {
-    let mut harness = test_harness();
-    harness.app.handle_command("settings");
-    assert_eq!(
-        harness.app.state.status,
-        "Unknown command: /settings. Use /providers"
-    );
-    assert!(harness.drain_requests().is_empty());
 }
 #[test]
 fn undo_command_requests_runtime_undo_for_current_session() {

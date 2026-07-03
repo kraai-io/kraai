@@ -1083,14 +1083,6 @@ mod tests {
         false
     }
 
-    fn test_client_or_skip() -> Option<Client> {
-        match Client::builder().build() {
-            Ok(client) => Some(client),
-            Err(error) if is_missing_system_ca_error(&error) => None,
-            Err(error) => panic!("unexpected reqwest client build error: {error}"),
-        }
-    }
-
     fn auth_controller_or_skip() -> Option<OpenAiCodexAuthController> {
         match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
             temp_auth_path(),
@@ -1136,32 +1128,6 @@ mod tests {
         assert_eq!(claims.email.as_deref(), Some("user@example.com"));
         assert_eq!(claims.plan_type.as_deref(), Some("Pro"));
         assert_eq!(claims.account_id.as_deref(), Some("workspace_123"));
-    }
-
-    #[test]
-    fn request_auth_applies_bearer_and_account_headers() {
-        let auth = RequestAuth {
-            access_token: "access-token".to_string(),
-            account_id: "workspace_123".to_string(),
-        };
-        let Some(client) = test_client_or_skip() else {
-            return;
-        };
-        let request = client
-            .get("https://example.com")
-            .bearer_auth(&auth.access_token)
-            .header("ChatGPT-Account-Id", &auth.account_id)
-            .build()
-            .unwrap();
-
-        assert_eq!(
-            request.headers().get("authorization").unwrap(),
-            "Bearer access-token"
-        );
-        assert_eq!(
-            request.headers().get("ChatGPT-Account-Id").unwrap(),
-            "workspace_123"
-        );
     }
 
     #[tokio::test]

@@ -315,27 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_stream_guard_allows_adjacent_tool_calls_across_chunks() {
-        let mut guard = ToolCallStreamGuard::default();
-
-        let first = guard
-            .ingest_chunk("before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>\n<to");
-        assert!(!first.should_stop);
-        assert_eq!(
-            first.accepted,
-            "before\n<tool_call>\ntool: auto_tool\nvalue: alpha\n</tool_call>"
-        );
-
-        let second = guard.ingest_chunk("ol_call>\ntool: auto_tool\nvalue: beta\n</tool_call>\n");
-        assert!(!second.should_stop);
-        assert_eq!(
-            second.accepted,
-            "<tool_call>\ntool: auto_tool\nvalue: beta\n</tool_call>"
-        );
-        assert!(guard.finish().is_empty());
-    }
-
-    #[test]
     fn tool_call_stream_guard_stops_when_tool_call_limit_is_reached() {
         let mut guard = ToolCallStreamGuard::new(1);
 

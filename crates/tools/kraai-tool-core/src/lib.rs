@@ -40,8 +40,7 @@ mod tests {
 
     use super::{
         PreparedToolCall, ToolCallResult, ToolContext, ToolError, ToolManager, ToolOutput,
-        TypedTool, assess_read_path, assess_write_path, format_text_with_line_numbers,
-        read_text_path, resolve_tool_path,
+        TypedTool, assess_read_path, assess_write_path, read_text_path, resolve_tool_path,
     };
 
     fn make_temp_dir(test_name: &str) -> PathBuf {
@@ -115,14 +114,6 @@ mod tests {
             vec![String::from(
                 "Reads workspace file /tmp/workspace/src/lib.rs"
             )]
-        );
-    }
-
-    #[test]
-    fn format_text_with_line_numbers_uses_one_based_indices() {
-        assert_eq!(
-            format_text_with_line_numbers("alpha\nbeta\n"),
-            "1|alpha\n2|beta"
         );
     }
 

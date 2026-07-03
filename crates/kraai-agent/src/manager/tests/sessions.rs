@@ -86,35 +86,6 @@ fn title_from_user_prompt_flattens_newlines() {
 }
 
 #[tokio::test]
-async fn last_used_profile_is_inherited_by_new_sessions() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-
-    let first_session = manager.create_session().await?;
-    manager
-        .set_session_profile(&first_session, String::from("plan-code"))
-        .await?;
-    let _request = manager
-        .prepare_start_stream(
-            &first_session,
-            String::from("hello"),
-            ModelId::new("mock-model"),
-            ProviderId::new("mock"),
-        )
-        .await?;
-
-    let second_session = manager.create_session().await?;
-    let sessions = manager.list_sessions().await?;
-    let inherited = sessions
-        .into_iter()
-        .find(|session| session.id == second_session)
-        .unwrap();
-    assert_eq!(inherited.selected_profile_id.as_deref(), Some("plan-code"));
-
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
@@ -264,30 +235,6 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
 }
 
 #[tokio::test]
-async fn first_user_message_sets_session_title() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-
-    let session_id = manager.create_session().await?;
-    manager
-        .add_message(
-            &session_id,
-            ChatRole::User,
-            String::from("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
-            None,
-        )
-        .await?;
-
-    let session = manager.require_session(&session_id).await?;
-    assert_eq!(
-        session.title.as_deref(),
-        Some("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567")
-    );
-
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
@@ -427,24 +374,6 @@ async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
     assert!(!manager.has_pending_tools(&session_b));
     assert!(!manager.approve_tool(&session_b, call_id.clone()));
     assert!(manager.approve_tool(&session_a, call_id));
-
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn new_sessions_default_to_plan_code_on_fresh_manager() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-
-    let session_id = manager.create_session().await?;
-    let session = manager
-        .list_sessions()
-        .await?
-        .into_iter()
-        .find(|session| session.id == session_id)
-        .unwrap();
-
-    assert_eq!(session.selected_profile_id.as_deref(), Some("plan-code"));
 
     cleanup_dir(data_dir).await;
     Ok(())

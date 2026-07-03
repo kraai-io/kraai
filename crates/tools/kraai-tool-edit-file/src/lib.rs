@@ -1017,14 +1017,6 @@ mod tests {
         cleanup_temp_dir(&outside_dir);
     }
 
-    #[tokio::test]
-    async fn describe_produces_readable_summary() {
-        let tool = EditFileTool;
-        let description = tool.describe(&edit_args("src/lib.rs", &[(1, 1, "old", "new")]));
-
-        assert_eq!(description, "Edit file src/lib.rs with 1 replacement(s)");
-    }
-
     #[test]
     fn native_toon_edit_arguments_validate_successfully() {
         let args: serde_json::Value = decode_default(

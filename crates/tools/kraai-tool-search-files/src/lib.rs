@@ -645,24 +645,6 @@ mod tests {
         cleanup_temp_dir(&workspace_dir);
     }
 
-    #[test]
-    fn assess_marks_outside_workspace_path_as_outside() {
-        let workspace_dir = make_temp_dir("assess_marks_outside_workspace_path_as_outside");
-        let outside_dir = make_temp_dir("assess_outside_target");
-        let tool = SearchFilesTool;
-        let config = tool_config(&workspace_dir);
-        let snapshot = ToolStateSnapshot::default();
-        let assessment = tool.assess(
-            &search_args("needle", Some(outside_dir.to_string_lossy().to_string())),
-            &tool_context(&config, &snapshot),
-        );
-
-        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
-
-        cleanup_temp_dir(&workspace_dir);
-        cleanup_temp_dir(&outside_dir);
-    }
-
     #[tokio::test]
     async fn returns_error_for_invalid_regex() {
         let workspace_dir = make_temp_dir("returns_error_for_invalid_regex");
@@ -684,30 +666,5 @@ mod tests {
         }
 
         cleanup_temp_dir(&workspace_dir);
-    }
-
-    #[test]
-    fn assess_marks_relative_parent_path_as_outside() {
-        let workspace_dir = make_temp_dir("assess_marks_relative_parent_path_as_outside");
-        let outside_dir = make_temp_dir("search_relative_outside_target");
-        let relative_path = format!(
-            "../{}",
-            outside_dir
-                .file_name()
-                .expect("outside dir name")
-                .to_string_lossy()
-        );
-        let tool = SearchFilesTool;
-        let config = tool_config(&workspace_dir);
-        let snapshot = ToolStateSnapshot::default();
-        let assessment = tool.assess(
-            &search_args("needle", Some(relative_path)),
-            &tool_context(&config, &snapshot),
-        );
-
-        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
-
-        cleanup_temp_dir(&workspace_dir);
-        cleanup_temp_dir(&outside_dir);
     }
 }

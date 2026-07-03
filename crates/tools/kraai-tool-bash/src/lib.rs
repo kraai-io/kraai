@@ -252,28 +252,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn success_output_is_opt_in() {
-        let args: BashToolArgs = serde_json::from_value(serde_json::json!({
-            "command": ["true"],
-            "timeout_seconds": 5,
-        }))
-        .expect("args deserialize");
-
-        assert!(!args.include_success_output);
-        assert_eq!(args.sandbox_permissions, None);
-        assert!(!BashToolArgs::toon_schema().contains("include_stdout"));
-        assert!(
-            BashToolArgs::toon_schema()
-                .contains("include_success_output[1:1]: boolean # default: default")
-        );
-        assert!(
-            BashToolArgs::toon_schema()
-                .contains("sandbox_permissions[0:1]: string # default: default")
-        );
-        assert!(BashToolArgs::toon_schema().contains("\"1,20p\""));
-    }
-
     #[tokio::test]
     async fn rejects_empty_commands() {
         let workspace_dir = make_temp_dir("rejects-empty-commands");

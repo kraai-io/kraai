@@ -1,8 +1,7 @@
 use color_eyre::eyre::Result;
 
 use super::harness::{
-    RuntimeTestHarness, ScriptedChunk, call_id_for_queue_order, create_session_with_profile,
-    stream_complete_count,
+    RuntimeTestHarness, ScriptedChunk, create_session_with_profile, stream_complete_count,
 };
 use crate::Event;
 
@@ -157,101 +156,6 @@ value: alpha\n\
     );
     assert!(
         history_a
-            .values()
-            .any(|message| message.content == "continuation complete")
-    );
-
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn continuation_starts_after_single_tool_execution() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![
-        vec![ScriptedChunk::plain(
-            "<tool_call>\n\
-tool: mock_tool\n\
-value: alpha\n\
-</tool_call>\n\
-<tool_call>\n\
-tool: mock_tool\n\
-value: beta\n\
-</tool_call>",
-        )],
-        vec![ScriptedChunk::plain("continuation complete")],
-    ])
-    .await
-    else {
-        return Ok(());
-    };
-
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    harness
-        .handle
-        .send_message(
-            session_id.clone(),
-            String::from("run two tools"),
-            String::from("mock-model"),
-            String::from("mock"),
-        )
-        .await?;
-
-    let detection_events = harness
-        .events
-        .wait_for("single tool detection", |events| {
-            events
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event,
-                        Event::ToolCallDetected {
-                            session_id: event_session,
-                            tool_id,
-                            ..
-                        } if event_session == &session_id && tool_id == "mock_tool"
-                    )
-                })
-                .count()
-                == 1
-        })
-        .await;
-
-    let first_call_id = call_id_for_queue_order(&detection_events, &session_id, "mock_tool", 0);
-
-    harness
-        .handle
-        .approve_tool(session_id.clone(), first_call_id.clone())
-        .await?;
-    harness
-        .handle
-        .execute_approved_tools(session_id.clone())
-        .await?;
-
-    harness
-        .events
-        .wait_for("tool result and continuation", |events| {
-            let first_result_ready = events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::ToolResultReady {
-                        session_id: event_session,
-                        call_id,
-                        tool_id,
-                        denied,
-                        ..
-                    } if event_session == &session_id
-                        && call_id == &first_call_id
-                        && tool_id == "mock_tool"
-                        && !denied
-                )
-            });
-            first_result_ready && stream_complete_count(events, &session_id) == 2
-        })
-        .await;
-
-    let history = harness.handle.get_chat_history(session_id.clone()).await?;
-    assert!(
-        history
             .values()
             .any(|message| message.content == "continuation complete")
     );

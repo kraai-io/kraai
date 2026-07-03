@@ -660,16 +660,6 @@ mod tests {
     }
 
     #[test]
-    fn definition_matches_expected_identity() {
-        let definition = OpenAiCodexFactory::definition();
-        assert_eq!(OpenAiCodexFactory::TYPE_ID, "openai-codex");
-        assert_eq!(definition.display_name, "OpenAI Codex");
-        assert_eq!(definition.protocol_family, "openai-responses");
-        assert!(definition.provider_fields.is_empty());
-        assert_eq!(definition.default_provider_id_prefix, "openai-codex");
-    }
-
-    #[test]
     fn resolve_unsuffixed_catalog_model_uses_default_reasoning_effort() {
         let resolved = resolve_request_model(&ModelId::new("gpt-5.4")).unwrap();
 

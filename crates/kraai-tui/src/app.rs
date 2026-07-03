@@ -51,8 +51,6 @@ use self::types::{
     RuntimeRequest, RuntimeResponse, SettingsFocus, SettingsModelField, SettingsProviderField,
     ToolApprovalAction, ToolPhase, UiMode, UsageModelKey,
 };
-#[cfg(test)]
-use self::ui::menu_scroll_offset;
 use self::ui::{
     STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
     copy_via_osc52, format_token_count, is_known_slash_command, model_menu_next_index,

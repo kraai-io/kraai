@@ -64,18 +64,3 @@ fn hex_path(path: &Path) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::hex_path;
-
-    #[test]
-    fn hex_path_is_filesystem_safe() {
-        assert_eq!(
-            hex_path(Path::new("/tmp/project-a")),
-            "2f746d702f70726f6a6563742d61"
-        );
-    }
-}

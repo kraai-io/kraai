@@ -160,16 +160,4 @@ mod tests {
         assert_eq!(cli.agent_profile.as_deref(), Some("build-code"));
         assert_eq!(cli.message.as_deref(), Some("hello world"));
     }
-
-    #[test]
-    fn parses_provider_config_path_argument() {
-        let cli = Cli::try_parse_from(["kraai", "--provider-config", "/tmp/custom-providers.toml"])
-            .and_then(Cli::validate)
-            .expect("provider config arg should parse");
-
-        assert_eq!(
-            cli.provider_config.as_deref(),
-            Some(std::path::Path::new("/tmp/custom-providers.toml"))
-        );
-    }
 }

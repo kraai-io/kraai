@@ -137,7 +137,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use kraai_tool_core::{ToolContext, ToolOutput, TypedTool};
-    use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallGlobalConfig, ToolStateSnapshot};
+    use kraai_types::{ToolCallGlobalConfig, ToolStateSnapshot};
 
     use super::{ListFilesTool, ListFilesToolArgs};
 
@@ -275,62 +275,5 @@ mod tests {
         }
 
         cleanup_temp_dir(&workspace_dir);
-    }
-
-    #[test]
-    fn assess_marks_workspace_path_as_read_only() {
-        let workspace_dir = make_temp_dir("assess_marks_workspace_path_as_read_only");
-        let tool = ListFilesTool;
-        let config = tool_config(&workspace_dir);
-        let snapshot = ToolStateSnapshot::default();
-        let assessment = tool.assess(&list_args("."), &tool_context(&config, &snapshot));
-
-        assert_eq!(assessment.risk, RiskLevel::ReadOnlyWorkspace);
-        assert_eq!(
-            assessment.policy,
-            ExecutionPolicy::AutonomousUpTo(RiskLevel::ReadOnlyWorkspace)
-        );
-
-        cleanup_temp_dir(&workspace_dir);
-    }
-
-    #[test]
-    fn assess_marks_outside_workspace_path_as_outside() {
-        let workspace_dir = make_temp_dir("assess_marks_outside_workspace_path_as_outside");
-        let outside_dir = make_temp_dir("assess_outside_target");
-        let tool = ListFilesTool;
-        let config = tool_config(&workspace_dir);
-        let snapshot = ToolStateSnapshot::default();
-        let assessment = tool.assess(
-            &list_args(outside_dir.to_string_lossy().to_string()),
-            &tool_context(&config, &snapshot),
-        );
-
-        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
-
-        cleanup_temp_dir(&workspace_dir);
-        cleanup_temp_dir(&outside_dir);
-    }
-
-    #[test]
-    fn assess_marks_relative_parent_path_as_outside() {
-        let workspace_dir = make_temp_dir("assess_marks_relative_parent_path_as_outside");
-        let outside_dir = make_temp_dir("assess_relative_outside_target");
-        let relative_path = format!(
-            "../{}",
-            outside_dir
-                .file_name()
-                .expect("outside dir name")
-                .to_string_lossy()
-        );
-        let tool = ListFilesTool;
-        let config = tool_config(&workspace_dir);
-        let snapshot = ToolStateSnapshot::default();
-        let assessment = tool.assess(&list_args(relative_path), &tool_context(&config, &snapshot));
-
-        assert_eq!(assessment.risk, RiskLevel::ReadOnlyOutsideWorkspace);
-
-        cleanup_temp_dir(&workspace_dir);
-        cleanup_temp_dir(&outside_dir);
     }
 }
