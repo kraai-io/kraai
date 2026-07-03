@@ -45,7 +45,7 @@ pub fn refresh_and_render_system_prompt(
     }
 
     let mut sections = vec![String::from(
-        "Opened Files\nThese files are pinned into context for this turn. Their contents below are the current on-disk versions. Do not call read_files for these paths unless you need a separate explicit read result.",
+        "Opened Files\nThese files are pinned into context for this turn. They are freshly read from disk before every turn and are not cached. Treat them as the authoritative current on-disk contents. Prefer this section over cat, sed, nl, or similar shell inspection commands for these paths.\n\nFormat: <line>|<content>.",
     )];
 
     for path in opened_files.paths {
