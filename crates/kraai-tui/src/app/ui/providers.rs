@@ -266,7 +266,7 @@ fn render_provider_list_view(state: &AppState, area: Rect, buf: &mut Buffer) {
         Some(draft) if !draft.providers.is_empty() => {
             for (idx, provider) in draft.providers.iter().enumerate() {
                 let selected = idx == state.settings_provider_index;
-                let marker = if selected { ">" } else { " " };
+                let marker = if selected { "⮞" } else { " " };
                 let display_name = provider_display_name(state, &provider.type_id);
                 let auth_badge = if provider.type_id == "openai-codex" {
                     format!(" [{}]", openai_auth_badge(state))
@@ -324,7 +324,7 @@ fn render_connect_provider_view(state: &AppState, area: Rect, buf: &mut Buffer) 
         lines.push(Line::raw(""));
         for (idx, definition) in definitions.iter().enumerate() {
             let selected = idx == selected_idx;
-            let marker = if selected { ">" } else { " " };
+            let marker = if selected { "⮞" } else { " " };
             lines.push(Line::styled(
                 format!("{marker} {}", definition.display_name),
                 if selected {
@@ -504,7 +504,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                     };
                     let mut line = format!(
                         "{} {:<18} {}",
-                        if selected { ">" } else { " " },
+                        if selected { "⮞" } else { " " },
                         settings_provider_field_label(state, field),
                         settings_provider_field_value(state, provider, field)
                     );
@@ -533,7 +533,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                         lines.push(Line::styled(
                             format!(
                                 "{} {}",
-                                if selected { ">" } else { " " },
+                                if selected { "⮞" } else { " " },
                                 if model.id.is_empty() {
                                     "<new model>"
                                 } else {
@@ -569,7 +569,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                         };
                         let mut line = format!(
                             "{} {:<18} {}",
-                            if selected { ">" } else { " " },
+                            if selected { "⮞" } else { " " },
                             settings_model_field_label(state, field),
                             settings_model_field_value(model, field)
                         );

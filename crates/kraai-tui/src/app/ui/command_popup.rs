@@ -55,7 +55,7 @@ pub(super) fn render_command_popup(
         .take(visible_count)
     {
         let selected = idx == selected_idx;
-        let marker = if selected { ">" } else { " " };
+        let marker = if selected { "⮞" } else { " " };
         lines.push(Line::styled(
             format!("{marker} /{command:<9} {description}"),
             if selected {

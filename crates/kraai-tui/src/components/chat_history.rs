@@ -458,7 +458,7 @@ impl<'a> ChatHistory<'a> {
                 }
 
                 lines.push(Self::single_span_line(String::new(), user_style));
-                Self::add_message_gutter(lines, '>')
+                Self::add_message_gutter(lines, '❯')
             }
             ChatRole::Assistant => Self::add_message_gutter(
                 Self::render_assistant_message(&content, content_width),
@@ -846,7 +846,7 @@ mod tests {
 
         assert_eq!(lines.len(), 3);
         assert_eq!(ChatHistory::line_text(&lines[0]), "   ");
-        assert_eq!(ChatHistory::line_text(&lines[1]), " > hello");
+        assert_eq!(ChatHistory::line_text(&lines[1]), " ❯ hello");
         assert_eq!(ChatHistory::line_text(&lines[2]), "   ");
     }
 

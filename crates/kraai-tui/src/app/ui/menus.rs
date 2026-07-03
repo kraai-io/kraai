@@ -23,7 +23,7 @@ pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
     } else {
         for (idx, (provider, model)) in models.iter().enumerate() {
             let selected = idx == state.model_menu_index;
-            let marker = if selected { ">" } else { " " };
+            let marker = if selected { "⮞" } else { " " };
             let current = state
                 .selected_provider_id
                 .as_ref()
@@ -69,7 +69,7 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
     } else {
         for (idx, profile) in state.agent_profiles.iter().enumerate() {
             let selected = idx == state.agent_menu_index;
-            let marker = if selected { ">" } else { " " };
+            let marker = if selected { "⮞" } else { " " };
             let current = state
                 .selected_profile_id
                 .as_ref()
@@ -147,7 +147,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 
     for (idx, session) in state.sessions.iter().enumerate() {
         let selected = state.sessions_menu_index == idx + 1;
-        let marker = if selected { ">" } else { " " };
+        let marker = if selected { "⮞" } else { " " };
         let current = state
             .current_session_id
             .as_ref()

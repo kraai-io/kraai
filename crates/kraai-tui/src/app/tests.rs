@@ -970,11 +970,11 @@ fn renders_chat_screen_snapshot() {
     let rendered = render_state_snapshot(&state, 72, 18);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end
 05:     smoke tests.
 14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  > Add tests for the settings menu"#,
+16:  ❯ Add tests for the settings menu"#,
     );
 }
 #[test]
@@ -1262,13 +1262,13 @@ fn renders_command_popup_snapshot() {
     let rendered = render_state_snapshot(&state, 72, 18);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end
 05:     smoke tests.
 12:  ┌Command (Tab/Down next, Shift-Tab/Up prev┐
-13:  │> /sessions  Open sessions menu          │
+13:  │⮞ /sessions  Open sessions menu          │
 14: i└─────────────────────────────────────────┘ Plan Code · ctx 0/128,000 (
-16:  > /s"#,
+16:  ❯ /s"#,
     );
 }
 #[test]
@@ -1279,18 +1279,18 @@ fn renders_model_menu_snapshot() {
     let rendered = render_state_snapshot(&state, 72, 18);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use re┌/model──────────────────────────────────────────────┐nd-to-end
 05:     smoke│Select model (Enter to choose, Esc to close)        │
 06:          │  openai-chat-completions / GPT-4.1 Mini            │
-07:          │> openai-chat-completions / GPT-4o Mini (current)   │
+07:          │⮞ openai-chat-completions / GPT-4o Mini (current)   │
 08:          │                                                    │
 09:          │                                                    │
 10:          │                                                    │
 11:          │                                                    │
 12:          └────────────────────────────────────────────────────┘
 14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  >"#,
+16:  ❯"#,
     );
 }
 #[test]
@@ -1301,13 +1301,13 @@ fn renders_providers_list_snapshot() {
     let rendered = render_state_snapshot(&state, 100, 22);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 02:     ┌/providers───────────────────────────────────────────────────────────────────────────────┐
 03:     │Providers                                                                                │
 04:  • U│Enter=open, a=connect, d=delete, r=refresh, Esc=close                                    │
 05:     │┌───────────────────────────────────────────────────────────────────────────────────────┐│
 06:     ││Configured providers                                                                   ││
-07:     ││> id=openai-chat-completions  OpenAI-compatible Chat Completions                       ││
+07:     ││⮞ id=openai-chat-completions  OpenAI-compatible Chat Completions                       ││
 08:     ││type=openai-chat-completions  models=2                                                 ││
 09:     ││                                                                                       ││
 10:     ││                                                                                       ││
@@ -1319,7 +1319,7 @@ fn renders_providers_list_snapshot() {
 16:     ││One provider panel at a time                                                           ││
 17:     │└───────────────────────────────────────────────────────────────────────────────────────┘│
 18: idle└─────────────────────────────────────────────────────────────────────────────────────────┘
-20:  >"#,
+20:  ❯"#,
     );
 }
 #[test]
@@ -1442,18 +1442,18 @@ fn renders_sessions_menu_snapshot() {
     let rendered = render_state_snapshot(&state, 72, 18);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use ┌/sessions──────────────────────────────────────────────┐d-to-end
 05:     smo│Sessions (Enter=load/new, x=delete, Esc=close)         │
 06:        │  Start new chat                                       │
 07:        │  Refactor ideas [approval] [streaming]                │
-08:        │> Testing plan (current)                               │
+08:        │⮞ Testing plan (current)                               │
 09:        │                                                       │
 10:        │                                                       │
 11:        │                                                       │
 12:        └───────────────────────────────────────────────────────┘
 14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  >"#,
+16:  ❯"#,
     );
 }
 #[test]
@@ -1463,7 +1463,7 @@ fn renders_tool_approval_panel_snapshot() {
     let rendered = render_state_snapshot(&state, 80, 20);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use render tests, interaction tests, and a small number of end-to-end smoke t
 05:    ests.
 09: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (0%) · Re
@@ -1486,7 +1486,7 @@ fn renders_help_menu_snapshot() {
     let rendered = render_state_snapshot(&state, 72, 18);
     assert_snapshot(
         &rendered,
-        r#"01:  > How should we test the TUI?
+        r#"01:  ❯ How should we test the TUI?
 04:  • Use render ┌/help────────────────────────────────────┐r of end-to-end
 05:     smoke test│Slash Commands                           │
 06:               │/agent     Open agent selector           │
@@ -1497,7 +1497,7 @@ fn renders_help_menu_snapshot() {
 11:               │/providers Open providers                │
 12:               └─────────────────────────────────────────┘
 14: idle · openai-chat-completions/GPT-4o Mini · Plan Code · ctx 0/128,000 (
-16:  >"#,
+16:  ❯"#,
     );
 }
 #[test]

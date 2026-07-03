@@ -24,7 +24,7 @@ pub(crate) struct CursorNavigation {
 
 const H_PADDING: u16 = 1;
 const V_PADDING: u16 = 1;
-const PROMPT: &str = "> ";
+const PROMPT: &str = "❯ ";
 const CONTINUATION_PREFIX: &str = "  ";
 const INPUT_STYLE: Style = Style::new()
     .fg(Color::Rgb(255, 255, 255))
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn wraps_wide_graphemes_without_rendering_truncation() {
         let input = "你好你好";
-        assert_eq!(TextInput::wrap_text(input, 8), vec!["> 你好你", "  好"]);
+        assert_eq!(TextInput::wrap_text(input, 8), vec!["❯ 你好你", "  好"]);
 
         let area = Rect::new(0, 0, 10, 4);
         let mut buffer = Buffer::empty(area);
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn keeps_an_overwide_first_grapheme_inside_the_input_width() {
         let input = "你";
-        assert_eq!(TextInput::wrap_text(input, 3), vec!["> "]);
+        assert_eq!(TextInput::wrap_text(input, 3), vec!["❯ "]);
 
         let area = Rect::new(0, 0, 5, 3);
         let cursor = TextInput::new(input, input.len()).get_cursor_position(area);
