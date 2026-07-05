@@ -826,17 +826,7 @@ mod tests {
     async fn bwrap_probe_times_out_instead_of_hanging() {
         use std::os::unix::fs::PermissionsExt;
 
-        let workspace = std::env::current_dir()
-            .expect("current dir")
-            .join("target/kraai-command-runner-tests")
-            .join(format!(
-                "bwrap-probe-timeout-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ));
+        let workspace = temp_dir("bwrap-probe-timeout");
         std::fs::create_dir_all(&workspace).expect("create fake bwrap dir");
 
         let fake_bwrap = workspace.join("bwrap");
