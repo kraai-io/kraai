@@ -14,5 +14,6 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
       - run: nix develop --command cargo autoinherit
+      - run: nix develop --command just generate-cargo-nix
       - run: nix fmt
       - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a

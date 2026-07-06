@@ -2,6 +2,10 @@
   imports = [inputs.treefmt-nix.flakeModule];
   perSystem = {...}: {
     treefmt = {
+      settings.excludes = [
+        "Cargo.nix"
+      ];
+
       projectRootFile = "flake.nix";
 
       programs.alejandra.enable = true;

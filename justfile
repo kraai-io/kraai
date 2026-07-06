@@ -32,10 +32,15 @@ clippy-flags := "\
 update-rust-deps:
     cargo upgrade
     cargo update
+    just generate-cargo-nix
 
 update-rust-deps-full:
     cargo upgrade --incompatible
     cargo update
+    just generate-cargo-nix
+
+generate-cargo-nix:
+    crate2nix generate
 
 test:
     cargo nextest run
@@ -58,4 +63,4 @@ lint-fix:
 lint-fix-dirty:
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty -- {{ clippy-flags }}
 
-check: format lint test
+check: generate-cargo-nix format lint test

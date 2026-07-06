@@ -2,7 +2,6 @@
   perSystem = {
     lib,
     pkgs,
-    system,
     ...
   }: let
     rustToolchain = pkgs.rust-bin.stable.latest.default.override {
@@ -13,24 +12,45 @@
       fileset = lib.fileset.unions [
         ../Cargo.lock
         ../Cargo.toml
+        ../Cargo.nix
         ../crates
         ../deny.toml
         ../justfile
       ];
     };
+    workspaceMembers =
+      map
+      (memberPath: let
+        cargoToml = lib.importTOML (../. + "/${memberPath}/Cargo.toml");
+      in {
+        name = cargoToml.package.name;
+        procMacro = cargoToml.lib.proc-macro or false;
+      })
+      (lib.importTOML ../Cargo.toml).workspace.members;
+    crate2nixTestMemberNames =
+      map
+      (member: member.name)
+      (lib.filter (member: !member.procMacro) workspaceMembers);
+    # crate2nix can build proc-macro crates, but its integration-test wrapper
+    # passes a nonexistent root-crate rlib to rustc when the tested workspace
+    # member itself is a proc-macro crate.
+    cargoTestMemberNames =
+      map
+      (member: member.name)
+      (lib.filter (member: member.procMacro) workspaceMembers);
 
-    generatedCargoNix = inputs.crate2nix.tools.${system}.generatedCargoNix {
-      name = "kraai-checks";
-      inherit src;
-    };
+    mkCargoNix = release:
+      pkgs.callPackage ../Cargo.nix {
+        inherit release;
+        buildRustCrateForPkgs = pkgs:
+          pkgs.buildRustCrate.override {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+      };
 
-    cargoNix = pkgs.callPackage generatedCargoNix {
-      buildRustCrateForPkgs = pkgs:
-        pkgs.buildRustCrate.override {
-          cargo = rustToolchain;
-          rustc = rustToolchain;
-        };
-    };
+    cargoNix = mkCargoNix true;
+    cargoCheckNix = mkCargoNix false;
 
     mkCargoCheck = {
       name,
@@ -47,6 +67,7 @@
         nativeBuildInputs =
           [
             rustToolchain
+            pkgs.rustPlatform.cargoSetupHook
             pkgs.pkg-config
           ]
           ++ nativeBuildInputs;
@@ -55,6 +76,9 @@
             pkgs.openssl
           ]
           ++ buildInputs;
+        cargoDeps = pkgs.rustPlatform.importCargoLock {
+          lockFile = ../Cargo.lock;
+        };
         buildPhase = let
           exportEnv = lib.concatLines (
             lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") env
@@ -62,16 +86,12 @@
         in ''
           export HOME="$TMPDIR/home"
           mkdir -p "$HOME"
-          export CARGO_HOME="$TMPDIR/cargo-home"
-          mkdir -p "$CARGO_HOME"
-          cp "${generatedCargoNix}/cargo/config" "$CARGO_HOME/config.toml"
           export CARGO_TARGET_DIR="$TMPDIR/target"
           export CARGO_TERM_COLOR=always
 
           ${exportEnv}
 
           runHook preBuild
-          cd "${generatedCargoNix}/crate"
           ${command}
           runHook postBuild
         '';
@@ -93,51 +113,67 @@
           mainProgram = "kraai";
         };
     });
+
+    workspaceTestChecks = builtins.listToAttrs (
+      map
+      (name:
+        lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
+          runTests = true;
+        }))
+      crate2nixTestMemberNames
+    );
+    cargoTestChecks = builtins.listToAttrs (
+      map
+      (name:
+        lib.nameValuePair "test-${name}" (mkCargoCheck {
+          name = "test-${name}";
+          nativeBuildInputs = [pkgs.cargo-nextest];
+          command = ''
+            cargo nextest run -p ${lib.escapeShellArg name} --no-tests=pass
+          '';
+        }))
+      cargoTestMemberNames
+    );
   in {
     packages = {
       inherit kraai;
       default = kraai;
     };
 
-    checks = {
-      clippy = mkCargoCheck {
-        name = "clippy";
-        command = ''
-          ${pkgs.just}/bin/just lint
-        '';
-      };
+    checks =
+      workspaceTestChecks
+      // cargoTestChecks
+      // {
+        clippy = mkCargoCheck {
+          name = "clippy";
+          command = ''
+            ${pkgs.just}/bin/just lint
+          '';
+        };
 
-      doc = mkCargoCheck {
-        name = "doc";
-        env.RUSTDOCFLAGS = "--deny warnings";
-        command = ''
-          cargo doc --workspace --no-deps
-        '';
-      };
+        doc = mkCargoCheck {
+          name = "doc";
+          env.RUSTDOCFLAGS = "--deny warnings";
+          command = ''
+            cargo doc --workspace --no-deps
+          '';
+        };
 
-      audit = mkCargoCheck {
-        name = "audit";
-        nativeBuildInputs = [pkgs.cargo-audit];
-        command = ''
-          cargo audit --db ${inputs.advisory-db} --no-fetch
-        '';
-      };
+        audit = mkCargoCheck {
+          name = "audit";
+          nativeBuildInputs = [pkgs.cargo-audit];
+          command = ''
+            cargo audit --db ${inputs.advisory-db} --no-fetch
+          '';
+        };
 
-      deny = mkCargoCheck {
-        name = "deny";
-        nativeBuildInputs = [pkgs.cargo-deny];
-        command = ''
-          cargo deny check bans licenses sources
-        '';
+        deny = mkCargoCheck {
+          name = "deny";
+          nativeBuildInputs = [pkgs.cargo-deny];
+          command = ''
+            cargo deny check bans licenses sources
+          '';
+        };
       };
-
-      nextest = mkCargoCheck {
-        name = "nextest";
-        nativeBuildInputs = [pkgs.cargo-nextest];
-        command = ''
-          cargo nextest run --workspace --no-tests=pass
-        '';
-      };
-    };
   };
 }

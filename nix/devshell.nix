@@ -23,6 +23,7 @@
           cargo-crev
           cargo-flamegraph
           cargo-autoinherit
+          inputs.crate2nix.packages.${system}.default
           samply
           (rust-bin.stable.latest.default.override {
             extensions = ["llvm-tools-preview"];

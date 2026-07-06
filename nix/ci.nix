@@ -20,7 +20,7 @@
     allJobs
     // {
       allJobs = inputs.nixpkgs.legacyPackages.${builtins.head config.systems}.releaseTools.aggregate {
-        name = "required";
+        name = "allJobs";
         constituents = lib.collect lib.isDerivation allJobs;
       };
     };
