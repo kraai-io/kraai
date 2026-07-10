@@ -306,10 +306,10 @@ fn parse_toon_field_attr(
                 }
             }
             Meta::NameValue(nv) if nv.path.is_ident("min") => {
-                *min = parse_u32_expr(&nv.value);
+                *min = Some(parse_u32_expr(&nv.value, "min")?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("max") => {
-                *max = parse_u32_expr(&nv.value);
+                *max = Some(parse_u32_expr(&nv.value, "max")?);
             }
             _ => {}
         }
@@ -318,14 +318,24 @@ fn parse_toon_field_attr(
     Ok(())
 }
 
-fn parse_u32_expr(expr: &Expr) -> Option<u32> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Int(value),
-            ..
-        }) => value.base10_parse().ok(),
-        _ => None,
-    }
+fn parse_u32_expr(expr: &Expr, name: &str) -> Result<u32> {
+    let Expr::Lit(ExprLit {
+        lit: Lit::Int(value),
+        ..
+    }) = expr
+    else {
+        return Err(syn::Error::new(
+            expr.span(),
+            format!("`{name}` must be a non-negative 32-bit integer literal"),
+        ));
+    };
+
+    value.base10_parse::<u32>().map_err(|error| {
+        syn::Error::new(
+            value.span(),
+            format!("`{name}` must fit in a 32-bit unsigned integer: {error}"),
+        )
+    })
 }
 
 fn parse_type_with_range(
@@ -346,6 +356,14 @@ fn parse_type_with_range(
     }
 
     if let Some(inner) = vec_inner(ty) {
+        if let (Some(lower), Some(upper)) = (min, max)
+            && lower > upper
+        {
+            return Err(syn::Error::new(
+                ty.span(),
+                format!("`min` ({lower}) cannot exceed `max` ({upper})"),
+            ));
+        }
         let inner_ty = parse_value_type(inner, declared)?;
         return Ok((
             FieldType::Array(Box::new(inner_ty)),

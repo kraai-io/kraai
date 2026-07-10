@@ -1,0 +1,5 @@
+error: `min` must fit in a 32-bit unsigned integer: invalid digit found in string
+ --> tests/compile_fail/invalid_range_negative.rs:7:33
+  |
+7 |             #[toon_schema(min = -1)]
+  |                                 ^
