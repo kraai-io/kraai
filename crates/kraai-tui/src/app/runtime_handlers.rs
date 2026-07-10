@@ -49,6 +49,9 @@ impl App {
                 }
                 if self.is_ci_mode() {
                     self.write_ci_output(&chunk);
+                    if self.state.exit {
+                        return;
+                    }
                 }
                 if !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
                     self.request_stream_history_sync(&session_id, Instant::now());

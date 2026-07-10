@@ -320,6 +320,9 @@ impl App {
 
         let message = message.into();
         self.finish_ci_output_line();
+        if self.ci_error.is_some() {
+            return;
+        }
         self.ci_turn_completion_pending = false;
         self.ci_error = Some(message.clone());
         self.state.status = message;
@@ -346,12 +349,18 @@ impl App {
     }
 
     pub(super) fn write_ci_output(&mut self, chunk: &str) {
-        if chunk.is_empty() {
+        if chunk.is_empty() || self.ci_error.is_some() {
             return;
         }
 
-        let _ = self.ci_output.write_all(chunk.as_bytes());
-        let _ = self.ci_output.flush();
+        if let Err(error) = self
+            .ci_output
+            .write_all(chunk.as_bytes())
+            .and_then(|()| self.ci_output.flush())
+        {
+            self.fail_ci_output(error);
+            return;
+        }
         self.ci_output_needs_newline = !chunk.ends_with('\n');
     }
 
@@ -360,9 +369,32 @@ impl App {
             return;
         }
 
-        let _ = self.ci_output.write_all(b"\n");
-        let _ = self.ci_output.flush();
+        if let Err(error) = self
+            .ci_output
+            .write_all(b"\n")
+            .and_then(|()| self.ci_output.flush())
+        {
+            self.fail_ci_output(error);
+            return;
+        }
         self.ci_output_needs_newline = false;
+    }
+
+    fn fail_ci_output(&mut self, error: std::io::Error) {
+        if self.ci_error.is_some() {
+            return;
+        }
+        let message = format!("Failed writing CI output: {error}");
+        self.ci_turn_completion_pending = false;
+        self.ci_error = Some(message.clone());
+        self.state.status = message;
+        if self.state.is_streaming
+            && let Some(session_id) = self.state.current_session_id.clone()
+        {
+            self.request(RuntimeRequest::CancelStream { session_id });
+        }
+        self.state.is_streaming = false;
+        self.state.exit = true;
     }
 
     pub(super) fn apply_agent_profiles_state(&mut self, state: AgentProfilesState) {

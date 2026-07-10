@@ -35,6 +35,29 @@ struct TestHarness {
 struct SharedBuffer {
     data: Arc<Mutex<Vec<u8>>>,
 }
+struct FailingWriter {
+    writes_before_failure: Option<usize>,
+    fail_flush: bool,
+    writes: usize,
+}
+
+impl Write for FailingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.writes_before_failure == Some(self.writes) {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "write failed"));
+        }
+        self.writes += 1;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.fail_flush {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
 impl Write for SharedBuffer {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.data
@@ -920,6 +943,105 @@ fn non_ci_and_stale_chunks_do_not_print_terminal_output() {
         chunk: String::from("hello"),
     });
     assert_eq!(captured_output(&stale_output), "");
+}
+
+#[test]
+fn ci_chunk_write_failure_exits_and_cancels_stream() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: Some(0),
+        fail_flush: false,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+
+    assert!(harness.app.state.exit);
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("write failed"))
+    );
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::CancelStream { session_id }] if session_id == "sess-2"
+    ));
+}
+
+#[test]
+fn ci_chunk_flush_failure_preserves_first_output_error() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: None,
+        fail_flush: true,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+    harness.app.handle_runtime_event(Event::StreamError {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        error: String::from("later runtime error"),
+    });
+
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("flush failed"))
+    );
+}
+
+#[test]
+fn ci_final_newline_write_failure_is_reported() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: Some(1),
+        fail_flush: false,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+
+    harness.app.handle_runtime_event(Event::StreamComplete {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+    });
+
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("write failed"))
+    );
 }
 
 #[test]
