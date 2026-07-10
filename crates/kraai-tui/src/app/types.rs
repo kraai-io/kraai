@@ -155,6 +155,7 @@ pub(super) struct OptimisticToolMessage {
 
 #[derive(Clone, Debug)]
 pub(super) struct PendingSubmit {
+    pub(super) creation_id: u64,
     pub(super) session_id: Option<String>,
     pub(super) message: String,
     pub(super) model_id: String,
@@ -186,7 +187,9 @@ pub(super) enum RuntimeRequest {
     StartOpenAiCodexDeviceCodeLogin,
     CancelOpenAiCodexLogin,
     LogoutOpenAiCodexAuth,
-    CreateSession,
+    CreateSession {
+        creation_id: u64,
+    },
     SetSessionProfile {
         session_id: String,
         profile_id: String,
@@ -258,7 +261,10 @@ pub(super) enum RuntimeResponse {
     StartOpenAiCodexDeviceCodeLogin(Result<ProviderAuthStatus, String>),
     CancelOpenAiCodexLogin(Result<ProviderAuthStatus, String>),
     LogoutOpenAiCodexAuth(Result<ProviderAuthStatus, String>),
-    CreateSession(Result<String, String>),
+    CreateSession {
+        creation_id: u64,
+        result: Result<String, String>,
+    },
     SetSessionProfile {
         session_id: String,
         profile_id: String,

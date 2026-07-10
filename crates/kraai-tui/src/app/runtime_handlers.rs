@@ -378,7 +378,18 @@ impl App {
                     self.state.status = format!("OpenAI auth failed: {err}");
                 }
             },
-            RuntimeResponse::CreateSession(Ok(session_id)) => {
+            RuntimeResponse::CreateSession {
+                creation_id,
+                result: Ok(session_id),
+            } => {
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .is_none_or(|pending| pending.creation_id != creation_id)
+                {
+                    return;
+                }
                 let draft_profile_id = self.state.selected_profile_id.clone();
                 let pending_submit = self.state.pending_submit.take().map(|mut pending_submit| {
                     pending_submit.session_id = Some(session_id.clone());
@@ -409,7 +420,18 @@ impl App {
                     );
                 }
             }
-            RuntimeResponse::CreateSession(Err(err)) => {
+            RuntimeResponse::CreateSession {
+                creation_id,
+                result: Err(err),
+            } => {
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .is_none_or(|pending| pending.creation_id != creation_id)
+                {
+                    return;
+                }
                 self.state.pending_submit = None;
                 self.state.status = format!("Failed creating session: {err}");
                 self.fail_ci(format!("Failed creating session: {err}"));

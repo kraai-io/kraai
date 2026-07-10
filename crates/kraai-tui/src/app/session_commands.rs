@@ -60,14 +60,25 @@ impl App {
             return;
         }
 
+        if self.state.pending_submit.is_some() {
+            self.state.status =
+                String::from("Session creation already in progress; message was not sent");
+            self.state.input = raw_input;
+            self.state.input_cursor = self.state.input.len();
+            return;
+        }
+
+        let creation_id = self.state.next_session_creation_id;
+        self.state.next_session_creation_id = creation_id.wrapping_add(1);
         self.state.pending_submit = Some(PendingSubmit {
+            creation_id,
             session_id: None,
             message: raw_input,
             model_id,
             provider_id,
         });
         self.state.status = String::from("Creating session");
-        self.request(RuntimeRequest::CreateSession);
+        self.request(RuntimeRequest::CreateSession { creation_id });
     }
 
     pub(super) fn handle_command(&mut self, command_line: &str) {

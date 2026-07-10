@@ -580,7 +580,7 @@ fn models_response_autosends_startup_message() {
     );
     assert!(matches!(
         harness.drain_requests().as_slice(),
-        [RuntimeRequest::CreateSession]
+        [RuntimeRequest::CreateSession { .. }]
     ));
 }
 #[test]
@@ -1618,6 +1618,7 @@ fn new_command_clears_local_state_without_creating_session() {
     harness.app.state = populated_state();
     harness.app.state.retry_waiting = true;
     harness.app.state.pending_submit = Some(PendingSubmit {
+        creation_id: 0,
         session_id: None,
         message: String::from("stale"),
         model_id: String::from("gpt-4o-mini"),
@@ -1667,7 +1668,7 @@ fn submit_without_session_requests_session_creation() {
     );
     let requests = harness.drain_requests();
     assert_eq!(requests.len(), 1);
-    assert!(matches!(requests[0], RuntimeRequest::CreateSession));
+    assert!(matches!(requests[0], RuntimeRequest::CreateSession { .. }));
 }
 #[test]
 fn create_session_applies_draft_agent_before_sending() {
@@ -1681,11 +1682,14 @@ fn create_session_applies_draft_agent_before_sending() {
     harness.app.handle_key_event(key(KeyCode::Enter));
     assert!(matches!(
         harness.drain_requests().as_slice(),
-        [RuntimeRequest::CreateSession]
+        [RuntimeRequest::CreateSession { .. }]
     ));
     harness
         .app
-        .handle_runtime_response(RuntimeResponse::CreateSession(Ok(String::from("sess-3"))));
+        .handle_runtime_response(RuntimeResponse::CreateSession {
+            creation_id: 0,
+            result: Ok(String::from("sess-3")),
+        });
     let requests = harness.drain_requests();
     assert!(requests.iter().any(|request| {
         matches!(
@@ -1726,11 +1730,64 @@ fn create_session_applies_draft_agent_before_sending() {
 }
 
 #[test]
+fn rapid_new_chat_submissions_create_only_one_session() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.selected_profile_id = Some(String::from("build-code"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+
+    harness.app.submit_message(String::from("first"));
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::CreateSession { creation_id: 0 }]
+    ));
+    harness.app.submit_message(String::from("second"));
+
+    assert!(harness.drain_requests().is_empty());
+    assert_eq!(
+        harness
+            .app
+            .state
+            .pending_submit
+            .as_ref()
+            .map(|pending| pending.message.as_str()),
+        Some("first")
+    );
+    assert_eq!(harness.app.state.input, "second");
+    assert!(harness.app.state.status.contains("already in progress"));
+}
+
+#[test]
+fn stale_session_creation_response_cannot_switch_foreground() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.selected_profile_id = Some(String::from("build-code"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.submit_message(String::from("first"));
+    harness.drain_requests();
+    harness.app.start_new_chat();
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::CreateSession {
+            creation_id: 0,
+            result: Ok(String::from("stale-session")),
+        });
+
+    assert!(harness.app.state.current_session_id.is_none());
+    assert_eq!(harness.app.state.status, "Started new chat");
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
 fn background_profile_response_does_not_mutate_foreground_session() {
     let mut harness = test_harness();
     harness.app.state = populated_state();
     harness.app.state.status = String::from("Foreground ready");
     harness.app.state.pending_submit = Some(PendingSubmit {
+        creation_id: 0,
         session_id: Some(String::from("sess-1")),
         message: String::from("background message"),
         model_id: String::from("gpt-4o-mini"),
@@ -3178,7 +3235,7 @@ fn request_name(request: &RuntimeRequest) -> &'static str {
         RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => "StartOpenAiCodexDeviceCodeLogin",
         RuntimeRequest::CancelOpenAiCodexLogin => "CancelOpenAiCodexLogin",
         RuntimeRequest::LogoutOpenAiCodexAuth => "LogoutOpenAiCodexAuth",
-        RuntimeRequest::CreateSession => "CreateSession",
+        RuntimeRequest::CreateSession { .. } => "CreateSession",
         RuntimeRequest::SetSessionProfile { .. } => "SetSessionProfile",
         RuntimeRequest::SendMessage { .. } => "SendMessage",
         RuntimeRequest::SaveSettings { .. } => "SaveSettings",
