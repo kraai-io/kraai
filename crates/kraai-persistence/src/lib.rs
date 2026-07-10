@@ -124,6 +124,7 @@ impl FileMessageStore {
 /// Unix persists both the file contents and containing directory entry. Other
 /// platforms persist the file contents before replacement but may not expose a
 /// portable directory-sync operation.
+#[cfg(not(windows))]
 async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -166,6 +167,30 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temp_path).await;
     }
     write_result
+}
+
+#[cfg(windows)]
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let path = path.to_path_buf();
+    let content = content.to_vec();
+    tokio::task::spawn_blocking(move || {
+        let parent = path
+            .parent()
+            .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {parent:?}"))?;
+        let mut file = atomic_write_file::AtomicWriteFile::open(&path)
+            .with_context(|| format!("Failed to create atomic file for: {path:?}"))?;
+        file.write_all(&content)
+            .with_context(|| format!("Failed to write atomic file for: {path:?}"))?;
+        file.commit()
+            .with_context(|| format!("Failed to replace file atomically: {path:?}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| eyre!("Atomic write task failed: {error}"))?
 }
 
 #[cfg(unix)]

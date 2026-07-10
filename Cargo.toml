@@ -53,6 +53,7 @@ kraai-types = { path = "crates/kraai-types" }
 
 arboard = "3.6.1"
 async-trait = "0.1.89"
+atomic-write-file = "0.3.0"
 base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }

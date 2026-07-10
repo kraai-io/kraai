@@ -54,7 +54,11 @@ impl RuntimeCore {
         self.send_event(Event::Error(error.into()));
     }
 
-    pub(crate) async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
+    pub(crate) async fn run(
+        self,
+        mut command_rx: mpsc::Receiver<Command>,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
         tracing::info!("Starting event loop");
 
         let background_tasks = [
@@ -74,7 +78,20 @@ impl RuntimeCore {
         }
 
         let mut shutdown_response = None;
-        while let Some(command) = command_rx.recv().await {
+        loop {
+            let command = tokio::select! {
+                command = command_rx.recv() => command,
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        None
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            let Some(command) = command else {
+                break;
+            };
             if let Command::Shutdown { response } = command {
                 shutdown_response = response;
                 break;

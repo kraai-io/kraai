@@ -189,24 +189,28 @@ async fn spawn_and_wait(
         stderr.read_to_end(&mut output).await.map(|_| output)
     });
 
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => status,
-        Ok(Err(error)) => return Err(CommandError::Wait(error.to_string())),
+    let completed = async {
+        let status = child
+            .wait()
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        let stdout = stdout_task
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        let stderr = stderr_task
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        Ok::<_, CommandError>((status, stdout, stderr))
+    };
+    let (status, stdout, stderr) = match tokio::time::timeout(timeout, completed).await {
+        Ok(result) => result?,
         Err(_) => {
             terminate_process_tree(&mut child, process_group_id).await?;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
             return Err(CommandError::TimedOut(timeout));
         }
     };
-    let stdout = stdout_task
-        .await
-        .map_err(|error| CommandError::Wait(error.to_string()))?
-        .map_err(|error| CommandError::Wait(error.to_string()))?;
-    let stderr = stderr_task
-        .await
-        .map_err(|error| CommandError::Wait(error.to_string()))?
-        .map_err(|error| CommandError::Wait(error.to_string()))?;
 
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let stderr = String::from_utf8_lossy(&stderr).into_owned();
@@ -230,11 +234,8 @@ fn configure_process_tree(process: &mut Command, _program: &OsString) -> Result<
 }
 
 #[cfg(not(unix))]
-fn configure_process_tree(_process: &mut Command, program: &OsString) -> Result<(), CommandError> {
-    Err(CommandError::Spawn {
-        program: program.to_string_lossy().into_owned(),
-        message: String::from("process-tree ownership is not implemented on this platform"),
-    })
+fn configure_process_tree(_process: &mut Command, _program: &OsString) -> Result<(), CommandError> {
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -922,6 +923,35 @@ mod tests {
             }
         }
 
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn timeout_includes_draining_inherited_pipes() {
+        let workspace = temp_dir("timeout-inherited-pipes");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let result = run_command(CommandRequest {
+            command: vec![
+                String::from("sh"),
+                String::from("-c"),
+                String::from("sleep 60 & printf done"),
+            ],
+            cwd: workspace.clone(),
+            sandbox: SandboxConfig {
+                mode: SandboxMode::DangerFullAccess,
+                ..SandboxConfig::default()
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            timeout: Duration::from_millis(100),
+        })
+        .await;
+
+        assert_eq!(
+            result,
+            Err(CommandError::TimedOut(Duration::from_millis(100)))
+        );
         let _ = std::fs::remove_dir_all(workspace);
     }
 

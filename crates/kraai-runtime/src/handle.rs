@@ -133,15 +133,15 @@ pub(crate) enum Command {
 }
 
 pub(crate) struct RuntimeLifecycle {
-    command_tx: mpsc::Sender<Command>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
     shutdown_started: AtomicBool,
     thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl RuntimeLifecycle {
-    pub(crate) fn new(command_tx: mpsc::Sender<Command>) -> Self {
+    pub(crate) fn new(shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
         Self {
-            command_tx,
+            shutdown_tx,
             shutdown_started: AtomicBool::new(false),
             thread: std::sync::Mutex::new(None),
         }
@@ -157,9 +157,7 @@ impl RuntimeLifecycle {
 impl Drop for RuntimeLifecycle {
     fn drop(&mut self) {
         if !self.shutdown_started.swap(true, Ordering::SeqCst) {
-            let _ = self
-                .command_tx
-                .try_send(Command::Shutdown { response: None });
+            self.shutdown_tx.send_replace(true);
         }
     }
 }

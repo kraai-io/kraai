@@ -270,14 +270,39 @@ fn open_workspace_file(
 
 #[cfg(not(target_os = "linux"))]
 fn open_workspace_file(
-    _workspace_root: &Path,
+    workspace_root: &Path,
     path: &Path,
-    _mode: ToolFileOpenMode,
+    mode: ToolFileOpenMode,
 ) -> Result<OpenedToolFile, String> {
-    Err(format!(
-        "secure descriptor-relative workspace access is unavailable on this platform: {}",
-        path.display()
-    ))
+    if !path_is_within_workspace(workspace_root, path) {
+        return Err(format!(
+            "workspace path resolves outside {}: {}",
+            workspace_root.display(),
+            path.display()
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    match mode {
+        ToolFileOpenMode::Read | ToolFileOpenMode::Directory => options.read(true),
+        ToolFileOpenMode::Edit => options.read(true).write(true),
+        ToolFileOpenMode::Create => options.write(true).create_new(true),
+    };
+    let file = options
+        .open(path)
+        .map_err(|error| format!("unable to open {}: {error}", path.display()))?;
+    if mode == ToolFileOpenMode::Directory
+        && !file
+            .metadata()
+            .map_err(|error| format!("unable to inspect {}: {error}", path.display()))?
+            .is_dir()
+    {
+        return Err(format!("path is not a directory: {}", path.display()));
+    }
+    Ok(OpenedToolFile {
+        path: path.to_path_buf(),
+        file,
+    })
 }
 
 pub fn read_text_path(path: &Path) -> Result<TextFileRead, String> {

@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
+use crate::handle::{Command, RuntimeLifecycle};
 use crate::{Event, RuntimeHandle, RuntimeStartupState};
 
 #[test]
@@ -68,6 +69,27 @@ async fn startup_state_remains_observable_after_initial_result() -> Result<()> {
         RuntimeStartupState::Failed(String::from("initial failure"))
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn dropping_last_handle_signals_shutdown_when_command_queue_is_full() {
+    let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
+    let (event_tx, _) = tokio::sync::broadcast::channel(1);
+    let (_startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    command_tx
+        .try_send(Command::LoadConfig)
+        .expect("fill command queue");
+    let handle = RuntimeHandle {
+        command_tx,
+        event_tx,
+        lifecycle: Some(std::sync::Arc::new(RuntimeLifecycle::new(shutdown_tx))),
+        startup_rx,
+    };
+
+    drop(handle);
+
+    assert!(*shutdown_rx.borrow());
 }
 
 #[tokio::test]

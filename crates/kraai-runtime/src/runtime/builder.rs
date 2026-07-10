@@ -49,7 +49,8 @@ impl RuntimeBuilder {
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, _) = broadcast::channel(1024);
         let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
-        let lifecycle = Arc::new(RuntimeLifecycle::new(command_tx.clone()));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let lifecycle = Arc::new(RuntimeLifecycle::new(shutdown_tx));
         let handle = RuntimeHandle {
             command_tx,
             event_tx: event_tx.clone(),
@@ -80,6 +81,7 @@ impl RuntimeBuilder {
                 event_tx.clone(),
                 command_tx_for_runtime,
                 command_rx,
+                shutdown_rx,
                 provider_config_path,
                 thread_startup_tx.clone(),
             )) {
@@ -96,6 +98,7 @@ impl RuntimeBuilder {
         event_tx: broadcast::Sender<Event>,
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
         provider_config_path_override: Option<PathBuf>,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     ) -> Result<()> {
@@ -138,7 +141,7 @@ impl RuntimeBuilder {
             startup_tx,
         };
 
-        runtime.run(command_rx).await;
+        runtime.run(command_rx, shutdown_rx).await;
         Ok(())
     }
 
