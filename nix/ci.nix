@@ -1,27 +1,9 @@
-{
-  self,
-  config,
-  lib,
-  inputs,
-  ...
-}: {
-  flake.hydraJobs = let
-    allJobs =
-      {
-      }
-      // (
-        lib.genAttrs config.systems (system: {
-          checks = self.checks.${system};
-          packages = self.packages.${system};
-          devShells = self.devShells.${system};
-        })
-      );
-  in
-    allJobs
-    // {
-      allJobs = inputs.nixpkgs.legacyPackages.${builtins.head config.systems}.releaseTools.aggregate {
-        name = "allJobs";
-        constituents = lib.collect lib.isDerivation allJobs;
-      };
-    };
+{lib, ...}: {
+  perSystem = {self', ...}: {
+    checks = let
+      packages = lib.mapAttrs' (n: lib.nameValuePair "package-${n}") self'.packages;
+      devShells = lib.mapAttrs' (n: lib.nameValuePair "devShell-${n}") self'.devShells;
+    in
+      packages // devShells;
+  };
 }
