@@ -135,9 +135,15 @@ pub(super) fn spawn_runtime_bridge(
                     profile_id,
                 } => {
                     let result = rt
-                        .block_on(runtime.set_session_profile(session_id, profile_id.clone()))
+                        .block_on(
+                            runtime.set_session_profile(session_id.clone(), profile_id.clone()),
+                        )
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile { profile_id, result });
+                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile {
+                        session_id,
+                        profile_id,
+                        result,
+                    });
                 }
                 RuntimeRequest::CreateSession => {
                     let result = rt
@@ -298,12 +304,14 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::SetSessionProfile { profile_id, .. } => {
-            RuntimeResponse::SetSessionProfile {
-                profile_id,
-                result: Err(message.to_string()),
-            }
-        }
+        RuntimeRequest::SetSessionProfile {
+            session_id,
+            profile_id,
+        } => RuntimeResponse::SetSessionProfile {
+            session_id,
+            profile_id,
+            result: Err(message.to_string()),
+        },
         RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
         RuntimeRequest::SendMessage { .. } => {
             RuntimeResponse::SendMessage(Err(message.to_string()))

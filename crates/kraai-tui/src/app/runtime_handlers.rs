@@ -415,37 +415,69 @@ impl App {
                 self.fail_ci(format!("Failed creating session: {err}"));
             }
             RuntimeResponse::SetSessionProfile {
+                session_id,
                 profile_id,
                 result: Ok(()),
             } => {
-                self.state.selected_profile_id = Some(profile_id.clone());
-                self.state.status = format!("Selected agent: {profile_id}");
-                self.save_workspace_preferences();
-                if let Some(session_id) = self.state.current_session_id.clone() {
-                    self.request(RuntimeRequest::ListSessions);
-                    self.request(RuntimeRequest::ListAgentProfiles { session_id });
+                let is_foreground =
+                    self.state.current_session_id.as_deref() == Some(session_id.as_str());
+                self.request(RuntimeRequest::ListSessions);
+                if is_foreground {
+                    self.state.selected_profile_id = Some(profile_id.clone());
+                    self.state.status = format!("Selected agent: {profile_id}");
+                    self.save_workspace_preferences();
+                    self.request(RuntimeRequest::ListAgentProfiles {
+                        session_id: session_id.clone(),
+                    });
+                    self.state.mode = UiMode::Chat;
                 }
-                self.state.mode = UiMode::Chat;
 
-                if let Some(pending_submit) = self.state.pending_submit.take()
-                    && let Some(session_id) = pending_submit.session_id
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .and_then(|pending| pending.session_id.as_deref())
+                    == Some(session_id.as_str())
+                    && let Some(pending_submit) = self.state.pending_submit.take()
                 {
-                    self.dispatch_send_message(
-                        session_id,
-                        pending_submit.message,
-                        pending_submit.model_id,
-                        pending_submit.provider_id,
-                        false,
-                    );
+                    if is_foreground {
+                        self.dispatch_send_message(
+                            session_id,
+                            pending_submit.message,
+                            pending_submit.model_id,
+                            pending_submit.provider_id,
+                            false,
+                        );
+                    } else {
+                        self.request(RuntimeRequest::SendMessage {
+                            session_id,
+                            message: pending_submit.message,
+                            model_id: pending_submit.model_id,
+                            provider_id: pending_submit.provider_id,
+                            auto_approve: false,
+                        });
+                    }
                 }
             }
             RuntimeResponse::SetSessionProfile {
-                result: Err(err), ..
+                session_id,
+                result: Err(err),
+                ..
             } => {
-                self.state.pending_submit = None;
-                self.clear_turn_timer();
-                self.state.status = format!("Failed changing agent: {err}");
-                self.fail_ci(format!("Failed changing agent: {err}"));
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .and_then(|pending| pending.session_id.as_deref())
+                    == Some(session_id.as_str())
+                {
+                    self.state.pending_submit = None;
+                }
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.clear_turn_timer();
+                    self.state.status = format!("Failed changing agent: {err}");
+                    self.fail_ci(format!("Failed changing agent: {err}"));
+                }
             }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {

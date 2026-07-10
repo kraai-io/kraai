@@ -1702,6 +1702,7 @@ fn create_session_applies_draft_agent_before_sending() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+            session_id: String::from("sess-3"),
             profile_id: String::from("build-code"),
             result: Ok(()),
         });
@@ -1720,6 +1721,44 @@ fn create_session_applies_draft_agent_before_sending() {
                 && model_id == "gpt-4o-mini"
                 && provider_id == "openai-chat-completions"
                 && !*auto_approve
+        )
+    }));
+}
+
+#[test]
+fn background_profile_response_does_not_mutate_foreground_session() {
+    let mut harness = test_harness();
+    harness.app.state = populated_state();
+    harness.app.state.status = String::from("Foreground ready");
+    harness.app.state.pending_submit = Some(PendingSubmit {
+        session_id: Some(String::from("sess-1")),
+        message: String::from("background message"),
+        model_id: String::from("gpt-4o-mini"),
+        provider_id: String::from("openai-chat-completions"),
+    });
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+            session_id: String::from("sess-1"),
+            profile_id: String::from("build-code"),
+            result: Ok(()),
+        });
+
+    assert_eq!(
+        harness.app.state.current_session_id.as_deref(),
+        Some("sess-2")
+    );
+    assert_eq!(
+        harness.app.state.selected_profile_id.as_deref(),
+        Some("plan-code")
+    );
+    assert_eq!(harness.app.state.status, "Foreground ready");
+    assert!(harness.drain_requests().iter().any(|request| {
+        matches!(
+            request,
+            RuntimeRequest::SendMessage { session_id, message, .. }
+                if session_id == "sess-1" && message == "background message"
         )
     }));
 }

@@ -260,6 +260,7 @@ pub(super) enum RuntimeResponse {
     LogoutOpenAiCodexAuth(Result<ProviderAuthStatus, String>),
     CreateSession(Result<String, String>),
     SetSessionProfile {
+        session_id: String,
         profile_id: String,
         result: Result<(), String>,
     },
