@@ -55,8 +55,10 @@ impl RuntimeCore {
     pub(crate) async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
         tracing::info!("Starting event loop");
 
-        self.spawn_config_watcher();
-        self.spawn_openai_auth_forwarder();
+        let background_tasks = [
+            self.spawn_config_watcher(),
+            self.spawn_openai_auth_forwarder(),
+        ];
         if let Err(error) = self.load_providers_config_and_emit().await {
             self.send_error(format!("Failed to load config: {error}"));
         }
@@ -65,6 +67,11 @@ impl RuntimeCore {
             if let Err(error) = self.handle_command(command).await {
                 self.send_error(error.to_string());
             }
+        }
+
+        for task in background_tasks {
+            task.abort();
+            let _ = task.await;
         }
 
         tracing::info!("Event loop terminated");

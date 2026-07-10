@@ -7,6 +7,7 @@ use kraai_provider_openai_codex::{
     OpenAiCodexLoginState as ProviderOpenAiCodexLoginState,
 };
 use notify::{RecursiveMode, Watcher};
+use tokio::task::JoinHandle;
 
 use super::core::{RuntimeCore, emit_event};
 use crate::api::{
@@ -17,7 +18,7 @@ use crate::handle::Command;
 use crate::settings::{SettingsDocument, read_settings_document, write_settings_document};
 
 impl RuntimeCore {
-    pub(crate) fn spawn_openai_auth_forwarder(&self) {
+    pub(crate) fn spawn_openai_auth_forwarder(&self) -> JoinHandle<()> {
         let mut updates = self.openai_codex_auth.subscribe();
         let runtime = self.clone();
         tokio::spawn(async move {
@@ -26,10 +27,10 @@ impl RuntimeCore {
                     status: map_openai_codex_auth_status(status),
                 });
             }
-        });
+        })
     }
 
-    pub(crate) fn spawn_config_watcher(&self) {
+    pub(crate) fn spawn_config_watcher(&self) -> JoinHandle<()> {
         let command_tx = self.command_tx.clone();
         let event_tx = self.event_tx.clone();
         let config_loc = self.provider_config_path.clone();
@@ -56,8 +57,10 @@ impl RuntimeCore {
                 return;
             }
 
-            let (tx, rx) = std::sync::mpsc::channel();
-            let mut watcher = match notify::recommended_watcher(tx) {
+            let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut watcher = match notify::recommended_watcher(move |result| {
+                let _ = notify_tx.send(result);
+            }) {
                 Ok(watcher) => watcher,
                 Err(error) => {
                     emit_event(
@@ -79,7 +82,7 @@ impl RuntimeCore {
                 return;
             }
 
-            for res in rx {
+            while let Some(res) = notify_rx.recv().await {
                 match res {
                     Ok(event) => {
                         if event.kind.is_access() {
@@ -88,7 +91,9 @@ impl RuntimeCore {
                         if !event.paths.iter().any(|path| path == &config_loc) {
                             continue;
                         }
-                        let _ = command_tx.send(Command::LoadConfig).await;
+                        if command_tx.send(Command::LoadConfig).await.is_err() {
+                            return;
+                        }
                     }
                     Err(error) => {
                         emit_event(
@@ -98,7 +103,7 @@ impl RuntimeCore {
                     }
                 }
             }
-        });
+        })
     }
 
     pub(crate) async fn read_and_validate_provider_config(

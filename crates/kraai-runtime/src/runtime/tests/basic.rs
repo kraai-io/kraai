@@ -11,6 +11,23 @@ use super::harness::{
 };
 use crate::Event;
 
+#[test]
+fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+            return Ok(());
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
+
+        harness.shutdown().await;
+        Ok(())
+    })
+}
+
 #[tokio::test]
 async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> {
     let mut providers = ProviderManager::new();
