@@ -7,8 +7,8 @@ use std::time::Duration;
 use color_eyre::eyre::Result;
 
 use super::harness::{
-    FailOnAssistantCompletionMessageStore, RuntimeTestHarness, ScriptedChunk,
-    create_session_with_profile, stream_complete_count, stream_complete_for,
+    FailOnAssistantCompletionMessageStore, FailOnDemandMessageStore, RuntimeTestHarness,
+    ScriptedChunk, create_session_with_profile, stream_complete_count, stream_complete_for,
 };
 use crate::Event;
 
@@ -288,6 +288,89 @@ async fn cancel_stream_persists_partial_message_as_complete() -> Result<()> {
         cancelled_message.status,
         kraai_types::MessageStatus::Complete
     );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancel_stream_save_failure_can_be_retried() -> Result<()> {
+    let fail_message_save = Arc::new(AtomicBool::new(false));
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let Some(harness) = RuntimeTestHarness::new_with_message_store(
+        vec![vec![
+            ScriptedChunk::plain("partial"),
+            ScriptedChunk::gated("blocked", gate),
+        ]],
+        {
+            let fail_message_save = fail_message_save.clone();
+            move |base_store| {
+                Arc::new(FailOnDemandMessageStore {
+                    inner: base_store,
+                    should_fail: fail_message_save,
+                })
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("start"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("partial chunk before failed cancel", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamChunk {
+                        session_id: event_session,
+                        chunk,
+                        ..
+                    } if event_session == &session_id && chunk == "partial"
+                )
+            })
+        })
+        .await;
+
+    fail_message_save.store(true, Ordering::SeqCst);
+    let error = harness
+        .handle
+        .cancel_stream(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("intentional message save failure")
+    );
+    assert!(!harness.events.snapshot().iter().any(|event| {
+        matches!(
+            event,
+            Event::StreamCancelled {
+                session_id: event_session,
+                ..
+            } if event_session == &session_id
+        )
+    }));
+
+    fail_message_save.store(false, Ordering::SeqCst);
+    assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+    let history = harness.handle.get_chat_history(session_id.clone()).await?;
+    assert!(history.values().any(|message| {
+        message.role == kraai_types::ChatRole::Assistant
+            && message.content == "partial"
+            && message.status == kraai_types::MessageStatus::Complete
+    }));
 
     harness.shutdown().await;
     Ok(())

@@ -573,6 +573,11 @@ pub(super) struct FailOnToolMessageStore {
     pub(super) should_fail: Arc<AtomicBool>,
 }
 
+pub(super) struct FailOnDemandMessageStore {
+    pub(super) inner: Arc<dyn MessageStore>,
+    pub(super) should_fail: Arc<AtomicBool>,
+}
+
 pub(super) struct FailOnDemandSessionStore {
     pub(super) inner: Arc<dyn SessionStore>,
     pub(super) should_fail: Arc<AtomicBool>,
@@ -635,6 +640,43 @@ impl MessageStore for FailOnToolMessageStore {
     }
 
     async fn delete(&self, id: &kraai_types::MessageId) -> Result<()> {
+        self.inner.delete(id).await
+    }
+
+    async fn exists(&self, id: &kraai_types::MessageId) -> Result<bool> {
+        self.inner.exists(id).await
+    }
+
+    async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<kraai_types::MessageId>> {
+        self.inner.list_all_on_disk().await
+    }
+
+    async fn list_hot(&self) -> Result<std::collections::HashSet<kraai_types::MessageId>> {
+        self.inner.list_hot().await
+    }
+}
+
+#[async_trait]
+impl MessageStore for FailOnDemandMessageStore {
+    async fn get(&self, id: &kraai_types::MessageId) -> Result<Option<kraai_types::Message>> {
+        self.inner.get(id).await
+    }
+
+    async fn save(&self, message: &kraai_types::Message) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional message save failure for {}", message.id));
+        }
+        self.inner.save(message).await
+    }
+
+    async fn unload(&self, id: &kraai_types::MessageId) {
+        self.inner.unload(id).await;
+    }
+
+    async fn delete(&self, id: &kraai_types::MessageId) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional message delete failure for {id}"));
+        }
         self.inner.delete(id).await
     }
 

@@ -102,7 +102,7 @@ pub(crate) enum Command {
     },
     CancelStream {
         session_id: String,
-        response: oneshot::Sender<bool>,
+        response: oneshot::Sender<Result<bool>>,
     },
     ContinueSession {
         session_id: String,
@@ -412,7 +412,7 @@ impl RuntimeHandle {
                 response: tx,
             })
             .await?;
-        Ok(rx.await?)
+        rx.await?
     }
 
     pub async fn continue_session(&self, session_id: String) -> Result<()> {

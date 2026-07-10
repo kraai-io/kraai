@@ -551,9 +551,21 @@ impl RuntimeCore {
 
         let cancelled_stream = {
             let mut agent = self.agent_manager.lock().await;
-            let cancelled = agent
+            let cancelled = match agent
                 .cancel_streaming_message(&active_stream.message_id)
-                .await?;
+                .await
+            {
+                Ok(cancelled) => cancelled,
+                Err(error) => {
+                    drop(agent);
+                    self.active_streams
+                        .lock()
+                        .await
+                        .entry(session_id)
+                        .or_insert(active_stream);
+                    return Err(error);
+                }
+            };
             agent.clear_active_turn(&session_id);
             cancelled
         };

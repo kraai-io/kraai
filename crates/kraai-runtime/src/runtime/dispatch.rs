@@ -315,7 +315,7 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                let cancelled = self.cancel_stream(session_id).await?;
+                let cancelled = self.cancel_stream(session_id).await;
                 response
                     .send(cancelled)
                     .map_err(|_| eyre!("Failed to send response"))?;
