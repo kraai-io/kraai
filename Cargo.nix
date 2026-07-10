@@ -5511,6 +5511,11 @@ rec {
             packageId = "libc";
           }
           {
+            name = "nix";
+            packageId = "nix";
+            features = [ "process" "signal" ];
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -5596,6 +5601,10 @@ rec {
           {
             name = "kraai-types";
             packageId = "kraai-types";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.2";
           }
           {
             name = "reqwest";
@@ -5994,6 +6003,11 @@ rec {
           {
             name = "regex";
             packageId = "regex";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.4";
+            features = [ "fs" ];
           }
           {
             name = "serde";
@@ -6965,7 +6979,7 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "socket" ];
+        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "process" "signal" "socket" ];
       };
       "nom" = rec {
         crateName = "nom";
@@ -10348,7 +10362,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "event" "fs" "net" "std" "stdio" "system" "termios" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "std" "stdio" "system" "termios" ];
       };
       "rustls" = rec {
         crateName = "rustls";

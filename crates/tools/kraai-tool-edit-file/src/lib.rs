@@ -475,6 +475,7 @@ fn index_lines(contents: &str) -> Vec<LineSpan> {
 #[expect(
     clippy::expect_used,
     clippy::panic,
+    clippy::unwrap_used,
     reason = "edit tests use direct assertions for filesystem fixtures and toon inputs"
 )]
 mod tests {

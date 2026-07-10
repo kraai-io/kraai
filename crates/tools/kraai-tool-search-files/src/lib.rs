@@ -218,6 +218,10 @@ fn search_directory(
     Ok(())
 }
 
+#[expect(
+    clippy::filetype_is_file,
+    reason = "only regular files and symlinks are searchable; special files must stay excluded"
+)]
 fn is_searchable_file(file_type: Option<std::fs::FileType>) -> bool {
     let Some(file_type) = file_type else {
         return false;

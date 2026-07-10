@@ -622,6 +622,7 @@ impl OpenAiCodexAuthController {
         let mut guard = self.inner.state.lock().await;
         guard.auth = Some(auth);
         guard.error = None;
+        drop(guard);
         Ok(())
     }
 
@@ -805,7 +806,7 @@ impl OpenAiCodexAuthController {
             ),
         )
         .await
-        .map_err(|_| {
+        .map_err(|_elapsed| {
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 "OpenAI device-code login timed out",
@@ -1255,18 +1256,24 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<Str
             let remaining = MAX_CALLBACK_HEADER_BYTES - request.len();
             let mut buffer = [0_u8; 1024];
             let read_capacity = remaining.min(buffer.len());
-            let size = stream.read(&mut buffer[..read_capacity]).await?;
+            let read_buffer = buffer.get_mut(..read_capacity).ok_or_else(|| {
+                io::Error::other("callback read capacity exceeded the receive buffer")
+            })?;
+            let size = stream.read(read_buffer).await?;
             if size == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "callback connection closed before HTTP headers completed",
                 ));
             }
-            request.extend_from_slice(&buffer[..size]);
+            let read_bytes = buffer
+                .get(..size)
+                .ok_or_else(|| io::Error::other("callback read exceeded the receive buffer"))?;
+            request.extend_from_slice(read_bytes);
         }
     })
     .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "callback request timed out"))?
+    .map_err(|_elapsed| io::Error::new(io::ErrorKind::TimedOut, "callback request timed out"))?
 }
 
 async fn write_http_response(

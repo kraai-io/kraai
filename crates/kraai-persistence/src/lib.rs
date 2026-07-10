@@ -478,6 +478,7 @@ impl SessionStore for FileSessionStore {
 
         let mut sessions = self.sessions.write().await;
         *sessions = next_sessions;
+        drop(sessions);
         Ok(true)
     }
 

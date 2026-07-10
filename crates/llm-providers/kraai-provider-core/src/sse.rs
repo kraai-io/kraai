@@ -151,6 +151,7 @@ async fn flush_event(
 
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
     clippy::panic_in_result_fn,
     reason = "fallible channel setup is combined with direct assertions"
 )]

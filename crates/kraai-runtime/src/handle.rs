@@ -225,7 +225,7 @@ impl RuntimeHandle {
             tokio::task::spawn_blocking(move || thread.join())
                 .await
                 .map_err(|error| eyre!("runtime join task failed: {error}"))?
-                .map_err(|_| eyre!("runtime background thread panicked"))?;
+                .map_err(|_panic| eyre!("runtime background thread panicked"))?;
         }
         Ok(())
     }

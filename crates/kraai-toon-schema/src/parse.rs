@@ -601,7 +601,7 @@ fn parse_example_value(input: ParseStream<'_>) -> Result<Value> {
             let value = if magnitude == i64::MAX as u64 + 1 {
                 i64::MIN
             } else {
-                -i64::try_from(magnitude).map_err(|_| {
+                -i64::try_from(magnitude).map_err(|_error| {
                     syn::Error::new(
                         lit.span(),
                         "negative integer example is outside the supported 64-bit range",
