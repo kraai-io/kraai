@@ -1,4 +1,5 @@
 use std::fs::{File, OpenOptions};
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -12,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, broadcast};
-use tokio::task::AbortHandle;
+use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::task::JoinHandle;
 
 const AUTH_ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -92,6 +93,7 @@ pub(crate) struct RequestAuth {
 struct Inner {
     client: Client,
     state: Mutex<ControllerState>,
+    login_gate: Mutex<()>,
     refresh_gate: Mutex<()>,
     updates: broadcast::Sender<OpenAiCodexAuthStatus>,
     config: AuthConfig,
@@ -140,8 +142,9 @@ struct ControllerState {
 }
 
 struct PendingLogin {
+    id: String,
     state: OpenAiCodexLoginState,
-    abort_handle: AbortHandle,
+    task: JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -279,6 +282,7 @@ impl OpenAiCodexAuthController {
                     pending: None,
                     error,
                 }),
+                login_gate: Mutex::new(()),
                 refresh_gate: Mutex::new(()),
                 updates,
                 config,
@@ -299,7 +303,8 @@ impl OpenAiCodexAuthController {
     }
 
     pub async fn start_browser_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
 
         let listener = bind_listener(
             self.inner.config.default_callback_port,
@@ -319,70 +324,54 @@ impl OpenAiCodexAuthController {
         );
 
         let controller = self.clone();
-        let abort_handle = tokio::spawn(async move {
-            if let Err(error) = controller
-                .run_browser_login(listener, redirect_uri, pkce, state)
-                .await
-            {
-                controller.finish_failed_login(error.to_string()).await;
-            }
-        })
-        .abort_handle();
-
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.pending = Some(PendingLogin {
-                state: OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
-                abort_handle,
-            });
-            guard.error = None;
-        }
+        self.install_login_task(
+            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
+            async move {
+                controller
+                    .run_browser_login(listener, redirect_uri, pkce, state)
+                    .await
+            },
+        )
+        .await;
 
         self.emit_status().await
     }
 
     pub async fn start_device_code_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
 
         let device_code = self.request_device_code().await?;
         let verification_url = format!("{}/codex/device", self.inner.config.issuer);
 
-        let controller = self.clone();
+        let worker = self.clone();
         let device_auth_id = device_code.device_auth_id.clone();
         let user_code = device_code.user_code.clone();
         let interval_seconds = device_code.interval_seconds;
-        let abort_handle = tokio::spawn(async move {
-            if let Err(error) = controller
-                .run_device_code_login(
-                    device_auth_id,
-                    user_code,
-                    interval_seconds,
-                    verification_url,
-                )
-                .await
-            {
-                controller.finish_failed_login(error.to_string()).await;
-            }
-        })
-        .abort_handle();
-
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.pending = Some(PendingLogin {
-                state: OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
-                    verification_url: format!("{}/codex/device", self.inner.config.issuer),
-                    user_code: device_code.user_code,
-                }),
-                abort_handle,
-            });
-            guard.error = None;
-        }
+        self.install_login_task(
+            OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+                verification_url: format!("{}/codex/device", self.inner.config.issuer),
+                user_code: device_code.user_code,
+            }),
+            async move {
+                worker
+                    .run_device_code_login(
+                        device_auth_id,
+                        user_code,
+                        interval_seconds,
+                        verification_url,
+                    )
+                    .await
+            },
+        )
+        .await;
 
         self.emit_status().await
     }
 
     pub async fn cancel_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         {
             let mut guard = self.inner.state.lock().await;
             guard.pending = None;
@@ -392,7 +381,8 @@ impl OpenAiCodexAuthController {
     }
 
     pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         {
             let mut guard = self.inner.state.lock().await;
@@ -555,24 +545,83 @@ impl OpenAiCodexAuthController {
         Ok(())
     }
 
-    async fn finish_failed_login(&self, error: String) {
+    async fn install_login_task<F>(&self, state: OpenAiCodexLoginState, worker: F)
+    where
+        F: Future<Output = io::Result<StoredAuth>> + Send + 'static,
+    {
+        let id = generate_generation();
+        let worker_id = id.clone();
+        let controller = self.clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            controller
+                .finish_login_attempt(worker_id, worker.await)
+                .await;
+        });
+
+        {
+            let mut guard = self.inner.state.lock().await;
+            guard.pending = Some(PendingLogin { id, state, task });
+            guard.error = None;
+        }
+        let _ = start_tx.send(());
+    }
+
+    async fn finish_login_attempt(&self, id: String, result: io::Result<StoredAuth>) {
+        let _login_guard = self.inner.login_gate.lock().await;
+        let is_current = {
+            let guard = self.inner.state.lock().await;
+            guard
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.id == id)
+        };
+        if !is_current {
+            return;
+        }
+
+        let result = match result {
+            Ok(auth) => match acquire_auth_file_lock(self.inner.config.auth_path.clone()).await {
+                Ok(_file_lock) => persist_auth_file(&self.inner.config.auth_path, &auth)
+                    .map(|()| auth)
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            },
+            Err(error) => Err(error.to_string()),
+        };
+
         let mut guard = self.inner.state.lock().await;
+        if guard
+            .pending
+            .as_ref()
+            .is_none_or(|pending| pending.id != id)
+        {
+            return;
+        }
         guard.pending = None;
-        guard.error = Some(error);
+        match result {
+            Ok(auth) => {
+                guard.auth = Some(auth);
+                guard.error = None;
+            }
+            Err(error) => guard.error = Some(error),
+        }
         drop(guard);
         let _ = self.emit_status().await;
     }
 
-    async fn finish_successful_login(&self, auth: StoredAuth) -> io::Result<()> {
+    #[cfg(test)]
+    async fn replace_auth_for_test(&self, auth: StoredAuth) -> io::Result<()> {
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         persist_auth_file(&self.inner.config.auth_path, &auth)?;
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.auth = Some(auth);
-            guard.pending = None;
-            guard.error = None;
-        }
-        let _ = self.emit_status().await;
+        let mut guard = self.inner.state.lock().await;
+        guard.auth = Some(auth);
+        guard.error = None;
         Ok(())
     }
 
@@ -587,13 +636,14 @@ impl OpenAiCodexAuthController {
         Ok(status)
     }
 
-    async fn cancel_pending_task(&self) {
+    async fn cancel_pending_task_locked(&self) {
         let pending = {
             let mut guard = self.inner.state.lock().await;
             guard.pending.take()
         };
         if let Some(pending) = pending {
-            pending.abort_handle.abort();
+            pending.task.abort();
+            let _ = pending.task.await;
         }
     }
 
@@ -603,7 +653,7 @@ impl OpenAiCodexAuthController {
         redirect_uri: String,
         pkce: PkceCodes,
         expected_state: String,
-    ) -> io::Result<()> {
+    ) -> io::Result<StoredAuth> {
         loop {
             let (mut stream, _) = listener.accept().await?;
             let request = match read_http_request(&mut stream).await {
@@ -700,8 +750,7 @@ impl OpenAiCodexAuthController {
                 "OpenAI sign-in complete. You can return to Kraai.",
             )
             .await?;
-            self.finish_successful_login(auth).await?;
-            return Ok(());
+            return Ok(auth);
         }
     }
 
@@ -745,7 +794,7 @@ impl OpenAiCodexAuthController {
         user_code: String,
         interval_seconds: u64,
         verification_url: String,
-    ) -> io::Result<()> {
+    ) -> io::Result<StoredAuth> {
         tokio::time::timeout(
             Duration::from_secs(DEVICE_CODE_TIMEOUT_SECS),
             self.run_device_code_login_inner(
@@ -770,7 +819,7 @@ impl OpenAiCodexAuthController {
         user_code: String,
         interval_seconds: u64,
         verification_url: String,
-    ) -> io::Result<()> {
+    ) -> io::Result<StoredAuth> {
         let interval = Duration::from_secs(interval_seconds.clamp(1, 30));
         loop {
             let response = self
@@ -804,8 +853,7 @@ impl OpenAiCodexAuthController {
                         &response.authorization_code,
                     )
                     .await?;
-                self.finish_successful_login(auth).await?;
-                return Ok(());
+                return Ok(auth);
             }
 
             if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
@@ -1264,6 +1312,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::{Barrier, oneshot};
+    use tokio::task::AbortHandle;
     use ulid::Ulid;
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -1441,6 +1490,89 @@ mod tests {
         let error = read_http_request(&mut server).await.unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn immediately_failing_login_does_not_leave_pending_state() {
+        let Some(controller) = auth_controller_or_skip() else {
+            return;
+        };
+        controller
+            .install_login_task(
+                OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                    auth_url: String::from("https://example.invalid"),
+                }),
+                async { Err(io::Error::other("immediate failure")) },
+            )
+            .await;
+
+        let status = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let status = controller.get_status().await;
+                if status.error.is_some() {
+                    break status;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
+        assert_eq!(status.error.as_deref(), Some("immediate failure"));
+    }
+
+    #[tokio::test]
+    async fn stale_login_completion_cannot_clear_newer_attempt() {
+        let Some(controller) = auth_controller_or_skip() else {
+            return;
+        };
+        controller
+            .install_login_task(
+                OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                    auth_url: String::from("https://old.invalid"),
+                }),
+                std::future::pending(),
+            )
+            .await;
+        let old_id = controller
+            .inner
+            .state
+            .lock()
+            .await
+            .pending
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
+
+        {
+            let _login_guard = controller.inner.login_gate.lock().await;
+            controller.cancel_pending_task_locked().await;
+            controller
+                .install_login_task(
+                    OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                        auth_url: String::from("https://new.invalid"),
+                    }),
+                    std::future::pending(),
+                )
+                .await;
+        }
+        controller
+            .finish_login_attempt(old_id, Err(io::Error::other("stale failure")))
+            .await;
+
+        let status = controller.get_status().await;
+        assert_eq!(
+            status.state,
+            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                auth_url: String::from("https://new.invalid"),
+            })
+        );
+        assert!(status.error.is_none());
+
+        let _login_guard = controller.inner.login_gate.lock().await;
+        controller.cancel_pending_task_locked().await;
     }
 
     #[test]
@@ -1770,7 +1902,7 @@ mod tests {
         let stale_auth = controller.get_request_auth().await.unwrap();
 
         controller
-            .finish_successful_login(stored_auth(
+            .replace_auth_for_test(stored_auth(
                 "new@example.com",
                 "team",
                 "workspace_new",
