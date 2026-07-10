@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
+use rand::RngExt;
 use reqwest::header::RETRY_AFTER;
 use reqwest::{Response, StatusCode};
 use tracing::warn;
@@ -10,6 +11,8 @@ use tracing::warn;
 pub struct HttpRetryPolicy {
     pub max_attempts: u32,
     pub initial_backoff: Duration,
+    pub max_delay: Duration,
+    pub max_elapsed: Duration,
 }
 
 impl HttpRetryPolicy {
@@ -24,12 +27,20 @@ impl HttpRetryPolicy {
         self.initial_backoff
             .checked_mul(multiplier)
             .unwrap_or(Duration::MAX)
+            .min(self.max_delay)
+    }
+
+    fn jittered_backoff_for_retry(&self, retry_number: u32) -> Duration {
+        let percent = rand::rng().random_range(80..=120);
+        apply_jitter(self.backoff_for_retry(retry_number), percent).min(self.max_delay)
     }
 }
 
 pub const DEFAULT_HTTP_RETRY_POLICY: HttpRetryPolicy = HttpRetryPolicy {
-    max_attempts: 20,
+    max_attempts: 6,
     initial_backoff: Duration::from_secs(1),
+    max_delay: Duration::from_secs(15),
+    max_elapsed: Duration::from_secs(60),
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,17 +112,22 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = reqwest::Result<Response>>,
 {
-    for attempt_number in 1..=policy.max_attempts {
+    let started = Instant::now();
+    let max_attempts = policy.max_attempts.max(1);
+
+    for attempt_number in 1..=max_attempts {
         match send().await {
             Ok(response) => {
-                if !is_retryable_status(response.status()) || attempt_number >= policy.max_attempts
-                {
+                if !is_retryable_status(response.status()) || attempt_number >= max_attempts {
                     return Ok(response);
                 }
 
                 let retry_number = attempt_number;
                 let reason = format!("HTTP {}", response.status());
                 let delay = retry_delay_from_response(policy, retry_number, &response);
+                if !retry_fits_budget(policy, started, delay) {
+                    return Ok(response);
+                }
                 notify_retry(
                     request_context,
                     operation,
@@ -129,12 +145,15 @@ where
                 tokio::time::sleep(delay).await;
             }
             Err(error) => {
-                if !is_retryable_error(&error) || attempt_number >= policy.max_attempts {
+                if !is_retryable_error(&error) || attempt_number >= max_attempts {
                     return Err(error);
                 }
 
                 let retry_number = attempt_number;
-                let delay = policy.backoff_for_retry(retry_number);
+                let delay = policy.jittered_backoff_for_retry(retry_number);
+                if !retry_fits_budget(policy, started, delay) {
+                    return Err(error);
+                }
                 let reason = error.to_string();
                 notify_retry(
                     request_context,
@@ -155,7 +174,18 @@ where
         }
     }
 
-    unreachable!("HTTP retry policy must allow at least one attempt")
+    unreachable!("max_attempts is normalized to at least one")
+}
+
+fn retry_fits_budget(policy: &HttpRetryPolicy, started: Instant, delay: Duration) -> bool {
+    started
+        .elapsed()
+        .checked_add(delay)
+        .is_some_and(|elapsed| elapsed <= policy.max_elapsed)
+}
+
+fn apply_jitter(delay: Duration, percent: u32) -> Duration {
+    delay.mul_f64(f64::from(percent) / 100.0)
 }
 
 fn notify_retry(
@@ -180,7 +210,9 @@ fn retry_delay_from_response(
     retry_number: u32,
     response: &Response,
 ) -> Duration {
-    parse_retry_after(response).unwrap_or_else(|| policy.backoff_for_retry(retry_number))
+    parse_retry_after(response)
+        .map(|delay| delay.min(policy.max_delay))
+        .unwrap_or_else(|| policy.jittered_backoff_for_retry(retry_number))
 }
 
 fn parse_retry_after(response: &Response) -> Option<Duration> {
@@ -377,6 +409,8 @@ mod tests {
         HttpRetryPolicy {
             max_attempts: 20,
             initial_backoff: Duration::from_millis(5),
+            max_delay: Duration::from_millis(50),
+            max_elapsed: Duration::from_secs(2),
         }
     }
 
@@ -681,6 +715,8 @@ mod tests {
         let policy = HttpRetryPolicy {
             max_attempts: 3,
             initial_backoff: Duration::from_millis(1),
+            max_delay: Duration::from_millis(10),
+            max_elapsed: Duration::from_secs(1),
         };
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
@@ -723,6 +759,8 @@ mod tests {
         let policy = HttpRetryPolicy {
             max_attempts: 3,
             initial_backoff: Duration::from_millis(7),
+            max_delay: Duration::from_millis(20),
+            max_elapsed: Duration::from_secs(1),
         };
         let collector = Arc::new(RetryCollector::default());
         let Some(client) = test_client_or_skip() else {
@@ -746,9 +784,11 @@ mod tests {
         };
         assert_eq!(first.operation, "responses");
         assert_eq!(first.retry_number, 1);
-        assert_eq!(first.delay, Duration::from_millis(7));
+        assert!(first.delay >= Duration::from_micros(5_600));
+        assert!(first.delay <= Duration::from_micros(8_400));
         assert_eq!(second.retry_number, 2);
-        assert_eq!(second.delay, Duration::from_millis(14));
+        assert!(second.delay >= Duration::from_micros(11_200));
+        assert!(second.delay <= Duration::from_micros(16_800));
         Ok(())
     }
 
@@ -808,6 +848,8 @@ mod tests {
         let policy = HttpRetryPolicy {
             max_attempts: 2,
             initial_backoff: Duration::from_millis(11),
+            max_delay: Duration::from_millis(20),
+            max_elapsed: Duration::from_secs(1),
         };
         let Some(client) = test_client_or_skip() else {
             return Ok(());
@@ -826,7 +868,94 @@ mod tests {
         let [event] = events.as_slice() else {
             return Err(eyre!("expected one retry event"));
         };
-        assert_eq!(event.delay, Duration::from_millis(11));
+        assert!(event.delay >= Duration::from_micros(8_800));
+        assert!(event.delay <= Duration::from_micros(13_200));
+        Ok(())
+    }
+
+    #[test]
+    fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
+        assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_attempts, 6);
+        assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_delay, Duration::from_secs(15));
+        assert_eq!(
+            DEFAULT_HTTP_RETRY_POLICY.max_elapsed,
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            apply_jitter(Duration::from_secs(10), 80),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            apply_jitter(Duration::from_secs(10), 120),
+            Duration::from_secs(12)
+        );
+        assert!(
+            DEFAULT_HTTP_RETRY_POLICY.backoff_for_retry(u32::MAX)
+                <= DEFAULT_HTTP_RETRY_POLICY.max_delay
+        );
+    }
+
+    #[tokio::test]
+    async fn clamps_oversized_retry_after_to_max_delay() -> Result<()> {
+        let address = spawn_server(vec![
+            ScriptedResponse::Status {
+                status_line: "429 Too Many Requests",
+                headers: vec![("Retry-After", String::from("999999"))],
+                body: "wait",
+            },
+            ScriptedResponse::Status {
+                status_line: "200 OK",
+                headers: Vec::new(),
+                body: "ok",
+            },
+        ])
+        .await?;
+        let collector = Arc::new(RetryCollector::default());
+        let Some(client) = test_client_or_skip() else {
+            return Ok(());
+        };
+
+        let response = send_with_retry(
+            "responses",
+            &test_policy(),
+            &ProviderRequestContext::with_retry_observer(collector.clone()),
+            || client.get(format!("http://{address}/")).send(),
+        )
+        .await?;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = collector.snapshot();
+        assert_eq!(
+            events.first().map(|event| event.delay),
+            Some(Duration::from_millis(50))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
+        let address = spawn_server(vec![ScriptedResponse::Status {
+            status_line: "200 OK",
+            headers: Vec::new(),
+            body: "ok",
+        }])
+        .await?;
+        let Some(client) = test_client_or_skip() else {
+            return Ok(());
+        };
+        let policy = HttpRetryPolicy {
+            max_attempts: 0,
+            initial_backoff: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            max_elapsed: Duration::ZERO,
+        };
+
+        let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
+            client.get(format!("http://{address}/")).send()
+        })
+        .await?;
+
+        assert_eq!(response.status(), StatusCode::OK);
         Ok(())
     }
 }

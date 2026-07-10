@@ -1762,6 +1762,7 @@ dependencies = [
  "futures",
  "httpdate",
  "kraai-types",
+ "rand 0.10.2",
  "reqwest",
  "serde",
  "thiserror 2.0.18",
