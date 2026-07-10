@@ -188,6 +188,8 @@ async fn spawn_and_wait(
         let mut output = Vec::new();
         stderr.read_to_end(&mut output).await.map(|_| output)
     });
+    let stdout_abort = stdout_task.abort_handle();
+    let stderr_abort = stderr_task.abort_handle();
 
     let completed = async {
         let status = child
@@ -207,6 +209,8 @@ async fn spawn_and_wait(
     let (status, stdout, stderr) = match tokio::time::timeout(timeout, completed).await {
         Ok(result) => result?,
         Err(_) => {
+            stdout_abort.abort();
+            stderr_abort.abort();
             terminate_process_tree(&mut child, process_group_id).await?;
             return Err(CommandError::TimedOut(timeout));
         }

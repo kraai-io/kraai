@@ -12,6 +12,10 @@ pub struct HttpRetryPolicy {
     pub max_attempts: u32,
     pub initial_backoff: Duration,
     pub max_delay: Duration,
+    /// Maximum elapsed time before scheduling another retry delay.
+    ///
+    /// Individual request attempts must enforce their own timeout; an attempt
+    /// started within this budget may complete after it expires.
     pub max_elapsed: Duration,
 }
 

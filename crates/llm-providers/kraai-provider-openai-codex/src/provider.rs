@@ -264,11 +264,17 @@ fn adapt_responses_stream(
                     }
                 }
                 "response.completed" => {
-                    return event
+                    let usage = event
                         .response
                         .and_then(|response| response.usage)
-                        .and_then(normalize_usage)
-                        .map(|usage| (Ok(ProviderStreamEvent::Usage(usage)), (source, true)));
+                        .and_then(normalize_usage);
+                    return Some((
+                        usage.map_or_else(
+                            || Err(eyre!("OpenAI response.completed event omitted usage")),
+                            |usage| Ok(ProviderStreamEvent::Usage(usage)),
+                        ),
+                        (source, true),
+                    ));
                 }
                 "response.failed" | "response.incomplete" => {
                     return Some((Err(eyre!("OpenAI response stream failed")), (source, true)));
@@ -887,7 +893,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_stream_stops_at_completed_without_waiting_for_eof() {
+    async fn responses_stream_rejects_completed_event_without_usage() {
         let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
             r#"{"type":"response.completed","response":{}}"#,
         )))])
@@ -901,6 +907,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(event.is_none());
+        assert!(event.is_some_and(|result| result.is_err()));
     }
 }
