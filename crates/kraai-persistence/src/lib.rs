@@ -66,6 +66,13 @@ pub trait SessionStore: Send + Sync {
     /// Save a session
     async fn save(&self, session: &SessionMeta) -> Result<()>;
 
+    /// Save a session only when its currently persisted tip matches `expected_tip`.
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&MessageId>,
+    ) -> Result<bool>;
+
     /// Delete a session
     async fn delete(&self, id: &str) -> Result<()>;
 }
@@ -449,6 +456,29 @@ impl SessionStore for FileSessionStore {
         *sessions = next_sessions;
         drop(sessions);
         Ok(())
+    }
+
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&MessageId>,
+    ) -> Result<bool> {
+        let _write_guard = self.write_guard.lock().await;
+
+        let mut next_sessions = self.sessions.read().await.clone();
+        let Some(current) = next_sessions.get(&session.id) else {
+            return Ok(false);
+        };
+        if current.tip_id.as_ref() != expected_tip {
+            return Ok(false);
+        }
+        next_sessions.insert(session.id.clone(), session.clone());
+
+        Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
+
+        let mut sessions = self.sessions.write().await;
+        *sessions = next_sessions;
+        Ok(true)
     }
 
     async fn delete(&self, id: &str) -> Result<()> {

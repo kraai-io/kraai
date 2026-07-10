@@ -62,13 +62,23 @@ impl ConversationStore {
         }
         session.updated_at = current_unix_timestamp();
 
-        if let Err(error) = self.session_store.save(&session).await {
-            if let Err(delete_error) = self.message_store.delete(&message_id).await {
-                tracing::error!(
-                    "Failed to delete unreferenced appended message {message_id}: {delete_error}"
-                );
+        match self
+            .session_store
+            .save_if_tip_matches(&session, previous_tip.as_ref())
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                self.delete_unreferenced_message(&message_id).await;
+                return Err(eyre!(
+                    "Session {} changed while appending message {message_id}",
+                    request.session_id
+                ));
             }
-            return Err(error);
+            Err(error) => {
+                self.delete_unreferenced_message(&message_id).await;
+                return Err(error);
+            }
         }
 
         Ok(AppendedMessage {
@@ -113,7 +123,15 @@ impl ConversationStore {
         session.tip_id = tip_id;
         session.title = title;
         session.updated_at = current_unix_timestamp();
-        self.session_store.save(&session).await?;
+        if !self
+            .session_store
+            .save_if_tip_matches(&session, Some(message_id))
+            .await?
+        {
+            return Err(eyre!(
+                "Cannot restore session {session_id}: tip changed while restoring message {message_id}"
+            ));
+        }
         // The session no longer references the abandoned message. Cleanup failure should leave an
         // orphan for later GC, not make callers believe the rollback itself failed.
         if let Err(error) = self.message_store.delete(message_id).await {
@@ -122,6 +140,14 @@ impl ConversationStore {
             );
         }
         Ok(())
+    }
+
+    async fn delete_unreferenced_message(&self, message_id: &MessageId) {
+        if let Err(delete_error) = self.message_store.delete(message_id).await {
+            tracing::error!(
+                "Failed to delete unreferenced appended message {message_id}: {delete_error}"
+            );
+        }
     }
 }
 
@@ -157,6 +183,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Barrier;
 
     fn test_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -202,6 +229,11 @@ mod tests {
         should_fail: Arc<AtomicBool>,
     }
 
+    struct BarrierOnSaveMessageStore {
+        inner: Arc<dyn MessageStore>,
+        barrier: Arc<Barrier>,
+    }
+
     #[async_trait::async_trait]
     impl SessionStore for FailOnSaveSessionStore {
         async fn list(&self) -> Result<Vec<SessionMeta>> {
@@ -217,6 +249,17 @@ mod tests {
                 return Err(eyre!("intentional session save failure for {}", session.id));
             }
             self.inner.save(session).await
+        }
+
+        async fn save_if_tip_matches(
+            &self,
+            session: &SessionMeta,
+            expected_tip: Option<&MessageId>,
+        ) -> Result<bool> {
+            if self.should_fail.load(Ordering::SeqCst) {
+                return Err(eyre!("intentional session save failure for {}", session.id));
+            }
+            self.inner.save_if_tip_matches(session, expected_tip).await
         }
 
         async fn delete(&self, id: &str) -> Result<()> {
@@ -242,6 +285,39 @@ mod tests {
             if self.should_fail.load(Ordering::SeqCst) {
                 return Err(eyre!("intentional message delete failure for {id}"));
             }
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &MessageId) -> Result<bool> {
+            self.inner.exists(id).await
+        }
+
+        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_all_on_disk().await
+        }
+
+        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_hot().await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MessageStore for BarrierOnSaveMessageStore {
+        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, message: &Message) -> Result<()> {
+            self.inner.save(message).await?;
+            self.barrier.wait().await;
+            Ok(())
+        }
+
+        async fn unload(&self, id: &MessageId) {
+            self.inner.unload(id).await;
+        }
+
+        async fn delete(&self, id: &MessageId) -> Result<()> {
             self.inner.delete(id).await
         }
 
@@ -412,6 +488,99 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_appends_do_not_silently_orphan_a_success() {
+        with_test_store(
+            "concurrent-appends",
+            |message_store, session_store, _| async move {
+                session_store
+                    .save(&untitled_session("session", None, 1))
+                    .await
+                    .unwrap();
+                let synchronized_messages: Arc<dyn MessageStore> =
+                    Arc::new(BarrierOnSaveMessageStore {
+                        inner: message_store.clone(),
+                        barrier: Arc::new(Barrier::new(2)),
+                    });
+                let conversations =
+                    ConversationStore::new(synchronized_messages, session_store.clone());
+
+                let first = tokio::spawn({
+                    let conversations = conversations.clone();
+                    async move {
+                        conversations
+                            .append_message(append_request(
+                                "session",
+                                ChatRole::User,
+                                "first",
+                                MessageStatus::Complete,
+                                None,
+                            ))
+                            .await
+                    }
+                });
+                let second = tokio::spawn({
+                    let conversations = conversations.clone();
+                    async move {
+                        conversations
+                            .append_message(append_request(
+                                "session",
+                                ChatRole::User,
+                                "second",
+                                MessageStatus::Complete,
+                                None,
+                            ))
+                            .await
+                    }
+                });
+
+                let results = [first.await.unwrap(), second.await.unwrap()];
+                assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+                assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+                let stored_session = session_store.get("session").await.unwrap().unwrap();
+                let tip = stored_session.tip_id.unwrap();
+                assert!(message_store.exists(&tip).await.unwrap());
+                assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn append_and_rollback_race_cannot_restore_over_newer_tip() {
+        with_test_store(
+            "append-rollback-race",
+            |_message_store, session_store, _| async move {
+                let abandoned_id = MessageId::new("abandoned");
+                let newer_id = MessageId::new("newer");
+                let original = untitled_session("session", Some(&abandoned_id), 1);
+                session_store.save(&original).await.unwrap();
+
+                let mut append_update = original.clone();
+                append_update.tip_id = Some(newer_id.clone());
+                let mut stale_rollback = original;
+                stale_rollback.tip_id = None;
+
+                assert!(
+                    session_store
+                        .save_if_tip_matches(&append_update, Some(&abandoned_id))
+                        .await
+                        .unwrap()
+                );
+                assert!(
+                    !session_store
+                        .save_if_tip_matches(&stale_rollback, Some(&abandoned_id))
+                        .await
+                        .unwrap()
+                );
+                let stored_session = session_store.get("session").await.unwrap().unwrap();
+                assert_eq!(stored_session.tip_id, Some(newer_id));
+            },
+        )
+        .await;
     }
 
     #[tokio::test]

@@ -669,6 +669,17 @@ impl SessionStore for FailOnDemandSessionStore {
         self.inner.save(session).await
     }
 
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&kraai_types::MessageId>,
+    ) -> Result<bool> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional session save failure for {}", session.id));
+        }
+        self.inner.save_if_tip_matches(session, expected_tip).await
+    }
+
     async fn delete(&self, id: &str) -> Result<()> {
         self.inner.delete(id).await
     }
