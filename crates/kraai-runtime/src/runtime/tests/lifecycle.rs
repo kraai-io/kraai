@@ -107,6 +107,67 @@ async fn start_failure_surfaces_rollback_error_without_clearing_active_turn() ->
 }
 
 #[tokio::test]
+async fn delete_session_waits_for_and_returns_persistence_result() -> Result<()> {
+    let fail_session_store = Arc::new(AtomicBool::new(false));
+    let Some(harness) = RuntimeTestHarness::new_with_provider_and_session_store(
+        Box::new(DeferredFailingProvider {
+            id: ProviderId::new("mock"),
+            started: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            failure_message: String::from("unused"),
+        }),
+        {
+            let fail_session_store = fail_session_store.clone();
+            move |base_store| {
+                Arc::new(FailOnDemandSessionStore {
+                    inner: base_store,
+                    should_fail: fail_session_store,
+                })
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = harness.handle.create_session().await?;
+
+    fail_session_store.store(true, Ordering::SeqCst);
+    let error = harness
+        .handle
+        .delete_session(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("intentional session delete failure")
+    );
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+
+    fail_session_store.store(false, Ordering::SeqCst);
+    harness.handle.delete_session(session_id.clone()).await?;
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .all(|session| session.id != session_id)
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn continue_session_starts_new_assistant_turn_without_new_user_message() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain("first reply")],

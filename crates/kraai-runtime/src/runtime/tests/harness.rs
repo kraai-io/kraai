@@ -681,6 +681,9 @@ impl SessionStore for FailOnDemandSessionStore {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional session delete failure for {id}"));
+        }
         self.inner.delete(id).await
     }
 }

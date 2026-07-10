@@ -146,16 +146,23 @@ impl RuntimeCore {
                     .send(history)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
-            Command::DeleteSession { session_id } => {
+            Command::DeleteSession {
+                session_id,
+                response,
+            } => {
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
                 self.queued_messages.lock().await.remove(&session_id);
-                self.agent_manager
+                let result = self
+                    .agent_manager
                     .lock()
                     .await
                     .delete_session(&session_id)
-                    .await?;
+                    .await;
+                response
+                    .send(result)
+                    .map_err(|_| eyre!("Failed to send delete-session response"))?;
             }
             Command::GetWorkspaceState {
                 session_id,

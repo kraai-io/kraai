@@ -61,6 +61,7 @@ pub(crate) enum Command {
     },
     DeleteSession {
         session_id: String,
+        response: oneshot::Sender<Result<()>>,
     },
     GetWorkspaceState {
         session_id: String,
@@ -309,10 +310,14 @@ impl RuntimeHandle {
 
     /// Delete a session by ID
     pub async fn delete_session(&self, session_id: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::DeleteSession { session_id })
+            .send(Command::DeleteSession {
+                session_id,
+                response: tx,
+            })
             .await?;
-        Ok(())
+        rx.await?
     }
 
     pub async fn get_workspace_state(&self, session_id: String) -> Result<Option<WorkspaceState>> {
