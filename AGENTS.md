@@ -41,7 +41,6 @@ crates/
     kraai-tool-core/ - Tool trait definitions
     kraai-tool-*/    - Tool definitions
   kraai-toon-schema/ - Schema definitions
-  toon-schema-core/  - Core schema types
   kraai-tui/         - Terminal UI
 ```
 
