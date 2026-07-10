@@ -39,6 +39,56 @@ const GENERAL_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     },
 ];
 
+const GPT_5_6_REASONING_EFFORTS: [CatalogReasoningEffort; 6] = [
+    CatalogReasoningEffort {
+        effort: "low",
+        description: "Fast responses with lighter reasoning",
+    },
+    CatalogReasoningEffort {
+        effort: "medium",
+        description: "Balances speed and reasoning depth for everyday tasks",
+    },
+    CatalogReasoningEffort {
+        effort: "high",
+        description: "Greater reasoning depth for complex problems",
+    },
+    CatalogReasoningEffort {
+        effort: "xhigh",
+        description: "Extra high reasoning depth for complex problems",
+    },
+    CatalogReasoningEffort {
+        effort: "max",
+        description: "Maximum reasoning depth for the hardest problems",
+    },
+    CatalogReasoningEffort {
+        effort: "ultra",
+        description: "Maximum reasoning with automatic task delegation",
+    },
+];
+
+const GPT_5_6_LUNA_REASONING_EFFORTS: [CatalogReasoningEffort; 5] = [
+    CatalogReasoningEffort {
+        effort: "low",
+        description: "Fast responses with lighter reasoning",
+    },
+    CatalogReasoningEffort {
+        effort: "medium",
+        description: "Balances speed and reasoning depth for everyday tasks",
+    },
+    CatalogReasoningEffort {
+        effort: "high",
+        description: "Greater reasoning depth for complex problems",
+    },
+    CatalogReasoningEffort {
+        effort: "xhigh",
+        description: "Extra high reasoning depth for complex problems",
+    },
+    CatalogReasoningEffort {
+        effort: "max",
+        description: "Maximum reasoning depth for the hardest problems",
+    },
+];
+
 const GPT_5_2_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     CatalogReasoningEffort {
         effort: "low",
@@ -58,10 +108,34 @@ const GPT_5_2_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     },
 ];
 
-const CATALOG_MODELS: [CatalogModel; 6] = [
+const CATALOG_MODELS: [CatalogModel; 8] = [
+    CatalogModel {
+        slug: "gpt-5.6-sol",
+        display_name: "GPT-5.6-Sol",
+        visibility: CatalogVisibility::List,
+        max_context: Some(372_000),
+        default_reasoning_effort: "low",
+        supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
+    },
+    CatalogModel {
+        slug: "gpt-5.6-terra",
+        display_name: "GPT-5.6-Terra",
+        visibility: CatalogVisibility::List,
+        max_context: Some(372_000),
+        default_reasoning_effort: "medium",
+        supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
+    },
+    CatalogModel {
+        slug: "gpt-5.6-luna",
+        display_name: "GPT-5.6-Luna",
+        visibility: CatalogVisibility::List,
+        max_context: Some(372_000),
+        default_reasoning_effort: "medium",
+        supported_reasoning_efforts: &GPT_5_6_LUNA_REASONING_EFFORTS,
+    },
     CatalogModel {
         slug: "gpt-5.5",
-        display_name: "gpt-5.5",
+        display_name: "GPT-5.5",
         visibility: CatalogVisibility::List,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
@@ -69,23 +143,15 @@ const CATALOG_MODELS: [CatalogModel; 6] = [
     },
     CatalogModel {
         slug: "gpt-5.4",
-        display_name: "gpt-5.4",
+        display_name: "GPT-5.4",
         visibility: CatalogVisibility::List,
-        max_context: Some(272_000),
+        max_context: Some(1_000_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
     },
     CatalogModel {
         slug: "gpt-5.4-mini",
-        display_name: "gpt-5.4-Mini",
-        visibility: CatalogVisibility::List,
-        max_context: Some(272_000),
-        default_reasoning_effort: "medium",
-        supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
-    },
-    CatalogModel {
-        slug: "gpt-5.3-codex",
-        display_name: "gpt-5.3-codex",
+        display_name: "GPT-5.4-Mini",
         visibility: CatalogVisibility::List,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
@@ -93,7 +159,7 @@ const CATALOG_MODELS: [CatalogModel; 6] = [
     },
     CatalogModel {
         slug: "gpt-5.2",
-        display_name: "gpt-5.2",
+        display_name: "GPT-5.2",
         visibility: CatalogVisibility::List,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
@@ -103,7 +169,7 @@ const CATALOG_MODELS: [CatalogModel; 6] = [
         slug: "codex-auto-review",
         display_name: "Codex Auto Review",
         visibility: CatalogVisibility::Hide,
-        max_context: Some(272_000),
+        max_context: Some(1_000_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
     },
@@ -133,9 +199,11 @@ mod tests {
             .map(|model| model.slug)
             .collect::<Vec<_>>();
 
+        assert!(visible.contains(&"gpt-5.6-sol"));
+        assert!(visible.contains(&"gpt-5.6-terra"));
+        assert!(visible.contains(&"gpt-5.6-luna"));
         assert!(visible.contains(&"gpt-5.5"));
         assert!(visible.contains(&"gpt-5.4-mini"));
-        assert!(visible.contains(&"gpt-5.3-codex"));
         assert!(!visible.contains(&"codex-auto-review"));
     }
 

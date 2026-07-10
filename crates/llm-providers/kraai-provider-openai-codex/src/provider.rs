@@ -721,7 +721,7 @@ mod tests {
         assert!(models.contains_key("gpt-5.5-high"));
         assert_eq!(
             models.get("gpt-5.5-xhigh").map(String::as_str),
-            Some("gpt-5.5 xhigh")
+            Some("GPT-5.5 xhigh")
         );
         assert!(models.contains_key("gpt-5.4-mini-medium"));
         assert!(!models.contains_key("codex-auto-review-medium"));
