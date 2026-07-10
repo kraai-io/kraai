@@ -1,7 +1,8 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use color_eyre::eyre::Result;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::{
     ProviderManager, ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver,
@@ -123,14 +124,18 @@ impl RuntimeCore {
             let start_gate = start_gate.clone();
             async move {
                 start_gate.notified().await;
-                let result = RuntimeCore::drive_stream(
+                let result = AssertUnwindSafe(RuntimeCore::drive_stream(
                     request_session_id.clone(),
                     request,
                     providers,
                     task_runtime.agent_manager.clone(),
                     task_runtime.event_tx.clone(),
-                )
-                .await;
+                ))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| StreamDriveResult::FailedDuringStream {
+                    error: String::from("provider stream task panicked"),
+                });
 
                 let stream_was_active = task_runtime
                     .clear_active_stream(&request_session_id, &active_message_id)
