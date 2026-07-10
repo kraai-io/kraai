@@ -588,9 +588,49 @@ fn parse_example_value(input: ParseStream<'_>) -> Result<Value> {
     if input.peek(LitBool) {
         return Ok(Value::Bool(input.parse::<LitBool>()?.value));
     }
+    if input.peek(Token![-]) {
+        input.parse::<Token![-]>()?;
+        if input.peek(LitInt) {
+            let lit = input.parse::<LitInt>()?;
+            let magnitude = lit.base10_parse::<u64>().map_err(|error| {
+                syn::Error::new(
+                    lit.span(),
+                    format!("integer example is outside the supported 64-bit range: {error}"),
+                )
+            })?;
+            let value = if magnitude == i64::MAX as u64 + 1 {
+                i64::MIN
+            } else {
+                -i64::try_from(magnitude).map_err(|_| {
+                    syn::Error::new(
+                        lit.span(),
+                        "negative integer example is outside the supported 64-bit range",
+                    )
+                })?
+            };
+            return Ok(Value::Number(Number::from(value)));
+        }
+        if input.peek(LitFloat) {
+            let lit = input.parse::<LitFloat>()?;
+            let value = -lit.base10_parse::<f64>()?;
+            let number = Number::from_f64(value).ok_or_else(|| {
+                syn::Error::new(lit.span(), "floating-point example must be finite")
+            })?;
+            return Ok(Value::Number(number));
+        }
+        return Err(syn::Error::new(
+            input.span(),
+            "`-` in an example must be followed by an integer or float literal",
+        ));
+    }
     if input.peek(LitInt) {
         let lit = input.parse::<LitInt>()?;
-        let value = lit.base10_parse::<i64>()?;
+        let value = lit.base10_parse::<u64>().map_err(|error| {
+            syn::Error::new(
+                lit.span(),
+                format!("integer example is outside the supported 64-bit range: {error}"),
+            )
+        })?;
         return Ok(Value::Number(Number::from(value)));
     }
     if input.peek(LitFloat) {

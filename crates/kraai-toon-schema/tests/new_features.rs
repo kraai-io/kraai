@@ -57,3 +57,27 @@ toon_tool! {
 fn accepts_types_declared_after_their_use() {
     assert_eq!(ForwardRoot::tool_name(), "forward_reference");
 }
+
+toon_tool! {
+    name: "numeric_examples",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct NumericExamples {
+            signed: i64,
+            unsigned: u64,
+            decimal: f64,
+        }
+    },
+    root: NumericExamples,
+    examples: [
+        { signed: -1, unsigned: 18446744073709551615, decimal: -1.5 }
+    ]
+}
+
+#[test]
+fn accepts_negative_and_wide_numeric_examples() {
+    let schema = NumericExamples::toon_schema();
+    assert!(schema.contains("signed: -1"));
+    assert!(schema.contains("unsigned: 18446744073709551615"));
+    assert!(schema.contains("decimal: -1.5"));
+}
