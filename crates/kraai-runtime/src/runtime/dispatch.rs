@@ -357,6 +357,9 @@ impl RuntimeCore {
                     .send(())
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
+            Command::Shutdown { .. } => {
+                return Err(eyre!("Shutdown command reached normal dispatch"));
+            }
         }
 
         Ok(())

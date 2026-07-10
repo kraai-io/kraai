@@ -63,18 +63,54 @@ impl RuntimeCore {
             self.send_error(format!("Failed to load config: {error}"));
         }
 
+        let mut shutdown_response = None;
         while let Some(command) = command_rx.recv().await {
+            if let Command::Shutdown { response } = command {
+                shutdown_response = response;
+                break;
+            }
             if let Err(error) = self.handle_command(command).await {
                 self.send_error(error.to_string());
             }
         }
 
+        self.stop_active_work().await;
+
         for task in background_tasks {
             task.abort();
             let _ = task.await;
         }
+        if let Some(response) = shutdown_response {
+            let _ = response.send(());
+        }
 
         tracing::info!("Event loop terminated");
+    }
+
+    pub(crate) async fn stop_active_work(&self) {
+        let active_streams = self
+            .active_streams
+            .lock()
+            .await
+            .drain()
+            .map(|(_, stream)| stream)
+            .collect::<Vec<_>>();
+        for stream in active_streams {
+            stream.abort_handle.abort();
+        }
+        let active_tool_tasks = self
+            .active_tool_tasks
+            .lock()
+            .await
+            .drain()
+            .flat_map(|(_, tasks)| tasks)
+            .collect::<Vec<_>>();
+        for task in &active_tool_tasks {
+            task.abort();
+        }
+        for task in active_tool_tasks {
+            let _ = task.await;
+        }
     }
 
     pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {

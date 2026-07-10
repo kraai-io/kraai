@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
 use super::super::core::RuntimeCore;
+use crate::handle::Command;
 use crate::{Event, EventCallback, RuntimeHandle};
 
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -880,6 +881,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
         let handle = RuntimeHandle {
             command_tx: command_tx.clone(),
             event_tx: event_tx.clone(),
+            lifecycle: None,
         };
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
@@ -915,6 +917,13 @@ default_risk_level = \"undoable_workspace_write\"\n"
 
         let runtime_task = tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
+                if let Command::Shutdown { response } = command {
+                    runtime.stop_active_work().await;
+                    if let Some(response) = response {
+                        let _ = response.send(());
+                    }
+                    break;
+                }
                 runtime
                     .handle_command(command)
                     .await
@@ -1056,9 +1065,8 @@ default_risk_level = \"undoable_workspace_write\"\n"
     }
 
     pub(super) async fn shutdown(self) {
-        drop(self.handle);
+        let _ = self.handle.shutdown().await;
         self.event_task.abort();
-        self.runtime_task.abort();
         let _ = self.event_task.await;
         let _ = self.runtime_task.await;
         let _ = tokio::fs::remove_dir_all(self.data_dir).await;

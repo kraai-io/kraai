@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
 use crate::api::Event;
-use crate::handle::{Command, RuntimeHandle};
+use crate::handle::{Command, RuntimeHandle, RuntimeLifecycle};
 use crate::settings::resolve_provider_config_path;
 
 /// Builder for creating a runtime
@@ -47,15 +47,17 @@ impl RuntimeBuilder {
     pub fn build(self) -> RuntimeHandle {
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, _) = broadcast::channel(1024);
+        let lifecycle = Arc::new(RuntimeLifecycle::new(command_tx.clone()));
         let handle = RuntimeHandle {
             command_tx,
             event_tx: event_tx.clone(),
+            lifecycle: Some(lifecycle.clone()),
         };
         let command_tx_for_runtime = handle.command_tx.clone();
 
         let provider_config_path = self.provider_config_path.clone();
 
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(error) => {
@@ -76,6 +78,7 @@ impl RuntimeBuilder {
                 emit_event(&event_tx, Event::Error(error.to_string()));
             }
         });
+        lifecycle.set_thread(thread);
 
         handle
     }

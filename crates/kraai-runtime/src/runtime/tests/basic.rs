@@ -29,6 +29,22 @@ fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
 }
 
 #[tokio::test]
+async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> {
+    for _ in 0..2 {
+        let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+            return Ok(());
+        };
+        let handle = harness.handle.clone();
+
+        tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await??;
+        assert!(handle.list_sessions().await.is_err());
+
+        tokio::time::timeout(Duration::from_secs(1), harness.shutdown()).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> {
     let mut providers = ProviderManager::new();
     providers.register_provider(

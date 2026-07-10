@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderDefinition;
@@ -125,6 +127,41 @@ pub(crate) enum Command {
     LogoutOpenAiCodexAuth {
         response: oneshot::Sender<()>,
     },
+    Shutdown {
+        response: Option<oneshot::Sender<()>>,
+    },
+}
+
+pub(crate) struct RuntimeLifecycle {
+    command_tx: mpsc::Sender<Command>,
+    shutdown_started: AtomicBool,
+    thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl RuntimeLifecycle {
+    pub(crate) fn new(command_tx: mpsc::Sender<Command>) -> Self {
+        Self {
+            command_tx,
+            shutdown_started: AtomicBool::new(false),
+            thread: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn set_thread(&self, thread: std::thread::JoinHandle<()>) {
+        if let Ok(mut slot) = self.thread.lock() {
+            *slot = Some(thread);
+        }
+    }
+}
+
+impl Drop for RuntimeLifecycle {
+    fn drop(&mut self) {
+        if !self.shutdown_started.swap(true, Ordering::SeqCst) {
+            let _ = self
+                .command_tx
+                .try_send(Command::Shutdown { response: None });
+        }
+    }
 }
 
 /// Handle to the runtime for sending commands
@@ -135,11 +172,46 @@ pub(crate) enum Command {
 pub struct RuntimeHandle {
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) event_tx: broadcast::Sender<Event>,
+    pub(crate) lifecycle: Option<Arc<RuntimeLifecycle>>,
 }
 
 impl RuntimeHandle {
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.event_tx.subscribe()
+    }
+
+    /// Stop the runtime, wait for child tasks, and join its background thread.
+    pub async fn shutdown(&self) -> Result<()> {
+        let should_signal = self
+            .lifecycle
+            .as_ref()
+            .is_none_or(|lifecycle| !lifecycle.shutdown_started.swap(true, Ordering::SeqCst));
+        if should_signal {
+            let (tx, rx) = oneshot::channel();
+            if self
+                .command_tx
+                .send(Command::Shutdown { response: Some(tx) })
+                .await
+                .is_ok()
+            {
+                rx.await?;
+            }
+        }
+
+        let thread = self.lifecycle.as_ref().and_then(|lifecycle| {
+            lifecycle
+                .thread
+                .lock()
+                .ok()
+                .and_then(|mut thread| thread.take())
+        });
+        if let Some(thread) = thread {
+            tokio::task::spawn_blocking(move || thread.join())
+                .await
+                .map_err(|error| eyre!("runtime join task failed: {error}"))?
+                .map_err(|_| eyre!("runtime background thread panicked"))?;
+        }
+        Ok(())
     }
 
     /// List available models from all providers
