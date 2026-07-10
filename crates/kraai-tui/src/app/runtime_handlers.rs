@@ -606,7 +606,13 @@ impl App {
 
                 match result {
                     Ok(pending_tools) => {
-                        let should_auto_start_execution = self.state.tool_phase == ToolPhase::Idle;
+                        let recovering_from_lag = self.event_lag_tools_resync_pending;
+                        let should_auto_start_execution =
+                            self.state.tool_phase == ToolPhase::Idle && !recovering_from_lag;
+                        if recovering_from_lag {
+                            self.state.tool_phase = ToolPhase::Idle;
+                            self.state.tool_batch_execution_started = false;
+                        }
                         self.state.pending_tools = pending_tools
                             .into_iter()
                             .map(|tool| PendingTool {
@@ -621,6 +627,11 @@ impl App {
                             })
                             .collect();
                         self.sync_tool_phase_from_pending_tools();
+                        if recovering_from_lag && self.state.tool_phase == ToolPhase::ExecutingBatch
+                        {
+                            self.state.tool_batch_execution_started = true;
+                        }
+                        self.event_lag_tools_resync_pending = false;
                         if should_auto_start_execution
                             && self.state.tool_phase == ToolPhase::ExecutingBatch
                             && !self.state.tool_batch_execution_started
@@ -660,6 +671,10 @@ impl App {
                     self.state.sessions_menu_index = self.state.sessions.len();
                 }
                 self.sync_current_session_profile_from_sessions();
+                if self.event_lag_session_resync_pending {
+                    self.sync_current_session_streaming_from_sessions();
+                    self.event_lag_session_resync_pending = false;
+                }
                 self.sync_turn_timer_with_activity(Instant::now());
                 self.maybe_finish_ci_run();
             }

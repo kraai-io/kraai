@@ -4,6 +4,7 @@ use super::{
     RuntimeRequest, RuntimeResponse, STATUSLINE_ANIMATION_INTERVAL, SettingsModelField,
     SettingsProviderField, StartupOptions, ToolPhase, UiMode, default_agent_profiles,
 };
+use super::{RuntimeEventBridgeMessage, spawn_event_bridge};
 use crate::components::TextInput;
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
@@ -90,6 +91,8 @@ fn test_harness() -> TestHarness {
             state: AppState::default(),
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
+            event_lag_session_resync_pending: false,
+            event_lag_tools_resync_pending: false,
         },
         requests_rx,
     }
@@ -362,6 +365,81 @@ fn sample_sessions() -> Vec<Session> {
 }
 fn sample_agent_profiles() -> Vec<AgentProfileSummary> {
     default_agent_profiles()
+}
+
+#[test]
+fn event_bridge_reports_broadcast_lag() {
+    let (runtime_event_tx, runtime_event_rx) = tokio::sync::broadcast::channel(1);
+    runtime_event_tx
+        .send(Event::ConfigLoaded)
+        .expect("subscriber should be attached");
+    runtime_event_tx
+        .send(Event::ConfigLoaded)
+        .expect("subscriber should be attached");
+
+    let event_rx = spawn_event_bridge(runtime_event_rx);
+
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(2)),
+        Ok(RuntimeEventBridgeMessage::Lagged(1))
+    ));
+}
+
+#[test]
+fn lag_resync_restores_authoritative_current_session_lifecycle() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.state.retry_waiting = true;
+    harness.app.state.profile_locked = true;
+    harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+    harness.app.state.tool_batch_execution_started = true;
+    harness.app.state.pending_tools = sample_pending_tools();
+    harness.app.ci_turn_completion_pending = true;
+
+    harness
+        .app
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
+
+    let requests = harness.drain_requests();
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::ListAgentProfiles { session_id } if session_id == "sess-2"
+    )));
+    assert!(!harness.app.state.retry_waiting);
+    assert!(harness.app.event_lag_session_resync_pending);
+    assert!(harness.app.event_lag_tools_resync_pending);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::PendingTools {
+            session_id: String::from("sess-2"),
+            result: Ok(Vec::new()),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(sample_sessions())));
+
+    assert!(!harness.app.state.is_streaming);
+    assert!(!harness.app.state.profile_locked);
+    assert!(harness.app.state.pending_tools.is_empty());
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+    assert!(!harness.app.state.tool_batch_execution_started);
+    assert!(!harness.app.event_lag_session_resync_pending);
+    assert!(!harness.app.event_lag_tools_resync_pending);
+    assert!(harness.app.state.exit);
+    assert_eq!(harness.app.ci_error, None);
 }
 fn sample_pending_tools() -> Vec<PendingTool> {
     vec![

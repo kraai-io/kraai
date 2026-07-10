@@ -7,9 +7,15 @@ use tokio::sync::broadcast;
 
 use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
 
+#[derive(Debug)]
+pub(super) enum RuntimeEventBridgeMessage {
+    Event(Event),
+    Lagged(u64),
+}
+
 pub(super) fn spawn_event_bridge(
     mut runtime_events: broadcast::Receiver<Event>,
-) -> Receiver<Event> {
+) -> Receiver<RuntimeEventBridgeMessage> {
     let (event_tx, event_rx) = unbounded();
 
     std::thread::spawn(move || {
@@ -21,11 +27,21 @@ pub(super) fn spawn_event_bridge(
             loop {
                 match runtime_events.recv().await {
                     Ok(event) => {
-                        if event_tx.send(event).is_err() {
+                        if event_tx
+                            .send(RuntimeEventBridgeMessage::Event(event))
+                            .is_err()
+                        {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        if event_tx
+                            .send(RuntimeEventBridgeMessage::Lagged(skipped))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }

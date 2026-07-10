@@ -438,6 +438,21 @@ impl App {
         }
     }
 
+    pub(super) fn sync_current_session_streaming_from_sessions(&mut self) {
+        let Some(session_id) = self.state.current_session_id.as_ref() else {
+            self.state.is_streaming = false;
+            return;
+        };
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| &session.id == session_id)
+        {
+            self.state.is_streaming = session.is_streaming;
+        }
+    }
+
     pub(super) fn flatten_models(&self) -> Vec<(String, Model)> {
         flatten_models_map(&self.state.models_by_provider)
     }
