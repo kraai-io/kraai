@@ -8,7 +8,7 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_read_path, path_is_within_workspace,
+    ToolCallResult, ToolContext, ToolFileOpenMode, TypedTool, assess_read_path, open_tool_file,
     resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
@@ -99,6 +99,27 @@ impl TypedTool for SearchFilesTool {
                 ));
             }
         };
+        let open_mode = if metadata.is_dir() {
+            ToolFileOpenMode::Directory
+        } else {
+            ToolFileOpenMode::Read
+        };
+        let opened = match open_tool_file(&ctx.global_config.workspace_dir, &raw_path, open_mode) {
+            Ok(opened) => opened,
+            Err(error) => {
+                return ToolCallResult::error(error);
+            }
+        };
+        let opened_metadata = match opened.file().metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return ToolCallResult::error(format!(
+                    "unable to inspect search path {}: {}",
+                    opened.path().display(),
+                    error
+                ));
+            }
+        };
 
         let matcher = match RegexMatcher::new(&args.query) {
             Ok(matcher) => matcher,
@@ -107,11 +128,12 @@ impl TypedTool for SearchFilesTool {
 
         let mut state = SearchState::default();
 
-        let search_result = if metadata.is_file() {
-            search_file(resolved.path(), &matcher, &mut state)
-        } else if metadata.is_dir() {
+        let search_result = if opened_metadata.is_file() {
+            search_file(opened.file(), opened.path(), &matcher, &mut state)
+        } else if opened_metadata.is_dir() {
             search_directory(
-                resolved.path(),
+                &opened.stable_path(),
+                opened.path(),
                 &ctx.global_config.workspace_dir,
                 &matcher,
                 &mut state,
@@ -119,21 +141,21 @@ impl TypedTool for SearchFilesTool {
         } else {
             return ToolCallResult::error(format!(
                 "path is neither a file nor a directory: {}",
-                resolved.path().display()
+                opened.path().display()
             ));
         };
 
         if let Err(error) = search_result {
             return ToolCallResult::error(format!(
                 "unable to search path {}: {}",
-                resolved.path().display(),
+                opened.path().display(),
                 error
             ));
         }
 
         let output = SearchFilesToolOutput {
             query: args.query,
-            path: resolved.path().display().to_string(),
+            path: opened.path().display().to_string(),
             match_count: state.matches.len(),
             matches: state.matches,
             truncated: state.truncated,
@@ -149,23 +171,40 @@ impl TypedTool for SearchFilesTool {
 }
 
 fn search_directory(
-    dir: &Path,
+    stable_dir: &Path,
+    display_dir: &Path,
     workspace_root: &Path,
     matcher: &RegexMatcher,
     state: &mut SearchState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut builder = WalkBuilder::new(dir);
+    let mut builder = WalkBuilder::new(stable_dir);
     builder.standard_filters(true);
     builder.hidden(true);
     builder.require_git(false);
 
     for entry in builder.build() {
         let entry = entry?;
-        if !is_searchable_file(entry.path(), entry.file_type(), workspace_root) {
+        let relative = entry.path().strip_prefix(stable_dir)?;
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let file_type = entry.file_type();
+        if !is_searchable_file(file_type) {
             continue;
         }
 
-        if let Err(error) = search_file(entry.path(), matcher, state) {
+        let display_path = display_dir.join(relative);
+        let opened = match open_tool_file(
+            workspace_root,
+            &display_path.to_string_lossy(),
+            ToolFileOpenMode::Read,
+        ) {
+            Ok(opened) => opened,
+            Err(_) if file_type.is_some_and(|file_type| file_type.is_symlink()) => continue,
+            Err(error) => return Err(std::io::Error::other(error).into()),
+        };
+
+        if let Err(error) = search_file(opened.file(), &display_path, matcher, state) {
             if error.to_string().contains("invalid utf-8") {
                 continue;
             }
@@ -179,23 +218,16 @@ fn search_directory(
     Ok(())
 }
 
-fn is_searchable_file(
-    path: &Path,
-    file_type: Option<std::fs::FileType>,
-    workspace_root: &Path,
-) -> bool {
+fn is_searchable_file(file_type: Option<std::fs::FileType>) -> bool {
     let Some(file_type) = file_type else {
         return false;
     };
-    if file_type.is_symlink() && !path_is_within_workspace(workspace_root, path) {
-        return false;
-    }
-
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+    file_type.is_file() || file_type.is_symlink()
 }
 
 fn search_file(
-    path: &Path,
+    file: &std::fs::File,
+    display_path: &Path,
     matcher: &RegexMatcher,
     state: &mut SearchState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -204,7 +236,7 @@ fn search_file(
         .line_number(true)
         .build();
 
-    let path_string = path.display().to_string();
+    let path_string = display_path.display().to_string();
     let mut sink = UTF8(|line_number: u64, line: &str| {
         if state.matches.len() >= MAX_MATCHES {
             state.truncated = true;
@@ -227,7 +259,7 @@ fn search_file(
         }
     });
 
-    searcher.search_path(matcher, path, &mut sink)?;
+    searcher.search_file(matcher, file, &mut sink)?;
     Ok(())
 }
 

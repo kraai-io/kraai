@@ -9,9 +9,9 @@ pub mod toon_parser;
 pub use api::{ToolCallResult, ToolContext, ToolError, ToolOutput, TypedTool};
 pub use manager::ToolManager;
 pub use paths::{
-    ResolvedToolPath, TextFileRead, assess_read_path, assess_write_path,
-    format_text_with_line_numbers, normalize_tool_path, path_is_within_workspace, read_text_file,
-    read_text_path, resolve_tool_path,
+    OpenedToolFile, ResolvedToolPath, TextFileRead, ToolFileOpenMode, assess_read_path,
+    assess_write_path, format_text_with_line_numbers, normalize_tool_path, open_tool_file,
+    path_is_within_workspace, read_text_file, read_text_path, resolve_tool_path,
 };
 pub use prepared::PreparedToolCall;
 

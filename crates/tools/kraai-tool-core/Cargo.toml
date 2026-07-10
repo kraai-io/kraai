@@ -11,6 +11,7 @@ async-trait = { workspace = true }
 kraai-toon-schema = { workspace = true }
 kraai-types = { workspace = true }
 regex = { workspace = true }
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

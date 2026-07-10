@@ -1,6 +1,7 @@
 use std::{
     ffi::OsString,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -35,6 +36,45 @@ impl TextFileRead {
 
     pub fn contents(&self) -> &str {
         &self.contents
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolFileOpenMode {
+    Read,
+    Edit,
+    Create,
+    Directory,
+}
+
+pub struct OpenedToolFile {
+    path: PathBuf,
+    file: File,
+}
+
+impl OpenedToolFile {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+
+    pub fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn stable_path(&self) -> PathBuf {
+        use std::os::fd::AsRawFd;
+
+        PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn stable_path(&self) -> PathBuf {
+        self.path.clone()
     }
 }
 
@@ -110,8 +150,134 @@ fn canonicalize_for_workspace_check(path: &Path) -> Option<PathBuf> {
 }
 
 pub fn read_text_file(workspace_root: &Path, raw_path: &str) -> Result<TextFileRead, String> {
-    let resolved = resolve_tool_path(workspace_root, raw_path);
-    read_text_path(resolved.path())
+    let path = normalize_tool_path(workspace_root, raw_path);
+    if !path.exists() {
+        return Err(format!("file does not exist: {}", path.display()));
+    }
+    if path.is_dir() {
+        return Err(format!("path is a directory: {}", path.display()));
+    }
+    let mut opened = open_tool_file(workspace_root, raw_path, ToolFileOpenMode::Read)?;
+    let mut contents = String::new();
+    opened
+        .file_mut()
+        .read_to_string(&mut contents)
+        .map_err(|error| format!("unable to read file {}: {}", opened.path().display(), error))?;
+
+    Ok(TextFileRead {
+        path: opened.path,
+        contents,
+    })
+}
+
+pub fn open_tool_file(
+    workspace_root: &Path,
+    raw_path: &str,
+    mode: ToolFileOpenMode,
+) -> Result<OpenedToolFile, String> {
+    let path = normalize_tool_path(workspace_root, raw_path);
+    let normalized_workspace = normalize_tool_path(workspace_root, ".");
+    if path.starts_with(&normalized_workspace) {
+        return open_workspace_file(&normalized_workspace, &path, mode);
+    }
+
+    let mut options = OpenOptions::new();
+    match mode {
+        ToolFileOpenMode::Read | ToolFileOpenMode::Directory => {
+            options.read(true);
+        }
+        ToolFileOpenMode::Edit => {
+            options.read(true).write(true);
+        }
+        ToolFileOpenMode::Create => {
+            options.write(true).create_new(true);
+        }
+    }
+    let file = options
+        .open(&path)
+        .map_err(|error| format!("unable to open {}: {error}", path.display()))?;
+    if mode == ToolFileOpenMode::Directory
+        && !file
+            .metadata()
+            .map_err(|error| format!("unable to inspect {}: {error}", path.display()))?
+            .is_dir()
+    {
+        return Err(format!("path is not a directory: {}", path.display()));
+    }
+    Ok(OpenedToolFile { path, file })
+}
+
+#[cfg(target_os = "linux")]
+fn open_workspace_file(
+    workspace_root: &Path,
+    path: &Path,
+    mode: ToolFileOpenMode,
+) -> Result<OpenedToolFile, String> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+
+    let relative = path.strip_prefix(workspace_root).map_err(|error| {
+        format!(
+            "unable to resolve {} beneath workspace {}: {error}",
+            path.display(),
+            workspace_root.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty() && mode != ToolFileOpenMode::Directory {
+        return Err(format!("path is a directory: {}", path.display()));
+    }
+    let workspace = File::open(workspace_root).map_err(|error| {
+        format!(
+            "unable to open workspace {}: {error}",
+            workspace_root.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty() {
+        return Ok(OpenedToolFile {
+            path: path.to_path_buf(),
+            file: workspace,
+        });
+    }
+    let (flags, create_mode) = match mode {
+        ToolFileOpenMode::Read => (OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()),
+        ToolFileOpenMode::Edit => (OFlags::RDWR | OFlags::CLOEXEC, Mode::empty()),
+        ToolFileOpenMode::Create => (
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        ),
+        ToolFileOpenMode::Directory => (
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        ),
+    };
+    let fd = openat2(
+        &workspace,
+        relative,
+        flags,
+        create_mode,
+        ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|error| {
+        format!(
+            "unable to securely open workspace path {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(OpenedToolFile {
+        path: path.to_path_buf(),
+        file: File::from(fd),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_workspace_file(
+    _workspace_root: &Path,
+    path: &Path,
+    _mode: ToolFileOpenMode,
+) -> Result<OpenedToolFile, String> {
+    Err(format!(
+        "secure descriptor-relative workspace access is unavailable on this platform: {}",
+        path.display()
+    ))
 }
 
 pub fn read_text_path(path: &Path) -> Result<TextFileRead, String> {

@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::fs;
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 use async_trait::async_trait;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_write_path, read_text_path, resolve_tool_path,
+    ToolCallResult, ToolContext, ToolFileOpenMode, TypedTool, assess_write_path, open_tool_file,
+    resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
 use kraai_types::{ExecutionPolicy, RiskLevel, ToolCallAssessment};
@@ -164,10 +165,13 @@ impl TypedTool for EditFileTool {
     }
 
     async fn call(&self, args: Self::Args, ctx: &ToolContext<'_>) -> ToolCallResult {
-        let resolved = resolve_tool_path(&ctx.global_config.workspace_dir, &args.path);
         let result = match validate_args(&args) {
-            Ok(ValidatedArgs::Create { contents }) => create_file(resolved.path(), contents),
-            Ok(ValidatedArgs::Edit { edits }) => edit_file(resolved.path(), edits),
+            Ok(ValidatedArgs::Create { contents }) => {
+                create_file(&ctx.global_config.workspace_dir, &args.path, contents)
+            }
+            Ok(ValidatedArgs::Edit { edits }) => {
+                edit_file(&ctx.global_config.workspace_dir, &args.path, edits)
+            }
             Err(error) => Err(error),
         };
 
@@ -218,7 +222,9 @@ fn validate_args(args: &EditFileToolArgs) -> Result<ValidatedArgs<'_>, String> {
     Ok(ValidatedArgs::Edit { edits })
 }
 
-fn create_file(path: &Path, contents: &str) -> Result<(), String> {
+fn create_file(workspace_root: &Path, raw_path: &str, contents: &str) -> Result<(), String> {
+    let resolved = resolve_tool_path(workspace_root, raw_path);
+    let path = resolved.path();
     if path.exists() {
         return Err(format!("file already exists: {}", path.display()));
     }
@@ -239,16 +245,34 @@ fn create_file(path: &Path, contents: &str) -> Result<(), String> {
         ));
     }
 
-    fs::write(path, contents)
+    let mut opened = open_tool_file(workspace_root, raw_path, ToolFileOpenMode::Create)?;
+    opened
+        .file_mut()
+        .write_all(contents.as_bytes())
         .map_err(|error| format!("unable to create file {}: {}", path.display(), error))
 }
 
-fn edit_file(path: &Path, edits: &[EditOperation]) -> Result<(), String> {
-    let original = read_text_path(path)?;
-    let updated = apply_edits(path, original.contents(), edits)?;
+fn edit_file(workspace_root: &Path, raw_path: &str, edits: &[EditOperation]) -> Result<(), String> {
+    let mut opened = open_tool_file(workspace_root, raw_path, ToolFileOpenMode::Edit)?;
+    let mut original = String::new();
+    opened
+        .file_mut()
+        .read_to_string(&mut original)
+        .map_err(|error| format!("unable to read file {}: {}", opened.path().display(), error))?;
+    let updated = apply_edits(opened.path(), &original, edits)?;
 
-    fs::write(path, updated)
-        .map_err(|error| format!("unable to write file {}: {}", path.display(), error))
+    opened
+        .file_mut()
+        .rewind()
+        .and_then(|()| opened.file_mut().set_len(0))
+        .and_then(|()| opened.file_mut().write_all(updated.as_bytes()))
+        .map_err(|error| {
+            format!(
+                "unable to write file {}: {}",
+                opened.path().display(),
+                error
+            )
+        })
 }
 
 fn apply_edits(path: &Path, contents: &str, edits: &[EditOperation]) -> Result<String, String> {
@@ -937,6 +961,37 @@ mod tests {
         }
 
         cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn swapped_workspace_symlink_cannot_redirect_edit_outside() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_dir = make_temp_dir("swapped-symlink-workspace");
+        let outside_dir = make_temp_dir("swapped-symlink-outside");
+        fs::write(workspace_dir.join("inside.txt"), "inside").expect("write inside");
+        let outside_path = outside_dir.join("secret.txt");
+        fs::write(&outside_path, "secret").expect("write outside");
+        let link = workspace_dir.join("target.txt");
+        symlink(workspace_dir.join("inside.txt"), &link).expect("link inside");
+        let tool = EditFileTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let args = edit_args("target.txt", &[(1, 1, "inside", "changed")]);
+        assert_eq!(
+            tool.assess(&args, &tool_context(&config, &snapshot)).risk,
+            RiskLevel::UndoableWorkspaceWrite
+        );
+
+        fs::remove_file(&link).expect("remove link");
+        symlink(&outside_path, &link).expect("redirect link");
+        let output = tool.call(args, &tool_context(&config, &snapshot)).await;
+
+        assert!(matches!(output.output, ToolOutput::Error { .. }));
+        assert_eq!(fs::read_to_string(&outside_path).unwrap(), "secret");
+        cleanup_temp_dir(&workspace_dir);
+        cleanup_temp_dir(&outside_dir);
     }
 
     #[tokio::test]
