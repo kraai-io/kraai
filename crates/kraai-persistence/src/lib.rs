@@ -86,8 +86,20 @@ impl FileMessageStore {
         }
     }
 
-    fn message_path(&self, id: &MessageId) -> PathBuf {
-        self.cold_dir.join(format!("{}.json", id))
+    fn message_path(&self, id: &MessageId) -> Result<PathBuf> {
+        let raw = id.as_str();
+        if MessageId::try_new(raw).is_err()
+            || Path::new(raw).is_absolute()
+            || raw.contains(['/', '\\', ':'])
+        {
+            return Err(eyre!("Unsafe message id for persisted path: {raw:?}"));
+        }
+
+        let path = self.cold_dir.join(format!("{raw}.json"));
+        if path.parent() != Some(self.cold_dir.as_path()) {
+            return Err(eyre!("Message path escaped storage directory: {path:?}"));
+        }
+        Ok(path)
     }
 
     /// Ensure the messages directory exists
@@ -140,7 +152,7 @@ impl MessageStore for FileMessageStore {
         }
 
         // Check cold storage
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -164,7 +176,7 @@ impl MessageStore for FileMessageStore {
     async fn save(&self, message: &Message) -> Result<()> {
         self.ensure_dir().await?;
 
-        let path = self.message_path(&message.id);
+        let path = self.message_path(&message.id)?;
         let content = serde_json::to_string_pretty(message)
             .with_context(|| format!("Failed to serialize message: {}", message.id))?;
 
@@ -194,7 +206,7 @@ impl MessageStore for FileMessageStore {
         }
 
         // Remove from cold storage
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         if path.exists() {
             fs::remove_file(&path)
                 .await
@@ -205,7 +217,7 @@ impl MessageStore for FileMessageStore {
     }
 
     async fn exists(&self, id: &MessageId) -> Result<bool> {
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         Ok(path.exists())
     }
 
@@ -231,7 +243,10 @@ impl MessageStore for FileMessageStore {
                 && let Some(stem) = path.file_stem()
                 && let Some(id_str) = stem.to_str()
             {
-                ids.insert(MessageId::new(id_str));
+                let id = MessageId::try_new(id_str).map_err(|error| {
+                    eyre!("Invalid message filename in storage {path:?}: {error}")
+                })?;
+                ids.insert(id);
             }
         }
 
@@ -587,6 +602,42 @@ mod tests {
         assert!(session_store.list().await.unwrap().is_empty());
 
         let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn message_store_rejects_ids_that_could_escape_storage() {
+        with_test_store(
+            "unsafe-message-id",
+            |message_store, _session_store, data_dir| async move {
+                for raw in [
+                    "../sessions",
+                    "/tmp/kraai-message",
+                    r"..\sessions",
+                    "C:escape",
+                ] {
+                    let id = MessageId(Arc::from(raw));
+                    let unsafe_message = Message {
+                        id: id.clone(),
+                        parent_id: None,
+                        role: ChatRole::Assistant,
+                        content: String::from("unsafe"),
+                        status: MessageStatus::Complete,
+                        agent_profile_id: None,
+                        tool_state_snapshot: None,
+                        tool_state_deltas: Vec::new(),
+                        generation: None,
+                    };
+
+                    assert!(message_store.save(&unsafe_message).await.is_err());
+                    assert!(message_store.get(&id).await.is_err());
+                    assert!(message_store.exists(&id).await.is_err());
+                    assert!(message_store.delete(&id).await.is_err());
+                }
+
+                assert!(!data_dir.join("sessions.json").exists());
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
