@@ -22,6 +22,8 @@ const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 const TOKEN_REFRESH_INTERVAL_SECS: u64 = 8 * 24 * 60 * 60;
 const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const DEVICE_CODE_TIMEOUT_SECS: u64 = 15 * 60;
+const CALLBACK_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CALLBACK_HEADER_BYTES: usize = 16 * 1024;
 const SIGN_IN_REQUIRED_MESSAGE: &str = "OpenAI sign-in required. Use /providers.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -603,7 +605,18 @@ impl OpenAiCodexAuthController {
     ) -> io::Result<()> {
         loop {
             let (mut stream, _) = listener.accept().await?;
-            let request = read_http_request(&mut stream).await?;
+            let request = match read_http_request(&mut stream).await {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = write_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        &format!("Invalid callback request: {error}"),
+                    )
+                    .await;
+                    continue;
+                }
+            };
             let request_line = request.lines().next().unwrap_or_default().to_string();
             let path = request_line
                 .split_whitespace()
@@ -612,22 +625,33 @@ impl OpenAiCodexAuthController {
                 .to_string();
 
             if path == "/cancel" {
-                write_http_response(&mut stream, "Login cancelled", false).await?;
+                write_http_response(&mut stream, "200 OK", "Login cancelled").await?;
                 return Err(io::Error::other("Login cancelled"));
             }
 
-            if !path.starts_with("/auth/callback") {
+            let url = match url::Url::parse(&format!("http://localhost{path}")) {
+                Ok(url) => url,
+                Err(error) => {
+                    write_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        "Invalid callback URL",
+                    )
+                    .await?;
+                    return Err(io::Error::other(error));
+                }
+            };
+
+            if url.path() != "/auth/callback" {
                 write_http_response(
                     &mut stream,
+                    "404 Not Found",
                     "Waiting for OpenAI sign-in callback on /auth/callback",
-                    false,
                 )
                 .await?;
                 continue;
             }
 
-            let url =
-                url::Url::parse(&format!("http://localhost{path}")).map_err(io::Error::other)?;
             let state = url
                 .query_pairs()
                 .find(|(key, _)| key == "state")
@@ -641,30 +665,42 @@ impl OpenAiCodexAuthController {
                 .find(|(key, _)| key == "error")
                 .map(|(_, value)| value.to_string());
 
+            if state.as_deref() != Some(expected_state.as_str()) {
+                write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "OpenAI sign-in failed. State mismatch.",
+                )
+                .await?;
+                return Err(io::Error::other("OpenAI sign-in state mismatch"));
+            }
+
             if let Some(error) = error {
                 write_http_response(
                     &mut stream,
+                    "400 Bad Request",
                     "OpenAI sign-in failed. You can return to Kraai.",
-                    true,
                 )
                 .await?;
                 return Err(io::Error::other(error));
             }
 
-            if state.as_deref() != Some(expected_state.as_str()) {
-                write_http_response(&mut stream, "OpenAI sign-in failed. State mismatch.", true)
-                    .await?;
-                return Err(io::Error::other("OpenAI sign-in state mismatch"));
-            }
-
-            let code = code.ok_or_else(|| io::Error::other("Missing OAuth code"))?;
+            let Some(code) = code else {
+                write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "OpenAI sign-in failed. Missing authorization code.",
+                )
+                .await?;
+                return Err(io::Error::other("Missing OAuth code"));
+            };
             let auth = self
                 .exchange_authorization_code(&redirect_uri, &pkce, &code)
                 .await?;
             write_http_response(
                 &mut stream,
+                "200 OK",
                 "OpenAI sign-in complete. You can return to Kraai.",
-                true,
             )
             .await?;
             self.finish_successful_login(auth).await?;
@@ -1137,24 +1173,47 @@ fn generate_state() -> String {
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<String> {
-    let mut buffer = [0u8; 4096];
-    let size = stream.read(&mut buffer).await?;
-    let request = buffer
-        .get(..size)
-        .ok_or_else(|| io::Error::other("request length exceeds buffer capacity"))?;
-    String::from_utf8(request.to_vec()).map_err(io::Error::other)
+    tokio::time::timeout(CALLBACK_REQUEST_TIMEOUT, async {
+        let mut request = Vec::with_capacity(1024);
+        loop {
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                return String::from_utf8(request).map_err(io::Error::other);
+            }
+            if request.len() >= MAX_CALLBACK_HEADER_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "callback request headers exceed {MAX_CALLBACK_HEADER_BYTES} bytes"
+                    ),
+                ));
+            }
+
+            let remaining = MAX_CALLBACK_HEADER_BYTES - request.len();
+            let mut buffer = [0_u8; 1024];
+            let read_capacity = remaining.min(buffer.len());
+            let size = stream.read(&mut buffer[..read_capacity]).await?;
+            if size == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "callback connection closed before HTTP headers completed",
+                ));
+            }
+            request.extend_from_slice(&buffer[..size]);
+        }
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "callback request timed out"))?
 }
 
 async fn write_http_response(
     stream: &mut tokio::net::TcpStream,
+    status: &str,
     message: &str,
-    close: bool,
 ) -> io::Result<()> {
     let body =
         format!("<html><body><pre style=\"font-family: monospace\">{message}</pre></body></html>");
-    let connection = if close { "close" } else { "keep-alive" };
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{}",
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     );
@@ -1309,6 +1368,63 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
         assert!(error.to_string().contains(&primary.to_string()));
         assert!(error.to_string().contains(&fallback.to_string()));
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_accepts_fragmented_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            for chunk in [
+                b"GET /auth/call".as_slice(),
+                b"back?code=test&state=ok HTTP/1.1\r\nHost: local".as_slice(),
+                b"host\r\n\r".as_slice(),
+                b"\n".as_slice(),
+            ] {
+                client.write_all(chunk).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+
+        let request = read_http_request(&mut server).await.unwrap();
+        writer.await.unwrap();
+
+        assert!(request.starts_with("GET /auth/callback?code=test&state=ok HTTP/1.1"));
+        assert!(request.ends_with("\r\n\r\n"));
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_rejects_oversized_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client
+                .write_all(&vec![b'x'; MAX_CALLBACK_HEADER_BYTES + 1])
+                .await
+                .unwrap();
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+
+        let error = read_http_request(&mut server).await.unwrap_err();
+        writer.await.unwrap();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_times_out_idle_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::spawn(tokio::net::TcpStream::connect(address));
+        let (mut server, _) = listener.accept().await.unwrap();
+        let _client = client.await.unwrap().unwrap();
+
+        let error = read_http_request(&mut server).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
