@@ -4,7 +4,8 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use kraai_tool_core::{
-    ToolCallResult, ToolContext, TypedTool, assess_read_path, resolve_tool_path,
+    ToolCallResult, ToolContext, ToolFileOpenMode, TypedTool, assess_read_path, open_tool_file,
+    resolve_tool_path,
 };
 use kraai_toon_schema::toon_tool;
 use kraai_types::ToolCallAssessment;
@@ -76,27 +77,35 @@ impl TypedTool for ListFilesTool {
                 ));
             }
         };
-
         if !metadata.is_dir() {
             return ToolCallResult::error(format!(
                 "path is not a directory: {}",
                 resolved.path().display()
             ));
         }
-
-        let entries = match read_entries(resolved.path()) {
+        let opened = match open_tool_file(
+            &ctx.global_config.workspace_dir,
+            &args.path,
+            ToolFileOpenMode::Directory,
+        ) {
+            Ok(opened) => opened,
+            Err(error) => {
+                return ToolCallResult::error(error);
+            }
+        };
+        let entries = match read_entries(&opened.stable_path(), opened.path()) {
             Ok(entries) => entries,
             Err(error) => {
                 return ToolCallResult::error(format!(
                     "unable to list directory {}: {}",
-                    resolved.path().display(),
+                    opened.path().display(),
                     error
                 ));
             }
         };
 
         ToolCallResult::success(ListFilesToolOutput {
-            path: resolved.path().display().to_string(),
+            path: opened.path().display().to_string(),
             entries,
         })
     }
@@ -106,16 +115,17 @@ impl TypedTool for ListFilesTool {
     }
 }
 
-fn read_entries(dir: &Path) -> std::io::Result<Vec<ListFilesEntry>> {
-    let mut entries = std::fs::read_dir(dir)?
+fn read_entries(stable_dir: &Path, display_dir: &Path) -> std::io::Result<Vec<ListFilesEntry>> {
+    let mut entries = std::fs::read_dir(stable_dir)?
         .map(|entry| {
             let entry = entry?;
-            let path = entry.path();
-            let metadata = entry.metadata()?;
+            let file_name = entry.file_name();
+            let path = display_dir.join(&file_name);
+            let file_type = entry.file_type()?;
             Ok(ListFilesEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
+                name: file_name.to_string_lossy().into_owned(),
                 path: path.display().to_string(),
-                is_dir: metadata.is_dir(),
+                is_dir: file_type.is_dir(),
             })
         })
         .collect::<std::io::Result<Vec<_>>>()?;

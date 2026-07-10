@@ -243,6 +243,35 @@ mod tests {
         cleanup_temp_dir(&outside_dir);
     }
 
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn swapped_workspace_symlink_cannot_redirect_read_outside() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_dir = make_temp_dir("swapped-symlink-workspace");
+        let outside_dir = make_temp_dir("swapped-symlink-outside");
+        fs::write(workspace_dir.join("inside.txt"), "inside").expect("write inside");
+        fs::write(outside_dir.join("secret.txt"), "secret").expect("write outside");
+        let link = workspace_dir.join("target.txt");
+        symlink(workspace_dir.join("inside.txt"), &link).expect("link inside");
+        let tool = ReadFileTool;
+        let config = tool_config(&workspace_dir);
+        let snapshot = ToolStateSnapshot::default();
+        let args = read_args(&["target.txt"]);
+        assert_eq!(
+            tool.assess(&args, &tool_context(&config, &snapshot)).risk,
+            RiskLevel::ReadOnlyWorkspace
+        );
+
+        fs::remove_file(&link).expect("remove link");
+        symlink(outside_dir.join("secret.txt"), &link).expect("redirect link");
+        let output = tool.call(args, &tool_context(&config, &snapshot)).await;
+
+        assert!(matches!(output.output, ToolOutput::Error { .. }));
+        cleanup_temp_dir(&workspace_dir);
+        cleanup_temp_dir(&outside_dir);
+    }
+
     #[test]
     fn assess_marks_workspace_paths_as_read_only() {
         let workspace_dir = make_temp_dir("assess_marks_workspace_paths_as_read_only");

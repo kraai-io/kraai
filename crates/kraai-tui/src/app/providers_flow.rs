@@ -65,8 +65,10 @@ impl App {
                 self.state.status = String::from("Connect a provider");
             }
             KeyCode::Char('d') => self.delete_selected_provider_from_list(),
-            KeyCode::Char('r') => {
-                self.request(RuntimeRequest::ListModels);
+            KeyCode::Char('r')
+                if self.request(RuntimeRequest::ListModels)
+                    == RuntimeRequestDelivery::Delivered =>
+            {
                 self.state.status = String::from("Refreshing provider models");
             }
             _ => {}
@@ -272,8 +274,9 @@ impl App {
                 if self
                     .current_provider()
                     .is_some_and(|provider| provider.type_id == "openai-codex")
+                    && self.request(RuntimeRequest::StartOpenAiCodexBrowserLogin)
+                        == RuntimeRequestDelivery::Delivered
                 {
-                    self.request(RuntimeRequest::StartOpenAiCodexBrowserLogin);
                     self.state.status = String::from("Starting OpenAI browser login");
                 }
             }
@@ -281,8 +284,9 @@ impl App {
                 if self
                     .current_provider()
                     .is_some_and(|provider| provider.type_id == "openai-codex")
+                    && self.request(RuntimeRequest::StartOpenAiCodexDeviceCodeLogin)
+                        == RuntimeRequestDelivery::Delivered
                 {
-                    self.request(RuntimeRequest::StartOpenAiCodexDeviceCodeLogin);
                     self.state.status = String::from("Starting OpenAI device-code login");
                 }
             }
@@ -290,8 +294,9 @@ impl App {
                 if self
                     .current_provider()
                     .is_some_and(|provider| provider.type_id == "openai-codex")
+                    && self.request(RuntimeRequest::CancelOpenAiCodexLogin)
+                        == RuntimeRequestDelivery::Delivered
                 {
-                    self.request(RuntimeRequest::CancelOpenAiCodexLogin);
                     self.state.status = String::from("Cancelling OpenAI login");
                 }
             }
@@ -299,8 +304,9 @@ impl App {
                 if self
                     .current_provider()
                     .is_some_and(|provider| provider.type_id == "openai-codex")
+                    && self.request(RuntimeRequest::LogoutOpenAiCodexAuth)
+                        == RuntimeRequestDelivery::Delivered
                 {
-                    self.request(RuntimeRequest::LogoutOpenAiCodexAuth);
                     self.state.status = String::from("Logging out from OpenAI");
                 }
             }
@@ -311,13 +317,14 @@ impl App {
                 self.state.status = String::from("Advanced provider config");
             }
             ProviderDetailAction::RefreshModels => {
-                self.request(RuntimeRequest::ListModels);
-                self.state.status = String::from("Refreshing provider models");
+                if self.request(RuntimeRequest::ListModels) == RuntimeRequestDelivery::Delivered {
+                    self.state.status = String::from("Refreshing provider models");
+                }
             }
         }
     }
 
-    pub(super) fn maybe_request_openai_auth_status(&self) {
+    pub(super) fn maybe_request_openai_auth_status(&mut self) {
         if self
             .current_provider()
             .is_some_and(|provider| provider.type_id == "openai-codex")

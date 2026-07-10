@@ -11,6 +11,20 @@ fn validate_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_message_id(value: &str) -> Result<(), String> {
+    validate_id(value)?;
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "message id may contain only ASCII letters, digits, hyphens, and underscores"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
@@ -334,7 +348,7 @@ pub fn format_tool_result_message(
 
 /// Wrapper that gives type safety while keeping Arc<str> benefits
 macro_rules! define_id {
-    ($name:ident) => {
+    ($name:ident, $validator:path) => {
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(pub Arc<str>);
 
@@ -345,7 +359,7 @@ macro_rules! define_id {
 
             pub fn try_new(s: impl Into<String>) -> Result<Self, String> {
                 let s = s.into();
-                validate_id(&s)?;
+                $validator(&s)?;
                 Ok(Self(Arc::from(s)))
             }
 
@@ -381,9 +395,29 @@ macro_rules! define_id {
     };
 }
 
-define_id!(MessageId);
-define_id!(SessionId);
-define_id!(CallId);
-define_id!(ToolId);
-define_id!(ProviderId);
-define_id!(ModelId);
+define_id!(MessageId, validate_message_id);
+define_id!(SessionId, validate_id);
+define_id!(CallId, validate_id);
+define_id!(ToolId, validate_id);
+define_id!(ProviderId, validate_id);
+define_id!(ModelId, validate_id);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_ids_reject_path_syntax() {
+        for invalid in [
+            "../sessions",
+            "/tmp/message",
+            r"..\sessions",
+            r"C:\temp\message",
+            r"\\server\share",
+            ".",
+        ] {
+            assert!(MessageId::try_new(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert!(MessageId::try_new("01J_VALID-message_id").is_ok());
+    }
+}

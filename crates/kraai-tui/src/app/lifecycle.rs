@@ -95,7 +95,7 @@ impl App {
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
         let state = AppState::from_startup_options(startup_options.clone());
 
-        let app = Self {
+        let mut app = Self {
             event_rx,
             runtime_tx,
             runtime_rx,
@@ -110,6 +110,10 @@ impl App {
             state,
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
+            event_lag_session_resync_pending: false,
+            event_lag_tools_resync_pending: false,
+            runtime_bridge_connected: true,
+            runtime_bridge_error: None,
         };
 
         app.request_sync();
@@ -120,7 +124,7 @@ impl App {
         while !self.state.exit {
             crossbeam_channel::select! {
                 recv(self.event_rx) -> event => match event {
-                    Ok(event) => self.handle_runtime_event(event),
+                    Ok(message) => self.handle_runtime_event_bridge_message(message),
                     Err(_) => self.fail_ci("event channel closed"),
                 },
                 recv(self.runtime_rx) -> response => match response {
@@ -198,7 +202,11 @@ impl App {
             })?;
             needs_redraw = false;
         }
-        Ok(())
+        if let Some(error) = self.runtime_bridge_error.take() {
+            Err(color_eyre::eyre::eyre!(error))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn exit_token_usage_summary(&self) -> Option<String> {
@@ -226,17 +234,46 @@ impl App {
     pub(super) fn process_events(&mut self) -> bool {
         let mut changed = false;
 
-        while let Ok(event) = self.event_rx.try_recv() {
-            self.handle_runtime_event(event);
+        while let Ok(message) = self.event_rx.try_recv() {
+            self.handle_runtime_event_bridge_message(message);
             changed = true;
         }
 
-        while let Ok(response) = self.runtime_rx.try_recv() {
-            self.handle_runtime_response(response);
-            changed = true;
+        loop {
+            match self.runtime_rx.try_recv() {
+                Ok(response) => {
+                    self.handle_runtime_response(response);
+                    changed = true;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.handle_runtime_bridge_disconnect();
+                    changed = true;
+                    break;
+                }
+            }
         }
 
         changed
+    }
+
+    pub(super) fn handle_runtime_event_bridge_message(
+        &mut self,
+        message: RuntimeEventBridgeMessage,
+    ) {
+        match message {
+            RuntimeEventBridgeMessage::Event(event) => self.handle_runtime_event(event),
+            RuntimeEventBridgeMessage::Lagged(skipped) => {
+                self.event_lag_session_resync_pending = true;
+                self.event_lag_tools_resync_pending = true;
+                self.state.retry_waiting = false;
+                self.last_stream_history_request = None;
+                self.stream_event_content.clear();
+                self.state.status =
+                    format!("Missed {skipped} runtime event(s); resynchronizing session state");
+                self.request_sync();
+            }
+        }
     }
 
     pub(super) fn advance_statusline_animation(&mut self, now: Instant) -> bool {

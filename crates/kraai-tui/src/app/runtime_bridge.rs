@@ -7,9 +7,15 @@ use tokio::sync::broadcast;
 
 use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
 
+#[derive(Debug)]
+pub(super) enum RuntimeEventBridgeMessage {
+    Event(Event),
+    Lagged(u64),
+}
+
 pub(super) fn spawn_event_bridge(
     mut runtime_events: broadcast::Receiver<Event>,
-) -> Receiver<Event> {
+) -> Receiver<RuntimeEventBridgeMessage> {
     let (event_tx, event_rx) = unbounded();
 
     std::thread::spawn(move || {
@@ -21,11 +27,21 @@ pub(super) fn spawn_event_bridge(
             loop {
                 match runtime_events.recv().await {
                     Ok(event) => {
-                        if event_tx.send(event).is_err() {
+                        if event_tx
+                            .send(RuntimeEventBridgeMessage::Event(event))
+                            .is_err()
+                        {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        if event_tx
+                            .send(RuntimeEventBridgeMessage::Lagged(skipped))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -135,15 +151,24 @@ pub(super) fn spawn_runtime_bridge(
                     profile_id,
                 } => {
                     let result = rt
-                        .block_on(runtime.set_session_profile(session_id, profile_id.clone()))
+                        .block_on(
+                            runtime.set_session_profile(session_id.clone(), profile_id.clone()),
+                        )
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile { profile_id, result });
+                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile {
+                        session_id,
+                        profile_id,
+                        result,
+                    });
                 }
-                RuntimeRequest::CreateSession => {
+                RuntimeRequest::CreateSession { creation_id } => {
                     let result = rt
                         .block_on(runtime.create_session())
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::CreateSession(result));
+                    let _ = res_tx.send(RuntimeResponse::CreateSession {
+                        creation_id,
+                        result,
+                    });
                 }
                 RuntimeRequest::SendMessage {
                     session_id,
@@ -298,13 +323,18 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::SetSessionProfile { profile_id, .. } => {
-            RuntimeResponse::SetSessionProfile {
-                profile_id,
-                result: Err(message.to_string()),
-            }
-        }
-        RuntimeRequest::CreateSession => RuntimeResponse::CreateSession(Err(message.to_string())),
+        RuntimeRequest::SetSessionProfile {
+            session_id,
+            profile_id,
+        } => RuntimeResponse::SetSessionProfile {
+            session_id,
+            profile_id,
+            result: Err(message.to_string()),
+        },
+        RuntimeRequest::CreateSession { creation_id } => RuntimeResponse::CreateSession {
+            creation_id,
+            result: Err(message.to_string()),
+        },
         RuntimeRequest::SendMessage { .. } => {
             RuntimeResponse::SendMessage(Err(message.to_string()))
         }

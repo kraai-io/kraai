@@ -83,6 +83,7 @@ pub(super) struct AppState {
     pub(super) connect_provider_index: usize,
     pub(super) openai_codex_auth: ProviderAuthStatus,
     pub(super) pending_submit: Option<PendingSubmit>,
+    pub(super) next_session_creation_id: u64,
     pub(super) exit_usage_totals: ExitUsageTotals,
 }
 
@@ -152,6 +153,7 @@ impl Default for AppState {
             connect_provider_index: 0,
             openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
+            next_session_creation_id: 0,
             exit_usage_totals: ExitUsageTotals::default(),
         }
     }

@@ -12,6 +12,7 @@ color-eyre = { workspace = true }
 futures = { workspace = true }
 httpdate = { workspace = true }
 kraai-types = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

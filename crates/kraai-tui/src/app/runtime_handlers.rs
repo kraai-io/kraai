@@ -49,6 +49,9 @@ impl App {
                 }
                 if self.is_ci_mode() {
                     self.write_ci_output(&chunk);
+                    if self.state.exit {
+                        return;
+                    }
                 }
                 if !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
                     self.request_stream_history_sync(&session_id, Instant::now());
@@ -378,7 +381,18 @@ impl App {
                     self.state.status = format!("OpenAI auth failed: {err}");
                 }
             },
-            RuntimeResponse::CreateSession(Ok(session_id)) => {
+            RuntimeResponse::CreateSession {
+                creation_id,
+                result: Ok(session_id),
+            } => {
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .is_none_or(|pending| pending.creation_id != creation_id)
+                {
+                    return;
+                }
                 let draft_profile_id = self.state.selected_profile_id.clone();
                 let pending_submit = self.state.pending_submit.take().map(|mut pending_submit| {
                     pending_submit.session_id = Some(session_id.clone());
@@ -409,43 +423,86 @@ impl App {
                     );
                 }
             }
-            RuntimeResponse::CreateSession(Err(err)) => {
+            RuntimeResponse::CreateSession {
+                creation_id,
+                result: Err(err),
+            } => {
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .is_none_or(|pending| pending.creation_id != creation_id)
+                {
+                    return;
+                }
                 self.state.pending_submit = None;
                 self.state.status = format!("Failed creating session: {err}");
                 self.fail_ci(format!("Failed creating session: {err}"));
             }
             RuntimeResponse::SetSessionProfile {
+                session_id,
                 profile_id,
                 result: Ok(()),
             } => {
-                self.state.selected_profile_id = Some(profile_id.clone());
-                self.state.status = format!("Selected agent: {profile_id}");
-                self.save_workspace_preferences();
-                if let Some(session_id) = self.state.current_session_id.clone() {
-                    self.request(RuntimeRequest::ListSessions);
-                    self.request(RuntimeRequest::ListAgentProfiles { session_id });
+                let is_foreground =
+                    self.state.current_session_id.as_deref() == Some(session_id.as_str());
+                self.request(RuntimeRequest::ListSessions);
+                if is_foreground {
+                    self.state.selected_profile_id = Some(profile_id.clone());
+                    self.state.status = format!("Selected agent: {profile_id}");
+                    self.save_workspace_preferences();
+                    self.request(RuntimeRequest::ListAgentProfiles {
+                        session_id: session_id.clone(),
+                    });
+                    self.state.mode = UiMode::Chat;
                 }
-                self.state.mode = UiMode::Chat;
 
-                if let Some(pending_submit) = self.state.pending_submit.take()
-                    && let Some(session_id) = pending_submit.session_id
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .and_then(|pending| pending.session_id.as_deref())
+                    == Some(session_id.as_str())
+                    && let Some(pending_submit) = self.state.pending_submit.take()
                 {
-                    self.dispatch_send_message(
-                        session_id,
-                        pending_submit.message,
-                        pending_submit.model_id,
-                        pending_submit.provider_id,
-                        false,
-                    );
+                    if is_foreground {
+                        self.dispatch_send_message(
+                            session_id,
+                            pending_submit.message,
+                            pending_submit.model_id,
+                            pending_submit.provider_id,
+                            false,
+                        );
+                    } else {
+                        self.request(RuntimeRequest::SendMessage {
+                            session_id,
+                            message: pending_submit.message,
+                            model_id: pending_submit.model_id,
+                            provider_id: pending_submit.provider_id,
+                            auto_approve: false,
+                        });
+                    }
                 }
             }
             RuntimeResponse::SetSessionProfile {
-                result: Err(err), ..
+                session_id,
+                result: Err(err),
+                ..
             } => {
-                self.state.pending_submit = None;
-                self.clear_turn_timer();
-                self.state.status = format!("Failed changing agent: {err}");
-                self.fail_ci(format!("Failed changing agent: {err}"));
+                if self
+                    .state
+                    .pending_submit
+                    .as_ref()
+                    .and_then(|pending| pending.session_id.as_deref())
+                    == Some(session_id.as_str())
+                {
+                    self.state.pending_submit = None;
+                }
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.clear_turn_timer();
+                    self.state.status = format!("Failed changing agent: {err}");
+                    self.fail_ci(format!("Failed changing agent: {err}"));
+                }
             }
             RuntimeResponse::SendMessage(Ok(())) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
@@ -549,7 +606,13 @@ impl App {
 
                 match result {
                     Ok(pending_tools) => {
-                        let should_auto_start_execution = self.state.tool_phase == ToolPhase::Idle;
+                        let recovering_from_lag = self.event_lag_tools_resync_pending;
+                        let should_auto_start_execution =
+                            self.state.tool_phase == ToolPhase::Idle && !recovering_from_lag;
+                        if recovering_from_lag {
+                            self.state.tool_phase = ToolPhase::Idle;
+                            self.state.tool_batch_execution_started = false;
+                        }
                         self.state.pending_tools = pending_tools
                             .into_iter()
                             .map(|tool| PendingTool {
@@ -564,6 +627,11 @@ impl App {
                             })
                             .collect();
                         self.sync_tool_phase_from_pending_tools();
+                        if recovering_from_lag && self.state.tool_phase == ToolPhase::ExecutingBatch
+                        {
+                            self.state.tool_batch_execution_started = true;
+                        }
+                        self.event_lag_tools_resync_pending = false;
                         if should_auto_start_execution
                             && self.state.tool_phase == ToolPhase::ExecutingBatch
                             && !self.state.tool_batch_execution_started
@@ -603,6 +671,10 @@ impl App {
                     self.state.sessions_menu_index = self.state.sessions.len();
                 }
                 self.sync_current_session_profile_from_sessions();
+                if self.event_lag_session_resync_pending {
+                    self.sync_current_session_streaming_from_sessions();
+                    self.event_lag_session_resync_pending = false;
+                }
                 self.sync_turn_timer_with_activity(Instant::now());
                 self.maybe_finish_ci_run();
             }

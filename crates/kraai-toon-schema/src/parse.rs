@@ -112,16 +112,21 @@ impl Parse for ToolMacroInput {
 
 fn build_tool_schema(parsed: ToolMacroInput) -> Result<ToolSchema> {
     let mut seen_names = BTreeSet::new();
+
+    for item in &parsed.type_items {
+        let name = item.ident.to_string();
+        if !seen_names.insert(name.clone()) {
+            return Err(syn::Error::new(
+                item.ident.span(),
+                format!("duplicate type `{name}` in `types:`"),
+            ));
+        }
+    }
+
     let mut defs = Vec::with_capacity(parsed.type_items.len());
 
     for mut item in parsed.type_items {
         let def = parse_struct_def(&item, &seen_names)?;
-        if !seen_names.insert(def.name.clone()) {
-            return Err(syn::Error::new(
-                item.ident.span(),
-                format!("duplicate type `{}` in `types:`", def.name),
-            ));
-        }
         strip_toon_schema_attrs(&mut item);
         defs.push(TypeItem { item, def });
     }
@@ -301,10 +306,10 @@ fn parse_toon_field_attr(
                 }
             }
             Meta::NameValue(nv) if nv.path.is_ident("min") => {
-                *min = parse_u32_expr(&nv.value);
+                *min = Some(parse_u32_expr(&nv.value, "min")?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("max") => {
-                *max = parse_u32_expr(&nv.value);
+                *max = Some(parse_u32_expr(&nv.value, "max")?);
             }
             _ => {}
         }
@@ -313,14 +318,24 @@ fn parse_toon_field_attr(
     Ok(())
 }
 
-fn parse_u32_expr(expr: &Expr) -> Option<u32> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Int(value),
-            ..
-        }) => value.base10_parse().ok(),
-        _ => None,
-    }
+fn parse_u32_expr(expr: &Expr, name: &str) -> Result<u32> {
+    let Expr::Lit(ExprLit {
+        lit: Lit::Int(value),
+        ..
+    }) = expr
+    else {
+        return Err(syn::Error::new(
+            expr.span(),
+            format!("`{name}` must be a non-negative 32-bit integer literal"),
+        ));
+    };
+
+    value.base10_parse::<u32>().map_err(|error| {
+        syn::Error::new(
+            value.span(),
+            format!("`{name}` must fit in a 32-bit unsigned integer: {error}"),
+        )
+    })
 }
 
 fn parse_type_with_range(
@@ -341,6 +356,14 @@ fn parse_type_with_range(
     }
 
     if let Some(inner) = vec_inner(ty) {
+        if let (Some(lower), Some(upper)) = (min, max)
+            && lower > upper
+        {
+            return Err(syn::Error::new(
+                ty.span(),
+                format!("`min` ({lower}) cannot exceed `max` ({upper})"),
+            ));
+        }
         let inner_ty = parse_value_type(inner, declared)?;
         return Ok((
             FieldType::Array(Box::new(inner_ty)),
@@ -565,9 +588,49 @@ fn parse_example_value(input: ParseStream<'_>) -> Result<Value> {
     if input.peek(LitBool) {
         return Ok(Value::Bool(input.parse::<LitBool>()?.value));
     }
+    if input.peek(Token![-]) {
+        input.parse::<Token![-]>()?;
+        if input.peek(LitInt) {
+            let lit = input.parse::<LitInt>()?;
+            let magnitude = lit.base10_parse::<u64>().map_err(|error| {
+                syn::Error::new(
+                    lit.span(),
+                    format!("integer example is outside the supported 64-bit range: {error}"),
+                )
+            })?;
+            let value = if magnitude == i64::MAX as u64 + 1 {
+                i64::MIN
+            } else {
+                -i64::try_from(magnitude).map_err(|_error| {
+                    syn::Error::new(
+                        lit.span(),
+                        "negative integer example is outside the supported 64-bit range",
+                    )
+                })?
+            };
+            return Ok(Value::Number(Number::from(value)));
+        }
+        if input.peek(LitFloat) {
+            let lit = input.parse::<LitFloat>()?;
+            let value = -lit.base10_parse::<f64>()?;
+            let number = Number::from_f64(value).ok_or_else(|| {
+                syn::Error::new(lit.span(), "floating-point example must be finite")
+            })?;
+            return Ok(Value::Number(number));
+        }
+        return Err(syn::Error::new(
+            input.span(),
+            "`-` in an example must be followed by an integer or float literal",
+        ));
+    }
     if input.peek(LitInt) {
         let lit = input.parse::<LitInt>()?;
-        let value = lit.base10_parse::<i64>()?;
+        let value = lit.base10_parse::<u64>().map_err(|error| {
+            syn::Error::new(
+                lit.span(),
+                format!("integer example is outside the supported 64-bit range: {error}"),
+            )
+        })?;
         return Ok(Value::Number(Number::from(value)));
     }
     if input.peek(LitFloat) {

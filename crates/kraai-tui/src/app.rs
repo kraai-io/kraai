@@ -37,7 +37,7 @@ use self::auth::{
     ProviderAuthState, ProviderAuthStatus, map_openai_codex_auth_status, open_external_target,
     pending_auth_target,
 };
-use self::runtime_bridge::{spawn_event_bridge, spawn_runtime_bridge};
+use self::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
 use self::settings::{
     clear_field_value, default_values, field_value_display, flatten_models_map, is_boolean_field,
     merge_values, next_provider_id, parse_field_input, provider_definition_rank, set_field_value,
@@ -70,8 +70,14 @@ const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("undo", "Restore last user message"),
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeRequestDelivery {
+    Delivered,
+    Disconnected,
+}
+
 pub struct App {
-    event_rx: Receiver<Event>,
+    event_rx: Receiver<RuntimeEventBridgeMessage>,
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
     clipboard: Option<arboard::Clipboard>,
@@ -85,6 +91,10 @@ pub struct App {
     state: AppState,
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
+    event_lag_session_resync_pending: bool,
+    event_lag_tools_resync_pending: bool,
+    runtime_bridge_connected: bool,
+    runtime_bridge_error: Option<String>,
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);

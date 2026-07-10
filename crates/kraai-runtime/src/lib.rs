@@ -8,8 +8,8 @@ mod settings;
 
 pub use api::{
     Event, EventCallback, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, PendingToolInfo, Session, SessionContextUsage, ToolBatchOutcome,
-    WorkspaceState,
+    PendingDeviceCodeLogin, PendingToolInfo, RuntimeStartupState, Session, SessionContextUsage,
+    ToolBatchOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
 pub use kraai_provider_core::{

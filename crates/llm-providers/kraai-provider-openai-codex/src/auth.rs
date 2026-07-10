@@ -1,26 +1,31 @@
 use std::fs::{File, OpenOptions};
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
+use kraai_provider_core::build_finite_http_client;
 use rand::Rng;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, broadcast};
-use tokio::task::AbortHandle;
+use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::task::JoinHandle;
 
 const AUTH_ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_CALLBACK_PORT: u16 = 1455;
+const REGISTERED_FALLBACK_CALLBACK_PORT: u16 = 1457;
 const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 const TOKEN_REFRESH_INTERVAL_SECS: u64 = 8 * 24 * 60 * 60;
 const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const DEVICE_CODE_TIMEOUT_SECS: u64 = 15 * 60;
+const CALLBACK_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CALLBACK_HEADER_BYTES: usize = 16 * 1024;
 const SIGN_IN_REQUIRED_MESSAGE: &str = "OpenAI sign-in required. Use /providers.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +62,7 @@ pub struct OpenAiCodexAuthControllerOptions {
     pub issuer: String,
     pub client_id: String,
     pub default_callback_port: u16,
+    pub fallback_callback_ports: Vec<u16>,
     pub auth_path: PathBuf,
 }
 
@@ -66,6 +72,7 @@ impl OpenAiCodexAuthControllerOptions {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
+            fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
             auth_path,
         }
     }
@@ -86,6 +93,7 @@ pub(crate) struct RequestAuth {
 struct Inner {
     client: Client,
     state: Mutex<ControllerState>,
+    login_gate: Mutex<()>,
     refresh_gate: Mutex<()>,
     updates: broadcast::Sender<OpenAiCodexAuthStatus>,
     config: AuthConfig,
@@ -96,6 +104,7 @@ struct AuthConfig {
     issuer: String,
     client_id: String,
     default_callback_port: u16,
+    fallback_callback_ports: Vec<u16>,
     auth_path: PathBuf,
     refresh_timeout: Duration,
 }
@@ -106,6 +115,7 @@ impl AuthConfig {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
+            fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
             auth_path: auth_path()?,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         })
@@ -118,6 +128,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
             issuer: value.issuer,
             client_id: value.client_id,
             default_callback_port: value.default_callback_port,
+            fallback_callback_ports: value.fallback_callback_ports,
             auth_path: value.auth_path,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         }
@@ -131,8 +142,9 @@ struct ControllerState {
 }
 
 struct PendingLogin {
+    id: String,
     state: OpenAiCodexLoginState,
-    abort_handle: AbortHandle,
+    task: JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -254,7 +266,7 @@ impl OpenAiCodexAuthController {
     }
 
     fn with_config(config: AuthConfig) -> io::Result<Self> {
-        let client = Client::builder().build().map_err(io::Error::other)?;
+        let client = build_finite_http_client().map_err(io::Error::other)?;
         let (updates, _) = broadcast::channel(32);
         let (auth, error) = match load_auth_file(&config.auth_path) {
             Ok(Some(auth)) => (Some(auth), None),
@@ -270,6 +282,7 @@ impl OpenAiCodexAuthController {
                     pending: None,
                     error,
                 }),
+                login_gate: Mutex::new(()),
                 refresh_gate: Mutex::new(()),
                 updates,
                 config,
@@ -290,9 +303,14 @@ impl OpenAiCodexAuthController {
     }
 
     pub async fn start_browser_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
 
-        let listener = bind_listener(self.inner.config.default_callback_port).await?;
+        let listener = bind_listener(
+            self.inner.config.default_callback_port,
+            &self.inner.config.fallback_callback_ports,
+        )
+        .await?;
         let actual_port = listener.local_addr()?.port();
         let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
         let pkce = generate_pkce();
@@ -306,70 +324,54 @@ impl OpenAiCodexAuthController {
         );
 
         let controller = self.clone();
-        let abort_handle = tokio::spawn(async move {
-            if let Err(error) = controller
-                .run_browser_login(listener, redirect_uri, pkce, state)
-                .await
-            {
-                controller.finish_failed_login(error.to_string()).await;
-            }
-        })
-        .abort_handle();
-
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.pending = Some(PendingLogin {
-                state: OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
-                abort_handle,
-            });
-            guard.error = None;
-        }
+        self.install_login_task(
+            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
+            async move {
+                controller
+                    .run_browser_login(listener, redirect_uri, pkce, state)
+                    .await
+            },
+        )
+        .await;
 
         self.emit_status().await
     }
 
     pub async fn start_device_code_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
 
         let device_code = self.request_device_code().await?;
         let verification_url = format!("{}/codex/device", self.inner.config.issuer);
 
-        let controller = self.clone();
+        let worker = self.clone();
         let device_auth_id = device_code.device_auth_id.clone();
         let user_code = device_code.user_code.clone();
         let interval_seconds = device_code.interval_seconds;
-        let abort_handle = tokio::spawn(async move {
-            if let Err(error) = controller
-                .run_device_code_login(
-                    device_auth_id,
-                    user_code,
-                    interval_seconds,
-                    verification_url,
-                )
-                .await
-            {
-                controller.finish_failed_login(error.to_string()).await;
-            }
-        })
-        .abort_handle();
-
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.pending = Some(PendingLogin {
-                state: OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
-                    verification_url: format!("{}/codex/device", self.inner.config.issuer),
-                    user_code: device_code.user_code,
-                }),
-                abort_handle,
-            });
-            guard.error = None;
-        }
+        self.install_login_task(
+            OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+                verification_url: format!("{}/codex/device", self.inner.config.issuer),
+                user_code: device_code.user_code,
+            }),
+            async move {
+                worker
+                    .run_device_code_login(
+                        device_auth_id,
+                        user_code,
+                        interval_seconds,
+                        verification_url,
+                    )
+                    .await
+            },
+        )
+        .await;
 
         self.emit_status().await
     }
 
     pub async fn cancel_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         {
             let mut guard = self.inner.state.lock().await;
             guard.pending = None;
@@ -379,7 +381,8 @@ impl OpenAiCodexAuthController {
     }
 
     pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        self.cancel_pending_task().await;
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         {
             let mut guard = self.inner.state.lock().await;
@@ -542,24 +545,84 @@ impl OpenAiCodexAuthController {
         Ok(())
     }
 
-    async fn finish_failed_login(&self, error: String) {
+    async fn install_login_task<F>(&self, state: OpenAiCodexLoginState, worker: F)
+    where
+        F: Future<Output = io::Result<StoredAuth>> + Send + 'static,
+    {
+        let id = generate_generation();
+        let worker_id = id.clone();
+        let controller = self.clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            controller
+                .finish_login_attempt(worker_id, worker.await)
+                .await;
+        });
+
+        {
+            let mut guard = self.inner.state.lock().await;
+            guard.pending = Some(PendingLogin { id, state, task });
+            guard.error = None;
+        }
+        let _ = start_tx.send(());
+    }
+
+    async fn finish_login_attempt(&self, id: String, result: io::Result<StoredAuth>) {
+        let _login_guard = self.inner.login_gate.lock().await;
+        let is_current = {
+            let guard = self.inner.state.lock().await;
+            guard
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.id == id)
+        };
+        if !is_current {
+            return;
+        }
+
+        let result = match result {
+            Ok(auth) => match acquire_auth_file_lock(self.inner.config.auth_path.clone()).await {
+                Ok(_file_lock) => persist_auth_file(&self.inner.config.auth_path, &auth)
+                    .map(|()| auth)
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            },
+            Err(error) => Err(error.to_string()),
+        };
+
         let mut guard = self.inner.state.lock().await;
+        if guard
+            .pending
+            .as_ref()
+            .is_none_or(|pending| pending.id != id)
+        {
+            return;
+        }
         guard.pending = None;
-        guard.error = Some(error);
+        match result {
+            Ok(auth) => {
+                guard.auth = Some(auth);
+                guard.error = None;
+            }
+            Err(error) => guard.error = Some(error),
+        }
         drop(guard);
         let _ = self.emit_status().await;
     }
 
-    async fn finish_successful_login(&self, auth: StoredAuth) -> io::Result<()> {
+    #[cfg(test)]
+    async fn replace_auth_for_test(&self, auth: StoredAuth) -> io::Result<()> {
+        let _login_guard = self.inner.login_gate.lock().await;
+        self.cancel_pending_task_locked().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         persist_auth_file(&self.inner.config.auth_path, &auth)?;
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.auth = Some(auth);
-            guard.pending = None;
-            guard.error = None;
-        }
-        let _ = self.emit_status().await;
+        let mut guard = self.inner.state.lock().await;
+        guard.auth = Some(auth);
+        guard.error = None;
+        drop(guard);
         Ok(())
     }
 
@@ -574,13 +637,14 @@ impl OpenAiCodexAuthController {
         Ok(status)
     }
 
-    async fn cancel_pending_task(&self) {
+    async fn cancel_pending_task_locked(&self) {
         let pending = {
             let mut guard = self.inner.state.lock().await;
             guard.pending.take()
         };
         if let Some(pending) = pending {
-            pending.abort_handle.abort();
+            pending.task.abort();
+            let _ = pending.task.await;
         }
     }
 
@@ -590,10 +654,21 @@ impl OpenAiCodexAuthController {
         redirect_uri: String,
         pkce: PkceCodes,
         expected_state: String,
-    ) -> io::Result<()> {
+    ) -> io::Result<StoredAuth> {
         loop {
             let (mut stream, _) = listener.accept().await?;
-            let request = read_http_request(&mut stream).await?;
+            let request = match read_http_request(&mut stream).await {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = write_http_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        &format!("Invalid callback request: {error}"),
+                    )
+                    .await;
+                    continue;
+                }
+            };
             let request_line = request.lines().next().unwrap_or_default().to_string();
             let path = request_line
                 .split_whitespace()
@@ -602,22 +677,29 @@ impl OpenAiCodexAuthController {
                 .to_string();
 
             if path == "/cancel" {
-                write_http_response(&mut stream, "Login cancelled", false).await?;
+                write_http_response(&mut stream, "200 OK", "Login cancelled").await?;
                 return Err(io::Error::other("Login cancelled"));
             }
 
-            if !path.starts_with("/auth/callback") {
+            let url = match url::Url::parse(&format!("http://localhost{path}")) {
+                Ok(url) => url,
+                Err(error) => {
+                    write_http_response(&mut stream, "400 Bad Request", "Invalid callback URL")
+                        .await?;
+                    return Err(io::Error::other(error));
+                }
+            };
+
+            if url.path() != "/auth/callback" {
                 write_http_response(
                     &mut stream,
+                    "404 Not Found",
                     "Waiting for OpenAI sign-in callback on /auth/callback",
-                    false,
                 )
                 .await?;
                 continue;
             }
 
-            let url =
-                url::Url::parse(&format!("http://localhost{path}")).map_err(io::Error::other)?;
             let state = url
                 .query_pairs()
                 .find(|(key, _)| key == "state")
@@ -631,34 +713,45 @@ impl OpenAiCodexAuthController {
                 .find(|(key, _)| key == "error")
                 .map(|(_, value)| value.to_string());
 
+            if state.as_deref() != Some(expected_state.as_str()) {
+                write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "OpenAI sign-in failed. State mismatch.",
+                )
+                .await?;
+                return Err(io::Error::other("OpenAI sign-in state mismatch"));
+            }
+
             if let Some(error) = error {
                 write_http_response(
                     &mut stream,
+                    "400 Bad Request",
                     "OpenAI sign-in failed. You can return to Kraai.",
-                    true,
                 )
                 .await?;
                 return Err(io::Error::other(error));
             }
 
-            if state.as_deref() != Some(expected_state.as_str()) {
-                write_http_response(&mut stream, "OpenAI sign-in failed. State mismatch.", true)
-                    .await?;
-                return Err(io::Error::other("OpenAI sign-in state mismatch"));
-            }
-
-            let code = code.ok_or_else(|| io::Error::other("Missing OAuth code"))?;
+            let Some(code) = code else {
+                write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "OpenAI sign-in failed. Missing authorization code.",
+                )
+                .await?;
+                return Err(io::Error::other("Missing OAuth code"));
+            };
             let auth = self
                 .exchange_authorization_code(&redirect_uri, &pkce, &code)
                 .await?;
             write_http_response(
                 &mut stream,
+                "200 OK",
                 "OpenAI sign-in complete. You can return to Kraai.",
-                true,
             )
             .await?;
-            self.finish_successful_login(auth).await?;
-            return Ok(());
+            return Ok(auth);
         }
     }
 
@@ -702,13 +795,34 @@ impl OpenAiCodexAuthController {
         user_code: String,
         interval_seconds: u64,
         verification_url: String,
-    ) -> io::Result<()> {
-        let started_at = unix_now();
-        loop {
-            if unix_now().saturating_sub(started_at) > DEVICE_CODE_TIMEOUT_SECS {
-                return Err(io::Error::other("OpenAI device-code login timed out"));
-            }
+    ) -> io::Result<StoredAuth> {
+        tokio::time::timeout(
+            Duration::from_secs(DEVICE_CODE_TIMEOUT_SECS),
+            self.run_device_code_login_inner(
+                device_auth_id,
+                user_code,
+                interval_seconds,
+                verification_url,
+            ),
+        )
+        .await
+        .map_err(|_elapsed| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "OpenAI device-code login timed out",
+            )
+        })?
+    }
 
+    async fn run_device_code_login_inner(
+        &self,
+        device_auth_id: String,
+        user_code: String,
+        interval_seconds: u64,
+        verification_url: String,
+    ) -> io::Result<StoredAuth> {
+        let interval = Duration::from_secs(interval_seconds.clamp(1, 30));
+        loop {
             let response = self
                 .inner
                 .client
@@ -740,12 +854,11 @@ impl OpenAiCodexAuthController {
                         &response.authorization_code,
                     )
                     .await?;
-                self.finish_successful_login(auth).await?;
-                return Ok(());
+                return Ok(auth);
             }
 
             if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
-                tokio::time::sleep(Duration::from_secs(interval_seconds.max(1))).await;
+                tokio::time::sleep(interval).await;
                 continue;
             }
 
@@ -1043,15 +1156,38 @@ async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<AuthFileLock> 
         .map_err(io::Error::other)?
 }
 
-async fn bind_listener(port: u16) -> io::Result<TcpListener> {
-    let primary = SocketAddr::from(([127, 0, 0, 1], port));
-    match TcpListener::bind(primary).await {
-        Ok(listener) => Ok(listener),
-        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
-            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await
+async fn bind_listener(port: u16, fallback_ports: &[u16]) -> io::Result<TcpListener> {
+    let mut attempted = Vec::with_capacity(fallback_ports.len() + 1);
+    for candidate in std::iter::once(port).chain(fallback_ports.iter().copied()) {
+        if candidate == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "OAuth callback ports must be explicitly registered, not port 0",
+            ));
         }
-        Err(error) => Err(error),
+        if attempted.contains(&candidate) {
+            continue;
+        }
+        attempted.push(candidate);
+
+        match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], candidate))).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+            Err(error) => return Err(error),
+        }
     }
+
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        format!(
+            "all registered OAuth callback ports are in use: {}",
+            attempted
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ))
 }
 
 fn build_authorize_url(
@@ -1104,24 +1240,51 @@ fn generate_state() -> String {
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<String> {
-    let mut buffer = [0u8; 4096];
-    let size = stream.read(&mut buffer).await?;
-    let request = buffer
-        .get(..size)
-        .ok_or_else(|| io::Error::other("request length exceeds buffer capacity"))?;
-    String::from_utf8(request.to_vec()).map_err(io::Error::other)
+    tokio::time::timeout(CALLBACK_REQUEST_TIMEOUT, async {
+        let mut request = Vec::with_capacity(1024);
+        loop {
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                return String::from_utf8(request).map_err(io::Error::other);
+            }
+            if request.len() >= MAX_CALLBACK_HEADER_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("callback request headers exceed {MAX_CALLBACK_HEADER_BYTES} bytes"),
+                ));
+            }
+
+            let remaining = MAX_CALLBACK_HEADER_BYTES - request.len();
+            let mut buffer = [0_u8; 1024];
+            let read_capacity = remaining.min(buffer.len());
+            let read_buffer = buffer.get_mut(..read_capacity).ok_or_else(|| {
+                io::Error::other("callback read capacity exceeded the receive buffer")
+            })?;
+            let size = stream.read(read_buffer).await?;
+            if size == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "callback connection closed before HTTP headers completed",
+                ));
+            }
+            let read_bytes = buffer
+                .get(..size)
+                .ok_or_else(|| io::Error::other("callback read exceeded the receive buffer"))?;
+            request.extend_from_slice(read_bytes);
+        }
+    })
+    .await
+    .map_err(|_elapsed| io::Error::new(io::ErrorKind::TimedOut, "callback request timed out"))?
 }
 
 async fn write_http_response(
     stream: &mut tokio::net::TcpStream,
+    status: &str,
     message: &str,
-    close: bool,
 ) -> io::Result<()> {
     let body =
         format!("<html><body><pre style=\"font-family: monospace\">{message}</pre></body></html>");
-    let connection = if close { "close" } else { "keep-alive" };
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{}",
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     );
@@ -1156,6 +1319,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::{Barrier, oneshot};
+    use tokio::task::AbortHandle;
     use ulid::Ulid;
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -1238,6 +1402,184 @@ mod tests {
     fn auth_path_uses_agent_provider_state_root() {
         let path = auth_path().unwrap();
         assert!(path.ends_with(".kraai/provider-state/openai-codex/auth.json"));
+    }
+
+    #[tokio::test]
+    async fn callback_listener_prefers_primary_registered_port() {
+        let reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = reservation.local_addr().unwrap().port();
+        drop(reservation);
+
+        let listener = bind_listener(primary, &[]).await.unwrap();
+
+        assert_eq!(listener.local_addr().unwrap().port(), primary);
+    }
+
+    #[tokio::test]
+    async fn callback_listener_uses_registered_fallback() {
+        let primary_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = primary_listener.local_addr().unwrap().port();
+        let fallback_reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback = fallback_reservation.local_addr().unwrap().port();
+        drop(fallback_reservation);
+
+        let listener = bind_listener(primary, &[fallback]).await.unwrap();
+
+        assert_eq!(listener.local_addr().unwrap().port(), fallback);
+    }
+
+    #[tokio::test]
+    async fn callback_listener_fails_when_registered_ports_are_occupied() {
+        let primary_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = primary_listener.local_addr().unwrap().port();
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback = fallback_listener.local_addr().unwrap().port();
+
+        let error = bind_listener(primary, &[fallback]).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert!(error.to_string().contains(&primary.to_string()));
+        assert!(error.to_string().contains(&fallback.to_string()));
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_accepts_fragmented_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            for chunk in [
+                b"GET /auth/call".as_slice(),
+                b"back?code=test&state=ok HTTP/1.1\r\nHost: local".as_slice(),
+                b"host\r\n\r".as_slice(),
+                b"\n".as_slice(),
+            ] {
+                client.write_all(chunk).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+
+        let request = read_http_request(&mut server).await.unwrap();
+        writer.await.unwrap();
+
+        assert!(request.starts_with("GET /auth/callback?code=test&state=ok HTTP/1.1"));
+        assert!(request.ends_with("\r\n\r\n"));
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_rejects_oversized_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client
+                .write_all(&vec![b'x'; MAX_CALLBACK_HEADER_BYTES + 1])
+                .await
+                .unwrap();
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+
+        let error = read_http_request(&mut server).await.unwrap_err();
+        writer.await.unwrap();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn callback_request_reader_times_out_idle_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::spawn(tokio::net::TcpStream::connect(address));
+        let (mut server, _) = listener.accept().await.unwrap();
+        let _client = client.await.unwrap().unwrap();
+
+        let error = read_http_request(&mut server).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn immediately_failing_login_does_not_leave_pending_state() {
+        let Some(controller) = auth_controller_or_skip() else {
+            return;
+        };
+        controller
+            .install_login_task(
+                OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                    auth_url: String::from("https://example.invalid"),
+                }),
+                async { Err(io::Error::other("immediate failure")) },
+            )
+            .await;
+
+        let status = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let status = controller.get_status().await;
+                if status.error.is_some() {
+                    break status;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
+        assert_eq!(status.error.as_deref(), Some("immediate failure"));
+    }
+
+    #[tokio::test]
+    async fn stale_login_completion_cannot_clear_newer_attempt() {
+        let Some(controller) = auth_controller_or_skip() else {
+            return;
+        };
+        controller
+            .install_login_task(
+                OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                    auth_url: String::from("https://old.invalid"),
+                }),
+                std::future::pending(),
+            )
+            .await;
+        let old_id = controller
+            .inner
+            .state
+            .lock()
+            .await
+            .pending
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
+
+        {
+            let _login_guard = controller.inner.login_gate.lock().await;
+            controller.cancel_pending_task_locked().await;
+            controller
+                .install_login_task(
+                    OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                        auth_url: String::from("https://new.invalid"),
+                    }),
+                    std::future::pending(),
+                )
+                .await;
+        }
+        controller
+            .finish_login_attempt(old_id, Err(io::Error::other("stale failure")))
+            .await;
+
+        let status = controller.get_status().await;
+        assert_eq!(
+            status.state,
+            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                auth_url: String::from("https://new.invalid"),
+            })
+        );
+        assert!(status.error.is_none());
+
+        let _login_guard = controller.inner.login_gate.lock().await;
+        controller.cancel_pending_task_locked().await;
     }
 
     #[test]
@@ -1567,7 +1909,7 @@ mod tests {
         let stale_auth = controller.get_request_auth().await.unwrap();
 
         controller
-            .finish_successful_login(stored_auth(
+            .replace_auth_for_test(stored_auth(
                 "new@example.com",
                 "team",
                 "workspace_new",

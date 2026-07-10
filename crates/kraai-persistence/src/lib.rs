@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
@@ -65,6 +66,13 @@ pub trait SessionStore: Send + Sync {
     /// Save a session
     async fn save(&self, session: &SessionMeta) -> Result<()>;
 
+    /// Save a session only when its currently persisted tip matches `expected_tip`.
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&MessageId>,
+    ) -> Result<bool>;
+
     /// Delete a session
     async fn delete(&self, id: &str) -> Result<()>;
 }
@@ -86,8 +94,20 @@ impl FileMessageStore {
         }
     }
 
-    fn message_path(&self, id: &MessageId) -> PathBuf {
-        self.cold_dir.join(format!("{}.json", id))
+    fn message_path(&self, id: &MessageId) -> Result<PathBuf> {
+        let raw = id.as_str();
+        if MessageId::try_new(raw).is_err()
+            || Path::new(raw).is_absolute()
+            || raw.contains(['/', '\\', ':'])
+        {
+            return Err(eyre!("Unsafe message id for persisted path: {raw:?}"));
+        }
+
+        let path = self.cold_dir.join(format!("{raw}.json"));
+        if path.parent() != Some(self.cold_dir.as_path()) {
+            return Err(eyre!("Message path escaped storage directory: {path:?}"));
+        }
+        Ok(path)
     }
 
     /// Ensure the messages directory exists
@@ -99,6 +119,12 @@ impl FileMessageStore {
     }
 }
 
+/// Atomically replace `path` and make the acknowledged write crash-durable.
+///
+/// Unix persists both the file contents and containing directory entry. Other
+/// platforms persist the file contents before replacement but may not expose a
+/// portable directory-sync operation.
+#[cfg(not(windows))]
 async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -108,15 +134,80 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         .with_context(|| format!("Failed to create directory: {parent:?}"))?;
 
     let temp_path = temp_write_path(path);
-    fs::write(&temp_path, content)
-        .await
-        .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
+    let write_result = async {
+        let mut temp_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await
+            .with_context(|| format!("Failed to create temp file: {temp_path:?}"))?;
+        temp_file
+            .write_all(content)
+            .await
+            .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
+        temp_file
+            .flush()
+            .await
+            .with_context(|| format!("Failed to flush temp file: {temp_path:?}"))?;
+        temp_file
+            .sync_all()
+            .await
+            .with_context(|| format!("Failed to sync temp file: {temp_path:?}"))?;
+        drop(temp_file);
 
-    if let Err(error) = fs::rename(&temp_path, path).await {
-        let _ = fs::remove_file(&temp_path).await;
-        return Err(error).with_context(|| format!("Failed to rename temp file to: {path:?}"));
+        fs::rename(&temp_path, path)
+            .await
+            .with_context(|| format!("Failed to rename temp file to: {path:?}"))?;
+        sync_parent_directory(parent).await?;
+        Ok(())
     }
+    .await;
 
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path).await;
+    }
+    write_result
+}
+
+#[cfg(windows)]
+async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let path = path.to_path_buf();
+    let content = content.to_vec();
+    tokio::task::spawn_blocking(move || {
+        let parent = path
+            .parent()
+            .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {parent:?}"))?;
+        let mut file = atomic_write_file::AtomicWriteFile::open(&path)
+            .with_context(|| format!("Failed to create atomic file for: {path:?}"))?;
+        file.write_all(&content)
+            .with_context(|| format!("Failed to write atomic file for: {path:?}"))?;
+        file.commit()
+            .with_context(|| format!("Failed to replace file atomically: {path:?}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| eyre!("Atomic write task failed: {error}"))?
+}
+
+#[cfg(unix)]
+async fn sync_parent_directory(parent: &Path) -> Result<()> {
+    let parent = parent.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::File::open(&parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| format!("Failed to sync parent directory: {parent:?}"))
+    })
+    .await
+    .map_err(|error| eyre!("Parent directory sync task failed: {error}"))??;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_directory(_parent: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -140,7 +231,7 @@ impl MessageStore for FileMessageStore {
         }
 
         // Check cold storage
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -164,7 +255,7 @@ impl MessageStore for FileMessageStore {
     async fn save(&self, message: &Message) -> Result<()> {
         self.ensure_dir().await?;
 
-        let path = self.message_path(&message.id);
+        let path = self.message_path(&message.id)?;
         let content = serde_json::to_string_pretty(message)
             .with_context(|| format!("Failed to serialize message: {}", message.id))?;
 
@@ -194,7 +285,7 @@ impl MessageStore for FileMessageStore {
         }
 
         // Remove from cold storage
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         if path.exists() {
             fs::remove_file(&path)
                 .await
@@ -205,7 +296,7 @@ impl MessageStore for FileMessageStore {
     }
 
     async fn exists(&self, id: &MessageId) -> Result<bool> {
-        let path = self.message_path(id);
+        let path = self.message_path(id)?;
         Ok(path.exists())
     }
 
@@ -231,7 +322,10 @@ impl MessageStore for FileMessageStore {
                 && let Some(stem) = path.file_stem()
                 && let Some(id_str) = stem.to_str()
             {
-                ids.insert(MessageId::new(id_str));
+                let id = MessageId::try_new(id_str).map_err(|error| {
+                    eyre!("Invalid message filename in storage {path:?}: {error}")
+                })?;
+                ids.insert(id);
             }
         }
 
@@ -296,7 +390,11 @@ impl FileSessionStore {
         let mut current = Some(tip_id.clone());
 
         while let Some(id) = current {
-            messages.insert(id.clone());
+            if !messages.insert(id.clone()) {
+                return Err(eyre!(
+                    "Corrupt message parent graph: cycle repeats message {id}"
+                ));
+            }
             if let Some(msg) = self.message_store.get(&id).await? {
                 current = msg.parent_id;
             } else {
@@ -314,7 +412,9 @@ impl FileSessionStore {
 
         for session in sessions {
             if let Some(tip_id) = &session.tip_id {
-                let tree = self.collect_tree_messages(tip_id).await?;
+                let tree = self.collect_tree_messages(tip_id).await.with_context(|| {
+                    format!("Failed to traverse messages for session {}", session.id)
+                })?;
                 all_messages.extend(tree);
             }
         }
@@ -383,6 +483,30 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&MessageId>,
+    ) -> Result<bool> {
+        let _write_guard = self.write_guard.lock().await;
+
+        let mut next_sessions = self.sessions.read().await.clone();
+        let Some(current) = next_sessions.get(&session.id) else {
+            return Ok(false);
+        };
+        if current.tip_id.as_ref() != expected_tip {
+            return Ok(false);
+        }
+        next_sessions.insert(session.id.clone(), session.clone());
+
+        Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
+
+        let mut sessions = self.sessions.write().await;
+        *sessions = next_sessions;
+        drop(sessions);
+        Ok(true)
+    }
+
     async fn delete(&self, id: &str) -> Result<()> {
         let _write_guard = self.write_guard.lock().await;
 
@@ -393,7 +517,11 @@ impl SessionStore for FileSessionStore {
 
         // Collect tree messages outside of lock (does I/O)
         let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
-            Some(self.collect_tree_messages(&tip_id).await?)
+            Some(
+                self.collect_tree_messages(&tip_id)
+                    .await
+                    .with_context(|| format!("Failed to traverse messages for session {id}"))?,
+            )
         } else {
             None
         };
@@ -520,6 +648,36 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn atomic_write_cleans_temp_file_after_replace_failure() {
+        let data_dir = test_dir("atomic-write-cleanup");
+        fs::create_dir_all(&data_dir).await.unwrap();
+        let destination = data_dir.join("destination");
+        fs::create_dir(&destination).await.unwrap();
+
+        let error = atomic_write(&destination, b"contents").await.unwrap_err();
+
+        assert!(error.to_string().contains("Failed to rename temp file"));
+        let mut entries = fs::read_dir(&data_dir).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(names, vec![String::from("destination")]);
+        let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn atomic_write_replaces_file_after_syncing_contents() {
+        let data_dir = test_dir("atomic-write-success");
+        let destination = data_dir.join("state.json");
+
+        atomic_write(&destination, b"durable").await.unwrap();
+
+        assert_eq!(fs::read(&destination).await.unwrap(), b"durable");
+        let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
     fn test_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -587,6 +745,42 @@ mod tests {
         assert!(session_store.list().await.unwrap().is_empty());
 
         let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn message_store_rejects_ids_that_could_escape_storage() {
+        with_test_store(
+            "unsafe-message-id",
+            |message_store, _session_store, data_dir| async move {
+                for raw in [
+                    "../sessions",
+                    "/tmp/kraai-message",
+                    r"..\sessions",
+                    "C:escape",
+                ] {
+                    let id = MessageId(Arc::from(raw));
+                    let unsafe_message = Message {
+                        id: id.clone(),
+                        parent_id: None,
+                        role: ChatRole::Assistant,
+                        content: String::from("unsafe"),
+                        status: MessageStatus::Complete,
+                        agent_profile_id: None,
+                        tool_state_snapshot: None,
+                        tool_state_deltas: Vec::new(),
+                        generation: None,
+                    };
+
+                    assert!(message_store.save(&unsafe_message).await.is_err());
+                    assert!(message_store.get(&id).await.is_err());
+                    assert!(message_store.exists(&id).await.is_err());
+                    assert!(message_store.delete(&id).await.is_err());
+                }
+
+                assert!(!data_dir.join("sessions.json").exists());
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -672,6 +866,69 @@ mod tests {
                 assert!(message_store.exists(&b_tip.id).await.unwrap());
                 assert!(message_store.exists(&shared.id).await.unwrap());
                 assert!(message_store.exists(&root.id).await.unwrap());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cyclic_message_graphs_return_corruption_errors() {
+        with_test_store(
+            "cyclic-message-graphs",
+            |message_store, session_store, _| async move {
+                let self_cycle_id = MessageId::new("self-cycle");
+                message_store
+                    .save(&message(
+                        self_cycle_id.as_str(),
+                        Some(&self_cycle_id),
+                        "self",
+                    ))
+                    .await
+                    .unwrap();
+                let error = session_store
+                    .collect_tree_messages(&self_cycle_id)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("self-cycle"));
+
+                let first_id = MessageId::new("cycle-a");
+                let second_id = MessageId::new("cycle-b");
+                message_store
+                    .save(&message("cycle-a", Some(&second_id), "a"))
+                    .await
+                    .unwrap();
+                message_store
+                    .save(&message("cycle-b", Some(&first_id), "b"))
+                    .await
+                    .unwrap();
+                let error = session_store
+                    .collect_tree_messages(&first_id)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("cycle-a"));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn valid_deep_message_graph_still_traverses() {
+        with_test_store(
+            "deep-message-graph",
+            |message_store, session_store, _| async move {
+                let mut parent = None;
+                for index in 0..256 {
+                    let current = message(&format!("deep-{index}"), parent.as_ref(), "item");
+                    message_store.save(&current).await.unwrap();
+                    parent = Some(current.id);
+                }
+
+                let tree = session_store
+                    .collect_tree_messages(parent.as_ref().unwrap())
+                    .await
+                    .unwrap();
+
+                assert_eq!(tree.len(), 256);
             },
         )
         .await;

@@ -4,8 +4,9 @@ use super::{
     RuntimeRequest, RuntimeResponse, STATUSLINE_ANIMATION_INTERVAL, SettingsModelField,
     SettingsProviderField, StartupOptions, ToolPhase, UiMode, default_agent_profiles,
 };
+use super::{RuntimeEventBridgeMessage, spawn_event_bridge};
 use crate::components::TextInput;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
     FieldValueKind, Model, ModelSettings, ProviderDefinition, ProviderSettings, Session,
@@ -30,10 +31,34 @@ use std::time::{Duration, Instant};
 struct TestHarness {
     app: App,
     requests_rx: Receiver<RuntimeRequest>,
+    responses_tx: Sender<RuntimeResponse>,
 }
 #[derive(Clone, Default)]
 struct SharedBuffer {
     data: Arc<Mutex<Vec<u8>>>,
+}
+struct FailingWriter {
+    writes_before_failure: Option<usize>,
+    fail_flush: bool,
+    writes: usize,
+}
+
+impl Write for FailingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.writes_before_failure == Some(self.writes) {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "write failed"));
+        }
+        self.writes += 1;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.fail_flush {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        } else {
+            Ok(())
+        }
+    }
 }
 impl Write for SharedBuffer {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -50,7 +75,7 @@ impl Write for SharedBuffer {
 fn test_harness() -> TestHarness {
     let (_event_tx, event_rx) = unbounded();
     let (runtime_tx, requests_rx) = unbounded();
-    let (_response_tx, runtime_rx) = unbounded();
+    let (responses_tx, runtime_rx) = unbounded();
     TestHarness {
         app: App {
             event_rx,
@@ -67,8 +92,13 @@ fn test_harness() -> TestHarness {
             state: AppState::default(),
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
+            event_lag_session_resync_pending: false,
+            event_lag_tools_resync_pending: false,
+            runtime_bridge_connected: true,
+            runtime_bridge_error: None,
         },
         requests_rx,
+        responses_tx,
     }
 }
 fn test_harness_with_startup_options(startup_options: StartupOptions) -> TestHarness {
@@ -99,6 +129,16 @@ impl TestHarness {
         cache.total_lines = total_lines;
         drop(cache);
         self.app.state.chat_viewport_height = viewport_height;
+    }
+    fn disconnect_request_receiver(&mut self) {
+        let (_replacement_tx, replacement_rx) = unbounded();
+        let old_receiver = std::mem::replace(&mut self.requests_rx, replacement_rx);
+        drop(old_receiver);
+    }
+    fn disconnect_response_sender(&mut self) {
+        let (replacement_tx, _replacement_rx) = unbounded();
+        let old_sender = std::mem::replace(&mut self.responses_tx, replacement_tx);
+        drop(old_sender);
     }
 }
 fn key(code: KeyCode) -> KeyEvent {
@@ -340,6 +380,81 @@ fn sample_sessions() -> Vec<Session> {
 fn sample_agent_profiles() -> Vec<AgentProfileSummary> {
     default_agent_profiles()
 }
+
+#[test]
+fn event_bridge_reports_broadcast_lag() {
+    let (runtime_event_tx, runtime_event_rx) = tokio::sync::broadcast::channel(1);
+    runtime_event_tx
+        .send(Event::ConfigLoaded)
+        .expect("subscriber should be attached");
+    runtime_event_tx
+        .send(Event::ConfigLoaded)
+        .expect("subscriber should be attached");
+
+    let event_rx = spawn_event_bridge(runtime_event_rx);
+
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(2)),
+        Ok(RuntimeEventBridgeMessage::Lagged(1))
+    ));
+}
+
+#[test]
+fn lag_resync_restores_authoritative_current_session_lifecycle() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+    harness.app.state.retry_waiting = true;
+    harness.app.state.profile_locked = true;
+    harness.app.state.tool_phase = ToolPhase::ExecutingBatch;
+    harness.app.state.tool_batch_execution_started = true;
+    harness.app.state.pending_tools = sample_pending_tools();
+    harness.app.ci_turn_completion_pending = true;
+
+    harness
+        .app
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
+
+    let requests = harness.drain_requests();
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetChatHistory { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetPendingTools { session_id } if session_id == "sess-2"
+    )));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        RuntimeRequest::ListAgentProfiles { session_id } if session_id == "sess-2"
+    )));
+    assert!(!harness.app.state.retry_waiting);
+    assert!(harness.app.event_lag_session_resync_pending);
+    assert!(harness.app.event_lag_tools_resync_pending);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::PendingTools {
+            session_id: String::from("sess-2"),
+            result: Ok(Vec::new()),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(sample_sessions())));
+
+    assert!(!harness.app.state.is_streaming);
+    assert!(!harness.app.state.profile_locked);
+    assert!(harness.app.state.pending_tools.is_empty());
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+    assert!(!harness.app.state.tool_batch_execution_started);
+    assert!(!harness.app.event_lag_session_resync_pending);
+    assert!(!harness.app.event_lag_tools_resync_pending);
+    assert!(harness.app.state.exit);
+    assert_eq!(harness.app.ci_error, None);
+}
 fn sample_pending_tools() -> Vec<PendingTool> {
     vec![
         PendingTool {
@@ -580,7 +695,7 @@ fn models_response_autosends_startup_message() {
     );
     assert!(matches!(
         harness.drain_requests().as_slice(),
-        [RuntimeRequest::CreateSession]
+        [RuntimeRequest::CreateSession { .. }]
     ));
 }
 #[test]
@@ -920,6 +1035,105 @@ fn non_ci_and_stale_chunks_do_not_print_terminal_output() {
         chunk: String::from("hello"),
     });
     assert_eq!(captured_output(&stale_output), "");
+}
+
+#[test]
+fn ci_chunk_write_failure_exits_and_cancels_stream() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: Some(0),
+        fail_flush: false,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.is_streaming = true;
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+
+    assert!(harness.app.state.exit);
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("write failed"))
+    );
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::CancelStream { session_id }] if session_id == "sess-2"
+    ));
+}
+
+#[test]
+fn ci_chunk_flush_failure_preserves_first_output_error() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: None,
+        fail_flush: true,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+    harness.app.handle_runtime_event(Event::StreamError {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        error: String::from("later runtime error"),
+    });
+
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("flush failed"))
+    );
+}
+
+#[test]
+fn ci_final_newline_write_failure_is_reported() {
+    let mut harness = test_harness_with_startup_options(StartupOptions {
+        ci: true,
+        ..StartupOptions::default()
+    });
+    harness.app.ci_output = Box::new(FailingWriter {
+        writes_before_failure: Some(1),
+        fail_flush: false,
+        writes: 0,
+    });
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+        chunk: String::from("hello"),
+    });
+
+    harness.app.handle_runtime_event(Event::StreamComplete {
+        session_id: String::from("sess-2"),
+        message_id: String::from("msg-1"),
+    });
+
+    assert!(
+        harness
+            .app
+            .ci_error
+            .as_deref()
+            .is_some_and(|error| error.contains("write failed"))
+    );
 }
 
 #[test]
@@ -1618,6 +1832,7 @@ fn new_command_clears_local_state_without_creating_session() {
     harness.app.state = populated_state();
     harness.app.state.retry_waiting = true;
     harness.app.state.pending_submit = Some(PendingSubmit {
+        creation_id: 0,
         session_id: None,
         message: String::from("stale"),
         model_id: String::from("gpt-4o-mini"),
@@ -1667,7 +1882,7 @@ fn submit_without_session_requests_session_creation() {
     );
     let requests = harness.drain_requests();
     assert_eq!(requests.len(), 1);
-    assert!(matches!(requests[0], RuntimeRequest::CreateSession));
+    assert!(matches!(requests[0], RuntimeRequest::CreateSession { .. }));
 }
 #[test]
 fn create_session_applies_draft_agent_before_sending() {
@@ -1681,11 +1896,14 @@ fn create_session_applies_draft_agent_before_sending() {
     harness.app.handle_key_event(key(KeyCode::Enter));
     assert!(matches!(
         harness.drain_requests().as_slice(),
-        [RuntimeRequest::CreateSession]
+        [RuntimeRequest::CreateSession { .. }]
     ));
     harness
         .app
-        .handle_runtime_response(RuntimeResponse::CreateSession(Ok(String::from("sess-3"))));
+        .handle_runtime_response(RuntimeResponse::CreateSession {
+            creation_id: 0,
+            result: Ok(String::from("sess-3")),
+        });
     let requests = harness.drain_requests();
     assert!(requests.iter().any(|request| {
         matches!(
@@ -1702,6 +1920,7 @@ fn create_session_applies_draft_agent_before_sending() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+            session_id: String::from("sess-3"),
             profile_id: String::from("build-code"),
             result: Ok(()),
         });
@@ -1720,6 +1939,97 @@ fn create_session_applies_draft_agent_before_sending() {
                 && model_id == "gpt-4o-mini"
                 && provider_id == "openai-chat-completions"
                 && !*auto_approve
+        )
+    }));
+}
+
+#[test]
+fn rapid_new_chat_submissions_create_only_one_session() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.selected_profile_id = Some(String::from("build-code"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+
+    harness.app.submit_message(String::from("first"));
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::CreateSession { creation_id: 0 }]
+    ));
+    harness.app.submit_message(String::from("second"));
+
+    assert!(harness.drain_requests().is_empty());
+    assert_eq!(
+        harness
+            .app
+            .state
+            .pending_submit
+            .as_ref()
+            .map(|pending| pending.message.as_str()),
+        Some("first")
+    );
+    assert_eq!(harness.app.state.input, "second");
+    assert!(harness.app.state.status.contains("already in progress"));
+}
+
+#[test]
+fn stale_session_creation_response_cannot_switch_foreground() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.selected_profile_id = Some(String::from("build-code"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.submit_message(String::from("first"));
+    harness.drain_requests();
+    harness.app.start_new_chat();
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::CreateSession {
+            creation_id: 0,
+            result: Ok(String::from("stale-session")),
+        });
+
+    assert!(harness.app.state.current_session_id.is_none());
+    assert_eq!(harness.app.state.status, "Started new chat");
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
+fn background_profile_response_does_not_mutate_foreground_session() {
+    let mut harness = test_harness();
+    harness.app.state = populated_state();
+    harness.app.state.status = String::from("Foreground ready");
+    harness.app.state.pending_submit = Some(PendingSubmit {
+        creation_id: 0,
+        session_id: Some(String::from("sess-1")),
+        message: String::from("background message"),
+        model_id: String::from("gpt-4o-mini"),
+        provider_id: String::from("openai-chat-completions"),
+    });
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+            session_id: String::from("sess-1"),
+            profile_id: String::from("build-code"),
+            result: Ok(()),
+        });
+
+    assert_eq!(
+        harness.app.state.current_session_id.as_deref(),
+        Some("sess-2")
+    );
+    assert_eq!(
+        harness.app.state.selected_profile_id.as_deref(),
+        Some("plan-code")
+    );
+    assert_eq!(harness.app.state.status, "Foreground ready");
+    assert!(harness.drain_requests().iter().any(|request| {
+        matches!(
+            request,
+            RuntimeRequest::SendMessage { session_id, message, .. }
+                if session_id == "sess-1" && message == "background message"
         )
     }));
 }
@@ -1772,6 +2082,71 @@ fn submit_sends_message_request_and_tracks_optimistic_message() {
         }
         other => panic!("unexpected request: {}", request_name(other)),
     }
+}
+
+#[test]
+fn disconnected_request_bridge_rejects_message_without_optimistic_state() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+    harness.app.state.input = String::from("keep this message");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+    harness.disconnect_request_receiver();
+
+    harness.app.handle_key_event(key(KeyCode::Enter));
+
+    assert_eq!(harness.app.state.input, "keep this message");
+    assert!(harness.app.state.optimistic_messages.is_empty());
+    assert!(!harness.app.state.is_streaming);
+    assert!(!harness.app.runtime_bridge_connected);
+    assert!(harness.app.state.exit);
+    assert_eq!(
+        harness.app.runtime_bridge_error.as_deref(),
+        Some("Runtime bridge disconnected")
+    );
+}
+
+#[test]
+fn disconnected_request_bridge_rejects_tool_approval() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.tool_phase = ToolPhase::Deciding;
+    harness.app.state.pending_tools = vec![PendingTool {
+        call_id: String::from("call-2"),
+        tool_id: String::from("write_file"),
+        args: String::from("{}"),
+        description: String::from("Write a file"),
+        risk_level: String::from("undoable_workspace_write"),
+        reasons: Vec::new(),
+        approved: None,
+        queue_order: 0,
+    }];
+    harness.disconnect_request_receiver();
+
+    harness.app.handle_key_event(key(KeyCode::Enter));
+
+    assert!(harness.app.state.pending_tools.is_empty());
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+    assert_eq!(harness.app.state.status, "Runtime bridge disconnected");
+    assert!(harness.app.state.exit);
+}
+
+#[test]
+fn interactive_event_processing_detects_runtime_response_disconnect() {
+    let mut harness = test_harness();
+    harness.disconnect_response_sender();
+
+    assert!(harness.app.process_events());
+
+    assert!(!harness.app.runtime_bridge_connected);
+    assert!(harness.app.state.exit);
+    assert_eq!(
+        harness.app.runtime_bridge_error.as_deref(),
+        Some("Runtime bridge disconnected")
+    );
 }
 #[test]
 fn submit_sends_message_starts_turn_timer() {
@@ -3139,7 +3514,7 @@ fn request_name(request: &RuntimeRequest) -> &'static str {
         RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => "StartOpenAiCodexDeviceCodeLogin",
         RuntimeRequest::CancelOpenAiCodexLogin => "CancelOpenAiCodexLogin",
         RuntimeRequest::LogoutOpenAiCodexAuth => "LogoutOpenAiCodexAuth",
-        RuntimeRequest::CreateSession => "CreateSession",
+        RuntimeRequest::CreateSession { .. } => "CreateSession",
         RuntimeRequest::SetSessionProfile { .. } => "SetSessionProfile",
         RuntimeRequest::SendMessage { .. } => "SendMessage",
         RuntimeRequest::SaveSettings { .. } => "SaveSettings",

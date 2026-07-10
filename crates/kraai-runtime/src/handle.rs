@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{CallId, MessageId, ModelId, ProviderId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
-    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, Session,
-    SessionContextUsage, SettingsDocument, WorkspaceState,
+    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, RuntimeStartupState,
+    Session, SessionContextUsage, SettingsDocument, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime
@@ -61,6 +63,7 @@ pub(crate) enum Command {
     },
     DeleteSession {
         session_id: String,
+        response: oneshot::Sender<Result<()>>,
     },
     GetWorkspaceState {
         session_id: String,
@@ -93,15 +96,15 @@ pub(crate) enum Command {
     },
     ApproveTool {
         session_id: String,
-        call_id: String,
+        call_id: CallId,
     },
     DenyTool {
         session_id: String,
-        call_id: String,
+        call_id: CallId,
     },
     CancelStream {
         session_id: String,
-        response: oneshot::Sender<bool>,
+        response: oneshot::Sender<Result<bool>>,
     },
     ContinueSession {
         session_id: String,
@@ -124,6 +127,39 @@ pub(crate) enum Command {
     LogoutOpenAiCodexAuth {
         response: oneshot::Sender<()>,
     },
+    Shutdown {
+        response: Option<oneshot::Sender<()>>,
+    },
+}
+
+pub(crate) struct RuntimeLifecycle {
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    shutdown_started: AtomicBool,
+    thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl RuntimeLifecycle {
+    pub(crate) fn new(shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
+        Self {
+            shutdown_tx,
+            shutdown_started: AtomicBool::new(false),
+            thread: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn set_thread(&self, thread: std::thread::JoinHandle<()>) {
+        if let Ok(mut slot) = self.thread.lock() {
+            *slot = Some(thread);
+        }
+    }
+}
+
+impl Drop for RuntimeLifecycle {
+    fn drop(&mut self) {
+        if !self.shutdown_started.swap(true, Ordering::SeqCst) {
+            self.shutdown_tx.send_replace(true);
+        }
+    }
 }
 
 /// Handle to the runtime for sending commands
@@ -134,11 +170,62 @@ pub(crate) enum Command {
 pub struct RuntimeHandle {
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) event_tx: broadcast::Sender<Event>,
+    pub(crate) lifecycle: Option<Arc<RuntimeLifecycle>>,
+    pub(crate) startup_rx: tokio::sync::watch::Receiver<RuntimeStartupState>,
 }
 
 impl RuntimeHandle {
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.event_tx.subscribe()
+    }
+
+    pub fn startup_status(&self) -> RuntimeStartupState {
+        self.startup_rx.borrow().clone()
+    }
+
+    pub async fn wait_for_startup(&self) -> Result<RuntimeStartupState> {
+        let mut startup = self.startup_rx.clone();
+        loop {
+            let state = startup.borrow_and_update().clone();
+            if state != RuntimeStartupState::Starting {
+                return Ok(state);
+            }
+            startup.changed().await?;
+        }
+    }
+
+    /// Stop the runtime, wait for child tasks, and join its background thread.
+    pub async fn shutdown(&self) -> Result<()> {
+        let should_signal = self
+            .lifecycle
+            .as_ref()
+            .is_none_or(|lifecycle| !lifecycle.shutdown_started.swap(true, Ordering::SeqCst));
+        if should_signal {
+            let (tx, rx) = oneshot::channel();
+            if self
+                .command_tx
+                .send(Command::Shutdown { response: Some(tx) })
+                .await
+                .is_ok()
+            {
+                rx.await?;
+            }
+        }
+
+        let thread = self.lifecycle.as_ref().and_then(|lifecycle| {
+            lifecycle
+                .thread
+                .lock()
+                .ok()
+                .and_then(|mut thread| thread.take())
+        });
+        if let Some(thread) = thread {
+            tokio::task::spawn_blocking(move || thread.join())
+                .await
+                .map_err(|error| eyre!("runtime join task failed: {error}"))?
+                .map_err(|_panic| eyre!("runtime background thread panicked"))?;
+        }
+        Ok(())
     }
 
     /// List available models from all providers
@@ -230,12 +317,16 @@ impl RuntimeHandle {
         provider_id: String,
         auto_approve: bool,
     ) -> Result<()> {
+        let model_id =
+            ModelId::try_new(model_id).map_err(|error| eyre!("invalid model_id: {error}"))?;
+        let provider_id = ProviderId::try_new(provider_id)
+            .map_err(|error| eyre!("invalid provider_id: {error}"))?;
         self.command_tx
             .send(Command::SendMessage {
                 session_id,
                 message,
-                model_id: ModelId::new(model_id),
-                provider_id: ProviderId::new(provider_id),
+                model_id,
+                provider_id,
                 auto_approve,
             })
             .await?;
@@ -305,10 +396,14 @@ impl RuntimeHandle {
 
     /// Delete a session by ID
     pub async fn delete_session(&self, session_id: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::DeleteSession { session_id })
+            .send(Command::DeleteSession {
+                session_id,
+                response: tx,
+            })
             .await?;
-        Ok(())
+        rx.await?
     }
 
     pub async fn get_workspace_state(&self, session_id: String) -> Result<Option<WorkspaceState>> {
@@ -370,6 +465,8 @@ impl RuntimeHandle {
 
     /// Approve a tool call
     pub async fn approve_tool(&self, session_id: String, call_id: String) -> Result<()> {
+        let call_id =
+            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
         self.command_tx
             .send(Command::ApproveTool {
                 session_id,
@@ -381,6 +478,8 @@ impl RuntimeHandle {
 
     /// Deny a tool call
     pub async fn deny_tool(&self, session_id: String, call_id: String) -> Result<()> {
+        let call_id =
+            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
         self.command_tx
             .send(Command::DenyTool {
                 session_id,
@@ -399,7 +498,7 @@ impl RuntimeHandle {
                 response: tx,
             })
             .await?;
-        Ok(rx.await?)
+        rx.await?
     }
 
     pub async fn continue_session(&self, session_id: String) -> Result<()> {

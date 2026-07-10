@@ -8,6 +8,7 @@ version = "0.1.0"
 
 [dependencies]
 async-trait.workspace = true
+atomic-write-file.workspace = true
 color-eyre.workspace = true
 directories.workspace = true
 kraai-types = { workspace = true }

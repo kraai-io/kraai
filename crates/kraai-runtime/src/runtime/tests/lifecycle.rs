@@ -107,6 +107,171 @@ async fn start_failure_surfaces_rollback_error_without_clearing_active_turn() ->
 }
 
 #[tokio::test]
+async fn delete_session_waits_for_and_returns_persistence_result() -> Result<()> {
+    let fail_session_store = Arc::new(AtomicBool::new(false));
+    let Some(harness) = RuntimeTestHarness::new_with_provider_and_session_store(
+        Box::new(DeferredFailingProvider {
+            id: ProviderId::new("mock"),
+            started: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            failure_message: String::from("unused"),
+        }),
+        {
+            let fail_session_store = fail_session_store.clone();
+            move |base_store| {
+                Arc::new(FailOnDemandSessionStore {
+                    inner: base_store,
+                    should_fail: fail_session_store,
+                })
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = harness.handle.create_session().await?;
+
+    fail_session_store.store(true, Ordering::SeqCst);
+    let error = harness
+        .handle
+        .delete_session(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("intentional session delete failure")
+    );
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+
+    fail_session_store.store(false, Ordering::SeqCst);
+    harness.handle.delete_session(session_id.clone()).await?;
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .all(|session| session.id != session_id)
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_session_is_rejected_while_a_tool_is_executing() -> Result<()> {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let Some(harness) = RuntimeTestHarness::new_with_tools(
+        vec![vec![ScriptedChunk::plain(
+            "<tool_call>\n\
+tool: blocking_tool\n\
+value: wait\n\
+</tool_call>",
+        )]],
+        {
+            let started = started.clone();
+            let release = release.clone();
+            move |tools| {
+                tools.register_tool(BlockingApprovalTool {
+                    started,
+                    release,
+                    fail_message: None,
+                });
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("run blocking tool"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    let events = harness
+        .events
+        .wait_for("blocking tool detection for delete", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ToolCallDetected {
+                        session_id: event_session,
+                        tool_id,
+                        ..
+                    } if event_session == &session_id && tool_id == "blocking_tool"
+                )
+            })
+        })
+        .await;
+    let call_id = call_id_for_queue_order(&events, &session_id, "blocking_tool", 0);
+    harness
+        .handle
+        .approve_tool(session_id.clone(), call_id)
+        .await?;
+    harness
+        .handle
+        .execute_approved_tools(session_id.clone())
+        .await?;
+    started.notified().await;
+
+    let error = harness
+        .handle
+        .delete_session(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("tools are executing"));
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+
+    release.notify_waiters();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match harness.handle.delete_session(session_id.clone()).await {
+                Ok(()) => break,
+                Err(error) if error.to_string().contains("tools are executing") => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected delete error: {error}"),
+            }
+        }
+    })
+    .await?;
+
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .all(|session| session.id != session_id)
+    );
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn continue_session_starts_new_assistant_turn_without_new_user_message() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain("first reply")],
@@ -673,6 +838,105 @@ value: {\n\
             .values()
             .any(|message| message.content == "retry reply")
     );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_result_history_failure_finalizes_execution_accounting() -> Result<()> {
+    let fail_tool_history_save = Arc::new(AtomicBool::new(true));
+    let Some(harness) = RuntimeTestHarness::new_with_message_store(
+        vec![
+            vec![ScriptedChunk::plain(
+                "<tool_call>\n\
+tool: mock_tool\n\
+value: alpha\n\
+</tool_call>",
+            )],
+            vec![ScriptedChunk::plain("recovered reply")],
+        ],
+        {
+            let fail_tool_history_save = fail_tool_history_save.clone();
+            move |base_store| {
+                Arc::new(FailOnToolMessageStore {
+                    inner: base_store,
+                    should_fail: fail_tool_history_save,
+                })
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("run tool"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    let events = harness
+        .events
+        .wait_for("tool detection before persistence failure", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ToolCallDetected {
+                        session_id: event_session,
+                        tool_id,
+                        ..
+                    } if event_session == &session_id && tool_id == "mock_tool"
+                )
+            })
+        })
+        .await;
+    let call_id = call_id_for_queue_order(&events, &session_id, "mock_tool", 0);
+    harness
+        .handle
+        .approve_tool(session_id.clone(), call_id)
+        .await?;
+    harness
+        .handle
+        .execute_approved_tools(session_id.clone())
+        .await?;
+    harness
+        .events
+        .wait_for("tool result persistence failure", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ContinuationFailed {
+                        session_id: event_session,
+                        error,
+                    } if event_session == &session_id
+                        && error.contains("intentional tool history save failure")
+                )
+            })
+        })
+        .await;
+
+    fail_tool_history_save.store(false, Ordering::SeqCst);
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("retry"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("new turn after tool persistence failure", |events| {
+            stream_complete_count(events, &session_id) >= 2
+        })
+        .await;
 
     harness.shutdown().await;
     Ok(())

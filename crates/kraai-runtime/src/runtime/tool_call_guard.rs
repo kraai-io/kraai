@@ -211,12 +211,15 @@ fn parse_full_think_tag_at_start(input: &str) -> Option<ParsedThinkTag> {
         cursor += 1;
     }
 
-    let name_len = if input[cursor..].len() >= "thinking".len()
-        && input[cursor..cursor + "thinking".len()].eq_ignore_ascii_case("thinking")
+    let remaining = input.get(cursor..)?;
+    let name_len = if remaining
+        .get(.."thinking".len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case("thinking"))
     {
         "thinking".len()
-    } else if input[cursor..].len() >= "think".len()
-        && input[cursor..cursor + "think".len()].eq_ignore_ascii_case("think")
+    } else if remaining
+        .get(.."think".len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case("think"))
     {
         "think".len()
     } else {
@@ -403,6 +406,29 @@ value: alpha\n\
             result.accepted,
             "<tool_call>\ntool: auto_tool\n</tool_call>"
         );
+        assert!(guard.finish().is_empty());
+    }
+
+    #[test]
+    fn tool_call_stream_guard_preserves_unicode_in_angle_bracket_text() {
+        let mut guard = ToolCallStreamGuard::default();
+
+        let result = guard.ingest_chunk("<abcdef💥xx> tail");
+
+        assert!(!result.should_stop);
+        assert_eq!(result.accepted, "<abcdef💥xx> tail");
+        assert!(guard.finish().is_empty());
+    }
+
+    #[test]
+    fn tool_call_stream_guard_handles_unicode_split_across_chunks() {
+        let mut guard = ToolCallStreamGuard::default();
+
+        let first = guard.ingest_chunk("<think data=\"💥");
+        let second = guard.ingest_chunk("\">秘密</THINK>visible");
+
+        assert!(first.accepted.is_empty());
+        assert_eq!(second.accepted, "<think data=\"💥\">秘密</THINK>visible");
         assert!(guard.finish().is_empty());
     }
 }

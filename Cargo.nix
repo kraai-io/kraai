@@ -685,6 +685,31 @@ rec {
           "portable-atomic" = [ "dep:portable-atomic" ];
         };
       };
+      "atomic-write-file" = rec {
+        crateName = "atomic-write-file";
+        version = "0.3.0";
+        edition = "2024";
+        sha256 = "0gb6a949lkajawjm4wx71vmp13iaw966mw8b2cshsjvhnmahqyc4";
+        libName = "atomic_write_file";
+        authors = [
+          "Andrea Corbellini <corbellini.andrea@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "nix";
+            packageId = "nix 0.30.1";
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "user" ];
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.9.4";
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
       "autocfg" = rec {
         crateName = "autocfg";
         version = "1.5.1";
@@ -5511,6 +5536,11 @@ rec {
             packageId = "libc";
           }
           {
+            name = "nix";
+            packageId = "nix 0.29.0";
+            features = [ "process" "signal" ];
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -5528,6 +5558,10 @@ rec {
           {
             name = "async-trait";
             packageId = "async-trait";
+          }
+          {
+            name = "atomic-write-file";
+            packageId = "atomic-write-file";
           }
           {
             name = "color-eyre";
@@ -5596,6 +5630,10 @@ rec {
           {
             name = "kraai-types";
             packageId = "kraai-types";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.2";
           }
           {
             name = "reqwest";
@@ -5994,6 +6032,11 @@ rec {
           {
             name = "regex";
             packageId = "regex";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.4";
+            features = [ "fs" ];
           }
           {
             name = "serde";
@@ -6675,7 +6718,7 @@ rec {
         dependencies = [
           {
             name = "nix";
-            packageId = "nix";
+            packageId = "nix 0.29.0";
             target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null) || ("freebsd" == target."os" or null) || ("netbsd" == target."os" or null) || ("openbsd" == target."os" or null) || ("android" == target."os" or null) || ("illumos" == target."os" or null));
             features = [ "net" ];
           }
@@ -6915,7 +6958,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "avx" "avx_luts" "avx_shaper_fixed_point_paths" "avx_shaper_paths" "default" "lut" "neon" "neon_luts" "neon_shaper_fixed_point_paths" "neon_shaper_paths" "sse" "sse_luts" "sse_shaper_fixed_point_paths" "sse_shaper_paths" ];
       };
-      "nix" = rec {
+      "nix 0.29.0" = rec {
         crateName = "nix";
         version = "0.29.0";
         edition = "2021";
@@ -6965,7 +7008,55 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "socket" ];
+        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "process" "signal" "socket" ];
+      };
+      "nix 0.30.1" = rec {
+        crateName = "nix";
+        version = "0.30.1";
+        edition = "2021";
+        sha256 = "1dixahq9hk191g0c2ydc0h1ppxj0xw536y6rl63vlnp06lx3ylkl";
+        authors = [
+          "The nix-rust Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags 2.13.0";
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            features = [ "extra_traits" ];
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "cfg_aliases";
+            packageId = "cfg_aliases";
+          }
+        ];
+        features = {
+          "aio" = [ "pin-utils" ];
+          "dir" = [ "fs" ];
+          "event" = [ "poll" ];
+          "memoffset" = [ "dep:memoffset" ];
+          "mount" = [ "uio" ];
+          "mqueue" = [ "fs" ];
+          "net" = [ "socket" ];
+          "pin-utils" = [ "dep:pin-utils" ];
+          "ptrace" = [ "process" ];
+          "sched" = [ "process" ];
+          "signal" = [ "process" ];
+          "socket" = [ "memoffset" ];
+          "ucontext" = [ "signal" ];
+          "user" = [ "feature" ];
+          "zerocopy" = [ "fs" "uio" ];
+        };
+        resolvedDefaultFeatures = [ "default" "feature" "fs" "user" ];
       };
       "nom" = rec {
         crateName = "nom";
@@ -10348,7 +10439,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "event" "fs" "net" "std" "stdio" "system" "termios" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "std" "stdio" "system" "termios" ];
       };
       "rustls" = rec {
         crateName = "rustls";
@@ -11798,7 +11889,7 @@ rec {
           }
           {
             name = "nix";
-            packageId = "nix";
+            packageId = "nix 0.29.0";
             target = { target, features }: (target."unix" or false);
             features = [ "mman" "fs" ];
           }

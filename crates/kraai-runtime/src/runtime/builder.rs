@@ -19,7 +19,8 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
 use crate::api::Event;
-use crate::handle::{Command, RuntimeHandle};
+use crate::api::RuntimeStartupState;
+use crate::handle::{Command, RuntimeHandle, RuntimeLifecycle};
 use crate::settings::resolve_provider_config_path;
 
 /// Builder for creating a runtime
@@ -47,18 +48,27 @@ impl RuntimeBuilder {
     pub fn build(self) -> RuntimeHandle {
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, _) = broadcast::channel(1024);
+        let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let lifecycle = Arc::new(RuntimeLifecycle::new(shutdown_tx));
         let handle = RuntimeHandle {
             command_tx,
             event_tx: event_tx.clone(),
+            lifecycle: Some(lifecycle.clone()),
+            startup_rx,
         };
         let command_tx_for_runtime = handle.command_tx.clone();
 
         let provider_config_path = self.provider_config_path.clone();
+        let thread_startup_tx = startup_tx.clone();
 
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(error) => {
+                    thread_startup_tx.send_replace(RuntimeStartupState::Failed(format!(
+                        "Failed to create tokio runtime: {error}"
+                    )));
                     emit_event(
                         &event_tx,
                         Event::Error(format!("Failed to create tokio runtime: {error}")),
@@ -71,11 +81,15 @@ impl RuntimeBuilder {
                 event_tx.clone(),
                 command_tx_for_runtime,
                 command_rx,
+                shutdown_rx,
                 provider_config_path,
+                thread_startup_tx.clone(),
             )) {
+                thread_startup_tx.send_replace(RuntimeStartupState::Failed(error.to_string()));
                 emit_event(&event_tx, Event::Error(error.to_string()));
             }
         });
+        lifecycle.set_thread(thread);
 
         handle
     }
@@ -84,7 +98,9 @@ impl RuntimeBuilder {
         event_tx: broadcast::Sender<Event>,
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
         provider_config_path_override: Option<PathBuf>,
+        startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     ) -> Result<()> {
         Self::init_tracing()?;
 
@@ -118,12 +134,14 @@ impl RuntimeBuilder {
             agent_manager,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_tool_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
             openai_codex_auth,
             provider_config_path,
+            startup_tx,
         };
 
-        runtime.run(command_rx).await;
+        runtime.run(command_rx, shutdown_rx).await;
         Ok(())
     }
 

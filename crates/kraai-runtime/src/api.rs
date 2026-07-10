@@ -1,6 +1,13 @@
 use kraai_persistence::SessionMeta;
 use kraai_types::TokenUsage;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeStartupState {
+    Starting,
+    Ready,
+    Failed(String),
+}
+
 /// Model information
 #[derive(Clone, Debug)]
 pub struct Model {

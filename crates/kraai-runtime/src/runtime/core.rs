@@ -7,9 +7,10 @@ use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::{Mutex, broadcast, mpsc};
-use tokio::task::AbortHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::api::Event;
+use crate::api::RuntimeStartupState;
 use crate::handle::Command;
 
 pub(crate) fn emit_event(event_tx: &broadcast::Sender<Event>, event: Event) {
@@ -23,9 +24,11 @@ pub(crate) struct RuntimeCore {
     pub(crate) agent_manager: Arc<Mutex<AgentManager>>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    pub(crate) active_tool_tasks: Arc<Mutex<HashMap<String, Vec<JoinHandle<()>>>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
+    pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,22 +54,90 @@ impl RuntimeCore {
         self.send_event(Event::Error(error.into()));
     }
 
-    pub(crate) async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
+    pub(crate) async fn run(
+        self,
+        mut command_rx: mpsc::Receiver<Command>,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
         tracing::info!("Starting event loop");
 
-        self.spawn_config_watcher();
-        self.spawn_openai_auth_forwarder();
-        if let Err(error) = self.load_providers_config_and_emit().await {
-            self.send_error(format!("Failed to load config: {error}"));
+        let background_tasks = [
+            self.spawn_config_watcher(),
+            self.spawn_openai_auth_forwarder(),
+        ];
+        match self.load_providers_config_and_emit().await {
+            Ok(()) => {
+                self.startup_tx.send_replace(RuntimeStartupState::Ready);
+            }
+            Err(error) => {
+                let error = format!("Failed to load config: {error}");
+                self.startup_tx
+                    .send_replace(RuntimeStartupState::Failed(error.clone()));
+                self.send_error(error);
+            }
         }
 
-        while let Some(command) = command_rx.recv().await {
+        let mut shutdown_response = None;
+        loop {
+            let command = tokio::select! {
+                command = command_rx.recv() => command,
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        None
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            let Some(command) = command else {
+                break;
+            };
+            if let Command::Shutdown { response } = command {
+                shutdown_response = response;
+                break;
+            }
             if let Err(error) = self.handle_command(command).await {
                 self.send_error(error.to_string());
             }
         }
 
+        self.stop_active_work().await;
+
+        for task in background_tasks {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(response) = shutdown_response {
+            let _ = response.send(());
+        }
+
         tracing::info!("Event loop terminated");
+    }
+
+    pub(crate) async fn stop_active_work(&self) {
+        let active_streams = self
+            .active_streams
+            .lock()
+            .await
+            .drain()
+            .map(|(_, stream)| stream)
+            .collect::<Vec<_>>();
+        for stream in active_streams {
+            stream.abort_handle.abort();
+        }
+        let active_tool_tasks = self
+            .active_tool_tasks
+            .lock()
+            .await
+            .drain()
+            .flat_map(|(_, tasks)| tasks)
+            .collect::<Vec<_>>();
+        for task in &active_tool_tasks {
+            task.abort();
+        }
+        for task in active_tool_tasks {
+            let _ = task.await;
+        }
     }
 
     pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {

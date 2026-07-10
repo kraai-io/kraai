@@ -15,6 +15,7 @@ pub use builder::RuntimeBuilder;
     clippy::map_err_ignore,
     clippy::panic,
     clippy::panic_in_result_fn,
+    clippy::unwrap_used,
     reason = "integration-style runtime tests use direct assertions and fixtures"
 )]
 mod tests;

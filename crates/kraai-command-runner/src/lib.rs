@@ -14,6 +14,11 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use kraai_types::{NetworkAccess, SandboxConfig, SandboxMode, SandboxPermissions};
+#[cfg(unix)]
+use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
+use nix::unistd::Pid;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const BWRAP_PROGRAM: &str = "bwrap";
@@ -86,10 +91,7 @@ pub async fn run_command(request: CommandRequest) -> Result<CommandOutput, Comma
         return Err(CommandError::InvalidTimeout);
     }
 
-    match tokio::time::timeout(request.timeout, run_command_with_timeout(&request)).await {
-        Ok(result) => result,
-        Err(_) => Err(CommandError::TimedOut(request.timeout)),
-    }
+    run_command_with_timeout(&request).await
 }
 
 async fn run_command_with_timeout(request: &CommandRequest) -> Result<CommandOutput, CommandError> {
@@ -161,21 +163,62 @@ async fn spawn_and_wait(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    configure_process_tree(&mut process, &program)?;
 
-    let child = process.spawn().map_err(|error| CommandError::Spawn {
+    let mut child = process.spawn().map_err(|error| CommandError::Spawn {
         program: program.to_string_lossy().into_owned(),
         message: error.to_string(),
     })?;
+    let process_group_id = child.id();
+    let mut stdout = child.stdout.take().ok_or_else(|| {
+        CommandError::Wait(String::from(
+            "spawned command did not provide a stdout pipe",
+        ))
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| {
+        CommandError::Wait(String::from(
+            "spawned command did not provide a stderr pipe",
+        ))
+    })?;
+    let stdout_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).await.map(|_| output)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).await.map(|_| output)
+    });
+    let stdout_abort = stdout_task.abort_handle();
+    let stderr_abort = stderr_task.abort_handle();
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(error)) => return Err(CommandError::Wait(error.to_string())),
-        Err(_) => return Err(CommandError::TimedOut(timeout)),
+    let completed = async {
+        let status = child
+            .wait()
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        let stdout = stdout_task
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        let stderr = stderr_task
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        Ok::<_, CommandError>((status, stdout, stderr))
+    };
+    let (status, stdout, stderr) = match tokio::time::timeout(timeout, completed).await {
+        Ok(result) => result?,
+        Err(_) => {
+            stdout_abort.abort();
+            stderr_abort.abort();
+            terminate_process_tree(&mut child, process_group_id).await?;
+            return Err(CommandError::TimedOut(timeout));
+        }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let exit_code = output.status.code();
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr).into_owned();
+    let exit_code = status.code();
     let sandbox_denied = sandboxed && is_likely_sandbox_denied(exit_code, &stdout, &stderr);
 
     Ok(CommandOutput {
@@ -184,6 +227,63 @@ async fn spawn_and_wait(
         stderr,
         sandbox_denied,
     })
+}
+
+#[cfg(unix)]
+fn configure_process_tree(process: &mut Command, _program: &OsString) -> Result<(), CommandError> {
+    use std::os::unix::process::CommandExt;
+
+    process.as_std_mut().process_group(0);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn configure_process_tree(_process: &mut Command, _program: &OsString) -> Result<(), CommandError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn terminate_process_tree(
+    child: &mut tokio::process::Child,
+    process_group_id: Option<u32>,
+) -> Result<(), CommandError> {
+    if let Some(process_group_id) = process_group_id {
+        let process_group_id = i32::try_from(process_group_id)
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+        if let Err(error) = killpg(Pid::from_raw(process_group_id), Signal::SIGKILL)
+            && error != nix::errno::Errno::ESRCH
+        {
+            return Err(CommandError::Wait(format!(
+                "unable to terminate command process group: {error}"
+            )));
+        }
+    } else {
+        child
+            .kill()
+            .await
+            .map_err(|error| CommandError::Wait(error.to_string()))?;
+    }
+    child
+        .wait()
+        .await
+        .map_err(|error| CommandError::Wait(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn terminate_process_tree(
+    child: &mut tokio::process::Child,
+    _process_group_id: Option<u32>,
+) -> Result<(), CommandError> {
+    child
+        .kill()
+        .await
+        .map_err(|error| CommandError::Wait(error.to_string()))?;
+    child
+        .wait()
+        .await
+        .map_err(|error| CommandError::Wait(error.to_string()))?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -776,6 +876,87 @@ mod tests {
             "Read-only file system"
         ));
         assert!(!is_likely_sandbox_denied(Some(0), "", "permission denied"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn timeout_terminates_background_descendants() {
+        use nix::sys::signal::kill;
+
+        let workspace = temp_dir("timeout-process-tree");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let pid_path = workspace.join("grandchild.pid");
+        let script = format!(
+            "sleep 60 & child=$!; echo $child > '{}'; wait $child",
+            pid_path.display()
+        );
+
+        let result = run_command(CommandRequest {
+            command: vec![String::from("sh"), String::from("-c"), script],
+            cwd: workspace.clone(),
+            sandbox: SandboxConfig {
+                mode: SandboxMode::DangerFullAccess,
+                ..SandboxConfig::default()
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            timeout: Duration::from_millis(100),
+        })
+        .await;
+
+        assert_eq!(
+            result,
+            Err(CommandError::TimedOut(Duration::from_millis(100)))
+        );
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("read grandchild pid")
+            .trim()
+            .parse::<i32>()
+            .expect("parse grandchild pid");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match kill(Pid::from_raw(pid), None) {
+                Err(nix::errno::Errno::ESRCH) => break,
+                Ok(()) | Err(nix::errno::Errno::EPERM) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "background descendant {pid} survived timeout"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected process lookup error: {error}"),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn timeout_includes_draining_inherited_pipes() {
+        let workspace = temp_dir("timeout-inherited-pipes");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let result = run_command(CommandRequest {
+            command: vec![
+                String::from("sh"),
+                String::from("-c"),
+                String::from("sleep 60 & printf done"),
+            ],
+            cwd: workspace.clone(),
+            sandbox: SandboxConfig {
+                mode: SandboxMode::DangerFullAccess,
+                ..SandboxConfig::default()
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            timeout: Duration::from_millis(100),
+        })
+        .await;
+
+        assert_eq!(
+            result,
+            Err(CommandError::TimedOut(Duration::from_millis(100)))
+        );
+        let _ = std::fs::remove_dir_all(workspace);
     }
 
     #[test]

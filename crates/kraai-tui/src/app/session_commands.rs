@@ -60,14 +60,30 @@ impl App {
             return;
         }
 
+        if self.state.pending_submit.is_some() {
+            self.state.status =
+                String::from("Session creation already in progress; message was not sent");
+            self.state.input = raw_input;
+            self.state.input_cursor = self.state.input.len();
+            return;
+        }
+
+        let creation_id = self.state.next_session_creation_id;
+        self.state.next_session_creation_id = creation_id.wrapping_add(1);
+        if self.request(RuntimeRequest::CreateSession { creation_id })
+            == RuntimeRequestDelivery::Disconnected
+        {
+            self.set_input_text(raw_input);
+            return;
+        }
         self.state.pending_submit = Some(PendingSubmit {
+            creation_id,
             session_id: None,
             message: raw_input,
             model_id,
             provider_id,
         });
         self.state.status = String::from("Creating session");
-        self.request(RuntimeRequest::CreateSession);
     }
 
     pub(super) fn handle_command(&mut self, command_line: &str) {
@@ -309,6 +325,9 @@ impl App {
 
         let message = message.into();
         self.finish_ci_output_line();
+        if self.ci_error.is_some() {
+            return;
+        }
         self.ci_turn_completion_pending = false;
         self.ci_error = Some(message.clone());
         self.state.status = message;
@@ -335,12 +354,18 @@ impl App {
     }
 
     pub(super) fn write_ci_output(&mut self, chunk: &str) {
-        if chunk.is_empty() {
+        if chunk.is_empty() || self.ci_error.is_some() {
             return;
         }
 
-        let _ = self.ci_output.write_all(chunk.as_bytes());
-        let _ = self.ci_output.flush();
+        if let Err(error) = self
+            .ci_output
+            .write_all(chunk.as_bytes())
+            .and_then(|()| self.ci_output.flush())
+        {
+            self.fail_ci_output(error);
+            return;
+        }
         self.ci_output_needs_newline = !chunk.ends_with('\n');
     }
 
@@ -349,9 +374,32 @@ impl App {
             return;
         }
 
-        let _ = self.ci_output.write_all(b"\n");
-        let _ = self.ci_output.flush();
+        if let Err(error) = self
+            .ci_output
+            .write_all(b"\n")
+            .and_then(|()| self.ci_output.flush())
+        {
+            self.fail_ci_output(error);
+            return;
+        }
         self.ci_output_needs_newline = false;
+    }
+
+    fn fail_ci_output(&mut self, error: std::io::Error) {
+        if self.ci_error.is_some() {
+            return;
+        }
+        let message = format!("Failed writing CI output: {error}");
+        self.ci_turn_completion_pending = false;
+        self.ci_error = Some(message.clone());
+        self.state.status = message;
+        if self.state.is_streaming
+            && let Some(session_id) = self.state.current_session_id.clone()
+        {
+            self.request(RuntimeRequest::CancelStream { session_id });
+        }
+        self.state.is_streaming = false;
+        self.state.exit = true;
     }
 
     pub(super) fn apply_agent_profiles_state(&mut self, state: AgentProfilesState) {
@@ -392,6 +440,21 @@ impl App {
         {
             self.state.selected_profile_id = session.selected_profile_id.clone();
             self.state.profile_locked = session.profile_locked;
+        }
+    }
+
+    pub(super) fn sync_current_session_streaming_from_sessions(&mut self) {
+        let Some(session_id) = self.state.current_session_id.as_ref() else {
+            self.state.is_streaming = false;
+            return;
+        };
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| &session.id == session_id)
+        {
+            self.state.is_streaming = session.is_streaming;
         }
     }
 

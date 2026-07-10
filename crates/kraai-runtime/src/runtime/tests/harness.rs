@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
 use super::super::core::RuntimeCore;
+use crate::handle::Command;
 use crate::{Event, EventCallback, RuntimeHandle};
 
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -573,6 +574,11 @@ pub(super) struct FailOnToolMessageStore {
     pub(super) should_fail: Arc<AtomicBool>,
 }
 
+pub(super) struct FailOnDemandMessageStore {
+    pub(super) inner: Arc<dyn MessageStore>,
+    pub(super) should_fail: Arc<AtomicBool>,
+}
+
 pub(super) struct FailOnDemandSessionStore {
     pub(super) inner: Arc<dyn SessionStore>,
     pub(super) should_fail: Arc<AtomicBool>,
@@ -652,6 +658,43 @@ impl MessageStore for FailOnToolMessageStore {
 }
 
 #[async_trait]
+impl MessageStore for FailOnDemandMessageStore {
+    async fn get(&self, id: &kraai_types::MessageId) -> Result<Option<kraai_types::Message>> {
+        self.inner.get(id).await
+    }
+
+    async fn save(&self, message: &kraai_types::Message) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional message save failure for {}", message.id));
+        }
+        self.inner.save(message).await
+    }
+
+    async fn unload(&self, id: &kraai_types::MessageId) {
+        self.inner.unload(id).await;
+    }
+
+    async fn delete(&self, id: &kraai_types::MessageId) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional message delete failure for {id}"));
+        }
+        self.inner.delete(id).await
+    }
+
+    async fn exists(&self, id: &kraai_types::MessageId) -> Result<bool> {
+        self.inner.exists(id).await
+    }
+
+    async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<kraai_types::MessageId>> {
+        self.inner.list_all_on_disk().await
+    }
+
+    async fn list_hot(&self) -> Result<std::collections::HashSet<kraai_types::MessageId>> {
+        self.inner.list_hot().await
+    }
+}
+
+#[async_trait]
 impl SessionStore for FailOnDemandSessionStore {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
         self.inner.list().await
@@ -669,7 +712,21 @@ impl SessionStore for FailOnDemandSessionStore {
         self.inner.save(session).await
     }
 
+    async fn save_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&kraai_types::MessageId>,
+    ) -> Result<bool> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional session save failure for {}", session.id));
+        }
+        self.inner.save_if_tip_matches(session, expected_tip).await
+    }
+
     async fn delete(&self, id: &str) -> Result<()> {
+        if self.should_fail.load(Ordering::SeqCst) {
+            return Err(eyre!("intentional session delete failure for {id}"));
+        }
         self.inner.delete(id).await
     }
 }
@@ -821,9 +878,13 @@ default_risk_level = \"undoable_workspace_write\"\n"
         let events = EventCollector::default();
         let (command_tx, mut command_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(1024);
+        let (startup_tx, startup_rx) =
+            tokio::sync::watch::channel(crate::RuntimeStartupState::Ready);
         let handle = RuntimeHandle {
             command_tx: command_tx.clone(),
             event_tx: event_tx.clone(),
+            lifecycle: None,
+            startup_rx,
         };
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
@@ -839,9 +900,11 @@ default_risk_level = \"undoable_workspace_write\"\n"
             provider_registry: build_provider_registry(openai_codex_auth.clone())
                 .expect("provider registry"),
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            active_tool_tasks: Arc::new(Mutex::new(HashMap::new())),
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),
+            startup_tx,
         };
 
         let events_for_task = events.clone();
@@ -858,6 +921,13 @@ default_risk_level = \"undoable_workspace_write\"\n"
 
         let runtime_task = tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
+                if let Command::Shutdown { response } = command {
+                    runtime.stop_active_work().await;
+                    if let Some(response) = response {
+                        let _ = response.send(());
+                    }
+                    break;
+                }
                 runtime
                     .handle_command(command)
                     .await
@@ -999,9 +1069,8 @@ default_risk_level = \"undoable_workspace_write\"\n"
     }
 
     pub(super) async fn shutdown(self) {
-        drop(self.handle);
+        let _ = self.handle.shutdown().await;
         self.event_task.abort();
-        self.runtime_task.abort();
         let _ = self.event_task.await;
         let _ = self.runtime_task.await;
         let _ = tokio::fs::remove_dir_all(self.data_dir).await;

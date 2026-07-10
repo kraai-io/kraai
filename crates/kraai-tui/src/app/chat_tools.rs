@@ -225,22 +225,22 @@ impl App {
     }
 
     pub(super) fn submit_tool_decision(&mut self, approved: bool) {
-        let Some(tool) = self.current_pending_tool() else {
+        let Some(call_id) = self.current_pending_tool().map(|tool| tool.call_id.clone()) else {
             return;
         };
-        let Some(session_id) = &self.state.current_session_id else {
+        let Some(session_id) = self.state.current_session_id.clone() else {
             return;
         };
 
         if approved {
             self.request(RuntimeRequest::ApproveTool {
-                session_id: session_id.clone(),
-                call_id: tool.call_id.clone(),
+                session_id,
+                call_id,
             });
         } else {
             self.request(RuntimeRequest::DenyTool {
-                session_id: session_id.clone(),
-                call_id: tool.call_id.clone(),
+                session_id,
+                call_id,
             });
         }
     }
@@ -327,18 +327,18 @@ impl App {
         }
     }
 
-    pub(super) fn request_sync(&self) {
+    pub(super) fn request_sync(&mut self) {
         self.request(RuntimeRequest::ListModels);
         self.request(RuntimeRequest::ListSessions);
         self.request(RuntimeRequest::ListUserInputHistory {
             limit: INPUT_HISTORY_LIMIT,
         });
-        if let Some(session_id) = &self.state.current_session_id {
-            self.request_sync_for_session(session_id);
+        if let Some(session_id) = self.state.current_session_id.clone() {
+            self.request_sync_for_session(&session_id);
         }
     }
 
-    pub(super) fn request_sync_for_session(&self, session_id: &str) {
+    pub(super) fn request_sync_for_session(&mut self, session_id: &str) {
         self.request(RuntimeRequest::GetCurrentTip {
             session_id: session_id.to_string(),
         });
@@ -411,6 +411,18 @@ impl App {
         provider_id: String,
         is_queued: bool,
     ) {
+        if self.request(RuntimeRequest::SendMessage {
+            session_id,
+            message: message.clone(),
+            model_id: model_id.clone(),
+            provider_id: provider_id.clone(),
+            auto_approve: self.startup_options.auto_approve,
+        }) == RuntimeRequestDelivery::Disconnected
+        {
+            self.set_input_text(message);
+            return;
+        }
+
         let content_key = message.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
@@ -443,18 +455,50 @@ impl App {
         self.state.current_tip_id = None;
         self.remember_submitted_input(&message);
         self.invalidate_chat_cache();
-
-        self.request(RuntimeRequest::SendMessage {
-            session_id,
-            message,
-            model_id,
-            provider_id,
-            auto_approve: self.startup_options.auto_approve,
-        });
     }
 
-    pub(super) fn request(&self, req: RuntimeRequest) {
-        let _ = self.runtime_tx.send(req);
+    pub(super) fn request(&mut self, req: RuntimeRequest) -> RuntimeRequestDelivery {
+        if !self.runtime_bridge_connected {
+            self.state.status = String::from("Runtime bridge disconnected");
+            return RuntimeRequestDelivery::Disconnected;
+        }
+
+        if self.runtime_tx.send(req).is_ok() {
+            return RuntimeRequestDelivery::Delivered;
+        }
+
+        self.handle_runtime_bridge_disconnect();
+        RuntimeRequestDelivery::Disconnected
+    }
+
+    pub(super) fn handle_runtime_bridge_disconnect(&mut self) {
+        let message = String::from("Runtime bridge disconnected");
+        self.runtime_bridge_connected = false;
+        self.runtime_bridge_error.get_or_insert(message.clone());
+        self.state.pending_submit = None;
+        self.state.optimistic_messages.clear();
+        self.state.optimistic_tool_messages.clear();
+        self.state.pending_tools.clear();
+        self.stream_event_content.clear();
+        self.state.is_streaming = false;
+        self.state.retry_waiting = false;
+        self.state.profile_locked = false;
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.tool_phase = ToolPhase::Idle;
+        self.state.tool_batch_execution_started = false;
+        self.state.statusline_animation_frame = 0;
+        self.last_statusline_animation_tick = None;
+        self.last_stream_history_request = None;
+        self.event_lag_session_resync_pending = false;
+        self.event_lag_tools_resync_pending = false;
+        self.clear_turn_timer();
+        self.invalidate_chat_cache();
+        self.state.status = message.clone();
+        self.state.exit = true;
+        if self.is_ci_mode() && self.ci_error.is_none() {
+            self.ci_turn_completion_pending = false;
+            self.ci_error = Some(message);
+        }
     }
 
     pub(super) fn invalidate_chat_cache(&mut self) {

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
@@ -7,8 +10,8 @@ use kraai_tool_core::ToolManager;
 use kraai_types::{ChatRole, ProviderId};
 
 use super::harness::{
-    BlockingStartProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
-    stream_complete_count,
+    BlockingStartProvider, FailOnDemandSessionStore, RuntimeTestHarness, ScriptedChunk,
+    create_session_with_profile, stream_complete_count,
 };
 use crate::Event;
 
@@ -475,6 +478,69 @@ async fn cancel_stream_before_first_chunk_discards_empty_placeholder() -> Result
         history
             .values()
             .all(|message| message.role == ChatRole::User)
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_stream_cancel_persistence_failure_can_be_retried() -> Result<()> {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let fail_session_save = Arc::new(AtomicBool::new(false));
+    let Some(harness) = RuntimeTestHarness::new_with_provider_and_session_store(
+        Box::new(BlockingStartProvider {
+            id: ProviderId::new("mock"),
+            started: started.clone(),
+            release: Arc::new(tokio::sync::Notify::new()),
+        }),
+        {
+            let fail_session_save = fail_session_save.clone();
+            move |base_store| {
+                Arc::new(FailOnDemandSessionStore {
+                    inner: base_store,
+                    should_fail: fail_session_save,
+                })
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("start"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    started.notified().await;
+
+    fail_session_save.store(true, Ordering::SeqCst);
+    let error = harness
+        .handle
+        .cancel_stream(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("intentional session save failure")
+    );
+
+    fail_session_save.store(false, Ordering::SeqCst);
+    assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+    assert_eq!(
+        harness
+            .handle
+            .get_chat_history(session_id.clone())
+            .await?
+            .len(),
+        1
     );
 
     harness.shutdown().await;

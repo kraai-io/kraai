@@ -146,16 +146,31 @@ impl RuntimeCore {
                     .send(history)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
-            Command::DeleteSession { session_id } => {
+            Command::DeleteSession {
+                session_id,
+                response,
+            } => {
+                if self.has_active_tool_tasks(&session_id).await {
+                    response
+                        .send(Err(eyre!(
+                            "Cannot delete session {session_id} while tools are executing"
+                        )))
+                        .map_err(|_| eyre!("Failed to send delete-session response"))?;
+                    return Ok(());
+                }
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
                 self.queued_messages.lock().await.remove(&session_id);
-                self.agent_manager
+                let result = self
+                    .agent_manager
                     .lock()
                     .await
                     .delete_session(&session_id)
-                    .await?;
+                    .await;
+                response
+                    .send(result)
+                    .map_err(|_| eyre!("Failed to send delete-session response"))?;
             }
             Command::GetWorkspaceState {
                 session_id,
@@ -282,7 +297,6 @@ impl RuntimeCore {
                 session_id,
                 call_id,
             } => {
-                let call_id = kraai_types::CallId::new(call_id);
                 self.agent_manager
                     .lock()
                     .await
@@ -292,7 +306,6 @@ impl RuntimeCore {
                 session_id,
                 call_id,
             } => {
-                let call_id = kraai_types::CallId::new(call_id);
                 self.agent_manager
                     .lock()
                     .await
@@ -302,7 +315,7 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                let cancelled = self.cancel_stream(session_id).await?;
+                let cancelled = self.cancel_stream(session_id).await;
                 response
                     .send(cancelled)
                     .map_err(|_| eyre!("Failed to send response"))?;
@@ -311,7 +324,7 @@ impl RuntimeCore {
                 self.start_continuation(session_id).await;
             }
             Command::ExecuteApprovedTools { session_id } => {
-                self.handle_execute_tools(session_id);
+                self.handle_execute_tools(session_id).await;
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 response
@@ -343,6 +356,9 @@ impl RuntimeCore {
                 response
                     .send(())
                     .map_err(|_| eyre!("Failed to send response"))?;
+            }
+            Command::Shutdown { .. } => {
+                return Err(eyre!("Shutdown command reached normal dispatch"));
             }
         }
 

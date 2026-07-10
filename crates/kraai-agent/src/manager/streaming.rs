@@ -489,20 +489,28 @@ impl AgentManager {
         let Some(mut state) = state else {
             return Ok(None);
         };
+        let original_state = state.clone();
 
         let persisted = !state.message.content.is_empty();
-        if persisted {
+        let persist_result = if persisted {
             state.message.status = MessageStatus::Complete;
-            self.message_store.save(&state.message).await?;
+            self.message_store.save(&state.message).await
         } else {
             self.conversation_store
                 .restore_tip_title_and_delete_message(
                     &state.session_id,
                     message_id,
-                    state.previous_tip,
-                    state.previous_title,
+                    state.previous_tip.clone(),
+                    state.previous_title.clone(),
                 )
-                .await?;
+                .await
+        };
+        if let Err(error) = persist_result {
+            self.streaming_messages
+                .write()
+                .await
+                .insert(message_id.clone(), original_state);
+            return Err(error);
         }
 
         Ok(Some(CancelledStreamResult {

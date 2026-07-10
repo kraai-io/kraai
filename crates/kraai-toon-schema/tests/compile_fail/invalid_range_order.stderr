@@ -1,0 +1,5 @@
+error: `min` (2) cannot exceed `max` (1)
+ --> tests/compile_fail/invalid_range_order.rs:8:21
+  |
+8 |             values: Vec<String>,
+  |                     ^^^
