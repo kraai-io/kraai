@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
@@ -111,6 +112,11 @@ impl FileMessageStore {
     }
 }
 
+/// Atomically replace `path` and make the acknowledged write crash-durable.
+///
+/// Unix persists both the file contents and containing directory entry. Other
+/// platforms persist the file contents before replacement but may not expose a
+/// portable directory-sync operation.
 async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -120,15 +126,56 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         .with_context(|| format!("Failed to create directory: {parent:?}"))?;
 
     let temp_path = temp_write_path(path);
-    fs::write(&temp_path, content)
-        .await
-        .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
+    let write_result = async {
+        let mut temp_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await
+            .with_context(|| format!("Failed to create temp file: {temp_path:?}"))?;
+        temp_file
+            .write_all(content)
+            .await
+            .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
+        temp_file
+            .flush()
+            .await
+            .with_context(|| format!("Failed to flush temp file: {temp_path:?}"))?;
+        temp_file
+            .sync_all()
+            .await
+            .with_context(|| format!("Failed to sync temp file: {temp_path:?}"))?;
+        drop(temp_file);
 
-    if let Err(error) = fs::rename(&temp_path, path).await {
-        let _ = fs::remove_file(&temp_path).await;
-        return Err(error).with_context(|| format!("Failed to rename temp file to: {path:?}"));
+        fs::rename(&temp_path, path)
+            .await
+            .with_context(|| format!("Failed to rename temp file to: {path:?}"))?;
+        sync_parent_directory(parent).await?;
+        Ok(())
     }
+    .await;
 
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path).await;
+    }
+    write_result
+}
+
+#[cfg(unix)]
+async fn sync_parent_directory(parent: &Path) -> Result<()> {
+    let parent = parent.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::File::open(&parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| format!("Failed to sync parent directory: {parent:?}"))
+    })
+    .await
+    .map_err(|error| eyre!("Parent directory sync task failed: {error}"))??;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_directory(_parent: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -543,6 +590,36 @@ mod tests {
                 .to_string_lossy()
                 .ends_with(".tmp")
         );
+    }
+
+    #[tokio::test]
+    async fn atomic_write_cleans_temp_file_after_replace_failure() {
+        let data_dir = test_dir("atomic-write-cleanup");
+        fs::create_dir_all(&data_dir).await.unwrap();
+        let destination = data_dir.join("destination");
+        fs::create_dir(&destination).await.unwrap();
+
+        let error = atomic_write(&destination, b"contents").await.unwrap_err();
+
+        assert!(error.to_string().contains("Failed to rename temp file"));
+        let mut entries = fs::read_dir(&data_dir).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(names, vec![String::from("destination")]);
+        let _ = fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn atomic_write_replaces_file_after_syncing_contents() {
+        let data_dir = test_dir("atomic-write-success");
+        let destination = data_dir.join("state.json");
+
+        atomic_write(&destination, b"durable").await.unwrap();
+
+        assert_eq!(fs::read(&destination).await.unwrap(), b"durable");
+        let _ = fs::remove_dir_all(&data_dir).await;
     }
 
     fn test_dir(name: &str) -> PathBuf {
