@@ -9,6 +9,7 @@ use kraai_provider_core::{
     SseEvent, ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
+use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use tokio::sync::RwLock;
 use tracing::{error, warn};
@@ -323,6 +324,7 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 impl OpenAiCodexProvider {
     fn authenticated_get(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
         self.apply_chatgpt_headers(self.client.get(url), auth)
+            .header(ACCEPT, HeaderValue::from_static("application/json"))
     }
 
     fn authenticated_post(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
@@ -333,7 +335,6 @@ impl OpenAiCodexProvider {
         builder
             .bearer_auth(auth.access_token)
             .header("ChatGPT-Account-Id", auth.account_id)
-            .header("Accept", "application/json")
             .header("Origin", CHATGPT_ORIGIN)
             .header("Referer", format!("{CHATGPT_ORIGIN}/"))
             .header("User-Agent", CODEX_ORIGINATOR)
@@ -453,6 +454,7 @@ impl OpenAiCodexProvider {
         self.send_authenticated_request("responses", request_context, |auth| {
             let builder = self
                 .authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
+                .header(ACCEPT, responses_accept_header(stream))
                 .json(&request);
             apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
@@ -492,6 +494,14 @@ impl OpenAiCodexProvider {
         .await?;
         ensure_success_response(operation, response).await
     }
+}
+
+fn responses_accept_header(stream: bool) -> HeaderValue {
+    HeaderValue::from_static(if stream {
+        "text/event-stream"
+    } else {
+        "application/json"
+    })
 }
 
 fn apply_responses_session_headers(
@@ -849,6 +859,18 @@ mod tests {
                 .get("x-client-request-id")
                 .and_then(|value| value.to_str().ok()),
             Some("session-123")
+        );
+    }
+
+    #[test]
+    fn responses_accept_header_matches_response_mode() {
+        assert_eq!(
+            responses_accept_header(true),
+            HeaderValue::from_static("text/event-stream")
+        );
+        assert_eq!(
+            responses_accept_header(false),
+            HeaderValue::from_static("application/json")
         );
     }
 
