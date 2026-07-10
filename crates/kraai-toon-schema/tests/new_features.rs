@@ -33,3 +33,27 @@ fn renders_vec_ranges_and_fixed_arrays() {
     assert!(schema.contains("pair[2:2]: array<integer>"));
     assert!(schema.contains("note[0:1]: string"));
 }
+
+toon_tool! {
+    name: "forward_reference",
+    types: {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct ForwardRoot {
+            nested: ForwardNested,
+        }
+
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct ForwardNested {
+            value: String,
+        }
+    },
+    root: ForwardRoot,
+    examples: [
+        { nested: { value: "ok" } }
+    ]
+}
+
+#[test]
+fn accepts_types_declared_after_their_use() {
+    assert_eq!(ForwardRoot::tool_name(), "forward_reference");
+}

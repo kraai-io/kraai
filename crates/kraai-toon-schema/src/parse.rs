@@ -112,16 +112,21 @@ impl Parse for ToolMacroInput {
 
 fn build_tool_schema(parsed: ToolMacroInput) -> Result<ToolSchema> {
     let mut seen_names = BTreeSet::new();
+
+    for item in &parsed.type_items {
+        let name = item.ident.to_string();
+        if !seen_names.insert(name.clone()) {
+            return Err(syn::Error::new(
+                item.ident.span(),
+                format!("duplicate type `{name}` in `types:`"),
+            ));
+        }
+    }
+
     let mut defs = Vec::with_capacity(parsed.type_items.len());
 
     for mut item in parsed.type_items {
         let def = parse_struct_def(&item, &seen_names)?;
-        if !seen_names.insert(def.name.clone()) {
-            return Err(syn::Error::new(
-                item.ident.span(),
-                format!("duplicate type `{}` in `types:`", def.name),
-            ));
-        }
         strip_toon_schema_attrs(&mut item);
         defs.push(TypeItem { item, def });
     }
