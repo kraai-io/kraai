@@ -9,4 +9,5 @@ version = "0.1.0"
 [dependencies]
 kraai-types = { workspace = true }
 libc = { workspace = true }
+nix = { workspace = true }
 tokio = { workspace = true }
