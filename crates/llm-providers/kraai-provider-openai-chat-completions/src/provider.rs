@@ -1,11 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::marker::PhantomData;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, send_with_retry, stream_sse_data,
+    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, SseEvent, send_with_retry,
+    stream_sse_data,
 };
 use kraai_types::{ChatMessage, ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -196,19 +197,50 @@ where
             .send_chat_completion_request("chat completions stream", &request, request_context)
             .await?;
 
-        let stream = stream_sse_data(response)
-            .flat_map(|event| {
-                stream::iter(match event {
-                    Ok(payload) => serde_json::from_str::<ChatCompletionChunk>(&payload)
-                        .map(events_from_chunk)
-                        .unwrap_or_else(|error| vec![Err(eyre!(error))]),
-                    Err(error) => vec![Err(error)],
-                })
-            })
-            .boxed();
-
-        Ok(stream)
+        Ok(adapt_chat_completion_stream(stream_sse_data(response)))
     }
+}
+
+fn adapt_chat_completion_stream(
+    source: BoxStream<'static, Result<SseEvent>>,
+) -> BoxStream<'static, Result<ProviderStreamEvent>> {
+    stream::unfold(
+        (source, VecDeque::new(), false),
+        |(mut source, mut pending, finished)| async move {
+            if finished {
+                return None;
+            }
+
+            loop {
+                if let Some(event) = pending.pop_front() {
+                    return Some((event, (source, pending, false)));
+                }
+
+                match source.next().await {
+                    Some(Ok(SseEvent::Data(payload))) => {
+                        pending.extend(
+                            serde_json::from_str::<ChatCompletionChunk>(&payload)
+                                .map(events_from_chunk)
+                                .unwrap_or_else(|error| vec![Err(eyre!(error))]),
+                        );
+                    }
+                    Some(Ok(SseEvent::Done)) => return None,
+                    Some(Err(error)) => {
+                        return Some((Err(error), (source, pending, true)));
+                    }
+                    None => {
+                        return Some((
+                            Err(eyre!(
+                                "Chat completions stream ended before the [DONE] marker"
+                            )),
+                            (source, pending, true),
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .boxed()
 }
 
 fn events_from_chunk(chunk: ChatCompletionChunk) -> Vec<Result<ProviderStreamEvent>> {
@@ -577,5 +609,36 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_eof_before_done_marker() {
+        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
+            r#"{"choices":[{"delta":{"content":"partial"}}]}"#,
+        )))])
+        .boxed();
+        let events = adapt_chat_completion_stream(source).collect::<Vec<_>>().await;
+
+        assert!(matches!(
+            events.first(),
+            Some(Ok(ProviderStreamEvent::TextDelta(delta))) if delta == "partial"
+        ));
+        assert!(events.get(1).is_some_and(Result::is_err));
+    }
+
+    #[tokio::test]
+    async fn stream_stops_at_done_without_waiting_for_eof() {
+        let source = stream::iter(vec![Ok(SseEvent::Done)])
+            .chain(stream::pending())
+            .boxed();
+
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            adapt_chat_completion_stream(source).next(),
+        )
+        .await
+        .unwrap();
+
+        assert!(event.is_none());
     }
 }

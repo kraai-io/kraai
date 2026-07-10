@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use futures::{StreamExt, stream::BoxStream};
+use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
     ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ProviderStreamEvent,
-    ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
+    SseEvent, ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
@@ -224,37 +224,69 @@ impl Provider for OpenAiCodexProvider {
         let response = self
             .send_responses_request(model_id, messages, true, request_context)
             .await?;
-        let stream = stream_sse_data(response)
-            .filter_map(|event| async move {
-                match event {
-                    Ok(payload) => {
-                        let event = match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
-                            Ok(event) => event,
-                            Err(error) => return Some(Err(eyre!(error))),
-                        };
-
-                        match event.kind.as_str() {
-                            "response.output_text.delta" => event
-                                .delta
-                                .map(|delta| Ok(ProviderStreamEvent::TextDelta(delta))),
-                            "response.completed" => event
-                                .response
-                                .and_then(|response| response.usage)
-                                .and_then(normalize_usage)
-                                .map(|usage| Ok(ProviderStreamEvent::Usage(usage))),
-                            "response.failed" | "response.incomplete" => {
-                                Some(Err(eyre!("OpenAI response stream failed")))
-                            }
-                            _ => None,
-                        }
-                    }
-                    Err(error) => Some(Err(error)),
-                }
-            })
-            .boxed();
-
-        Ok(stream)
+        Ok(adapt_responses_stream(stream_sse_data(response)))
     }
+}
+
+fn adapt_responses_stream(
+    source: BoxStream<'static, Result<SseEvent>>,
+) -> BoxStream<'static, Result<ProviderStreamEvent>> {
+    stream::unfold((source, false), |(mut source, finished)| async move {
+        if finished {
+            return None;
+        }
+
+        loop {
+            let event = match source.next().await {
+                Some(Ok(SseEvent::Data(payload))) => {
+                    match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
+                        Ok(event) => event,
+                        Err(error) => return Some((Err(eyre!(error)), (source, true))),
+                    }
+                }
+                Some(Ok(SseEvent::Done)) | None => {
+                    return Some((
+                        Err(eyre!(
+                            "OpenAI response stream ended before response.completed"
+                        )),
+                        (source, true),
+                    ));
+                }
+                Some(Err(error)) => return Some((Err(error), (source, true))),
+            };
+
+            match event.kind.as_str() {
+                "response.output_text.delta" => {
+                    if let Some(delta) = event.delta {
+                        return Some((
+                            Ok(ProviderStreamEvent::TextDelta(delta)),
+                            (source, false),
+                        ));
+                    }
+                }
+                "response.completed" => {
+                    return event
+                        .response
+                        .and_then(|response| response.usage)
+                        .and_then(normalize_usage)
+                        .map(|usage| {
+                            (
+                                Ok(ProviderStreamEvent::Usage(usage)),
+                                (source, true),
+                            )
+                        });
+                }
+                "response.failed" | "response.incomplete" => {
+                    return Some((
+                        Err(eyre!("OpenAI response stream failed")),
+                        (source, true),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    })
+    .boxed()
 }
 
 fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
@@ -606,6 +638,7 @@ fn extract_response_text(output: ResponsesOutput) -> String {
 mod tests {
     use super::*;
     use crate::auth::OpenAiCodexAuthControllerOptions;
+    use std::time::Duration;
     use ulid::Ulid;
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -817,5 +850,38 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("session-123")
         );
+    }
+
+    #[tokio::test]
+    async fn responses_stream_rejects_eof_before_completed() {
+        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
+            r#"{"type":"response.output_text.delta","delta":"partial"}"#,
+        )))])
+        .boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+
+        assert!(matches!(
+            events.first(),
+            Some(Ok(ProviderStreamEvent::TextDelta(delta))) if delta == "partial"
+        ));
+        assert!(events.get(1).is_some_and(Result::is_err));
+    }
+
+    #[tokio::test]
+    async fn responses_stream_stops_at_completed_without_waiting_for_eof() {
+        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
+            r#"{"type":"response.completed","response":{}}"#,
+        )))])
+        .chain(stream::pending())
+        .boxed();
+
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            adapt_responses_stream(source).next(),
+        )
+        .await
+        .unwrap();
+
+        assert!(event.is_none());
     }
 }

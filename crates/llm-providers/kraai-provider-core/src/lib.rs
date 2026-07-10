@@ -23,5 +23,5 @@ pub use http_retry::{
 pub use manager::ProviderManager;
 pub use provider::{Model, Provider};
 pub use registry::{ProviderFactory, ProviderRegistry};
-pub use sse::stream_sse_data;
+pub use sse::{SseEvent, stream_sse_data};
 pub use stream::ProviderStreamEvent;
