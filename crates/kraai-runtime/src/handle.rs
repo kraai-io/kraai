@@ -8,8 +8,8 @@ use kraai_types::{CallId, MessageId, ModelId, ProviderId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
-    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, Session,
-    SessionContextUsage, SettingsDocument, WorkspaceState,
+    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, RuntimeStartupState,
+    Session, SessionContextUsage, SettingsDocument, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime
@@ -173,11 +173,27 @@ pub struct RuntimeHandle {
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) event_tx: broadcast::Sender<Event>,
     pub(crate) lifecycle: Option<Arc<RuntimeLifecycle>>,
+    pub(crate) startup_rx: tokio::sync::watch::Receiver<RuntimeStartupState>,
 }
 
 impl RuntimeHandle {
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.event_tx.subscribe()
+    }
+
+    pub fn startup_status(&self) -> RuntimeStartupState {
+        self.startup_rx.borrow().clone()
+    }
+
+    pub async fn wait_for_startup(&self) -> Result<RuntimeStartupState> {
+        let mut startup = self.startup_rx.clone();
+        loop {
+            let state = startup.borrow_and_update().clone();
+            if state != RuntimeStartupState::Starting {
+                return Ok(state);
+            }
+            startup.changed().await?;
+        }
     }
 
     /// Stop the runtime, wait for child tasks, and join its background thread.

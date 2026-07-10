@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
-use crate::Event;
+use crate::{Event, RuntimeHandle, RuntimeStartupState};
 
 #[test]
 fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
@@ -41,6 +41,32 @@ async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> 
 
         tokio::time::timeout(Duration::from_secs(1), harness.shutdown()).await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_state_remains_observable_after_initial_result() -> Result<()> {
+    let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
+    let (event_tx, _) = tokio::sync::broadcast::channel(1);
+    let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
+    startup_tx.send_replace(RuntimeStartupState::Failed(String::from("initial failure")));
+    let handle = RuntimeHandle {
+        command_tx,
+        event_tx,
+        lifecycle: None,
+        startup_rx,
+    };
+
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        handle.startup_status(),
+        RuntimeStartupState::Failed(String::from("initial failure"))
+    );
+    assert_eq!(
+        handle.wait_for_startup().await?,
+        RuntimeStartupState::Failed(String::from("initial failure"))
+    );
     Ok(())
 }
 

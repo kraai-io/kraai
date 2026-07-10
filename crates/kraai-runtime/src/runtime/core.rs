@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::api::Event;
+use crate::api::RuntimeStartupState;
 use crate::handle::Command;
 
 pub(crate) fn emit_event(event_tx: &broadcast::Sender<Event>, event: Event) {
@@ -27,6 +28,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
+    pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,8 +61,16 @@ impl RuntimeCore {
             self.spawn_config_watcher(),
             self.spawn_openai_auth_forwarder(),
         ];
-        if let Err(error) = self.load_providers_config_and_emit().await {
-            self.send_error(format!("Failed to load config: {error}"));
+        match self.load_providers_config_and_emit().await {
+            Ok(()) => {
+                self.startup_tx.send_replace(RuntimeStartupState::Ready);
+            }
+            Err(error) => {
+                let error = format!("Failed to load config: {error}");
+                self.startup_tx
+                    .send_replace(RuntimeStartupState::Failed(error.clone()));
+                self.send_error(error);
+            }
         }
 
         let mut shutdown_response = None;

@@ -878,10 +878,13 @@ default_risk_level = \"undoable_workspace_write\"\n"
         let events = EventCollector::default();
         let (command_tx, mut command_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(1024);
+        let (startup_tx, startup_rx) =
+            tokio::sync::watch::channel(crate::RuntimeStartupState::Ready);
         let handle = RuntimeHandle {
             command_tx: command_tx.clone(),
             event_tx: event_tx.clone(),
             lifecycle: None,
+            startup_rx,
         };
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
@@ -901,6 +904,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),
+            startup_tx,
         };
 
         let events_for_task = events.clone();
