@@ -17,6 +17,7 @@ use tokio::task::AbortHandle;
 const AUTH_ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_CALLBACK_PORT: u16 = 1455;
+const REGISTERED_FALLBACK_CALLBACK_PORT: u16 = 1457;
 const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 const TOKEN_REFRESH_INTERVAL_SECS: u64 = 8 * 24 * 60 * 60;
 const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -57,6 +58,7 @@ pub struct OpenAiCodexAuthControllerOptions {
     pub issuer: String,
     pub client_id: String,
     pub default_callback_port: u16,
+    pub fallback_callback_ports: Vec<u16>,
     pub auth_path: PathBuf,
 }
 
@@ -66,6 +68,7 @@ impl OpenAiCodexAuthControllerOptions {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
+            fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
             auth_path,
         }
     }
@@ -96,6 +99,7 @@ struct AuthConfig {
     issuer: String,
     client_id: String,
     default_callback_port: u16,
+    fallback_callback_ports: Vec<u16>,
     auth_path: PathBuf,
     refresh_timeout: Duration,
 }
@@ -106,6 +110,7 @@ impl AuthConfig {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
+            fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
             auth_path: auth_path()?,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         })
@@ -118,6 +123,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
             issuer: value.issuer,
             client_id: value.client_id,
             default_callback_port: value.default_callback_port,
+            fallback_callback_ports: value.fallback_callback_ports,
             auth_path: value.auth_path,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         }
@@ -292,7 +298,11 @@ impl OpenAiCodexAuthController {
     pub async fn start_browser_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
         self.cancel_pending_task().await;
 
-        let listener = bind_listener(self.inner.config.default_callback_port).await?;
+        let listener = bind_listener(
+            self.inner.config.default_callback_port,
+            &self.inner.config.fallback_callback_ports,
+        )
+        .await?;
         let actual_port = listener.local_addr()?.port();
         let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
         let pkce = generate_pkce();
@@ -1043,15 +1053,38 @@ async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<AuthFileLock> 
         .map_err(io::Error::other)?
 }
 
-async fn bind_listener(port: u16) -> io::Result<TcpListener> {
-    let primary = SocketAddr::from(([127, 0, 0, 1], port));
-    match TcpListener::bind(primary).await {
-        Ok(listener) => Ok(listener),
-        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
-            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await
+async fn bind_listener(port: u16, fallback_ports: &[u16]) -> io::Result<TcpListener> {
+    let mut attempted = Vec::with_capacity(fallback_ports.len() + 1);
+    for candidate in std::iter::once(port).chain(fallback_ports.iter().copied()) {
+        if candidate == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "OAuth callback ports must be explicitly registered, not port 0",
+            ));
         }
-        Err(error) => Err(error),
+        if attempted.contains(&candidate) {
+            continue;
+        }
+        attempted.push(candidate);
+
+        match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], candidate))).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+            Err(error) => return Err(error),
+        }
     }
+
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        format!(
+            "all registered OAuth callback ports are in use: {}",
+            attempted
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ))
 }
 
 fn build_authorize_url(
@@ -1238,6 +1271,44 @@ mod tests {
     fn auth_path_uses_agent_provider_state_root() {
         let path = auth_path().unwrap();
         assert!(path.ends_with(".kraai/provider-state/openai-codex/auth.json"));
+    }
+
+    #[tokio::test]
+    async fn callback_listener_prefers_primary_registered_port() {
+        let reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = reservation.local_addr().unwrap().port();
+        drop(reservation);
+
+        let listener = bind_listener(primary, &[]).await.unwrap();
+
+        assert_eq!(listener.local_addr().unwrap().port(), primary);
+    }
+
+    #[tokio::test]
+    async fn callback_listener_uses_registered_fallback() {
+        let primary_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = primary_listener.local_addr().unwrap().port();
+        let fallback_reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback = fallback_reservation.local_addr().unwrap().port();
+        drop(fallback_reservation);
+
+        let listener = bind_listener(primary, &[fallback]).await.unwrap();
+
+        assert_eq!(listener.local_addr().unwrap().port(), fallback);
+    }
+
+    #[tokio::test]
+    async fn callback_listener_fails_when_registered_ports_are_occupied() {
+        let primary_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = primary_listener.local_addr().unwrap().port();
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback = fallback_listener.local_addr().unwrap().port();
+
+        let error = bind_listener(primary, &[fallback]).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert!(error.to_string().contains(&primary.to_string()));
+        assert!(error.to_string().contains(&fallback.to_string()));
     }
 
     #[test]
