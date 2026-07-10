@@ -350,10 +350,8 @@ impl RuntimeCore {
             {
                 Ok(result) => result,
                 Err(error) => {
-                    {
-                        let mut agent = self.agent_manager.lock().await;
-                        agent.clear_active_turn(&completed_session);
-                    }
+                    agent.clear_active_turn(&completed_session);
+                    drop(agent);
                     self.schedule_queue_drain(&completed_session).await;
                     emit_event(
                         &self.event_tx,
