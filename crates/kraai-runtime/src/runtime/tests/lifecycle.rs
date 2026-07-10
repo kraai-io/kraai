@@ -168,6 +168,110 @@ async fn delete_session_waits_for_and_returns_persistence_result() -> Result<()>
 }
 
 #[tokio::test]
+async fn delete_session_is_rejected_while_a_tool_is_executing() -> Result<()> {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let Some(harness) = RuntimeTestHarness::new_with_tools(
+        vec![vec![ScriptedChunk::plain(
+            "<tool_call>\n\
+tool: blocking_tool\n\
+value: wait\n\
+</tool_call>",
+        )]],
+        {
+            let started = started.clone();
+            let release = release.clone();
+            move |tools| {
+                tools.register_tool(BlockingApprovalTool {
+                    started,
+                    release,
+                    fail_message: None,
+                });
+            }
+        },
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("run blocking tool"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    let events = harness
+        .events
+        .wait_for("blocking tool detection for delete", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::ToolCallDetected {
+                        session_id: event_session,
+                        tool_id,
+                        ..
+                    } if event_session == &session_id && tool_id == "blocking_tool"
+                )
+            })
+        })
+        .await;
+    let call_id = call_id_for_queue_order(&events, &session_id, "blocking_tool", 0);
+    harness
+        .handle
+        .approve_tool(session_id.clone(), call_id)
+        .await?;
+    harness
+        .handle
+        .execute_approved_tools(session_id.clone())
+        .await?;
+    started.notified().await;
+
+    let error = harness
+        .handle
+        .delete_session(session_id.clone())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("tools are executing"));
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+
+    release.notify_waiters();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match harness.handle.delete_session(session_id.clone()).await {
+                Ok(()) => break,
+                Err(error) if error.to_string().contains("tools are executing") => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected delete error: {error}"),
+            }
+        }
+    })
+    .await?;
+
+    assert!(
+        harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .all(|session| session.id != session_id)
+    );
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn continue_session_starts_new_assistant_turn_without_new_user_message() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain("first reply")],

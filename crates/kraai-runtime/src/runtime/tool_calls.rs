@@ -1,6 +1,8 @@
 use kraai_agent::{ToolExecutionPayload, ToolExecutionRequest};
 use kraai_tool_core::{ToolContext, ToolOutput};
 use kraai_types::{ModelId, ProviderId};
+use std::sync::Arc;
+use tokio::sync::Notify;
 
 use super::core::{QueuedMessage, RuntimeCore, emit_event};
 use super::streaming::StreamJobKind;
@@ -190,10 +192,14 @@ impl RuntimeCore {
             .await;
     }
 
-    pub(crate) fn handle_execute_tools(&self, session_id: String) {
+    pub(crate) async fn handle_execute_tools(&self, session_id: String) {
         let runtime = self.clone();
+        let start_gate = Arc::new(Notify::new());
+        let task_start_gate = start_gate.clone();
+        let task_session_id = session_id.clone();
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
+            task_start_gate.notified().await;
             let executions = {
                 let mut agent = runtime.agent_manager.lock().await;
                 agent.take_ready_tool_executions(&session_id)
@@ -334,6 +340,25 @@ impl RuntimeCore {
                 runtime.spawn_continuation(session_id.clone());
             }
         });
+        let mut active_tasks = self.active_tool_tasks.lock().await;
+        let tasks = active_tasks.entry(task_session_id).or_default();
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+        drop(active_tasks);
+        start_gate.notify_one();
+    }
+
+    pub(crate) async fn has_active_tool_tasks(&self, session_id: &str) -> bool {
+        let mut active_tasks = self.active_tool_tasks.lock().await;
+        let Some(tasks) = active_tasks.get_mut(session_id) else {
+            return false;
+        };
+        tasks.retain(|task| !task.is_finished());
+        let has_active = !tasks.is_empty();
+        if !has_active {
+            active_tasks.remove(session_id);
+        }
+        has_active
     }
 
     pub(crate) async fn process_completed_stream_output(

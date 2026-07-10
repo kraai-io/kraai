@@ -853,6 +853,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
             provider_registry: build_provider_registry(openai_codex_auth.clone())
                 .expect("provider registry"),
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            active_tool_tasks: Arc::new(Mutex::new(HashMap::new())),
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),

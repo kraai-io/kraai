@@ -7,7 +7,7 @@ use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::{Mutex, broadcast, mpsc};
-use tokio::task::AbortHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::api::Event;
 use crate::handle::Command;
@@ -23,6 +23,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) agent_manager: Arc<Mutex<AgentManager>>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    pub(crate) active_tool_tasks: Arc<Mutex<HashMap<String, Vec<JoinHandle<()>>>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,

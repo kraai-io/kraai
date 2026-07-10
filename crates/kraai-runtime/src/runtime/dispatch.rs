@@ -150,6 +150,14 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
+                if self.has_active_tool_tasks(&session_id).await {
+                    response
+                        .send(Err(eyre!(
+                            "Cannot delete session {session_id} while tools are executing"
+                        )))
+                        .map_err(|_| eyre!("Failed to send delete-session response"))?;
+                    return Ok(());
+                }
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
@@ -316,7 +324,7 @@ impl RuntimeCore {
                 self.start_continuation(session_id).await;
             }
             Command::ExecuteApprovedTools { session_id } => {
-                self.handle_execute_tools(session_id);
+                self.handle_execute_tools(session_id).await;
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 response

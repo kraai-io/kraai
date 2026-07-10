@@ -118,6 +118,7 @@ impl RuntimeBuilder {
             agent_manager,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_tool_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
             openai_codex_auth,
             provider_config_path,
