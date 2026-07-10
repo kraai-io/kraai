@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{CallId, MessageId, ModelId, ProviderId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
@@ -93,11 +93,11 @@ pub(crate) enum Command {
     },
     ApproveTool {
         session_id: String,
-        call_id: String,
+        call_id: CallId,
     },
     DenyTool {
         session_id: String,
-        call_id: String,
+        call_id: CallId,
     },
     CancelStream {
         session_id: String,
@@ -230,12 +230,16 @@ impl RuntimeHandle {
         provider_id: String,
         auto_approve: bool,
     ) -> Result<()> {
+        let model_id =
+            ModelId::try_new(model_id).map_err(|error| eyre!("invalid model_id: {error}"))?;
+        let provider_id = ProviderId::try_new(provider_id)
+            .map_err(|error| eyre!("invalid provider_id: {error}"))?;
         self.command_tx
             .send(Command::SendMessage {
                 session_id,
                 message,
-                model_id: ModelId::new(model_id),
-                provider_id: ProviderId::new(provider_id),
+                model_id,
+                provider_id,
                 auto_approve,
             })
             .await?;
@@ -370,6 +374,8 @@ impl RuntimeHandle {
 
     /// Approve a tool call
     pub async fn approve_tool(&self, session_id: String, call_id: String) -> Result<()> {
+        let call_id =
+            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
         self.command_tx
             .send(Command::ApproveTool {
                 session_id,
@@ -381,6 +387,8 @@ impl RuntimeHandle {
 
     /// Deny a tool call
     pub async fn deny_tool(&self, session_id: String, call_id: String) -> Result<()> {
+        let call_id =
+            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
         self.command_tx
             .send(Command::DenyTool {
                 session_id,

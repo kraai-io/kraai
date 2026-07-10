@@ -282,7 +282,6 @@ impl RuntimeCore {
                 session_id,
                 call_id,
             } => {
-                let call_id = kraai_types::CallId::new(call_id);
                 self.agent_manager
                     .lock()
                     .await
@@ -292,7 +291,6 @@ impl RuntimeCore {
                 session_id,
                 call_id,
             } => {
-                let call_id = kraai_types::CallId::new(call_id);
                 self.agent_manager
                     .lock()
                     .await

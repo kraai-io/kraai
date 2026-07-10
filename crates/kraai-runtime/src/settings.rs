@@ -164,7 +164,8 @@ fn provider_config_from_settings(settings: &SettingsDocument) -> Result<Provider
 
 fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<ProviderConfig> {
     Ok(ProviderConfig {
-        id: ProviderId::new(settings.id.trim().to_string()),
+        id: ProviderId::try_new(settings.id.trim().to_string())
+            .map_err(|error| eyre!("invalid provider id: {error}"))?,
         type_id: settings.type_id.trim().to_string(),
         config: values_to_dynamic_config(&settings.values),
     })
@@ -172,8 +173,10 @@ fn provider_config_entry_from_settings(settings: &ProviderSettings) -> Result<Pr
 
 fn model_config_entry_from_settings(settings: &ModelSettings) -> Result<ModelConfig> {
     Ok(ModelConfig {
-        id: ModelId::new(settings.id.trim().to_string()),
-        provider_id: ProviderId::new(settings.provider_id.trim().to_string()),
+        id: ModelId::try_new(settings.id.trim().to_string())
+            .map_err(|error| eyre!("invalid model id: {error}"))?,
+        provider_id: ProviderId::try_new(settings.provider_id.trim().to_string())
+            .map_err(|error| eyre!("invalid provider id: {error}"))?,
         config: values_to_dynamic_config(&settings.values),
     })
 }

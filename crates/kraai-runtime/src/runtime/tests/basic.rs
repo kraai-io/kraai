@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManager;
 use kraai_tool_core::ToolManager;
@@ -245,6 +247,54 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
         .expect("assistant usage should be persisted");
     assert_eq!(usage.total_tokens, 42);
 
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+        return Ok(());
+    };
+
+    let model_error = harness
+        .handle
+        .send_message(
+            String::from("session"),
+            String::from("message"),
+            String::new(),
+            String::from("provider"),
+        )
+        .await
+        .unwrap_err();
+    assert!(model_error.to_string().contains("model_id"));
+
+    let provider_error = harness
+        .handle
+        .send_message(
+            String::from("session"),
+            String::from("message"),
+            String::from("model"),
+            String::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(provider_error.to_string().contains("provider_id"));
+
+    let approve_error = harness
+        .handle
+        .approve_tool(String::from("session"), String::new())
+        .await
+        .unwrap_err();
+    assert!(approve_error.to_string().contains("call_id"));
+    let deny_error = harness
+        .handle
+        .deny_tool(String::from("session"), String::new())
+        .await
+        .unwrap_err();
+    assert!(deny_error.to_string().contains("call_id"));
+
+    tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
     harness.shutdown().await;
     Ok(())
 }
