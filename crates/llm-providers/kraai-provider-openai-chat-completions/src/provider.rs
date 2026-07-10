@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use color_eyre::eyre::{Result, eyre};
-use futures::{StreamExt, stream::BoxStream};
+use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
     ProviderFactory, ProviderRequestContext, ProviderStreamEvent, send_with_retry, stream_sse_data,
@@ -197,29 +197,35 @@ where
             .await?;
 
         let stream = stream_sse_data(response)
-            .filter_map(|event| async move {
-                match event {
-                    Ok(payload) => match serde_json::from_str::<ChatCompletionChunk>(&payload) {
-                        Ok(chunk) => {
-                            if let Some(usage) = chunk.usage.and_then(normalize_usage) {
-                                return Some(Ok(ProviderStreamEvent::Usage(usage)));
-                            }
-
-                            chunk
-                                .choices
-                                .into_iter()
-                                .find_map(|choice| choice.delta.content)
-                                .map(|delta| Ok(ProviderStreamEvent::TextDelta(delta)))
-                        }
-                        Err(error) => Some(Err(eyre!(error))),
-                    },
-                    Err(error) => Some(Err(error)),
-                }
+            .flat_map(|event| {
+                stream::iter(match event {
+                    Ok(payload) => serde_json::from_str::<ChatCompletionChunk>(&payload)
+                        .map(events_from_chunk)
+                        .unwrap_or_else(|error| vec![Err(eyre!(error))]),
+                    Err(error) => vec![Err(error)],
+                })
             })
             .boxed();
 
         Ok(stream)
     }
+}
+
+fn events_from_chunk(chunk: ChatCompletionChunk) -> Vec<Result<ProviderStreamEvent>> {
+    let mut events = Vec::with_capacity(2);
+
+    if let Some(delta) = chunk
+        .choices
+        .into_iter()
+        .find_map(|choice| choice.delta.content)
+    {
+        events.push(Ok(ProviderStreamEvent::TextDelta(delta)));
+    }
+    if let Some(usage) = chunk.usage.and_then(normalize_usage) {
+        events.push(Ok(ProviderStreamEvent::Usage(usage)));
+    }
+
+    events
 }
 
 fn normalize_usage(usage: ChatCompletionUsage) -> Option<kraai_types::TokenUsage> {
@@ -541,5 +547,35 @@ mod tests {
         assert_eq!(usage.output_tokens, 40);
         assert_eq!(usage.reasoning_tokens, 5);
         assert_eq!(usage.cache_read_tokens, 20);
+    }
+
+    #[test]
+    fn mixed_stream_chunk_preserves_text_before_usage() {
+        let chunk = serde_json::from_str::<ChatCompletionChunk>(
+            r#"{
+                "choices":[{"delta":{"content":"hello"}}],
+                "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
+            }"#,
+        )
+        .unwrap();
+
+        let events = events_from_chunk(chunk)
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::TextDelta(String::from("hello")),
+                ProviderStreamEvent::Usage(kraai_types::TokenUsage {
+                    total_tokens: 3,
+                    input_tokens: 2,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cache_read_tokens: 0,
+                }),
+            ]
+        );
     }
 }
