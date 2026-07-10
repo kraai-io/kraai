@@ -57,32 +57,32 @@ base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
-crossbeam-channel = "0.5.15"
+crossbeam-channel = "0.5.16"
 directories = "6.0.0"
 futures = "0.3.32"
 grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
 httpdate = "1.0.3"
-ignore = "0.4.26"
+ignore = "0.4.28"
 libc = "0.2.186"
 notify = "8.2.0"
 proc-macro2 = "1.0.106"
-quote = "1.0.45"
-rand = "0.10.1"
+quote = "1.0.46"
+rand = "0.10.2"
 ratatui = { version = "0.30.2", features = [
   "all-widgets",
   "macros",
   "scrolling-regions",
   "serde",
 ] }
-regex = "1.12.4"
+regex = "1.13.0"
 reqwest = { features = ["json", "stream"], version = "0.13.4" }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 syn = { version = "2.0.118", features = ["derive", "extra-traits", "full"] }
-tachyonfx = "0.25.0"
+tachyonfx = "0.25.1"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.52.3" }
@@ -91,9 +91,9 @@ toon-format = { version = "0.5.0", default-features = false }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-trybuild = "1.0.116"
+trybuild = "1.0.117"
 ulid = "1.2.1"
-unicode-segmentation = "1.12.0"
-unicode-width = "0.2.0"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
 url = "2.5.8"
 urlencoding = "2.1.3"
