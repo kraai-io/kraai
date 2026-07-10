@@ -6,7 +6,7 @@ use super::{
 };
 use super::{RuntimeEventBridgeMessage, spawn_event_bridge};
 use crate::components::TextInput;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Event, FieldDefinition, FieldValueEntry,
     FieldValueKind, Model, ModelSettings, ProviderDefinition, ProviderSettings, Session,
@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 struct TestHarness {
     app: App,
     requests_rx: Receiver<RuntimeRequest>,
+    responses_tx: Sender<RuntimeResponse>,
 }
 #[derive(Clone, Default)]
 struct SharedBuffer {
@@ -74,7 +75,7 @@ impl Write for SharedBuffer {
 fn test_harness() -> TestHarness {
     let (_event_tx, event_rx) = unbounded();
     let (runtime_tx, requests_rx) = unbounded();
-    let (_response_tx, runtime_rx) = unbounded();
+    let (responses_tx, runtime_rx) = unbounded();
     TestHarness {
         app: App {
             event_rx,
@@ -93,8 +94,11 @@ fn test_harness() -> TestHarness {
             last_statusline_animation_tick: None,
             event_lag_session_resync_pending: false,
             event_lag_tools_resync_pending: false,
+            runtime_bridge_connected: true,
+            runtime_bridge_error: None,
         },
         requests_rx,
+        responses_tx,
     }
 }
 fn test_harness_with_startup_options(startup_options: StartupOptions) -> TestHarness {
@@ -125,6 +129,16 @@ impl TestHarness {
         cache.total_lines = total_lines;
         drop(cache);
         self.app.state.chat_viewport_height = viewport_height;
+    }
+    fn disconnect_request_receiver(&mut self) {
+        let (_replacement_tx, replacement_rx) = unbounded();
+        let old_receiver = std::mem::replace(&mut self.requests_rx, replacement_rx);
+        drop(old_receiver);
+    }
+    fn disconnect_response_sender(&mut self) {
+        let (replacement_tx, _replacement_rx) = unbounded();
+        let old_sender = std::mem::replace(&mut self.responses_tx, replacement_tx);
+        drop(old_sender);
     }
 }
 fn key(code: KeyCode) -> KeyEvent {
@@ -2068,6 +2082,71 @@ fn submit_sends_message_request_and_tracks_optimistic_message() {
         }
         other => panic!("unexpected request: {}", request_name(other)),
     }
+}
+
+#[test]
+fn disconnected_request_bridge_rejects_message_without_optimistic_state() {
+    let mut harness = test_harness();
+    harness.app.state.config_loaded = true;
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.selected_provider_id = Some(String::from("openai-chat-completions"));
+    harness.app.state.selected_model_id = Some(String::from("gpt-4o-mini"));
+    harness.app.state.selected_profile_id = Some(String::from("plan-code"));
+    harness.app.state.input = String::from("keep this message");
+    harness.app.state.input_cursor = harness.app.state.input.len();
+    harness.disconnect_request_receiver();
+
+    harness.app.handle_key_event(key(KeyCode::Enter));
+
+    assert_eq!(harness.app.state.input, "keep this message");
+    assert!(harness.app.state.optimistic_messages.is_empty());
+    assert!(!harness.app.state.is_streaming);
+    assert!(!harness.app.runtime_bridge_connected);
+    assert!(harness.app.state.exit);
+    assert_eq!(
+        harness.app.runtime_bridge_error.as_deref(),
+        Some("Runtime bridge disconnected")
+    );
+}
+
+#[test]
+fn disconnected_request_bridge_rejects_tool_approval() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("sess-2"));
+    harness.app.state.tool_phase = ToolPhase::Deciding;
+    harness.app.state.pending_tools = vec![PendingTool {
+        call_id: String::from("call-2"),
+        tool_id: String::from("write_file"),
+        args: String::from("{}"),
+        description: String::from("Write a file"),
+        risk_level: String::from("undoable_workspace_write"),
+        reasons: Vec::new(),
+        approved: None,
+        queue_order: 0,
+    }];
+    harness.disconnect_request_receiver();
+
+    harness.app.handle_key_event(key(KeyCode::Enter));
+
+    assert!(harness.app.state.pending_tools.is_empty());
+    assert_eq!(harness.app.state.tool_phase, ToolPhase::Idle);
+    assert_eq!(harness.app.state.status, "Runtime bridge disconnected");
+    assert!(harness.app.state.exit);
+}
+
+#[test]
+fn interactive_event_processing_detects_runtime_response_disconnect() {
+    let mut harness = test_harness();
+    harness.disconnect_response_sender();
+
+    assert!(harness.app.process_events());
+
+    assert!(!harness.app.runtime_bridge_connected);
+    assert!(harness.app.state.exit);
+    assert_eq!(
+        harness.app.runtime_bridge_error.as_deref(),
+        Some("Runtime bridge disconnected")
+    );
 }
 #[test]
 fn submit_sends_message_starts_turn_timer() {

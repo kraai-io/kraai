@@ -70,6 +70,12 @@ impl App {
 
         let creation_id = self.state.next_session_creation_id;
         self.state.next_session_creation_id = creation_id.wrapping_add(1);
+        if self.request(RuntimeRequest::CreateSession { creation_id })
+            == RuntimeRequestDelivery::Disconnected
+        {
+            self.set_input_text(raw_input);
+            return;
+        }
         self.state.pending_submit = Some(PendingSubmit {
             creation_id,
             session_id: None,
@@ -78,7 +84,6 @@ impl App {
             provider_id,
         });
         self.state.status = String::from("Creating session");
-        self.request(RuntimeRequest::CreateSession { creation_id });
     }
 
     pub(super) fn handle_command(&mut self, command_line: &str) {

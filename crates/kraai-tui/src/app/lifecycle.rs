@@ -95,7 +95,7 @@ impl App {
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
         let state = AppState::from_startup_options(startup_options.clone());
 
-        let app = Self {
+        let mut app = Self {
             event_rx,
             runtime_tx,
             runtime_rx,
@@ -112,6 +112,8 @@ impl App {
             last_statusline_animation_tick: None,
             event_lag_session_resync_pending: false,
             event_lag_tools_resync_pending: false,
+            runtime_bridge_connected: true,
+            runtime_bridge_error: None,
         };
 
         app.request_sync();
@@ -200,7 +202,11 @@ impl App {
             })?;
             needs_redraw = false;
         }
-        Ok(())
+        if let Some(error) = self.runtime_bridge_error.take() {
+            Err(color_eyre::eyre::eyre!(error))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn exit_token_usage_summary(&self) -> Option<String> {
@@ -233,9 +239,19 @@ impl App {
             changed = true;
         }
 
-        while let Ok(response) = self.runtime_rx.try_recv() {
-            self.handle_runtime_response(response);
-            changed = true;
+        loop {
+            match self.runtime_rx.try_recv() {
+                Ok(response) => {
+                    self.handle_runtime_response(response);
+                    changed = true;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.handle_runtime_bridge_disconnect();
+                    changed = true;
+                    break;
+                }
+            }
         }
 
         changed

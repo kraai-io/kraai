@@ -70,6 +70,12 @@ const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("undo", "Restore last user message"),
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeRequestDelivery {
+    Delivered,
+    Disconnected,
+}
+
 pub struct App {
     event_rx: Receiver<RuntimeEventBridgeMessage>,
     runtime_tx: Sender<RuntimeRequest>,
@@ -87,6 +93,8 @@ pub struct App {
     last_statusline_animation_tick: Option<Instant>,
     event_lag_session_resync_pending: bool,
     event_lag_tools_resync_pending: bool,
+    runtime_bridge_connected: bool,
+    runtime_bridge_error: Option<String>,
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
