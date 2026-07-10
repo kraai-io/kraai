@@ -36,13 +36,17 @@ where
 
         while let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
             let line = buffer.drain(..=position).collect::<Vec<_>>();
-            if process_line(&tx, line, &mut event_lines).await.is_err() {
+            if let Err(error) = process_line(&tx, line, &mut event_lines).await {
+                let _ = tx.send(Err(error)).await;
                 return;
             }
         }
     }
 
-    if !buffer.is_empty() && process_line(&tx, buffer, &mut event_lines).await.is_err() {
+    if !buffer.is_empty()
+        && let Err(error) = process_line(&tx, buffer, &mut event_lines).await
+    {
+        let _ = tx.send(Err(error)).await;
         return;
     }
 
@@ -141,6 +145,42 @@ mod tests {
             .await
             .ok_or_else(|| eyre!("missing split event"))??;
         assert_eq!(event, "split payload");
+        assert!(rx.recv().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_invalid_utf8_in_newline_delimited_line() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(4);
+
+        forward_sse_events(
+            stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(vec![
+                b'd', b'a', b't', b'a', b':', b' ', 0xff, b'\n',
+            ])]),
+            tx,
+        )
+        .await;
+
+        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
+        assert!(error.is_err());
+        assert!(rx.recv().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_invalid_utf8_in_final_unterminated_line() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(4);
+
+        forward_sse_events(
+            stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(vec![
+                b'd', b'a', b't', b'a', b':', b' ', 0xff,
+            ])]),
+            tx,
+        )
+        .await;
+
+        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
+        assert!(error.is_err());
         assert!(rx.recv().await.is_none());
         Ok(())
     }
