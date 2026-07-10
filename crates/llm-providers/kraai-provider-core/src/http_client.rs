@@ -44,18 +44,11 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    fn client_or_skip(builder: ClientBuilder) -> Option<Client> {
-        match builder.build() {
-            Ok(client) => Some(client),
-            Err(error)
-                if error
-                    .to_string()
-                    .contains("No CA certificates were loaded from the system") =>
-            {
-                None
-            }
-            Err(error) => panic!("unexpected client build failure: {error}"),
-        }
+    fn build_test_client(builder: ClientBuilder) -> Client {
+        builder
+            .tls_certs_only([])
+            .build()
+            .unwrap_or_else(|error| panic!("unexpected client build failure: {error}"))
     }
 
     #[tokio::test]
@@ -68,12 +61,10 @@ mod tests {
             let _ = stream.read(&mut request).await;
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let Some(client) = client_or_skip(
+        let client = build_test_client(
             base_client_builder(Duration::from_millis(100), Duration::from_millis(100))
                 .timeout(Duration::from_millis(25)),
-        ) else {
-            return;
-        };
+        );
 
         let error = client
             .get(format!("http://{address}/"))
@@ -101,12 +92,10 @@ mod tests {
             stream.flush().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let Some(client) = client_or_skip(base_client_builder(
+        let client = build_test_client(base_client_builder(
             Duration::from_millis(100),
             Duration::from_millis(25),
-        )) else {
-            return;
-        };
+        ));
 
         let response = client
             .get(format!("http://{address}/"))
