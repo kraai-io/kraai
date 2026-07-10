@@ -1,3 +1,4 @@
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_CALLBACK_PORT: u16 = 1455;
 const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 const TOKEN_REFRESH_INTERVAL_SECS: u64 = 8 * 24 * 60 * 60;
+const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const DEVICE_CODE_TIMEOUT_SECS: u64 = 15 * 60;
 const SIGN_IN_REQUIRED_MESSAGE: &str = "OpenAI sign-in required. Use /providers.";
 
@@ -78,11 +80,13 @@ pub struct OpenAiCodexAuthController {
 pub(crate) struct RequestAuth {
     pub(crate) access_token: String,
     pub(crate) account_id: String,
+    generation: String,
 }
 
 struct Inner {
     client: Client,
     state: Mutex<ControllerState>,
+    refresh_gate: Mutex<()>,
     updates: broadcast::Sender<OpenAiCodexAuthStatus>,
     config: AuthConfig,
 }
@@ -93,6 +97,7 @@ struct AuthConfig {
     client_id: String,
     default_callback_port: u16,
     auth_path: PathBuf,
+    refresh_timeout: Duration,
 }
 
 impl AuthConfig {
@@ -102,6 +107,7 @@ impl AuthConfig {
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
             auth_path: auth_path()?,
+            refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         })
     }
 }
@@ -113,6 +119,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
             client_id: value.client_id,
             default_callback_port: value.default_callback_port,
             auth_path: value.auth_path,
+            refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         }
     }
 }
@@ -133,6 +140,7 @@ struct StoredAuth {
     tokens: StoredTokens,
     claims: IdTokenClaims,
     last_refresh_unix: u64,
+    generation: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,6 +148,8 @@ struct StoredAuthFile {
     auth_mode: String,
     tokens: StoredTokens,
     last_refresh: u64,
+    #[serde(default)]
+    generation: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,6 +270,7 @@ impl OpenAiCodexAuthController {
                     pending: None,
                     error,
                 }),
+                refresh_gate: Mutex::new(()),
                 updates,
                 config,
             }),
@@ -369,6 +380,7 @@ impl OpenAiCodexAuthController {
 
     pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
         self.cancel_pending_task().await;
+        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         {
             let mut guard = self.inner.state.lock().await;
             guard.auth = None;
@@ -386,20 +398,17 @@ impl OpenAiCodexAuthController {
                 Some(auth)
                     if auth.last_refresh_unix + TOKEN_REFRESH_INTERVAL_SECS <= unix_now() =>
                 {
-                    Some(auth.tokens.account_id.clone())
+                    Some(request_auth(auth))
                 }
                 Some(auth) => {
-                    return Ok(RequestAuth {
-                        access_token: auth.tokens.access_token.clone(),
-                        account_id: auth.tokens.account_id.clone(),
-                    });
+                    return Ok(request_auth(auth));
                 }
                 None => None,
             }
         };
 
-        if let Some(expected_account_id) = needs_refresh {
-            return self.refresh_request_auth(Some(expected_account_id)).await;
+        if let Some(expected_auth) = needs_refresh {
+            return self.refresh_request_auth(&expected_auth).await;
         }
 
         Err(io::Error::other(SIGN_IN_REQUIRED_MESSAGE))
@@ -407,13 +416,35 @@ impl OpenAiCodexAuthController {
 
     pub(crate) async fn refresh_request_auth(
         &self,
-        expected_account_id: Option<String>,
+        expected_auth: &RequestAuth,
     ) -> io::Result<RequestAuth> {
-        let old_auth = {
-            let guard = self.inner.state.lock().await;
-            guard.auth.clone()
+        let _refresh_guard = self.inner.refresh_gate.lock().await;
+        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+
+        let disk_auth = load_auth_file(&self.inner.config.auth_path)?;
+        let (old_auth, state_changed) = {
+            let mut guard = self.inner.state.lock().await;
+            let state_changed = guard.auth.as_ref().map(|auth| &auth.generation)
+                != disk_auth.as_ref().map(|auth| &auth.generation);
+            guard.auth = disk_auth;
+            if state_changed {
+                guard.error = None;
+            }
+            (guard.auth.clone(), state_changed)
+        };
+        if state_changed {
+            let _ = self.emit_status().await;
         }
-        .ok_or_else(|| io::Error::other(SIGN_IN_REQUIRED_MESSAGE))?;
+        let old_auth = old_auth.ok_or_else(|| io::Error::other(SIGN_IN_REQUIRED_MESSAGE))?;
+
+        if old_auth.generation != expected_auth.generation {
+            if old_auth.tokens.account_id != expected_auth.account_id {
+                return Err(io::Error::other(
+                    "OpenAI account changed during token refresh",
+                ));
+            }
+            return Ok(request_auth(&old_auth));
+        }
 
         let refresh_response = self
             .inner
@@ -425,6 +456,7 @@ impl OpenAiCodexAuthController {
                 grant_type: "refresh_token",
                 refresh_token: old_auth.tokens.refresh_token.clone(),
             })
+            .timeout(self.inner.config.refresh_timeout)
             .send()
             .await
             .map_err(io::Error::other)?;
@@ -433,8 +465,10 @@ impl OpenAiCodexAuthController {
         if !status.is_success() {
             let body = refresh_response.text().await.unwrap_or_default();
             if status == StatusCode::UNAUTHORIZED {
-                self.clear_auth_with_error(String::from("OpenAI sign-in expired. Use /providers."))
-                    .await?;
+                self.clear_auth_with_error_locked(String::from(
+                    "OpenAI sign-in expired. Use /providers.",
+                ))
+                .await?;
                 return Err(io::Error::other(format!(
                     "OpenAI token refresh failed: {body}"
                 )));
@@ -462,11 +496,11 @@ impl OpenAiCodexAuthController {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| io::Error::other("Missing ChatGPT account id in refreshed auth"))?;
 
-        if let Some(expected_account_id) = expected_account_id
-            && expected_account_id != account_id
-        {
-            self.clear_auth_with_error(String::from("OpenAI account changed. Use /providers."))
-                .await?;
+        if expected_auth.account_id != account_id {
+            self.clear_auth_with_error_locked(String::from(
+                "OpenAI account changed. Use /providers.",
+            ))
+            .await?;
             return Err(io::Error::other(
                 "OpenAI account changed during token refresh",
             ));
@@ -481,7 +515,9 @@ impl OpenAiCodexAuthController {
             },
             claims,
             last_refresh_unix: unix_now(),
+            generation: generate_generation(),
         };
+        let request_auth = request_auth(&stored);
 
         persist_auth_file(&self.inner.config.auth_path, &stored)?;
         {
@@ -491,13 +527,10 @@ impl OpenAiCodexAuthController {
         }
         let _ = self.emit_status().await;
 
-        Ok(RequestAuth {
-            access_token,
-            account_id,
-        })
+        Ok(request_auth)
     }
 
-    async fn clear_auth_with_error(&self, error: String) -> io::Result<()> {
+    async fn clear_auth_with_error_locked(&self, error: String) -> io::Result<()> {
         {
             let mut guard = self.inner.state.lock().await;
             guard.auth = None;
@@ -518,6 +551,7 @@ impl OpenAiCodexAuthController {
     }
 
     async fn finish_successful_login(&self, auth: StoredAuth) -> io::Result<()> {
+        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
         persist_auth_file(&self.inner.config.auth_path, &auth)?;
         {
             let mut guard = self.inner.state.lock().await;
@@ -772,6 +806,7 @@ impl OpenAiCodexAuthController {
             },
             claims,
             last_refresh_unix: unix_now(),
+            generation: generate_generation(),
         })
     }
 }
@@ -891,10 +926,16 @@ fn load_auth_file(path: &Path) -> io::Result<Option<StoredAuth>> {
     let file = std::fs::read(path)?;
     let stored = serde_json::from_slice::<StoredAuthFile>(&file).map_err(io::Error::other)?;
     let claims = parse_id_token_claims(&stored.tokens.id_token)?;
+    let generation = if stored.generation.is_empty() {
+        token_generation(&stored.tokens.refresh_token)
+    } else {
+        stored.generation
+    };
     Ok(Some(StoredAuth {
         tokens: stored.tokens,
         claims,
         last_refresh_unix: stored.last_refresh,
+        generation,
     }))
 }
 
@@ -907,6 +948,7 @@ fn persist_auth_file(path: &Path, auth: &StoredAuth) -> io::Result<()> {
         auth_mode: "chatgpt".to_string(),
         tokens: auth.tokens.clone(),
         last_refresh: auth.last_refresh_unix,
+        generation: auth.generation.clone(),
     })
     .map_err(io::Error::other)?;
     let temp_path = temp_auth_write_path(path);
@@ -953,6 +995,52 @@ fn delete_auth_file(path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+fn request_auth(auth: &StoredAuth) -> RequestAuth {
+    RequestAuth {
+        access_token: auth.tokens.access_token.clone(),
+        account_id: auth.tokens.account_id.clone(),
+        generation: auth.generation.clone(),
+    }
+}
+
+fn token_generation(refresh_token: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(refresh_token.as_bytes()))
+}
+
+fn generate_generation() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+struct AuthFileLock {
+    _file: File,
+}
+
+impl AuthFileLock {
+    fn acquire(auth_path: &Path) -> io::Result<Self> {
+        if let Some(parent) = auth_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let lock_path = auth_path.with_extension("json.refresh.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+        file.lock()?;
+        Ok(Self { _file: file })
+    }
+}
+
+async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<AuthFileLock> {
+    tokio::task::spawn_blocking(move || AuthFileLock::acquire(&auth_path))
+        .await
+        .map_err(io::Error::other)?
 }
 
 async fn bind_listener(port: u16) -> io::Result<TcpListener> {
@@ -1065,6 +1153,9 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::{Barrier, oneshot};
     use ulid::Ulid;
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -1087,6 +1178,35 @@ mod tests {
         match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
             temp_auth_path(),
         )) {
+            Ok(controller) => Some(controller),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected auth controller init error: {error}"),
+        }
+    }
+
+    fn auth_controller_with_issuer_or_skip(
+        auth_path: PathBuf,
+        issuer: String,
+    ) -> Option<OpenAiCodexAuthController> {
+        let mut options = OpenAiCodexAuthControllerOptions::new(auth_path);
+        options.issuer = issuer;
+        match OpenAiCodexAuthController::new_with_options(options) {
+            Ok(controller) => Some(controller),
+            Err(error) if is_missing_system_ca_error(&error) => None,
+            Err(error) => panic!("unexpected auth controller init error: {error}"),
+        }
+    }
+
+    fn auth_controller_with_refresh_timeout_or_skip(
+        auth_path: PathBuf,
+        issuer: String,
+        refresh_timeout: Duration,
+    ) -> Option<OpenAiCodexAuthController> {
+        let mut options = OpenAiCodexAuthControllerOptions::new(auth_path);
+        options.issuer = issuer;
+        let mut config = AuthConfig::from(options);
+        config.refresh_timeout = refresh_timeout;
+        match OpenAiCodexAuthController::with_config(config) {
             Ok(controller) => Some(controller),
             Err(error) if is_missing_system_ca_error(&error) => None,
             Err(error) => panic!("unexpected auth controller init error: {error}"),
@@ -1177,7 +1297,303 @@ mod tests {
                 account_id: Some(account_id.to_string()),
             },
             last_refresh_unix,
+            generation: generate_generation(),
         }
+    }
+
+    async fn scripted_refresh_server(account_id: &str) -> (String, Arc<AtomicUsize>, AbortHandle) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let id_token = fake_jwt("refreshed@example.com", "pro", account_id);
+        let account_id = account_id.to_string();
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let requests = server_requests.clone();
+                let id_token = id_token.clone();
+                let account_id = account_id.clone();
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 4096];
+                    let _ = stream.read(&mut request).await.unwrap();
+                    let request_number = requests.fetch_add(1, Ordering::SeqCst);
+                    let (status, body) = if request_number == 0 {
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "id_token": id_token,
+                                "access_token": format!("access-refreshed-{account_id}"),
+                                "refresh_token": format!("refresh-rotated-{account_id}")
+                            })
+                            .to_string(),
+                        )
+                    } else {
+                        (
+                            "401 Unauthorized",
+                            "rotated refresh token reused".to_string(),
+                        )
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                });
+            }
+        });
+        (format!("http://{address}"), requests, task.abort_handle())
+    }
+
+    async fn stalled_refresh_server() -> (String, oneshot::Receiver<()>, AbortHandle) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_received, received) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            let _ = request_received.send(());
+            std::future::pending::<()>().await;
+        });
+        (format!("http://{address}"), received, task.abort_handle())
+    }
+
+    async fn run_concurrent_refreshes(
+        controller: OpenAiCodexAuthController,
+        expected_auth: RequestAuth,
+        task_count: usize,
+    ) -> Vec<io::Result<RequestAuth>> {
+        let barrier = Arc::new(Barrier::new(task_count));
+        let tasks = (0..task_count).map(|_| {
+            let controller = controller.clone();
+            let expected_auth = expected_auth.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                controller.refresh_request_auth(&expected_auth).await
+            })
+        });
+        futures::future::join_all(tasks)
+            .await
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn simultaneous_proactive_refreshes_use_one_network_request() {
+        let path = temp_auth_path();
+        persist_auth_file(
+            &path,
+            &stored_auth("user@example.com", "pro", "workspace_123", 0),
+        )
+        .unwrap();
+        let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
+        let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
+            server.abort();
+            return;
+        };
+
+        let tasks = (0..8).map(|_| {
+            let controller = controller.clone();
+            tokio::spawn(async move { controller.get_request_auth().await })
+        });
+        for result in futures::future::join_all(tasks).await {
+            assert_eq!(
+                result.unwrap().unwrap().access_token,
+                "access-refreshed-workspace_123"
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn simultaneous_unauthorized_recovery_reuses_refreshed_credentials() {
+        let path = temp_auth_path();
+        persist_auth_file(
+            &path,
+            &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
+        )
+        .unwrap();
+        let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
+        let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
+            server.abort();
+            return;
+        };
+        let expected_auth = controller.get_request_auth().await.unwrap();
+
+        let results = run_concurrent_refreshes(controller, expected_auth, 8).await;
+        for result in results {
+            assert_eq!(
+                result.unwrap().access_token,
+                "access-refreshed-workspace_123"
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn separate_controllers_do_not_reuse_a_rotated_refresh_token() {
+        let path = temp_auth_path();
+        persist_auth_file(
+            &path,
+            &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
+        )
+        .unwrap();
+        let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
+        let Some(first) = auth_controller_with_issuer_or_skip(path.clone(), issuer.clone()) else {
+            server.abort();
+            return;
+        };
+        let Some(second) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
+            server.abort();
+            return;
+        };
+        let mut first_updates = first.subscribe();
+        let mut second_updates = second.subscribe();
+        let expected_auth = first.get_request_auth().await.unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let first_task = {
+            let barrier = barrier.clone();
+            let expected_auth = expected_auth.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                first.refresh_request_auth(&expected_auth).await
+            })
+        };
+        let second_task = tokio::spawn(async move {
+            barrier.wait().await;
+            second.refresh_request_auth(&expected_auth).await
+        });
+
+        assert_eq!(
+            first_task.await.unwrap().unwrap().account_id,
+            "workspace_123"
+        );
+        assert_eq!(
+            second_task.await.unwrap().unwrap().account_id,
+            "workspace_123"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            first_updates.try_recv().unwrap().account_id.as_deref(),
+            Some("workspace_123")
+        );
+        assert_eq!(
+            second_updates.try_recv().unwrap().account_id.as_deref(),
+            Some("workspace_123")
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn stalled_refresh_releases_auth_file_lock_after_timeout() {
+        let path = temp_auth_path();
+        persist_auth_file(
+            &path,
+            &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
+        )
+        .unwrap();
+        let (issuer, request_received, server) = stalled_refresh_server().await;
+        let Some(controller) = auth_controller_with_refresh_timeout_or_skip(
+            path.clone(),
+            issuer,
+            Duration::from_millis(100),
+        ) else {
+            server.abort();
+            return;
+        };
+        let expected_auth = controller.get_request_auth().await.unwrap();
+
+        let refresh_controller = controller.clone();
+        let refresh = tokio::spawn(async move {
+            refresh_controller
+                .refresh_request_auth(&expected_auth)
+                .await
+        });
+        request_received.await.unwrap();
+        let mut logout = tokio::spawn(async move { controller.logout().await });
+        tokio::task::yield_now().await;
+        assert!(!logout.is_finished());
+
+        let refresh_result = tokio::time::timeout(Duration::from_secs(2), refresh)
+            .await
+            .unwrap()
+            .unwrap();
+        let Err(refresh_error) = refresh_result else {
+            panic!("stalled refresh unexpectedly succeeded");
+        };
+        let request_error = refresh_error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<reqwest::Error>())
+            .unwrap();
+        assert!(request_error.is_timeout());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), &mut logout)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .state,
+            OpenAiCodexLoginState::SignedOut
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_cannot_overwrite_or_clear_newer_credentials() {
+        let path = temp_auth_path();
+        persist_auth_file(
+            &path,
+            &stored_auth("old@example.com", "pro", "workspace_old", unix_now()),
+        )
+        .unwrap();
+        let (issuer, requests, server) = scripted_refresh_server("workspace_old").await;
+        let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
+            server.abort();
+            return;
+        };
+        let stale_auth = controller.get_request_auth().await.unwrap();
+
+        controller
+            .finish_successful_login(stored_auth(
+                "new@example.com",
+                "team",
+                "workspace_new",
+                unix_now(),
+            ))
+            .await
+            .unwrap();
+        let Err(error) = controller.refresh_request_auth(&stale_auth).await else {
+            panic!("stale refresh unexpectedly succeeded");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "OpenAI account changed during token refresh"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        let current = controller.get_request_auth().await.unwrap();
+        assert_eq!(current.account_id, "workspace_new");
+        assert_eq!(current.access_token, "access-workspace_new");
+        assert_eq!(
+            load_auth_file(&path).unwrap().unwrap().tokens.account_id,
+            "workspace_new"
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

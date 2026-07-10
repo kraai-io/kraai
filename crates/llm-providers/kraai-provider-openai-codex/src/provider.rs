@@ -450,10 +450,7 @@ impl OpenAiCodexProvider {
 
         log_retryable_auth_failure(operation, response).await;
 
-        let refreshed = self
-            .auth
-            .refresh_request_auth(Some(auth.account_id.clone()))
-            .await?;
+        let refreshed = self.auth.refresh_request_auth(&auth).await?;
         let response = send_http_with_retry(
             operation,
             &DEFAULT_HTTP_RETRY_POLICY,
