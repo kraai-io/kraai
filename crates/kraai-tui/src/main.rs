@@ -15,6 +15,32 @@ use crate::app::{App, StartupOptions};
 mod app;
 mod components;
 
+struct TerminalSessionGuard {
+    active: bool,
+}
+
+impl TerminalSessionGuard {
+    fn new() -> Self {
+        Self { active: true }
+    }
+
+    fn restore(&mut self) -> std::io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        let feature_result = execute!(stdout(), DisableMouseCapture, DisableBracketedPaste);
+        ratatui::restore();
+        self.active = false;
+        feature_result
+    }
+}
+
+impl Drop for TerminalSessionGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
 #[derive(Debug, Parser)]
 struct Cli {
     #[arg(long)]
@@ -95,12 +121,12 @@ fn main() -> Result<()> {
     }
 
     let terminal = ratatui::init();
+    let mut terminal_guard = TerminalSessionGuard::new();
     execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
 
     let result = app.run(terminal);
 
-    execute!(stdout(), DisableMouseCapture, DisableBracketedPaste)?;
-    ratatui::restore();
+    let restore_result = terminal_guard.restore();
 
     if result.is_ok()
         && let Some(summary) = app.exit_token_usage_summary()
@@ -108,7 +134,7 @@ fn main() -> Result<()> {
         println!("{summary}");
     }
 
-    result
+    result.and(restore_result.map_err(Into::into))
 }
 
 #[cfg(test)]
