@@ -4,6 +4,9 @@ use futures::{StreamExt, stream};
 use reqwest::Response;
 use tokio::sync::mpsc;
 
+/// Maximum size of one SSE line or accumulated multi-line event payload.
+pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SseEvent {
     Data(String),
@@ -28,6 +31,7 @@ where
 {
     let mut buffer = Vec::new();
     let mut event_lines: Vec<String> = Vec::new();
+    let mut event_bytes = 0_usize;
 
     while let Some(chunk) = bytes_stream.next().await {
         let chunk = match chunk {
@@ -41,8 +45,16 @@ where
         buffer.extend_from_slice(chunk.as_ref());
 
         while let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
+            if position > MAX_SSE_EVENT_BYTES {
+                let _ = tx
+                    .send(Err(eyre!(
+                        "SSE line exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"
+                    )))
+                    .await;
+                return;
+            }
             let line = buffer.drain(..=position).collect::<Vec<_>>();
-            match process_line(&tx, line, &mut event_lines).await {
+            match process_line(&tx, line, &mut event_lines, &mut event_bytes).await {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {
@@ -51,10 +63,19 @@ where
                 }
             }
         }
+
+        if buffer.len() > MAX_SSE_EVENT_BYTES {
+            let _ = tx
+                .send(Err(eyre!(
+                    "SSE line exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"
+                )))
+                .await;
+            return;
+        }
     }
 
     if !buffer.is_empty() {
-        match process_line(&tx, buffer, &mut event_lines).await {
+        match process_line(&tx, buffer, &mut event_lines, &mut event_bytes).await {
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => {
@@ -71,6 +92,7 @@ async fn process_line(
     tx: &mpsc::Sender<Result<SseEvent>>,
     mut line: Vec<u8>,
     event_lines: &mut Vec<String>,
+    event_bytes: &mut usize,
 ) -> Result<bool> {
     if matches!(line.last(), Some(b'\n')) {
         line.pop();
@@ -80,12 +102,25 @@ async fn process_line(
     }
 
     if line.is_empty() {
-        return flush_event(tx, event_lines).await;
+        let result = flush_event(tx, event_lines).await;
+        if result.is_ok() {
+            *event_bytes = 0;
+        }
+        return result;
     }
 
     let line = String::from_utf8(line).map_err(|error| eyre!(error))?;
     if let Some(data) = line.strip_prefix("data:") {
-        event_lines.push(data.trim_start().to_string());
+        let data = data.trim_start();
+        *event_bytes = event_bytes
+            .saturating_add(usize::from(!event_lines.is_empty()))
+            .saturating_add(data.len());
+        if *event_bytes > MAX_SSE_EVENT_BYTES {
+            return Err(eyre!(
+                "SSE event exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"
+            ));
+        }
+        event_lines.push(data.to_string());
     }
     Ok(false)
 }
@@ -214,6 +249,44 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), forward_sse_events(source, tx)).await?;
 
         assert!(matches!(rx.recv().await, Some(Ok(SseEvent::Done))));
+        assert!(rx.recv().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_sse_lines() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut line = b"data: ".to_vec();
+        line.extend(std::iter::repeat_n(b'x', MAX_SSE_EVENT_BYTES + 1));
+
+        forward_sse_events(stream::iter(vec![Ok::<_, reqwest::Error>(line)]), tx).await;
+
+        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
+        assert!(
+            error
+                .expect_err("oversized line should fail")
+                .to_string()
+                .contains("SSE line exceeds")
+        );
+        assert!(rx.recv().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_multiline_sse_events() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(4);
+        let half = "x".repeat(MAX_SSE_EVENT_BYTES / 2);
+        let payload = format!("data: {half}\ndata: {half}\n\n").into_bytes();
+
+        forward_sse_events(stream::iter(vec![Ok::<_, reqwest::Error>(payload)]), tx).await;
+
+        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
+        assert!(
+            error
+                .expect_err("oversized event should fail")
+                .to_string()
+                .contains("SSE event exceeds")
+        );
         assert!(rx.recv().await.is_none());
         Ok(())
     }

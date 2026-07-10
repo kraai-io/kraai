@@ -5,8 +5,8 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, SseEvent, send_with_retry,
-    stream_sse_data,
+    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, SseEvent,
+    build_streaming_http_client, finite_request, send_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -58,10 +58,15 @@ where
             &DEFAULT_HTTP_RETRY_POLICY,
             request_context,
             || {
-                self.auth
+                let builder = self
+                    .auth
                     .apply(self.client.post(self.build_endpoint("chat/completions")))
-                    .json(request)
-                    .send()
+                    .json(request);
+                if request.stream {
+                    builder.send()
+                } else {
+                    finite_request(builder).send()
+                }
             },
         )
         .await?;
@@ -89,9 +94,11 @@ where
             &DEFAULT_HTTP_RETRY_POLICY,
             &ProviderRequestContext::default(),
             || {
-                self.auth
-                    .apply(self.client.get(self.build_endpoint("models")))
-                    .send()
+                finite_request(
+                    self.auth
+                        .apply(self.client.get(self.build_endpoint("models"))),
+                )
+                .send()
             },
         )
         .await?;
@@ -326,7 +333,7 @@ where
 
     Ok(Box::new(ChatCompletionsProvider::<P> {
         id,
-        client: Client::new(),
+        client: build_streaming_http_client()?,
         base_url,
         auth,
         only_listed_models,
@@ -617,7 +624,9 @@ mod tests {
             r#"{"choices":[{"delta":{"content":"partial"}}]}"#,
         )))])
         .boxed();
-        let events = adapt_chat_completion_stream(source).collect::<Vec<_>>().await;
+        let events = adapt_chat_completion_stream(source)
+            .collect::<Vec<_>>()
+            .await;
 
         assert!(matches!(
             events.first(),

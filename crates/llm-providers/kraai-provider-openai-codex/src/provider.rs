@@ -6,7 +6,8 @@ use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
     ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ProviderStreamEvent,
-    SseEvent, ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
+    SseEvent, ValidationError, build_streaming_http_client, finite_request,
+    send_with_retry as send_http_with_retry, stream_sse_data,
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 use reqwest::header::{ACCEPT, HeaderValue};
@@ -129,7 +130,7 @@ impl OpenAiCodexFactory {
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
-            client: Client::new(),
+            client: build_streaming_http_client()?,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
         }))
@@ -259,10 +260,7 @@ fn adapt_responses_stream(
             match event.kind.as_str() {
                 "response.output_text.delta" => {
                     if let Some(delta) = event.delta {
-                        return Some((
-                            Ok(ProviderStreamEvent::TextDelta(delta)),
-                            (source, false),
-                        ));
+                        return Some((Ok(ProviderStreamEvent::TextDelta(delta)), (source, false)));
                     }
                 }
                 "response.completed" => {
@@ -270,18 +268,10 @@ fn adapt_responses_stream(
                         .response
                         .and_then(|response| response.usage)
                         .and_then(normalize_usage)
-                        .map(|usage| {
-                            (
-                                Ok(ProviderStreamEvent::Usage(usage)),
-                                (source, true),
-                            )
-                        });
+                        .map(|usage| (Ok(ProviderStreamEvent::Usage(usage)), (source, true)));
                 }
                 "response.failed" | "response.incomplete" => {
-                    return Some((
-                        Err(eyre!("OpenAI response stream failed")),
-                        (source, true),
-                    ));
+                    return Some((Err(eyre!("OpenAI response stream failed")), (source, true)));
                 }
                 _ => {}
             }
@@ -323,8 +313,10 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 
 impl OpenAiCodexProvider {
     fn authenticated_get(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
-        self.apply_chatgpt_headers(self.client.get(url), auth)
-            .header(ACCEPT, HeaderValue::from_static("application/json"))
+        finite_request(
+            self.apply_chatgpt_headers(self.client.get(url), auth)
+                .header(ACCEPT, HeaderValue::from_static("application/json")),
+        )
     }
 
     fn authenticated_post(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
@@ -456,6 +448,11 @@ impl OpenAiCodexProvider {
                 .authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
                 .header(ACCEPT, responses_accept_header(stream))
                 .json(&request);
+            let builder = if stream {
+                builder
+            } else {
+                finite_request(builder)
+            };
             apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
         .await

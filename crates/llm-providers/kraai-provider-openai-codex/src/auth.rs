@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
+use kraai_provider_core::build_finite_http_client;
 use rand::Rng;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -262,7 +263,7 @@ impl OpenAiCodexAuthController {
     }
 
     fn with_config(config: AuthConfig) -> io::Result<Self> {
-        let client = Client::builder().build().map_err(io::Error::other)?;
+        let client = build_finite_http_client().map_err(io::Error::other)?;
         let (updates, _) = broadcast::channel(32);
         let (auth, error) = match load_auth_file(&config.auth_path) {
             Ok(Some(auth)) => (Some(auth), None),
@@ -632,12 +633,8 @@ impl OpenAiCodexAuthController {
             let url = match url::Url::parse(&format!("http://localhost{path}")) {
                 Ok(url) => url,
                 Err(error) => {
-                    write_http_response(
-                        &mut stream,
-                        "400 Bad Request",
-                        "Invalid callback URL",
-                    )
-                    .await?;
+                    write_http_response(&mut stream, "400 Bad Request", "Invalid callback URL")
+                        .await?;
                     return Err(io::Error::other(error));
                 }
             };
@@ -749,12 +746,33 @@ impl OpenAiCodexAuthController {
         interval_seconds: u64,
         verification_url: String,
     ) -> io::Result<()> {
-        let started_at = unix_now();
-        loop {
-            if unix_now().saturating_sub(started_at) > DEVICE_CODE_TIMEOUT_SECS {
-                return Err(io::Error::other("OpenAI device-code login timed out"));
-            }
+        tokio::time::timeout(
+            Duration::from_secs(DEVICE_CODE_TIMEOUT_SECS),
+            self.run_device_code_login_inner(
+                device_auth_id,
+                user_code,
+                interval_seconds,
+                verification_url,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "OpenAI device-code login timed out",
+            )
+        })?
+    }
 
+    async fn run_device_code_login_inner(
+        &self,
+        device_auth_id: String,
+        user_code: String,
+        interval_seconds: u64,
+        verification_url: String,
+    ) -> io::Result<()> {
+        let interval = Duration::from_secs(interval_seconds.clamp(1, 30));
+        loop {
             let response = self
                 .inner
                 .client
@@ -791,7 +809,7 @@ impl OpenAiCodexAuthController {
             }
 
             if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
-                tokio::time::sleep(Duration::from_secs(interval_seconds.max(1))).await;
+                tokio::time::sleep(interval).await;
                 continue;
             }
 
@@ -1182,9 +1200,7 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<Str
             if request.len() >= MAX_CALLBACK_HEADER_BYTES {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!(
-                        "callback request headers exceed {MAX_CALLBACK_HEADER_BYTES} bytes"
-                    ),
+                    format!("callback request headers exceed {MAX_CALLBACK_HEADER_BYTES} bytes"),
                 ));
             }
 
