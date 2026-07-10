@@ -311,7 +311,11 @@ impl FileSessionStore {
         let mut current = Some(tip_id.clone());
 
         while let Some(id) = current {
-            messages.insert(id.clone());
+            if !messages.insert(id.clone()) {
+                return Err(eyre!(
+                    "Corrupt message parent graph: cycle repeats message {id}"
+                ));
+            }
             if let Some(msg) = self.message_store.get(&id).await? {
                 current = msg.parent_id;
             } else {
@@ -329,7 +333,9 @@ impl FileSessionStore {
 
         for session in sessions {
             if let Some(tip_id) = &session.tip_id {
-                let tree = self.collect_tree_messages(tip_id).await?;
+                let tree = self.collect_tree_messages(tip_id).await.with_context(|| {
+                    format!("Failed to traverse messages for session {}", session.id)
+                })?;
                 all_messages.extend(tree);
             }
         }
@@ -408,7 +414,11 @@ impl SessionStore for FileSessionStore {
 
         // Collect tree messages outside of lock (does I/O)
         let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
-            Some(self.collect_tree_messages(&tip_id).await?)
+            Some(
+                self.collect_tree_messages(&tip_id)
+                    .await
+                    .with_context(|| format!("Failed to traverse messages for session {id}"))?,
+            )
         } else {
             None
         };
@@ -723,6 +733,69 @@ mod tests {
                 assert!(message_store.exists(&b_tip.id).await.unwrap());
                 assert!(message_store.exists(&shared.id).await.unwrap());
                 assert!(message_store.exists(&root.id).await.unwrap());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cyclic_message_graphs_return_corruption_errors() {
+        with_test_store(
+            "cyclic-message-graphs",
+            |message_store, session_store, _| async move {
+                let self_cycle_id = MessageId::new("self-cycle");
+                message_store
+                    .save(&message(
+                        self_cycle_id.as_str(),
+                        Some(&self_cycle_id),
+                        "self",
+                    ))
+                    .await
+                    .unwrap();
+                let error = session_store
+                    .collect_tree_messages(&self_cycle_id)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("self-cycle"));
+
+                let first_id = MessageId::new("cycle-a");
+                let second_id = MessageId::new("cycle-b");
+                message_store
+                    .save(&message("cycle-a", Some(&second_id), "a"))
+                    .await
+                    .unwrap();
+                message_store
+                    .save(&message("cycle-b", Some(&first_id), "b"))
+                    .await
+                    .unwrap();
+                let error = session_store
+                    .collect_tree_messages(&first_id)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("cycle-a"));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn valid_deep_message_graph_still_traverses() {
+        with_test_store(
+            "deep-message-graph",
+            |message_store, session_store, _| async move {
+                let mut parent = None;
+                for index in 0..256 {
+                    let current = message(&format!("deep-{index}"), parent.as_ref(), "item");
+                    message_store.save(&current).await.unwrap();
+                    parent = Some(current.id);
+                }
+
+                let tree = session_store
+                    .collect_tree_messages(parent.as_ref().unwrap())
+                    .await
+                    .unwrap();
+
+                assert_eq!(tree.len(), 256);
             },
         )
         .await;
