@@ -234,10 +234,11 @@ impl RuntimeCore {
 
             {
                 let mut agent = runtime.agent_manager.lock().await;
-                if let Err(error) = agent
+                let history_result = agent
                     .add_tool_results_to_history(&session_id, results)
-                    .await
-                {
+                    .await;
+                agent.finish_tool_executions(&session_id, &executed_source_message_ids);
+                if let Err(error) = history_result {
                     agent.clear_active_turn(&session_id);
                     drop(agent);
                     emit_event(&runtime.event_tx, Event::Error(error.to_string()));
@@ -257,7 +258,6 @@ impl RuntimeCore {
                     runtime.schedule_queue_drain(&session_id).await;
                     return;
                 }
-                agent.finish_tool_executions(&session_id, &executed_source_message_ids);
             }
 
             tracing::debug!("Emitting HistoryUpdated event after tool results");
