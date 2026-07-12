@@ -2,6 +2,7 @@
 members = [
   "crates/kraai-agent",
   "crates/kraai-command-runner",
+  "crates/kraai-eval",
   "crates/kraai-persistence",
   "crates/kraai-runtime",
   "crates/kraai-toon-schema",
@@ -35,6 +36,7 @@ strip = true      # Ensures debug symbols are removed.
 [workspace.dependencies]
 kraai-agent = { path = "crates/kraai-agent" }
 kraai-command-runner = { path = "crates/kraai-command-runner" }
+kraai-eval = { path = "crates/kraai-eval" }
 kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
 kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }

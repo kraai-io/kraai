@@ -85,6 +85,8 @@ fn test_harness() -> TestHarness {
             ci_output: Box::new(io::sink()),
             ci_output_needs_newline: false,
             ci_turn_completion_pending: false,
+            ci_metrics_history_pending: false,
+            ci_metrics_context_pending: false,
             startup_options: StartupOptions::default(),
             startup_message_sent: false,
             ci_error: None,
@@ -943,6 +945,44 @@ fn ci_finishes_after_synced_state_shows_turn_is_idle() {
     assert!(!harness.app.state.exit);
     harness
         .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: String::from("sess-2"),
+            result: Ok(BTreeMap::from([(
+                MessageId::new("msg-1"),
+                assistant_message_with_usage(
+                    "msg-1",
+                    "openai",
+                    "model",
+                    TokenUsage {
+                        total_tokens: 10,
+                        input_tokens: 7,
+                        output_tokens: 3,
+                        reasoning_tokens: 0,
+                        cache_read_tokens: 0,
+                    },
+                ),
+            )])),
+        });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionContextUsage {
+            session_id: String::from("sess-2"),
+            result: Ok(Some(kraai_runtime::SessionContextUsage {
+                provider_id: String::from("openai"),
+                model_id: String::from("model"),
+                max_context: Some(100),
+                usage: TokenUsage {
+                    total_tokens: 10,
+                    input_tokens: 7,
+                    output_tokens: 3,
+                    reasoning_tokens: 0,
+                    cache_read_tokens: 0,
+                },
+            })),
+        });
+    assert!(!harness.app.state.exit);
+    harness
+        .app
         .handle_runtime_response(RuntimeResponse::AgentProfiles {
             session_id: String::from("sess-2"),
             result: Ok(AgentProfilesState {
@@ -1474,6 +1514,12 @@ fn exit_token_usage_summary_accumulates_per_model_and_total_since_launch() {
             "Token usage since launch:\n  openai-chat-completions/gpt-4.1-mini: total 900 (+25 cached), input 700 (+25 cached), output 180 (+20 reasoning)\n  openai-chat-completions/gpt-4o-mini: total 13,990 (+1,010 cached), input 10,250 (+1,010 cached), output 3,120 (+540 reasoning)\n  total: total 14,890 (+1,035 cached), input 10,950 (+1,035 cached), output 3,300 (+560 reasoning)"
         )
     );
+    let metrics = harness.app.evaluation_metrics();
+    assert_eq!(metrics["schema_version"], 1);
+    assert_eq!(metrics["turns"], 3);
+    assert_eq!(metrics["tool_calls"], 0);
+    assert_eq!(metrics["usage"]["total_tokens"], 15_925);
+    assert_eq!(metrics["usage"]["cache_read_tokens"], 1_035);
 }
 
 #[test]

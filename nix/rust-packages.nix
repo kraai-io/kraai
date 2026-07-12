@@ -114,6 +114,26 @@
         };
     });
 
+    kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
+      postInstall =
+        (old.postInstall or "")
+        + ''
+          wrapProgram "$out/bin/kraai-eval" --prefix PATH : ${lib.makeBinPath [
+            pkgs.bubblewrap
+            pkgs.coreutils
+            pkgs.git
+            pkgs.gnutar
+            pkgs.systemd
+          ]}
+        '';
+      meta =
+        (old.meta or {})
+        // {
+          mainProgram = "kraai-eval";
+        };
+    });
+
     workspaceTestChecks = builtins.listToAttrs (
       map
       (name:
@@ -136,7 +156,7 @@
     );
   in {
     packages = {
-      inherit kraai;
+      inherit kraai kraai-eval;
       default = kraai;
     };
 

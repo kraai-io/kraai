@@ -1749,6 +1749,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-eval"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "color-eyre",
+ "futures",
+ "kraai-persistence",
+ "kraai-provider-core",
+ "kraai-provider-openai-codex",
+ "kraai-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "toml",
+ "ulid",
+]
+
+[[package]]
 name = "kraai-persistence"
 version = "0.1.0"
 dependencies = [

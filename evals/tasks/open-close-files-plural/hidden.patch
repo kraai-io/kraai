@@ -1,0 +1,176 @@
+diff --git a/crates/tools/kraai-tool-open-file/tests/eval_plural_paths.rs b/crates/tools/kraai-tool-open-file/tests/eval_plural_paths.rs
+new file mode 100644
+index 0000000..a0e8281
+--- /dev/null
++++ b/crates/tools/kraai-tool-open-file/tests/eval_plural_paths.rs
+@@ -0,0 +1,104 @@
++#![expect(
++    clippy::indexing_slicing,
++    clippy::panic,
++    reason = "hidden evaluator assertions inspect exact tool results"
++)]
++
++use std::fs;
++use std::path::PathBuf;
++
++use kraai_tool_core::{ToolContext, ToolManager, ToolOutput};
++use kraai_tool_open_file::OpenFileTool;
++use kraai_types::{RiskLevel, ToolCallGlobalConfig, ToolId, ToolStateSnapshot};
++
++fn workspace() -> PathBuf {
++    let path = std::env::temp_dir().join(format!(
++        "kraai-eval-open-files-{}-{}",
++        std::process::id(),
++        std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .unwrap_or_default()
++            .as_nanos()
++    ));
++    fs::create_dir_all(&path).expect("create evaluation workspace");
++    path
++}
++
++#[tokio::test]
++async fn plural_interface_processes_all_paths_and_aggregates_risk() {
++    let workspace = workspace();
++    fs::write(workspace.join("one.txt"), "one").expect("write first fixture");
++    fs::write(workspace.join("two.txt"), "two").expect("write second fixture");
++
++    let mut tools = ToolManager::new();
++    tools.register_tool(OpenFileTool);
++    assert!(tools.has_tool(&ToolId::new("open_files")));
++    assert!(!tools.has_tool(&ToolId::new("open_file")));
++
++    let config = ToolCallGlobalConfig::new(workspace.clone());
++    let snapshot = ToolStateSnapshot::default();
++    let context = ToolContext {
++        global_config: &config,
++        tool_state_snapshot: &snapshot,
++    };
++    let prepared = tools
++        .prepare_tool(
++            &ToolId::new("open_files"),
++            serde_json::json!({ "paths": ["one.txt", "two.txt"] }),
++        )
++        .expect("prepare plural call");
++    assert_eq!(prepared.assess(&context).risk, RiskLevel::ReadOnlyWorkspace);
++
++    let result = prepared.call(&context).await;
++    let expected = [
++        workspace.join("one.txt").display().to_string(),
++        workspace.join("two.txt").display().to_string(),
++    ];
++    match result.output {
++        ToolOutput::Success { data } => {
++            assert_eq!(data["paths"][0].as_str(), Some(expected[0].as_str()));
++            assert_eq!(data["paths"][1].as_str(), Some(expected[1].as_str()));
++        }
++        ToolOutput::Error { message } => panic!("unexpected error: {message}"),
++    }
++    assert_eq!(result.tool_state_deltas.len(), 2);
++    assert_eq!(result.tool_state_deltas[0].payload["path"], expected[0]);
++    assert_eq!(result.tool_state_deltas[1].payload["path"], expected[1]);
++
++    let mixed_risk = tools
++        .prepare_tool(
++            &ToolId::new("open_files"),
++            serde_json::json!({ "paths": ["one.txt", "/outside.txt"] }),
++        )
++        .expect("prepare mixed-risk call")
++        .assess(&context);
++    assert_eq!(mixed_risk.risk, RiskLevel::ReadOnlyOutsideWorkspace);
++    assert_eq!(mixed_risk.reasons.len(), 2);
++
++    fs::remove_dir_all(workspace).expect("remove evaluation workspace");
++}
++
++#[tokio::test]
++async fn one_failed_read_makes_the_open_call_atomic() {
++    let workspace = workspace();
++    fs::write(workspace.join("exists.txt"), "content").expect("write fixture");
++    let mut tools = ToolManager::new();
++    tools.register_tool(OpenFileTool);
++    let config = ToolCallGlobalConfig::new(workspace.clone());
++    let snapshot = ToolStateSnapshot::default();
++    let context = ToolContext {
++        global_config: &config,
++        tool_state_snapshot: &snapshot,
++    };
++    let result = tools
++        .prepare_tool(
++            &ToolId::new("open_files"),
++            serde_json::json!({ "paths": ["exists.txt", "missing.txt"] }),
++        )
++        .expect("prepare plural call")
++        .call(&context)
++        .await;
++    assert!(matches!(result.output, ToolOutput::Error { .. }));
++    assert!(result.tool_state_deltas.is_empty());
++    fs::remove_dir_all(workspace).expect("remove evaluation workspace");
++}
+diff --git a/crates/tools/kraai-tool-close-file/tests/eval_plural_paths.rs b/crates/tools/kraai-tool-close-file/tests/eval_plural_paths.rs
+new file mode 100644
+index 0000000..57c10ad
+--- /dev/null
++++ b/crates/tools/kraai-tool-close-file/tests/eval_plural_paths.rs
+@@ -0,0 +1,60 @@
++#![expect(
++    clippy::indexing_slicing,
++    clippy::panic,
++    reason = "hidden evaluator assertions inspect exact tool results"
++)]
++
++use std::path::PathBuf;
++
++use kraai_tool_close_file::CloseFileTool;
++use kraai_tool_core::{ToolContext, ToolManager, ToolOutput};
++use kraai_types::{RiskLevel, ToolCallGlobalConfig, ToolId, ToolStateSnapshot};
++
++#[tokio::test]
++async fn plural_interface_processes_all_paths_and_aggregates_risk() {
++    let workspace = PathBuf::from("/tmp/kraai-eval-close-files-workspace");
++    let mut tools = ToolManager::new();
++    tools.register_tool(CloseFileTool);
++    assert!(tools.has_tool(&ToolId::new("close_files")));
++    assert!(!tools.has_tool(&ToolId::new("close_file")));
++
++    let config = ToolCallGlobalConfig::new(workspace.clone());
++    let snapshot = ToolStateSnapshot::default();
++    let context = ToolContext {
++        global_config: &config,
++        tool_state_snapshot: &snapshot,
++    };
++    let prepared = tools
++        .prepare_tool(
++            &ToolId::new("close_files"),
++            serde_json::json!({ "paths": ["one.txt", "nested/two.txt"] }),
++        )
++        .expect("prepare plural call");
++    assert_eq!(prepared.assess(&context).risk, RiskLevel::ReadOnlyWorkspace);
++
++    let result = prepared.call(&context).await;
++    let expected = [
++        workspace.join("one.txt").display().to_string(),
++        workspace.join("nested/two.txt").display().to_string(),
++    ];
++    match result.output {
++        ToolOutput::Success { data } => {
++            assert_eq!(data["paths"][0].as_str(), Some(expected[0].as_str()));
++            assert_eq!(data["paths"][1].as_str(), Some(expected[1].as_str()));
++        }
++        ToolOutput::Error { message } => panic!("unexpected error: {message}"),
++    }
++    assert_eq!(result.tool_state_deltas.len(), 2);
++    assert_eq!(result.tool_state_deltas[0].payload["path"], expected[0]);
++    assert_eq!(result.tool_state_deltas[1].payload["path"], expected[1]);
++
++    let mixed_risk = tools
++        .prepare_tool(
++            &ToolId::new("close_files"),
++            serde_json::json!({ "paths": ["one.txt", "/outside.txt"] }),
++        )
++        .expect("prepare mixed-risk call")
++        .assess(&context);
++    assert_eq!(mixed_risk.risk, RiskLevel::ReadOnlyOutsideWorkspace);
++    assert_eq!(mixed_risk.reasons.len(), 2);
++}

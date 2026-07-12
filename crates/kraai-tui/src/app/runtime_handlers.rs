@@ -85,6 +85,8 @@ impl App {
                     if self.is_ci_mode() {
                         self.finish_ci_output_line();
                         self.ci_turn_completion_pending = true;
+                        self.ci_metrics_history_pending = true;
+                        self.ci_metrics_context_pending = true;
                     }
                     self.sync_turn_timer_with_activity(Instant::now());
                 }
@@ -528,24 +530,30 @@ impl App {
                 self.state.settings_errors = parse_settings_errors(&err);
                 self.state.status = format!("Failed saving settings: {err}");
             }
-            RuntimeResponse::ChatHistory { session_id, result } => match result {
-                Ok(mut history) => {
-                    self.merge_local_streaming_content(&mut history);
-                    self.accumulate_exit_usage_from_history(&history);
-                    if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                        self.state.chat_history = history;
-                        self.invalidate_chat_cache();
-                        self.reconcile_optimistic_messages();
-                        self.reconcile_optimistic_tool_messages();
-                        self.clamp_chat_scroll();
+            RuntimeResponse::ChatHistory { session_id, result } => {
+                match result {
+                    Ok(mut history) => {
+                        self.merge_local_streaming_content(&mut history);
+                        self.accumulate_exit_usage_from_history(&history);
+                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                            self.state.chat_history = history;
+                            self.invalidate_chat_cache();
+                            self.reconcile_optimistic_messages();
+                            self.reconcile_optimistic_tool_messages();
+                            self.clamp_chat_scroll();
+                        }
+                    }
+                    Err(err) => {
+                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                            self.state.status = format!("Failed loading history: {err}");
+                        }
                     }
                 }
-                Err(err) => {
-                    if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                        self.state.status = format!("Failed loading history: {err}");
-                    }
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.ci_metrics_history_pending = false;
+                    self.maybe_finish_ci_run();
                 }
-            },
+            }
             RuntimeResponse::SessionContextUsage { session_id, result } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
@@ -559,6 +567,8 @@ impl App {
                         self.state.status = format!("Failed loading context usage: {err}");
                     }
                 }
+                self.ci_metrics_context_pending = false;
+                self.maybe_finish_ci_run();
             }
             RuntimeResponse::CurrentTip { session_id, result } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {

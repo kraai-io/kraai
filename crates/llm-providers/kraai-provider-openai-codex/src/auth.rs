@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use kraai_provider_core::build_finite_http_client;
 use rand::Rng;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -84,10 +84,26 @@ pub struct OpenAiCodexAuthController {
 }
 
 #[derive(Clone)]
-pub(crate) struct RequestAuth {
+pub struct OpenAiCodexRequestAuth {
     pub(crate) access_token: String,
     pub(crate) account_id: String,
     generation: String,
+}
+
+impl OpenAiCodexRequestAuth {
+    pub fn apply_chatgpt_headers(&self, builder: RequestBuilder) -> RequestBuilder {
+        builder
+            .bearer_auth(&self.access_token)
+            .header("ChatGPT-Account-Id", &self.account_id)
+            .header("Origin", "https://chatgpt.com")
+            .header("Referer", "https://chatgpt.com/")
+            .header("User-Agent", DEFAULT_ORIGINATOR)
+            .header("OpenAI-Client-Originator", DEFAULT_ORIGINATOR)
+    }
+
+    pub fn account_id(&self) -> &str {
+        &self.account_id
+    }
 }
 
 struct Inner {
@@ -394,7 +410,7 @@ impl OpenAiCodexAuthController {
         self.emit_status().await
     }
 
-    pub(crate) async fn get_request_auth(&self) -> io::Result<RequestAuth> {
+    pub async fn get_request_auth(&self) -> io::Result<OpenAiCodexRequestAuth> {
         let needs_refresh = {
             let guard = self.inner.state.lock().await;
             match &guard.auth {
@@ -417,10 +433,10 @@ impl OpenAiCodexAuthController {
         Err(io::Error::other(SIGN_IN_REQUIRED_MESSAGE))
     }
 
-    pub(crate) async fn refresh_request_auth(
+    pub async fn refresh_request_auth(
         &self,
-        expected_auth: &RequestAuth,
-    ) -> io::Result<RequestAuth> {
+        expected_auth: &OpenAiCodexRequestAuth,
+    ) -> io::Result<OpenAiCodexRequestAuth> {
         let _refresh_guard = self.inner.refresh_gate.lock().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
 
@@ -1110,8 +1126,8 @@ fn delete_auth_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn request_auth(auth: &StoredAuth) -> RequestAuth {
-    RequestAuth {
+fn request_auth(auth: &StoredAuth) -> OpenAiCodexRequestAuth {
+    OpenAiCodexRequestAuth {
         access_token: auth.tokens.access_token.clone(),
         account_id: auth.tokens.account_id.clone(),
         generation: auth.generation.clone(),
@@ -1315,6 +1331,28 @@ fn unix_now() -> u64 {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_auth_applies_subscription_headers_without_exposing_fields() {
+        let auth = OpenAiCodexRequestAuth {
+            access_token: String::from("access-secret"),
+            account_id: String::from("account-123"),
+            generation: String::from("generation"),
+        };
+        let request = auth
+            .apply_chatgpt_headers(Client::new().get("https://chatgpt.com/backend-api/models"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Bearer access-secret"
+        );
+        assert_eq!(
+            request.headers().get("chatgpt-account-id").unwrap(),
+            "account-123"
+        );
+        assert_eq!(auth.account_id(), "account-123");
+    }
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1703,9 +1741,9 @@ mod tests {
 
     async fn run_concurrent_refreshes(
         controller: OpenAiCodexAuthController,
-        expected_auth: RequestAuth,
+        expected_auth: OpenAiCodexRequestAuth,
         task_count: usize,
-    ) -> Vec<io::Result<RequestAuth>> {
+    ) -> Vec<io::Result<OpenAiCodexRequestAuth>> {
         let barrier = Arc::new(Barrier::new(task_count));
         let tasks = (0..task_count).map(|_| {
             let controller = controller.clone();

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# < 3 )); then
+  echo "usage: $0 <run|suite> <model> <provider> [evaluation arguments...]" >&2
+  exit 2
+fi
+
+mode="$1"
+model="$2"
+provider="$3"
+shift 3
+
+runner="$(nix build .#kraai --no-link --print-out-paths)"
+evaluator="$(nix build .#kraai-eval --no-link --print-out-paths)"
+version="git:$(git rev-parse HEAD)"
+if test -n "$(git status --porcelain --untracked-files=normal)"; then
+  version="$version+dirty"
+fi
+
+"$evaluator/bin/kraai-eval" "$mode" \
+  --task evals/tasks/open-close-files-plural/task.toml \
+  --runner-program "$runner/bin/kraai" \
+  --runner-version "$version" \
+  --harness-name kraai \
+  --model-label "$model" \
+  --codex-subscription-proxy \
+  --runner-arg --ci \
+  --runner-arg --auto-approve \
+  --runner-arg --provider \
+  --runner-arg "$provider" \
+  --runner-arg --model \
+  --runner-arg "$model" \
+  --runner-arg --agent-profile \
+  --runner-arg build-code \
+  --runner-arg --message \
+  --runner-arg '{prompt}' \
+  --runner-arg --provider-config \
+  --runner-arg '{provider_config}' \
+  "$@"

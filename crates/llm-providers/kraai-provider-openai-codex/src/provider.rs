@@ -11,11 +11,11 @@ use kraai_provider_core::{
 };
 use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
 use reqwest::header::{ACCEPT, HeaderValue};
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response, StatusCode, Url};
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
-use crate::auth::{OpenAiCodexAuthController, RequestAuth};
+use crate::auth::{OpenAiCodexAuthController, OpenAiCodexRequestAuth};
 use crate::catalog::{CatalogModel, all_catalog_models, visible_catalog_models};
 use crate::messages::normalize_chat_messages;
 use crate::wire::{
@@ -23,11 +23,7 @@ use crate::wire::{
     ResponsesStreamEvent, ResponsesUsage,
 };
 
-const CHATGPT_ORIGIN: &str = "https://chatgpt.com";
-const CHATGPT_MODELS_ENDPOINT: &str =
-    "https://chatgpt.com/backend-api/models?history_and_training_disabled=false";
-const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
-const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
 
 #[derive(Clone)]
 struct ModelMetadata {
@@ -53,6 +49,40 @@ struct ResolvedRequestModel {
     reasoning: Option<ResponsesReasoning>,
 }
 
+fn valid_backend_url(value: &str) -> bool {
+    Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+fn valid_environment_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+#[derive(Clone)]
+enum RequestAuthentication {
+    Subscription(OpenAiCodexRequestAuth),
+    ProxyToken(String),
+}
+
+impl RequestAuthentication {
+    fn apply(&self, builder: RequestBuilder) -> RequestBuilder {
+        match self {
+            Self::Subscription(auth) => auth.apply_chatgpt_headers(builder),
+            Self::ProxyToken(token) => builder.bearer_auth(token),
+        }
+    }
+}
+
 pub struct OpenAiCodexFactory {
     auth: Arc<OpenAiCodexAuthController>,
 }
@@ -70,7 +100,33 @@ impl OpenAiCodexFactory {
             display_name: "OpenAI Codex".to_string(),
             protocol_family: "openai-responses".to_string(),
             description: "OpenAI Codex provider using ChatGPT/Codex subscription auth".to_string(),
-            provider_fields: vec![],
+            provider_fields: vec![
+                FieldDefinition {
+                    key: "base_url".to_string(),
+                    label: "Backend URL".to_string(),
+                    value_kind: FieldValueKind::Url,
+                    required: false,
+                    secret: false,
+                    help_text: Some(
+                        "ChatGPT backend URL; override only for a trusted proxy".to_string(),
+                    ),
+                    default_value: Some(DynamicValue::String(
+                        DEFAULT_CHATGPT_BACKEND_URL.to_string(),
+                    )),
+                },
+                FieldDefinition {
+                    key: "proxy_token_env".to_string(),
+                    label: "Proxy Token Env Var".to_string(),
+                    value_kind: FieldValueKind::String,
+                    required: false,
+                    secret: false,
+                    help_text: Some(
+                        "Short-lived proxy token environment variable; evaluation use only"
+                            .to_string(),
+                    ),
+                    default_value: None,
+                },
+            ],
             model_fields: vec![
                 FieldDefinition {
                     key: "name".to_string(),
@@ -96,8 +152,32 @@ impl OpenAiCodexFactory {
         }
     }
 
-    pub fn validate_provider_config(_config: &DynamicConfig) -> Vec<ValidationError> {
-        Vec::new()
+    pub fn validate_provider_config(config: &DynamicConfig) -> Vec<ValidationError> {
+        let mut errors = match config.get("base_url") {
+            None => Vec::new(),
+            Some(value)
+                if value
+                    .as_str()
+                    .is_some_and(|url| valid_backend_url(url.trim())) =>
+            {
+                Vec::new()
+            }
+            Some(_) => vec![ValidationError {
+                field: "base_url".to_string(),
+                message: "Backend URL must be an absolute HTTP or HTTPS URL".to_string(),
+            }],
+        };
+        if let Some(value) = config.get("proxy_token_env")
+            && value
+                .as_str()
+                .is_none_or(|name| name.trim().is_empty() || !valid_environment_name(name.trim()))
+        {
+            errors.push(ValidationError {
+                field: "proxy_token_env".to_string(),
+                message: "Proxy token environment variable name is invalid".to_string(),
+            });
+        }
+        errors
     }
 
     pub fn validate_model_config(config: &DynamicConfig) -> Vec<ValidationError> {
@@ -126,13 +206,42 @@ impl OpenAiCodexFactory {
         errors
     }
 
-    pub fn create(&self, id: ProviderId, _config: DynamicConfig) -> Result<Box<dyn Provider>> {
+    pub fn create(&self, id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
+        let base_url = config
+            .get("base_url")
+            .and_then(DynamicValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_CHATGPT_BACKEND_URL)
+            .trim_end_matches('/')
+            .to_string();
+        if !valid_backend_url(&base_url) {
+            return Err(eyre!("Invalid OpenAI Codex backend URL"));
+        }
+        let proxy_token = config
+            .get("proxy_token_env")
+            .and_then(DynamicValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|name| {
+                std::env::var(name).map_err(|error| {
+                    eyre!("OpenAI Codex proxy token environment variable is missing: {error}")
+                })
+            })
+            .transpose()?;
+        if proxy_token.is_some() && base_url == DEFAULT_CHATGPT_BACKEND_URL {
+            return Err(eyre!(
+                "OpenAI Codex proxy token requires a non-default backend URL"
+            ));
+        }
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
             client: build_streaming_http_client()?,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
+            base_url,
+            proxy_token,
         }))
     }
 }
@@ -143,6 +252,8 @@ pub struct OpenAiCodexProvider {
     client: Client,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
     model_configs: BTreeMap<ModelId, ModelMetadata>,
+    base_url: String,
+    proxy_token: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -318,25 +429,27 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 }
 
 impl OpenAiCodexProvider {
-    fn authenticated_get(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    fn authenticated_get(&self, url: &str, auth: RequestAuthentication) -> RequestBuilder {
         finite_request(
             self.apply_chatgpt_headers(self.client.get(url), auth)
                 .header(ACCEPT, HeaderValue::from_static("application/json")),
         )
     }
 
-    fn authenticated_post(&self, url: &str, auth: RequestAuth) -> RequestBuilder {
+    fn authenticated_post(&self, url: &str, auth: RequestAuthentication) -> RequestBuilder {
         self.apply_chatgpt_headers(self.client.post(url), auth)
     }
 
-    fn apply_chatgpt_headers(&self, builder: RequestBuilder, auth: RequestAuth) -> RequestBuilder {
-        builder
-            .bearer_auth(auth.access_token)
-            .header("ChatGPT-Account-Id", auth.account_id)
-            .header("Origin", CHATGPT_ORIGIN)
-            .header("Referer", format!("{CHATGPT_ORIGIN}/"))
-            .header("User-Agent", CODEX_ORIGINATOR)
-            .header("OpenAI-Client-Originator", CODEX_ORIGINATOR)
+    fn apply_chatgpt_headers(
+        &self,
+        builder: RequestBuilder,
+        auth: RequestAuthentication,
+    ) -> RequestBuilder {
+        auth.apply(builder)
     }
 
     async fn fetch_remote_model_availability(
@@ -345,7 +458,13 @@ impl OpenAiCodexProvider {
         let request_context = ProviderRequestContext::default();
         let response = self
             .send_authenticated_request("list models", &request_context, |auth| {
-                self.authenticated_get(CHATGPT_MODELS_ENDPOINT, auth)
+                self.authenticated_get(
+                    &format!(
+                        "{}?history_and_training_disabled=false",
+                        self.endpoint("models")
+                    ),
+                    auth,
+                )
             })
             .await?;
         let models = response.json::<ListModelsResponse>().await?;
@@ -451,7 +570,7 @@ impl OpenAiCodexProvider {
 
         self.send_authenticated_request("responses", request_context, |auth| {
             let builder = self
-                .authenticated_post(CHATGPT_RESPONSES_ENDPOINT, auth)
+                .authenticated_post(&self.endpoint("codex/responses"), auth)
                 .header(ACCEPT, responses_accept_header(stream))
                 .json(&request);
             let builder = if stream {
@@ -471,14 +590,25 @@ impl OpenAiCodexProvider {
         build: F,
     ) -> Result<Response>
     where
-        F: Fn(RequestAuth) -> RequestBuilder + Send + Sync,
+        F: Fn(RequestAuthentication) -> RequestBuilder + Send + Sync,
     {
+        if let Some(token) = &self.proxy_token {
+            let auth = RequestAuthentication::ProxyToken(token.clone());
+            let response = send_http_with_retry(
+                operation,
+                &DEFAULT_HTTP_RETRY_POLICY,
+                request_context,
+                || build(auth.clone()).send(),
+            )
+            .await?;
+            return ensure_success_response(operation, response).await;
+        }
         let auth = self.auth.get_request_auth().await?;
         let response = send_http_with_retry(
             operation,
             &DEFAULT_HTTP_RETRY_POLICY,
             request_context,
-            || build(auth.clone()).send(),
+            || build(RequestAuthentication::Subscription(auth.clone())).send(),
         )
         .await?;
         if response.status() != StatusCode::UNAUTHORIZED {
@@ -492,7 +622,7 @@ impl OpenAiCodexProvider {
             operation,
             &DEFAULT_HTTP_RETRY_POLICY,
             request_context,
-            || build(refreshed.clone()).send(),
+            || build(RequestAuthentication::Subscription(refreshed.clone())).send(),
         )
         .await?;
         ensure_success_response(operation, response).await
@@ -699,7 +829,50 @@ mod tests {
             client,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
+            base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
+            proxy_token: None,
         })
+    }
+
+    #[test]
+    fn backend_url_validation_rejects_credentials_queries_and_non_http_schemes() {
+        assert!(valid_backend_url("https://chatgpt.com/backend-api"));
+        assert!(valid_backend_url("http://127.0.0.1:1234/backend-api"));
+        assert!(!valid_backend_url("file:///tmp/backend"));
+        assert!(!valid_backend_url(
+            "https://user:secret@example.com/backend"
+        ));
+        assert!(!valid_backend_url(
+            "https://example.com/backend?redirect=elsewhere"
+        ));
+    }
+
+    #[test]
+    fn configured_backend_url_controls_codex_endpoints() {
+        let Some(mut provider) = provider() else {
+            return;
+        };
+        provider.base_url = String::from("http://127.0.0.1:4321/backend-api");
+        assert_eq!(
+            provider.endpoint("codex/responses"),
+            "http://127.0.0.1:4321/backend-api/codex/responses"
+        );
+    }
+
+    #[test]
+    fn proxy_authentication_uses_only_the_short_lived_bearer_token() {
+        let Some(client) = test_client_or_skip() else {
+            return;
+        };
+        let request = RequestAuthentication::ProxyToken(String::from("short-lived"))
+            .apply(client.get("http://127.0.0.1/backend-api/models"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Bearer short-lived"
+        );
+        assert!(request.headers().get("chatgpt-account-id").is_none());
     }
 
     #[test]

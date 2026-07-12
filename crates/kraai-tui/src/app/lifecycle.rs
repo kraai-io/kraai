@@ -103,6 +103,8 @@ impl App {
             ci_output: Box::new(io::stdout()),
             ci_output_needs_newline: false,
             ci_turn_completion_pending: false,
+            ci_metrics_history_pending: false,
+            ci_metrics_context_pending: false,
             startup_options,
             startup_message_sent: false,
             ci_error: None,
@@ -229,6 +231,40 @@ impl App {
 
         lines.push(format!("  total: {}", format_exit_usage_fields(&total)));
         Some(lines.join("\n"))
+    }
+
+    pub fn evaluation_metrics(&self) -> serde_json::Value {
+        let mut usage = kraai_runtime::TokenUsage::default();
+        for model_usage in self.state.exit_usage_totals.usage_by_model.values() {
+            accumulate_token_usage(&mut usage, model_usage);
+        }
+        let tool_calls = self
+            .state
+            .chat_history
+            .values()
+            .filter(|message| message.role == kraai_types::ChatRole::Tool)
+            .count();
+        let usage = (usage.total_tokens != 0
+            || usage.input_tokens != 0
+            || usage.output_tokens != 0
+            || usage.reasoning_tokens != 0
+            || usage.cache_read_tokens != 0)
+            .then(|| {
+                serde_json::json!({
+                    "total_tokens": usage.total_tokens,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "reasoning_tokens": usage.reasoning_tokens,
+                    "cache_read_tokens": usage.cache_read_tokens,
+                })
+            });
+        serde_json::json!({
+            "schema_version": 1,
+            "turns": self.state.exit_usage_totals.completed_message_ids.len(),
+            "tool_calls": tool_calls,
+            "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
+            "usage": usage,
+        })
     }
 
     pub(super) fn process_events(&mut self) -> bool {
