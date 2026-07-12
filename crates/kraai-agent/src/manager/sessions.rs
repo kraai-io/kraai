@@ -5,6 +5,7 @@ impl AgentManager {
         providers: ProviderManager,
         tools: ToolManager,
         default_workspace_dir: PathBuf,
+        default_tool_sandbox: kraai_types::SandboxConfig,
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
     ) -> Self {
@@ -14,6 +15,7 @@ impl AgentManager {
             providers,
             tools,
             default_workspace_dir,
+            default_tool_sandbox,
             conversation_store,
             message_store,
             session_store,
@@ -170,8 +172,13 @@ impl AgentManager {
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
 
+        let sandbox = self.default_tool_sandbox.clone();
+        let config = kraai_types::ToolCallGlobalConfig {
+            workspace_dir,
+            sandbox,
+        };
         self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_tool_config = Some(kraai_types::ToolCallGlobalConfig::new(workspace_dir));
+            .pending_tool_config = Some(config);
         Ok(())
     }
 
@@ -287,9 +294,10 @@ impl AgentManager {
         session_id: &str,
         workspace_dir: &Path,
     ) -> &mut SessionRuntimeState {
+        let sandbox = self.default_tool_sandbox.clone();
         self.session_states
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()))
+            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf(), sandbox))
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {

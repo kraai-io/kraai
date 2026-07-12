@@ -871,6 +871,7 @@ default_risk_level = \"undoable_workspace_write\"\n"
             providers,
             tools,
             data_dir.join("workspace"),
+            kraai_types::SandboxConfig::default(),
             message_store,
             session_store,
         )));

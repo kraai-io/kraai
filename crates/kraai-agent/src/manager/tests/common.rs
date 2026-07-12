@@ -129,6 +129,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         providers,
         tools,
         PathBuf::from("/tmp/default-workspace"),
+        kraai_types::SandboxConfig::default(),
         message_store,
         session_store,
     );

@@ -150,6 +150,8 @@ pub enum SandboxMode {
     ReadOnly,
     #[default]
     WorkspaceWrite,
+    /// Skip the process-local sandbox because the caller supplies an enclosing sandbox.
+    External,
     DangerFullAccess,
 }
 
@@ -158,8 +160,13 @@ impl SandboxMode {
         match self {
             Self::ReadOnly => "read-only",
             Self::WorkspaceWrite => "workspace-write",
+            Self::External => "external",
             Self::DangerFullAccess => "danger-full-access",
         }
+    }
+
+    pub fn disables_inner_sandbox(self) -> bool {
+        matches!(self, Self::External | Self::DangerFullAccess)
     }
 }
 

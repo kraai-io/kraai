@@ -80,7 +80,6 @@ pub(crate) fn capture_submission(
             String::from("git"),
             String::from("add"),
             String::from("-A"),
-            String::from("-f"),
             String::from("--"),
             String::from("."),
         ],
@@ -178,7 +177,18 @@ pub(crate) fn commit_fixture(path: &Path, message: &str) -> Result<()> {
 }
 
 fn checked(command: &[String], cwd: &Path) -> Result<()> {
-    let outcome = run_trusted(command, cwd, Duration::from_secs(60))?;
+    let timeout = Duration::from_secs(60);
+    let outcome = run_trusted(command, cwd, timeout)?;
+    if outcome.timed_out {
+        bail!(
+            "command timed out after {} seconds ({})",
+            timeout.as_secs(),
+            command.join(" ")
+        );
+    }
+    if outcome.output_limit_exceeded {
+        bail!("command exceeded the output limit ({})", command.join(" "));
+    }
     if !outcome.success() {
         bail!(
             "command failed ({}): {}",
@@ -187,4 +197,38 @@ fn checked(command: &[String], cwd: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use color_eyre::eyre::{Result, ensure};
+
+    use super::{capture_submission, init_repository};
+
+    #[test]
+    fn capture_submission_excludes_ignored_build_artifacts() -> Result<()> {
+        let workspace = std::env::temp_dir().join(format!(
+            "kraai-eval-capture-submission-{}",
+            ulid::Ulid::new()
+        ));
+        fs::create_dir(&workspace)?;
+        fs::write(workspace.join(".gitignore"), "target/\n")?;
+        fs::write(workspace.join("tracked.txt"), "base\n")?;
+        init_repository(&workspace)?;
+
+        fs::create_dir(workspace.join("target"))?;
+        fs::write(workspace.join("target/large.bin"), vec![0_u8; 8192])?;
+        fs::write(workspace.join("new-source.txt"), "submission\n")?;
+        let patch_path = workspace.join("submission.patch");
+
+        capture_submission(&workspace, &patch_path, 4096)?;
+        let patch = fs::read_to_string(&patch_path)?;
+        ensure!(patch.contains("new-source.txt"));
+        ensure!(!patch.contains("target/large.bin"));
+
+        fs::remove_dir_all(workspace)?;
+        Ok(())
+    }
 }

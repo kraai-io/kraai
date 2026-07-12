@@ -27,6 +27,8 @@ fi
   --codex-subscription-proxy \
   --runner-arg --ci \
   --runner-arg --auto-approve \
+  --runner-arg --sandbox-mode \
+  --runner-arg external \
   --runner-arg --provider \
   --runner-arg "$provider" \
   --runner-arg --model \

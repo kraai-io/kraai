@@ -160,9 +160,12 @@ struct SessionRuntimeState {
 }
 
 impl SessionRuntimeState {
-    fn new(workspace_dir: PathBuf) -> Self {
+    fn new(workspace_dir: PathBuf, sandbox: kraai_types::SandboxConfig) -> Self {
         Self {
-            active_tool_config: kraai_types::ToolCallGlobalConfig::new(workspace_dir),
+            active_tool_config: kraai_types::ToolCallGlobalConfig {
+                workspace_dir,
+                sandbox,
+            },
             pending_tool_config: None,
             pending_tool_calls: HashMap::new(),
             in_flight_tool_calls: HashMap::new(),
@@ -202,6 +205,7 @@ pub struct AgentManager {
     providers: ProviderManager,
     tools: ToolManager,
     default_workspace_dir: PathBuf,
+    default_tool_sandbox: kraai_types::SandboxConfig,
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,

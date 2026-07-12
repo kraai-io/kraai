@@ -15,6 +15,7 @@ use kraai_tool_list_files::ListFilesTool;
 use kraai_tool_open_file::OpenFileTool;
 use kraai_tool_read_file::ReadFileTool;
 use kraai_tool_search_files::SearchFilesTool;
+use kraai_types::{SandboxConfig, SandboxMode};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
@@ -26,6 +27,7 @@ use crate::settings::resolve_provider_config_path;
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     provider_config_path: Option<PathBuf>,
+    tool_sandbox: SandboxConfig,
 }
 
 impl RuntimeBuilder {
@@ -33,11 +35,18 @@ impl RuntimeBuilder {
     pub fn new() -> Self {
         Self {
             provider_config_path: None,
+            tool_sandbox: SandboxConfig::default(),
         }
     }
 
     pub fn provider_config_path(mut self, path: PathBuf) -> Self {
         self.provider_config_path = Some(path);
+        self
+    }
+
+    /// Set the sandbox mode used by command tools in every runtime session.
+    pub fn tool_sandbox_mode(mut self, mode: SandboxMode) -> Self {
+        self.tool_sandbox.mode = mode;
         self
     }
 
@@ -60,6 +69,7 @@ impl RuntimeBuilder {
         let command_tx_for_runtime = handle.command_tx.clone();
 
         let provider_config_path = self.provider_config_path.clone();
+        let tool_sandbox = self.tool_sandbox.clone();
         let thread_startup_tx = startup_tx.clone();
 
         let thread = std::thread::spawn(move || {
@@ -83,6 +93,7 @@ impl RuntimeBuilder {
                 command_rx,
                 shutdown_rx,
                 provider_config_path,
+                tool_sandbox,
                 thread_startup_tx.clone(),
             )) {
                 let error = format!("{error:#}");
@@ -101,6 +112,7 @@ impl RuntimeBuilder {
         command_rx: mpsc::Receiver<Command>,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
         provider_config_path_override: Option<PathBuf>,
+        tool_sandbox: SandboxConfig,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     ) -> Result<()> {
         Self::init_tracing()?;
@@ -125,6 +137,7 @@ impl RuntimeBuilder {
             providers,
             tools,
             default_workspace_dir,
+            tool_sandbox,
             message_store,
             session_store,
         )));

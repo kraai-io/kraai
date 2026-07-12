@@ -146,6 +146,7 @@ async fn prepare_start_stream_rolls_back_user_message_after_snapshot_failure() -
         ProviderManager::new(),
         tools,
         PathBuf::from("/tmp/default-workspace"),
+        kraai_types::SandboxConfig::default(),
         message_store,
         session_store,
     );
@@ -506,6 +507,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         manager_providers,
         tools,
         PathBuf::from("/tmp/default-workspace"),
+        kraai_types::SandboxConfig::default(),
         message_store,
         session_store,
     );

@@ -107,6 +107,7 @@ impl TypedTool for BashTool {
         let risk = match ctx.global_config.sandbox.mode {
             SandboxMode::ReadOnly => RiskLevel::ReadOnlyWorkspace,
             SandboxMode::WorkspaceWrite => RiskLevel::UndoableWorkspaceWrite,
+            SandboxMode::External => RiskLevel::UndoableWorkspaceWrite,
             SandboxMode::DangerFullAccess => RiskLevel::WriteOutsideWorkspace,
         };
 
@@ -114,7 +115,7 @@ impl TypedTool for BashTool {
             risk,
             policy: ExecutionPolicy::AutonomousUpTo(risk),
             reasons: vec![format!(
-                "Runs sandboxed command in {} mode: {}",
+                "Runs command in {} mode: {}",
                 ctx.global_config.sandbox.mode.as_str(),
                 args.command.join(" ")
             )],
@@ -440,6 +441,29 @@ mod tests {
             assessment.policy,
             ExecutionPolicy::AutonomousUpTo(RiskLevel::UndoableWorkspaceWrite)
         );
+
+        cleanup_temp_dir(&workspace_dir);
+    }
+
+    #[test]
+    fn assessment_for_external_sandbox_is_autonomous_workspace_write() {
+        let workspace_dir = make_temp_dir("external-sandbox-assessment");
+        let tool = BashTool;
+        let mut config = ToolCallGlobalConfig::new(workspace_dir.clone());
+        config.sandbox.mode = SandboxMode::External;
+        let snapshot = ToolStateSnapshot::default();
+
+        let assessment = tool.assess(
+            &bash_args(&["cargo", "test"], 5),
+            &tool_context(&config, &snapshot),
+        );
+
+        assert_eq!(assessment.risk, RiskLevel::UndoableWorkspaceWrite);
+        assert_eq!(
+            assessment.policy,
+            ExecutionPolicy::AutonomousUpTo(RiskLevel::UndoableWorkspaceWrite)
+        );
+        assert!(assessment.reasons[0].contains("external mode"));
 
         cleanup_temp_dir(&workspace_dir);
     }

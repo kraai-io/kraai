@@ -120,7 +120,7 @@ async fn prepare_command(request: &CommandRequest) -> Result<PreparedCommand, Co
         }
     }
 
-    if request.sandbox.mode == SandboxMode::DangerFullAccess {
+    if request.sandbox.mode.disables_inner_sandbox() {
         return Ok(PreparedCommand::unsandboxed(
             program.clone(),
             request.command.get(1..).unwrap_or_default().to_vec(),
@@ -1142,6 +1142,35 @@ mod tests {
             cwd: workspace.clone(),
             sandbox: SandboxConfig::default(),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
+            timeout: Duration::from_secs(5),
+        })
+        .await
+        .expect("command should run");
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, "ok");
+        assert!(!output.sandbox_denied);
+
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test]
+    async fn external_mode_runs_without_inner_sandbox() {
+        let workspace = temp_dir("external-sandbox");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let output = run_command(CommandRequest {
+            command: vec![
+                String::from("sh"),
+                String::from("-c"),
+                String::from("printf ok"),
+            ],
+            cwd: workspace.clone(),
+            sandbox: SandboxConfig {
+                mode: SandboxMode::External,
+                ..SandboxConfig::default()
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
             timeout: Duration::from_secs(5),
         })
         .await
