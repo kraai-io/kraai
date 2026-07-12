@@ -186,9 +186,6 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
         "--setenv",
         "TMPDIR",
         "/tmp",
-        "--setenv",
-        "PATH",
-        "/usr/bin:/bin",
     ]
     .into_iter()
     .map(String::from)

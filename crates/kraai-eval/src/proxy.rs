@@ -772,7 +772,10 @@ fn codex_allowed_paths() -> BTreeSet<String> {
 }
 
 fn tracing_fallback(message: &str) {
-    let path = std::env::temp_dir().join("kraai-eval-proxy-errors.log");
+    let path = std::env::temp_dir().join(format!(
+        "kraai-eval-proxy-errors-{}.log",
+        std::process::id()
+    ));
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{message}");
     }

@@ -1,8 +1,11 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::command::run_trusted;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,20 +137,23 @@ impl TaskManifest {
 
     pub fn resolve_source_revision(&mut self, task_dir: &Path) -> Result<()> {
         let repository = resolve_repository(task_dir, &self.source.repository)?;
-        let output = std::process::Command::new("git")
-            .args(["-C"])
-            .arg(repository)
-            .args(["rev-parse", "--verify"])
-            .arg(format!("{}^{{commit}}", self.source.revision))
-            .output()
-            .wrap_err("resolve task source revision")?;
-        if !output.status.success() {
+        let command = [
+            String::from("git"),
+            String::from("rev-parse"),
+            String::from("--verify"),
+            format!("{}^{{commit}}", self.source.revision),
+        ];
+        let outcome = run_trusted(&command, &repository, Duration::from_secs(30))?;
+        if outcome.timed_out {
+            bail!("resolving task source revision timed out after 30 seconds");
+        }
+        if !outcome.success() {
             bail!(
                 "unable to resolve task source revision: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                String::from_utf8_lossy(&outcome.stderr).trim()
             );
         }
-        let revision = String::from_utf8(output.stdout)?.trim().to_owned();
+        let revision = String::from_utf8(outcome.stdout)?.trim().to_owned();
         if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             bail!("git returned a non-canonical source revision: {revision}");
         }

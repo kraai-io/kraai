@@ -291,12 +291,10 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
             experiment_id: &experiment_id,
         },
     );
-    if request.reuse_result
-        && let Some(result) = store.load_result()?
-    {
-        return Ok(result);
-    }
-    if store.load_result()?.is_some() {
+    if let Some(result) = store.load_result()? {
+        if request.reuse_result {
+            return Ok(result);
+        }
         bail!("experiment result already exists; use --reuse-result or select another --attempt");
     }
 

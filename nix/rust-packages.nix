@@ -139,6 +139,9 @@
       (name:
         lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
           runTests = true;
+          testPreRun = ''
+            export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
+          '';
         }))
       crate2nixTestMemberNames
     );
