@@ -16,7 +16,7 @@
       programs.taplo = {
         enable = true;
         settings = {
-          formatting.reorder_arrays = true;
+          formatting.reorder_arrays = false;
           formatting.reorder_keys = true;
         };
       };

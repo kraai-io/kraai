@@ -63,6 +63,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-eval" = rec {
+      packageId = "kraai-eval";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-eval";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-persistence" = rec {
       packageId = "kraai-persistence";
       build = internal.buildRustCrateWithFeatures {
@@ -5544,6 +5554,87 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
+          }
+        ];
+
+      };
+      "kraai-eval" = rec {
+        crateName = "kraai-eval";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "kraai-eval";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-eval; };
+        libName = "kraai_eval";
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64";
+          }
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" ];
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
+          }
+          {
+            name = "kraai-provider-core";
+            packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-provider-openai-codex";
+            packageId = "kraai-provider-openai-codex";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "reqwest";
+            packageId = "reqwest";
+            features = [ "json" "stream" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.0";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "toml";
+            packageId = "toml";
+          }
+          {
+            name = "ulid";
+            packageId = "ulid";
           }
         ];
 

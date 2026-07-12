@@ -114,11 +114,34 @@
         };
     });
 
+    kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
+      postInstall =
+        (old.postInstall or "")
+        + ''
+          wrapProgram "$out/bin/kraai-eval" --prefix PATH : ${lib.makeBinPath [
+            pkgs.bubblewrap
+            pkgs.coreutils
+            pkgs.git
+            pkgs.gnutar
+            pkgs.systemd
+          ]}
+        '';
+      meta =
+        (old.meta or {})
+        // {
+          mainProgram = "kraai-eval";
+        };
+    });
+
     workspaceTestChecks = builtins.listToAttrs (
       map
       (name:
         lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
           runTests = true;
+          testPreRun = ''
+            export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
+          '';
         }))
       crate2nixTestMemberNames
     );
@@ -136,7 +159,7 @@
     );
   in {
     packages = {
-      inherit kraai;
+      inherit kraai kraai-eval;
       default = kraai;
     };
 

@@ -8,6 +8,6 @@ mod wire;
 
 pub use auth::{
     OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexAuthStatus,
-    OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
+    OpenAiCodexLoginState, OpenAiCodexRequestAuth, PendingBrowserLogin, PendingDeviceCodeLogin,
 };
 pub use provider::OpenAiCodexFactory;

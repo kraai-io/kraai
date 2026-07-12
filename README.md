@@ -101,6 +101,14 @@ cargo run
 
 Most configuration can be done through the UI. Currently all configuration is unstable and might change at any time.
 
+## Evaluations
+
+`kraai-eval` runs agent harnesses against immutable Git fixtures, captures their
+submissions, and grades those submissions in a fresh workspace with tests that
+were never mounted in the agent sandbox. Results and process logs are stored by
+experiment identity for exact reuse. See [docs/evaluations.md](docs/evaluations.md)
+for the task format, isolation boundary, and current limitations.
+
 ## License
 
 Apache-2.0

@@ -85,8 +85,9 @@ impl RuntimeBuilder {
                 provider_config_path,
                 thread_startup_tx.clone(),
             )) {
-                thread_startup_tx.send_replace(RuntimeStartupState::Failed(error.to_string()));
-                emit_event(&event_tx, Event::Error(error.to_string()));
+                let error = format!("{error:#}");
+                thread_startup_tx.send_replace(RuntimeStartupState::Failed(error.clone()));
+                emit_event(&event_tx, Event::Error(error));
             }
         });
         lifecycle.set_thread(thread);

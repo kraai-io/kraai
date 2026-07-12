@@ -117,7 +117,9 @@ fn main() -> Result<()> {
     let mut app = App::new(runtime, startup_options);
 
     if cli.ci {
-        return app.run_ci();
+        let run_result = app.run_ci();
+        let metrics_result = write_evaluation_metrics(&app);
+        return run_result.and(metrics_result);
     }
 
     let terminal = ratatui::init();
@@ -135,6 +137,14 @@ fn main() -> Result<()> {
     }
 
     result.and(restore_result.map_err(Into::into))
+}
+
+fn write_evaluation_metrics(app: &App) -> Result<()> {
+    let Some(path) = std::env::var_os("KRAAI_EVAL_METRICS_PATH") else {
+        return Ok(());
+    };
+    std::fs::write(path, serde_json::to_vec_pretty(&app.evaluation_metrics())?)?;
+    Ok(())
 }
 
 #[cfg(test)]

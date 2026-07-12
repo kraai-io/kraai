@@ -344,6 +344,8 @@ impl App {
             || !self.state.pending_tools.is_empty()
             || self.state.tool_phase != ToolPhase::Idle
             || self.state.profile_locked
+            || self.ci_metrics_history_pending
+            || self.ci_metrics_context_pending
         {
             return;
         }

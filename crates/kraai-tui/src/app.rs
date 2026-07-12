@@ -84,6 +84,8 @@ pub struct App {
     ci_output: Box<dyn Write + Send>,
     ci_output_needs_newline: bool,
     ci_turn_completion_pending: bool,
+    ci_metrics_history_pending: bool,
+    ci_metrics_context_pending: bool,
     startup_options: StartupOptions,
     startup_message_sent: bool,
     ci_error: Option<String>,
