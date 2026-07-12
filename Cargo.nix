@@ -5547,7 +5547,7 @@ rec {
           }
           {
             name = "nix";
-            packageId = "nix 0.29.0";
+            packageId = "nix 0.30.1";
             features = [ "process" "signal" ];
           }
           {
@@ -7099,7 +7099,7 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "process" "signal" "socket" ];
+        resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "socket" ];
       };
       "nix 0.30.1" = rec {
         crateName = "nix";
@@ -7147,7 +7147,7 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "default" "feature" "fs" "user" ];
+        resolvedDefaultFeatures = [ "default" "feature" "fs" "process" "signal" "user" ];
       };
       "nom" = rec {
         crateName = "nom";
