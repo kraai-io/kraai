@@ -38,6 +38,9 @@
       map
       (member: member.name)
       (lib.filter (member: member.procMacro) workspaceMembers);
+    workspaceTestInputs = {
+      "kraai-eval" = [pkgs.git];
+    };
 
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
@@ -139,6 +142,7 @@
       (name:
         lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
           runTests = true;
+          testInputs = workspaceTestInputs.${name} or [];
           testPreRun = ''
             export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
           '';
