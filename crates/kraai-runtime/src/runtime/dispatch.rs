@@ -4,7 +4,7 @@ use color_eyre::eyre::{Result, eyre};
 
 use super::config::{canonicalize_workspace_dir, map_openai_codex_auth_status};
 use super::core::RuntimeCore;
-use crate::api::{Model, PendingToolInfo, Session, SessionContextUsage, WorkspaceState};
+use crate::api::{Model, Session, SessionContextUsage, WorkspaceState};
 use crate::handle::Command;
 use crate::settings::read_settings_document;
 
@@ -95,9 +95,8 @@ impl RuntimeCore {
                 message,
                 model_id,
                 provider_id,
-                auto_approve,
             } => {
-                self.handle_send_message(session_id, message, model_id, provider_id, auto_approve)
+                self.handle_send_message(session_id, message, model_id, provider_id)
                     .await;
             }
             Command::StartQueuedMessages { session_id } => {
@@ -118,6 +117,13 @@ impl RuntimeCore {
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
             Command::ListSessions { response } => {
+                let pending_approvals = self
+                    .pending_script_approvals
+                    .lock()
+                    .await
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
                 let agent = self.agent_manager.lock().await;
                 let sessions = agent.list_sessions().await?;
                 let streaming_sessions = agent.streaming_session_ids().await;
@@ -125,7 +131,7 @@ impl RuntimeCore {
                     .into_iter()
                     .map(|session| Session {
                         profile_locked: agent.is_profile_locked(&session.id),
-                        waiting_for_approval: agent.session_waiting_for_approval(&session.id),
+                        waiting_for_approval: pending_approvals.contains(&session.id),
                         is_streaming: streaming_sessions.contains(&session.id),
                         ..Session::from_session_meta(session)
                     })
@@ -150,10 +156,16 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                if self.has_active_tool_tasks(&session_id).await {
+                if self.has_active_script_tasks(&session_id).await
+                    || self
+                        .pending_script_approvals
+                        .lock()
+                        .await
+                        .contains_key(&session_id)
+                {
                     response
                         .send(Err(eyre!(
-                            "Cannot delete session {session_id} while tools are executing"
+                            "Cannot delete session {session_id} while a script is active"
                         )))
                         .map_err(|_| eyre!("Failed to send delete-session response"))?;
                     return Ok(());
@@ -268,48 +280,33 @@ impl RuntimeCore {
                     .send(usage)
                     .map_err(|_| eyre!("Failed to send response"))?;
             }
-            Command::GetPendingTools {
+            Command::GetPendingScript {
                 session_id,
                 response,
             } => {
-                let tools = self
-                    .agent_manager
-                    .lock()
-                    .await
-                    .list_pending_tools(&session_id)
-                    .into_iter()
-                    .map(|tool| PendingToolInfo {
-                        call_id: tool.call_id.to_string(),
-                        tool_id: tool.tool_id.to_string(),
-                        args: serde_json::to_string(&tool.args).unwrap_or_default(),
-                        description: tool.description,
-                        risk_level: tool.risk_level.as_str().to_string(),
-                        reasons: tool.reasons,
-                        approved: tool.approved,
-                        queue_order: tool.queue_order,
-                    })
-                    .collect();
                 response
-                    .send(tools)
-                    .map_err(|_| eyre!("Failed to send response"))?;
+                    .send(self.get_pending_script(&session_id).await)
+                    .map_err(|_| eyre!("Failed to send pending-script response"))?;
             }
-            Command::ApproveTool {
+            Command::ApproveScript {
                 session_id,
-                call_id,
+                execution_id,
+                response,
             } => {
-                self.agent_manager
-                    .lock()
-                    .await
-                    .approve_tool(&session_id, call_id);
+                let result = self.approve_pending_script(session_id, execution_id).await;
+                response
+                    .send(result)
+                    .map_err(|_| eyre!("Failed to send script-approval response"))?;
             }
-            Command::DenyTool {
+            Command::DenyScript {
                 session_id,
-                call_id,
+                execution_id,
+                response,
             } => {
-                self.agent_manager
-                    .lock()
-                    .await
-                    .deny_tool(&session_id, call_id);
+                let result = self.deny_pending_script(session_id, execution_id).await;
+                response
+                    .send(result)
+                    .map_err(|_| eyre!("Failed to send script-denial response"))?;
             }
             Command::CancelStream {
                 session_id,
@@ -322,9 +319,6 @@ impl RuntimeCore {
             }
             Command::ContinueSession { session_id } => {
                 self.start_continuation(session_id).await;
-            }
-            Command::ExecuteApprovedTools { session_id } => {
-                self.handle_execute_tools(session_id).await;
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 response

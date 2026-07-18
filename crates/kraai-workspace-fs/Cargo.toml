@@ -1,0 +1,12 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-workspace-fs"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+rustix.workspace = true
+thiserror.workspace = true
+ulid.workspace = true

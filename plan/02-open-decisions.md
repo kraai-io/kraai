@@ -101,9 +101,10 @@ Kraai commands directly as Rust commands.
 - Kraai commands run with trusted in-process context inaccessible to Nushell
   source and forward each completed state effect immediately over an
   authenticated, sequenced parent channel. The parent durably acknowledges the
-  effect before the command returns success. Close-on-exec descriptors and
-  sandboxed process-inspection controls reduce channel exposure to external
-  descendants; effects are not delayed until final evaluation.
+  effect before the command returns success. A private-temp Unix socket, a
+  dedicated seccomp-authorized close-on-exec descriptor, and sandboxed
+  process-inspection controls reduce channel exposure to external descendants;
+  effects are not delayed until final evaluation.
 - Can construct the trusted command environment first and parse the exact model
   source afterward, without concatenating definitions into it.
 
@@ -118,8 +119,9 @@ Kraai commands.
 - `nu-plugin` and `nu-protocol` must be pinned to the exact compatible Nushell
   release.
 - The official Rust plugin defaults may use a local socket. Kraai's restricted
-  network seccomp blocks socket connection syscalls, so this rejected design
-  would have required another transport/sandbox compatibility constraint.
+  network seccomp permits `connect` only for Kraai's dedicated internal
+  descriptor, so a plugin transport would require a broader exception and a
+  second sandbox compatibility contract.
 - Plugin registry generation, startup cost, cancellation, and state-event
   transport also require measurement.
 
@@ -192,7 +194,8 @@ Proposed initial capability vocabulary:
 - `network`: permit IP networking and communication with Unix-domain sockets
   visible inside the sandbox. It does not mount or otherwise expose host sockets
   by itself; optional integrations such as the Nix daemon control their own
-  visibility.
+  visibility. The private parent/host transport is an internal,
+  descriptor-scoped exception and is not part of this capability.
 - `metadata-write`: permit writes to protected workspace metadata such as
   `.git`, `.jj`, `.kraai`, `.agents`, and `.codex`.
 - `host-write`: permit writes anywhere the Kraai process's operating-system
@@ -450,6 +453,12 @@ Resolved initial contract:
 - Section contents are preserved exactly. Kraai does not escape, summarize,
   compact, or reinterpret output merely because it resembles XML or contains a
   closing tag.
+- Valid UTF-8 output is returned unchanged. If a channel contains invalid
+  UTF-8, Kraai keeps its exact bytes in durable execution storage and renders
+  an explicit binary-output marker with the channel's byte count instead of
+  automatically injecting base64. The marker tells the model to rerun the
+  command with an intentional text encoding when it needs to inspect those
+  bytes. This avoids lossy decoding and unbounded base64 token expansion.
 - The tag is presentation framing for the model, not executable protocol input.
   `kraai-script-protocol` never parses result blocks, and output text cannot
   create another execution.
@@ -552,6 +561,7 @@ Resolved stable statuses:
 - `cancelled`
 - `sandbox-unavailable`
 - `failed-to-start`
+- `runtime-error`
 
 The applicable status is persisted durably and returned to the model together
 with Nushell diagnostics and all output produced before termination. The final
@@ -559,6 +569,9 @@ crate plan must define the Rust enum and persisted representation from this one
 status vocabulary rather than duplicating status models across the runner,
 runtime, persistence layer, and TUI.
 
-`completed`, `denied`, `invalid-script`, `timed-out`, `sandbox-unavailable`, and
-`failed-to-start` return their result and continue the model exactly once. A
+`completed`, `denied`, `invalid-script`, `timed-out`, `sandbox-unavailable`,
+`failed-to-start`, and `runtime-error` return their result and continue the
+model exactly once. `runtime-error` represents post-launch host, protocol, or
+parent-runtime failure, including recovery of an execution that was still
+active when Kraai restarted. A
 user-initiated `cancelled` execution stops without automatic continuation.

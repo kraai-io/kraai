@@ -92,6 +92,7 @@ to recognize strings or comments.
 | RES-008 | Provider normalization | Exact result block sent once with no `[Tool Result]` prefix |
 | RES-009 | History/TUI round trip | Internal result role remains distinct from human user role |
 | RES-010 | Structured rerender | Persisted status/channels reproduce the block deterministically |
+| RES-011 | Invalid UTF-8 output | Exact bytes persist; result uses a binary marker and byte count, never lossy text or automatic base64 |
 
 Result tests must compare exact strings and independent structured fields. The
 rendered tag is not the persistence source of truth.
@@ -135,7 +136,7 @@ Run the real Linux backend on NixOS first and general Linux when available.
 | SBX-003 | Workspace write | Workspace writable; protected metadata remains read-only |
 | SBX-004 | Metadata write | Agreed metadata paths writable in addition to workspace |
 | SBX-005 | Host write | Any visible path writable subject to host OS credentials |
-| SBX-006 | Network absent | IP connects and visible Unix-socket connects fail |
+| SBX-006 | Network absent | IP and visible Unix-socket connects fail; only the declared private control descriptor can connect inside private temp |
 | SBX-007 | Network present | IP and visible Unix-socket behavior permitted |
 | SBX-008 | No sandbox | Direct host visibility with owned child/process tree retained |
 | SBX-009 | Runtime roots | Host/Nushell/packaged programs readable but not writable |

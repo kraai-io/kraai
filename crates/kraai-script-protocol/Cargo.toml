@@ -1,0 +1,10 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-script-protocol"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+kraai-types = { workspace = true }

@@ -1,0 +1,35 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-nushell-runtime"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+hmac = { workspace = true }
+kraai-command-close-files = { workspace = true }
+kraai-command-core = { workspace = true }
+kraai-command-edit-file = { workspace = true }
+kraai-command-open-files = { workspace = true }
+kraai-sandbox = { workspace = true }
+kraai-types = { workspace = true }
+nu-cli = { workspace = true }
+nu-cmd-lang = { workspace = true }
+nu-command = { workspace = true }
+nu-engine = { workspace = true }
+nu-parser = { workspace = true }
+nu-path = { workspace = true }
+nu-protocol = { workspace = true }
+rand = { workspace = true }
+rustix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+ulid = { workspace = true }
+
+[[bin]]
+name = "kraai-nushell-host"
+path = "src/bin/kraai-nushell-host.rs"

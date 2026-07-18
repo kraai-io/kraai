@@ -6,7 +6,7 @@ use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
 use kraai_runtime::{
     AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
-    ProviderSettings, RuntimeHandle, SettingsValue, ToolBatchOutcome,
+    ProviderSettings, RuntimeHandle, SettingsValue,
 };
 use kraai_types::{ChatRole, MessageId, MessageStatus};
 use ratatui::{
@@ -20,7 +20,7 @@ use ratatui::{
 use crate::components::TextInput;
 
 mod auth;
-mod chat_tools;
+mod chat;
 mod lifecycle;
 mod providers_flow;
 mod runtime_bridge;
@@ -46,10 +46,10 @@ use self::state::{AppState, build_tip_chain};
 pub use self::types::StartupOptions;
 use self::types::default_agent_profiles;
 use self::types::{
-    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, OptimisticMessage, OptimisticToolMessage,
-    PendingSubmit, PendingTool, ProviderDetailAction, ProvidersAdvancedFocus, ProvidersView,
-    RuntimeRequest, RuntimeResponse, SettingsFocus, SettingsModelField, SettingsProviderField,
-    ToolApprovalAction, ToolPhase, UiMode, UsageModelKey,
+    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, OptimisticMessage, PendingSubmit,
+    ProviderDetailAction, ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse,
+    ScriptApprovalAction, ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField,
+    UiMode, UsageModelKey,
 };
 use self::ui::{
     STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
@@ -94,7 +94,7 @@ pub struct App {
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
     event_lag_session_resync_pending: bool,
-    event_lag_tools_resync_pending: bool,
+    event_lag_script_resync_pending: bool,
     runtime_bridge_connected: bool,
     runtime_bridge_error: Option<String>,
 }
@@ -107,7 +107,6 @@ const INPUT_HISTORY_LIMIT: usize = 100;
 #[expect(
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic,
     reason = "TUI tests use direct assertions for buffered output and request ordering"
 )]
 mod tests;

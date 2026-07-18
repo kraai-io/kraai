@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_types::{
-    ChatRole, Message, MessageGeneration, MessageId, MessageStatus, ToolStateDelta,
-    ToolStateSnapshot,
-};
+use kraai_types::{ChatRole, Message, MessageGeneration, MessageId, MessageStatus};
 use ulid::Ulid;
 
 use crate::{MessageStore, SessionStore};
@@ -31,6 +28,15 @@ impl ConversationStore {
     }
 
     pub async fn append_message(&self, request: AppendMessageRequest) -> Result<AppendedMessage> {
+        self.append_new_message(MessageId::new(Ulid::new()), request)
+            .await
+    }
+
+    async fn append_new_message(
+        &self,
+        message_id: MessageId,
+        request: AppendMessageRequest,
+    ) -> Result<AppendedMessage> {
         let mut session = self
             .session_store
             .get(&request.session_id)
@@ -38,7 +44,6 @@ impl ConversationStore {
             .ok_or_else(|| eyre!("Session not found: {}", request.session_id))?;
         let previous_tip = session.tip_id.clone();
         let previous_title = session.title.clone();
-        let message_id = MessageId::new(Ulid::new());
         let message = Message {
             id: message_id.clone(),
             parent_id: previous_tip.clone(),
@@ -46,8 +51,6 @@ impl ConversationStore {
             content: request.content,
             status: request.status,
             agent_profile_id: request.agent_profile_id,
-            tool_state_snapshot: request.tool_state_snapshot,
-            tool_state_deltas: request.tool_state_deltas,
             generation: request.generation,
         };
 
@@ -86,6 +89,82 @@ impl ConversationStore {
             previous_tip,
             previous_title,
         })
+    }
+
+    /// Append a message with a stable ID, or finish linking the same durable message after a
+    /// process interruption. This is used for script results whose delivery must be retry-safe.
+    pub async fn append_message_idempotent(
+        &self,
+        message_id: MessageId,
+        request: AppendMessageRequest,
+    ) -> Result<IdempotentAppendOutcome> {
+        let Some(existing) = self.message_store.get(&message_id).await? else {
+            let appended = self.append_new_message(message_id, request).await?;
+            return Ok(IdempotentAppendOutcome {
+                message: appended.message,
+                linked_now: true,
+            });
+        };
+        validate_idempotent_message(&existing, &request)?;
+
+        let mut session = self
+            .session_store
+            .get(&request.session_id)
+            .await?
+            .ok_or_else(|| eyre!("Session not found: {}", request.session_id))?;
+        if session.tip_id.as_ref() == Some(&message_id)
+            || self
+                .message_is_in_history(session.tip_id.clone(), &message_id)
+                .await?
+        {
+            return Ok(IdempotentAppendOutcome {
+                message: existing,
+                linked_now: false,
+            });
+        }
+        if session.tip_id != existing.parent_id {
+            return Err(eyre!(
+                "Cannot recover message {message_id} for session {}: current tip {:?} does not match durable parent {:?}",
+                request.session_id,
+                session.tip_id,
+                existing.parent_id
+            ));
+        }
+
+        let previous_tip = session.tip_id.clone();
+        session.tip_id = Some(message_id.clone());
+        session.updated_at = current_unix_timestamp();
+        if !self
+            .session_store
+            .save_if_tip_matches(&session, previous_tip.as_ref())
+            .await?
+        {
+            return Err(eyre!(
+                "Session {} changed while recovering message {message_id}",
+                request.session_id
+            ));
+        }
+        Ok(IdempotentAppendOutcome {
+            message: existing,
+            linked_now: true,
+        })
+    }
+
+    async fn message_is_in_history(
+        &self,
+        mut cursor: Option<MessageId>,
+        target: &MessageId,
+    ) -> Result<bool> {
+        while let Some(id) = cursor {
+            if &id == target {
+                return Ok(true);
+            }
+            let Some(message) = self.message_store.get(&id).await? else {
+                return Err(eyre!("History references missing message {id}"));
+            };
+            cursor = message.parent_id;
+        }
+        Ok(false)
     }
 
     pub async fn restore_appended_message(
@@ -157,8 +236,6 @@ pub struct AppendMessageRequest {
     pub content: String,
     pub status: MessageStatus,
     pub agent_profile_id: Option<String>,
-    pub tool_state_snapshot: Option<ToolStateSnapshot>,
-    pub tool_state_deltas: Vec<ToolStateDelta>,
     pub generation: Option<MessageGeneration>,
     pub title_if_first_message: Option<String>,
 }
@@ -168,6 +245,27 @@ pub struct AppendedMessage {
     pub message: Message,
     pub previous_tip: Option<MessageId>,
     pub previous_title: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IdempotentAppendOutcome {
+    pub message: Message,
+    pub linked_now: bool,
+}
+
+fn validate_idempotent_message(existing: &Message, request: &AppendMessageRequest) -> Result<()> {
+    if existing.role != request.role
+        || existing.content != request.content
+        || existing.status != request.status
+        || existing.agent_profile_id != request.agent_profile_id
+        || existing.generation != request.generation
+    {
+        return Err(eyre!(
+            "Message {} already exists with content that does not match the idempotent append",
+            existing.id
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -347,8 +445,6 @@ mod tests {
             content: content.to_string(),
             status,
             agent_profile_id: None,
-            tool_state_snapshot: None,
-            tool_state_deltas: Vec::new(),
             generation: None,
             title_if_first_message: title_if_first_message.map(str::to_string),
         }
@@ -610,7 +706,7 @@ mod tests {
                         ChatRole::Assistant,
                         "",
                         MessageStatus::Streaming {
-                            call_id: kraai_types::CallId::new(Ulid::new()),
+                            stream_id: kraai_types::StreamId::new(Ulid::new()),
                         },
                         None,
                     ))
@@ -677,7 +773,7 @@ mod tests {
                         ChatRole::Assistant,
                         "",
                         MessageStatus::Streaming {
-                            call_id: kraai_types::CallId::new(Ulid::new()),
+                            stream_id: kraai_types::StreamId::new(Ulid::new()),
                         },
                         None,
                     ))
@@ -693,6 +789,70 @@ mod tests {
                 assert_eq!(stored_session.tip_id, Some(root.message.id));
                 assert_eq!(stored_session.title.as_deref(), Some("root title"));
                 assert!(message_store.exists(&streaming.message.id).await.unwrap());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn idempotent_append_links_orphan_once_and_recognizes_history() {
+        with_test_store(
+            "idempotent-append",
+            |message_store, session_store, _| async move {
+                session_store
+                    .save(&untitled_session("session", None, 1))
+                    .await
+                    .unwrap();
+                let conversation_store =
+                    ConversationStore::new(message_store.clone(), session_store.clone());
+                let root = conversation_store
+                    .append_message(append_request(
+                        "session",
+                        ChatRole::Assistant,
+                        "script",
+                        MessageStatus::Complete,
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+                let result_id = MessageId::new(Ulid::new());
+                message_store
+                    .save(&Message {
+                        id: result_id.clone(),
+                        parent_id: Some(root.message.id),
+                        role: ChatRole::ToolCallResult,
+                        content: String::from("result"),
+                        status: MessageStatus::Complete,
+                        agent_profile_id: Some(String::from("coding")),
+                        generation: None,
+                    })
+                    .await
+                    .unwrap();
+                let request = || AppendMessageRequest {
+                    session_id: String::from("session"),
+                    role: ChatRole::ToolCallResult,
+                    content: String::from("result"),
+                    status: MessageStatus::Complete,
+                    agent_profile_id: Some(String::from("coding")),
+                    generation: None,
+                    title_if_first_message: None,
+                };
+
+                let recovered = conversation_store
+                    .append_message_idempotent(result_id.clone(), request())
+                    .await
+                    .unwrap();
+                assert!(recovered.linked_now);
+                assert_eq!(
+                    session_store.get("session").await.unwrap().unwrap().tip_id,
+                    Some(result_id.clone())
+                );
+
+                let retry = conversation_store
+                    .append_message_idempotent(result_id, request())
+                    .await
+                    .unwrap();
+                assert!(!retry.linked_now);
             },
         )
         .await;

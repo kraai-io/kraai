@@ -1,20 +1,45 @@
 # kraai
 
-`kraai` is an agentic runtime for llm tool calling.
-The main goals of the project are improving token efficiency and model accuracy.
+`kraai` is an agentic runtime for safe, token-efficient LLM execution.
+Models use Nushell directly instead of serializing named tool calls.
 
 ## Features
 
-- **Toon Formatted Tool Calls**: All tool calls use less context
-- **Dynamic System Prompt**: Token caching works with an ever changing system prompt
-- **Stateful Tools**: Tools can cause system prompt injection with updating context every turn
-- **Small Tool Set**: open_file, edit_file, bash, search_files, list_files, close_file
+- **Nushell scripts**: One complete script can compose external commands,
+  structured pipelines, and native Kraai commands without JSON argument payloads.
+- **Capability sandbox**: Profiles grant filesystem, metadata, network, or
+  no-sandbox capabilities and independently decide whether escalation is denied,
+  prompted, or allowed.
+- **Stateful commands**: `kraai-open-files`, `kraai-close-files`, and
+  `kraai-edit-file` update durable context while the script is running.
+- **Crash-safe execution**: Exact source, stdout, stderr, completed state effects,
+  and terminal status are persisted for recovery.
+- **Dynamic system prompt**: Current pinned-file contents and workspace
+  instructions are refreshed for each model request.
+
+### Script protocol
+
+An assistant may write ordinary progress text and then one script block:
+
+```xml
+<tool_call timeout="30sec" permissions="workspace-write">
+let packages = cargo metadata --no-deps --format-version 1 | from json
+$packages.packages | select name version
+</tool_call>
+```
+
+The runtime executes the block as one Nushell script and returns one
+`<tool_call_result>` block. The model must choose a timeout. Capability requests
+are evaluated for the whole script before it starts; successfully completed
+commands and state effects remain completed if a later statement fails.
 
 ### Context Cost
 
-`open_file` keeps a file out of tool-result history. The runtime reads the
+`kraai-open-files` keeps a file out of script-result history. The runtime reads the
 current on-disk contents and injects that current snapshot into future model
-requests until `close_file` removes it.
+requests until `kraai-close-files` removes it. A model can use ordinary Nushell
+commands such as `open`, `ls`, or an external `rg` when it needs immediate data
+instead of durable context.
 
 Use this simplified model:
 
@@ -27,18 +52,18 @@ Use this simplified model:
 This ignores tool schemas, instructions, edit payloads, output tokens, and file
 size changes.
 
-The context-window difference is simple. A read loop that does
-`read_files -> edit_file` before each edit leaves `n` full file snapshots in the
-conversation before the final answer:
+The context-window difference is simple. A conventional read/edit loop before
+each edit leaves `n` full file snapshots in the conversation before the final
+answer:
 
 ```text
 read-loop context = n * F
 open-file context = F
 ```
 
-The billing-weighted input-token model is different because old `read_files`
-results can be cached. Across `n` edits plus the final answer, each read result
-is paid once as new input and then remains in cached history for later requests:
+The billing-weighted input-token model is different because old read results can
+be cached. Across `n` edits plus the final answer, each read result is paid once
+as new input and then remains in cached history for later requests:
 
 ```text
 read-loop = F * (n + c * n^2)

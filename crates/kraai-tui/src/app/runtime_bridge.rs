@@ -175,16 +175,9 @@ pub(super) fn spawn_runtime_bridge(
                     message,
                     model_id,
                     provider_id,
-                    auto_approve,
                 } => {
                     let result = rt
-                        .block_on(runtime.send_message_with_options(
-                            session_id,
-                            message,
-                            model_id,
-                            provider_id,
-                            auto_approve,
-                        ))
+                        .block_on(runtime.send_message(session_id, message, model_id, provider_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::SendMessage(result));
                 }
@@ -220,11 +213,11 @@ pub(super) fn spawn_runtime_bridge(
                     let _ =
                         res_tx.send(RuntimeResponse::UndoLastUserMessage { session_id, result });
                 }
-                RuntimeRequest::GetPendingTools { session_id } => {
+                RuntimeRequest::GetPendingScript { session_id } => {
                     let result = rt
-                        .block_on(runtime.get_pending_tools(session_id.clone()))
+                        .block_on(runtime.get_pending_script(session_id.clone()))
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::PendingTools { session_id, result });
+                    let _ = res_tx.send(RuntimeResponse::PendingScript { session_id, result });
                 }
                 RuntimeRequest::LoadSession { session_id } => {
                     let result = rt
@@ -250,23 +243,31 @@ pub(super) fn spawn_runtime_bridge(
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::DeleteSession { session_id, result });
                 }
-                RuntimeRequest::ApproveTool {
+                RuntimeRequest::ApproveScript {
                     session_id,
-                    call_id,
+                    execution_id,
                 } => {
                     let result = rt
-                        .block_on(runtime.approve_tool(session_id, call_id.clone()))
+                        .block_on(runtime.approve_script(session_id.clone(), execution_id.clone()))
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::ApproveTool { call_id, result });
+                    let _ = res_tx.send(RuntimeResponse::ApproveScript {
+                        session_id,
+                        execution_id,
+                        result,
+                    });
                 }
-                RuntimeRequest::DenyTool {
+                RuntimeRequest::DenyScript {
                     session_id,
-                    call_id,
+                    execution_id,
                 } => {
                     let result = rt
-                        .block_on(runtime.deny_tool(session_id, call_id.clone()))
+                        .block_on(runtime.deny_script(session_id.clone(), execution_id.clone()))
                         .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::DenyTool { call_id, result });
+                    let _ = res_tx.send(RuntimeResponse::DenyScript {
+                        session_id,
+                        execution_id,
+                        result,
+                    });
                 }
                 RuntimeRequest::CancelStream { session_id } => {
                     let result = rt
@@ -279,12 +280,6 @@ pub(super) fn spawn_runtime_bridge(
                         .block_on(runtime.continue_session(session_id))
                         .map_err(|e| e.to_string());
                     let _ = res_tx.send(RuntimeResponse::ContinueSession(result));
-                }
-                RuntimeRequest::ExecuteApprovedTools { session_id } => {
-                    let result = rt
-                        .block_on(runtime.execute_approved_tools(session_id))
-                        .map_err(|e| e.to_string());
-                    let _ = res_tx.send(RuntimeResponse::ExecuteApprovedTools(result));
                 }
             }
         }
@@ -361,7 +356,7 @@ fn respond_with_runtime_error(
                 result: Err(message.to_string()),
             }
         }
-        RuntimeRequest::GetPendingTools { session_id } => RuntimeResponse::PendingTools {
+        RuntimeRequest::GetPendingScript { session_id } => RuntimeResponse::PendingScript {
             session_id,
             result: Err(message.to_string()),
         },
@@ -377,12 +372,20 @@ fn respond_with_runtime_error(
             session_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::ApproveTool { call_id, .. } => RuntimeResponse::ApproveTool {
-            call_id,
+        RuntimeRequest::ApproveScript {
+            session_id,
+            execution_id,
+        } => RuntimeResponse::ApproveScript {
+            session_id,
+            execution_id,
             result: Err(message.to_string()),
         },
-        RuntimeRequest::DenyTool { call_id, .. } => RuntimeResponse::DenyTool {
-            call_id,
+        RuntimeRequest::DenyScript {
+            session_id,
+            execution_id,
+        } => RuntimeResponse::DenyScript {
+            session_id,
+            execution_id,
             result: Err(message.to_string()),
         },
         RuntimeRequest::CancelStream { .. } => {
@@ -390,9 +393,6 @@ fn respond_with_runtime_error(
         }
         RuntimeRequest::ContinueSession { .. } => {
             RuntimeResponse::ContinueSession(Err(message.to_string()))
-        }
-        RuntimeRequest::ExecuteApprovedTools { .. } => {
-            RuntimeResponse::ExecuteApprovedTools(Err(message.to_string()))
         }
     };
 

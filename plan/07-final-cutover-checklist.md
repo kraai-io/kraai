@@ -129,11 +129,12 @@ Delete:
 - [ ] Launch an absolute packaged `kraai-nushell-host` path.
 - [ ] Create one immutable request and fresh authentication secret per script.
 - [ ] Establish sandbox before model-authored source is parsed/evaluated.
-- [ ] Pass the exact script through a private one-shot request channel, not argv
-      or shell interpolation.
-- [ ] Close the request channel before evaluation.
-- [ ] Keep stdout, stderr, events, and acknowledgments on separate channels.
-- [ ] Mark internal descriptors close-on-exec where required.
+- [ ] Pass the exact script through the framed private-temp socket, not argv or
+      shell interpolation.
+- [ ] Consume exactly one request frame before evaluation.
+- [ ] Keep stdout and stderr separate from framed events and acknowledgments.
+- [ ] Keep the dedicated transport descriptor close-on-exec and make it the only
+      restricted-mode `connect` exception.
 - [ ] Deny descendant tracing/process-memory inspection.
 - [ ] Create one fresh Nu engine for one script and never pool initially.
 - [ ] Register only active commands before parsing exact source.

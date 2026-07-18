@@ -39,7 +39,7 @@ pub struct HarnessMetrics {
     #[serde(default)]
     pub turns: Option<u64>,
     #[serde(default)]
-    pub tool_calls: Option<u64>,
+    pub script_executions: Option<u64>,
     #[serde(default)]
     pub final_context_tokens: Option<u64>,
     #[serde(default)]
@@ -118,7 +118,7 @@ mod tests {
             harness: Some(HarnessMetrics {
                 schema_version: 1,
                 turns: None,
-                tool_calls: None,
+                script_executions: None,
                 final_context_tokens: None,
                 usage: Some(harness_usage),
             }),

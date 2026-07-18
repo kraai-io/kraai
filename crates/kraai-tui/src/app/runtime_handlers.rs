@@ -30,7 +30,7 @@ impl App {
                 self.state.is_streaming = true;
                 self.state.retry_waiting = false;
                 self.state.profile_locked = true;
-                self.clear_manual_continuation_phase();
+                self.state.script_phase = ScriptPhase::Idle;
                 self.start_or_resume_turn_timer(Instant::now());
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
@@ -77,11 +77,6 @@ impl App {
                     self.last_stream_history_request = None;
                     self.stream_event_content.remove(&message_id);
                     self.request_sync_for_session(&session_id);
-                    if self.state.tool_phase == ToolPhase::ExecutingBatch
-                        && self.state.pending_tools.is_empty()
-                    {
-                        self.finish_tool_batch_execution();
-                    }
                     if self.is_ci_mode() {
                         self.finish_ci_output_line();
                         self.ci_turn_completion_pending = true;
@@ -108,11 +103,6 @@ impl App {
                     self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = format!("Stream error: {error}");
                     self.request_sync_for_session(&session_id);
-                    if self.state.tool_phase == ToolPhase::ExecutingBatch
-                        && self.state.pending_tools.is_empty()
-                    {
-                        self.finish_tool_batch_execution();
-                    }
                 }
                 self.fail_ci(format!("Stream error: {error}"));
                 self.request(RuntimeRequest::ListSessions);
@@ -132,11 +122,6 @@ impl App {
                     self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
-                    if self.state.tool_phase == ToolPhase::ExecutingBatch
-                        && self.state.pending_tools.is_empty()
-                    {
-                        self.finish_tool_batch_execution();
-                    }
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -163,11 +148,6 @@ impl App {
                     self.finish_terminal_turn_timer(Instant::now());
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
-                    if self.state.tool_phase == ToolPhase::ExecutingBatch
-                        && self.state.pending_tools.is_empty()
-                    {
-                        self.finish_tool_batch_execution();
-                    }
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
@@ -193,117 +173,33 @@ impl App {
                     self.state.status = String::from("OpenAI auth updated");
                 }
             }
-            Event::MessageComplete(_) => {}
-            Event::ToolCallDetected {
-                session_id,
-                call_id,
-                tool_id,
-                args,
-                description,
-                risk_level,
-                reasons,
-                queue_order,
-            } => {
+            Event::ScriptApprovalRequested { session_id, script } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     self.request(RuntimeRequest::ListSessions);
                     return;
                 }
-
-                let exists = self
-                    .state
-                    .pending_tools
-                    .iter()
-                    .any(|tool| tool.call_id == call_id);
-                if !exists {
-                    if self.is_ci_mode() {
-                        self.fail_ci(format!("CI mode does not support tool approval: {tool_id}"));
-                        return;
-                    }
-                    self.state.pending_tools.push(PendingTool {
-                        call_id,
-                        tool_id,
-                        args,
-                        description,
-                        risk_level,
-                        reasons,
-                        approved: None,
-                        queue_order,
-                    });
+                if self.is_ci_mode() {
+                    self.fail_ci(String::from(
+                        "CI mode cannot answer a script capability escalation prompt",
+                    ));
+                    return;
                 }
-                self.sort_pending_tools();
-                self.enter_tool_decision_phase();
-                self.state.status =
-                    format!("{} tool call(s) pending", self.state.pending_tools.len());
+                self.state.pending_script = Some(script);
+                self.enter_script_decision_phase();
+                self.state.status = String::from("Script capability approval required");
             }
-            Event::ToolResultReady {
+            Event::ScriptResultReady {
                 session_id,
-                call_id,
-                tool_id,
-                success,
-                denied,
-                output,
+                execution_id: _,
+                status,
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state
-                        .pending_tools
-                        .retain(|tool| tool.call_id != call_id);
-                    self.sort_pending_tools();
-                    if !success || denied {
-                        self.push_optimistic_tool_message(&call_id, &tool_id, &output, denied);
-                    }
-                    self.state.status = if denied {
-                        format!("Tool denied: {tool_id}")
-                    } else if success {
-                        format!("Tool succeeded: {tool_id}")
-                    } else {
-                        format!("Tool failed: {tool_id}")
-                    };
-                    if self.state.pending_tools.is_empty()
-                        && self.state.tool_phase == ToolPhase::ExecutingBatch
-                        && !self.state.is_streaming
-                        && !denied
-                    {
-                        self.state.status = format!("Waiting for assistant after {tool_id}");
-                    } else {
-                        self.sync_tool_phase_from_pending_tools();
-                    }
+                    self.state.pending_script = None;
+                    self.state.script_phase = ScriptPhase::Executing;
+                    self.start_or_resume_turn_timer(Instant::now());
+                    self.state.status = format!("Script {status}; waiting for assistant");
                 } else {
                     self.request(RuntimeRequest::ListSessions);
-                }
-            }
-            Event::ToolBatchFinished {
-                session_id,
-                outcome,
-            } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    self.request(RuntimeRequest::ListSessions);
-                    return;
-                }
-
-                match outcome {
-                    ToolBatchOutcome::ContinuationScheduled => {
-                        self.state.tool_phase = ToolPhase::ExecutingBatch;
-                        self.state.tool_batch_execution_started = false;
-                        self.state.status = String::from("Waiting for assistant after tools");
-                        self.start_or_resume_turn_timer(Instant::now());
-                    }
-                    ToolBatchOutcome::ManualContinuationRequired => {
-                        self.enter_manual_continuation_phase();
-                        self.request_sync_for_session(&session_id);
-                        self.request(RuntimeRequest::ListSessions);
-                        self.maybe_finish_ci_run();
-                    }
-                    ToolBatchOutcome::PendingToolsRemaining => {
-                        self.state.tool_batch_execution_started = false;
-                        self.pause_turn_timer(Instant::now());
-                        self.sync_tool_phase_from_pending_tools();
-                        self.state.status = if self.state.pending_tools.is_empty() {
-                            String::from("Tool approval pending")
-                        } else {
-                            format!("{} tool call(s) pending", self.state.pending_tools.len())
-                        };
-                        self.request_sync_for_session(&session_id);
-                    }
                 }
             }
         }
@@ -481,7 +377,6 @@ impl App {
                             message: pending_submit.message,
                             model_id: pending_submit.model_id,
                             provider_id: pending_submit.provider_id,
-                            auto_approve: false,
                         });
                     }
                 }
@@ -539,7 +434,6 @@ impl App {
                             self.state.chat_history = history;
                             self.invalidate_chat_cache();
                             self.reconcile_optimistic_messages();
-                            self.reconcile_optimistic_tool_messages();
                             self.clamp_chat_scroll();
                         }
                     }
@@ -581,7 +475,6 @@ impl App {
                             self.state.current_tip_id = tip;
                             self.invalidate_chat_cache();
                             self.reconcile_optimistic_messages();
-                            self.reconcile_optimistic_tool_messages();
                             self.clamp_chat_scroll();
                         }
                     }
@@ -609,52 +502,23 @@ impl App {
                     }
                 }
             }
-            RuntimeResponse::PendingTools { session_id, result } => {
+            RuntimeResponse::PendingScript { session_id, result } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;
                 }
-
                 match result {
-                    Ok(pending_tools) => {
-                        let recovering_from_lag = self.event_lag_tools_resync_pending;
-                        let should_auto_start_execution =
-                            self.state.tool_phase == ToolPhase::Idle && !recovering_from_lag;
-                        if recovering_from_lag {
-                            self.state.tool_phase = ToolPhase::Idle;
-                            self.state.tool_batch_execution_started = false;
-                        }
-                        self.state.pending_tools = pending_tools
-                            .into_iter()
-                            .map(|tool| PendingTool {
-                                call_id: tool.call_id,
-                                tool_id: tool.tool_id,
-                                args: tool.args,
-                                description: tool.description,
-                                risk_level: tool.risk_level,
-                                reasons: tool.reasons,
-                                approved: tool.approved,
-                                queue_order: tool.queue_order,
-                            })
-                            .collect();
-                        self.sync_tool_phase_from_pending_tools();
-                        if recovering_from_lag && self.state.tool_phase == ToolPhase::ExecutingBatch
-                        {
-                            self.state.tool_batch_execution_started = true;
-                        }
-                        self.event_lag_tools_resync_pending = false;
-                        if should_auto_start_execution
-                            && self.state.tool_phase == ToolPhase::ExecutingBatch
-                            && !self.state.tool_batch_execution_started
-                            && !self.has_undecided_tools()
-                            && !self.state.pending_tools.is_empty()
-                        {
-                            self.maybe_start_tool_batch_execution();
-                        }
-                        self.maybe_finish_ci_run();
-                        self.sync_turn_timer_with_activity(Instant::now());
+                    Ok(Some(script)) => {
+                        self.state.pending_script = Some(script);
+                        self.enter_script_decision_phase();
                     }
-                    Err(err) => {
-                        self.state.status = format!("Failed loading pending tools: {err}");
+                    Ok(None) => {
+                        self.state.pending_script = None;
+                        if self.state.script_phase == ScriptPhase::AwaitingApproval {
+                            self.state.script_phase = ScriptPhase::Idle;
+                        }
+                    }
+                    Err(error) => {
+                        self.state.status = format!("Failed loading pending script: {error}");
                     }
                 }
             }
@@ -713,39 +577,62 @@ impl App {
             } => {
                 self.state.status = format!("Failed deleting session: {err}");
             }
-            RuntimeResponse::ApproveTool {
-                call_id,
+            RuntimeResponse::ApproveScript {
+                session_id,
+                execution_id,
                 result: Ok(()),
             } => {
-                self.set_tool_approval(&call_id, Some(true));
-                if self.has_undecided_tools() {
-                    self.enter_tool_decision_phase();
-                } else {
-                    self.state.tool_phase = ToolPhase::ExecutingBatch;
-                    self.maybe_start_tool_batch_execution();
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+                if self
+                    .state
+                    .pending_script
+                    .as_ref()
+                    .is_some_and(|script| script.execution_id == execution_id)
+                {
+                    self.state.pending_script = None;
+                }
+                self.state.script_phase = ScriptPhase::Executing;
+                self.start_or_resume_turn_timer(Instant::now());
+                self.state.status = String::from("Executing approved Nushell script");
+            }
+            RuntimeResponse::ApproveScript {
+                session_id,
+                result: Err(err),
+                ..
+            } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.status = format!("Failed approving script: {err}");
                 }
             }
-            RuntimeResponse::ApproveTool {
-                result: Err(err), ..
-            } => {
-                self.state.status = format!("Failed approving tool: {err}");
-            }
-            RuntimeResponse::DenyTool {
-                call_id,
+            RuntimeResponse::DenyScript {
+                session_id,
+                execution_id,
                 result: Ok(()),
             } => {
-                self.set_tool_approval(&call_id, Some(false));
-                if self.has_undecided_tools() {
-                    self.enter_tool_decision_phase();
-                } else {
-                    self.state.tool_phase = ToolPhase::ExecutingBatch;
-                    self.maybe_start_tool_batch_execution();
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
                 }
+                if self
+                    .state
+                    .pending_script
+                    .as_ref()
+                    .is_some_and(|script| script.execution_id == execution_id)
+                {
+                    self.state.pending_script = None;
+                }
+                self.state.script_phase = ScriptPhase::Executing;
+                self.state.status = String::from("Script capability escalation denied");
             }
-            RuntimeResponse::DenyTool {
-                result: Err(err), ..
+            RuntimeResponse::DenyScript {
+                session_id,
+                result: Err(err),
+                ..
             } => {
-                self.state.status = format!("Failed denying tool: {err}");
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.status = format!("Failed denying script: {err}");
+                }
             }
             RuntimeResponse::CancelStream(Ok(true)) => {}
             RuntimeResponse::CancelStream(Ok(false)) => {
@@ -755,21 +642,12 @@ impl App {
                 self.state.status = format!("Failed cancelling stream: {err}");
             }
             RuntimeResponse::ContinueSession(Ok(())) => {
-                self.clear_manual_continuation_phase();
+                self.state.script_phase = ScriptPhase::Idle;
                 self.start_or_resume_turn_timer(Instant::now());
                 self.state.status = String::from("Continuing session");
             }
             RuntimeResponse::ContinueSession(Err(err)) => {
                 self.state.status = format!("Failed continuing session: {err}");
-            }
-            RuntimeResponse::ExecuteApprovedTools(Ok(())) => {
-                self.start_or_resume_turn_timer(Instant::now());
-                self.state.status = String::from("Executing decided tool calls");
-            }
-            RuntimeResponse::ExecuteApprovedTools(Err(err)) => {
-                self.state.tool_batch_execution_started = false;
-                self.finish_turn_timer(Instant::now());
-                self.state.status = format!("Failed executing tools: {err}");
             }
         }
     }

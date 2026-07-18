@@ -8,11 +8,11 @@ use kraai_provider_core::{
     ProviderManager, ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver,
     ProviderStreamEvent,
 };
+use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, ScriptProtocolParser};
 use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::Notify;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
-use super::tool_call_guard::ToolCallStreamGuard;
 use crate::api::Event;
 
 struct RuntimeRetryObserver {
@@ -41,9 +41,19 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
 
 #[derive(Debug)]
 pub(crate) enum StreamDriveResult {
-    Completed { session_id: String, content: String },
-    FailedToStart { error: String },
-    FailedDuringStream { error: String },
+    Completed {
+        session_id: String,
+        content: String,
+        script: Option<ScriptBlock>,
+        invalid_script: Option<InvalidScriptBlock>,
+        protocol_error: Option<ProtocolError>,
+    },
+    FailedToStart {
+        error: String,
+    },
+    FailedDuringStream {
+        error: String,
+    },
     Stopped,
 }
 
@@ -61,6 +71,15 @@ impl StreamJobKind {
 
 impl RuntimeCore {
     pub(crate) async fn start_continuation(&self, session_id: String) {
+        if self
+            .pending_script_approvals
+            .lock()
+            .await
+            .contains_key(&session_id)
+            || self.has_active_script_tasks(&session_id).await
+        {
+            return;
+        }
         let continuation = {
             let mut agent = self.agent_manager.lock().await;
             match agent.prepare_continuation_stream(&session_id).await {
@@ -179,6 +198,9 @@ impl RuntimeCore {
             StreamDriveResult::Completed {
                 session_id: _completed_session,
                 content,
+                script,
+                invalid_script,
+                protocol_error,
             } => {
                 let completed_session = {
                     let agent = self.agent_manager.lock().await;
@@ -212,8 +234,15 @@ impl RuntimeCore {
                         session_id: completed_session.clone(),
                     },
                 );
-                self.process_completed_stream_output(completed_session, message_id, content)
-                    .await;
+                self.process_completed_stream_output(
+                    completed_session,
+                    message_id,
+                    content,
+                    script,
+                    invalid_script,
+                    protocol_error,
+                )
+                .await;
             }
             StreamDriveResult::FailedToStart { error } => {
                 match self
@@ -449,17 +478,17 @@ impl RuntimeCore {
         );
 
         let mut content = String::new();
-        let mut guard = ToolCallStreamGuard::new(1);
+        let mut parser = ScriptProtocolParser::new();
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(ProviderStreamEvent::TextDelta(chunk)) => {
-                    let guarded = guard.ingest_chunk(&chunk);
-                    if !guarded.accepted.is_empty() {
-                        content.push_str(&guarded.accepted);
+                    let parsed = parser.ingest(&chunk);
+                    if !parsed.accepted.is_empty() {
+                        content.push_str(&parsed.accepted);
                         {
                             let agent = agent_manager.lock().await;
-                            if !agent.append_chunk(&message_id, &guarded.accepted).await {
+                            if !agent.append_chunk(&message_id, &parsed.accepted).await {
                                 return StreamDriveResult::Stopped;
                             }
                         }
@@ -468,17 +497,19 @@ impl RuntimeCore {
                             Event::StreamChunk {
                                 session_id: session_id.clone(),
                                 message_id: message_id.to_string(),
-                                chunk: guarded.accepted,
+                                chunk: parsed.accepted,
                             },
                         );
                     }
-                    if guarded.should_stop {
-                        tracing::debug!(
-                            "Stopping stream after invalid content following tool call"
-                        );
+                    if parsed.should_stop {
+                        let invalid_script = parsed.error.as_ref().map(|_| parser.invalid_block());
+                        tracing::debug!("Stopping stream at script protocol boundary");
                         return StreamDriveResult::Completed {
                             session_id,
                             content,
+                            script: parsed.completed,
+                            invalid_script,
+                            protocol_error: parsed.error,
                         };
                     }
                 }
@@ -496,12 +527,12 @@ impl RuntimeCore {
             }
         }
 
-        let tail = guard.finish();
-        if !tail.is_empty() {
-            content.push_str(&tail);
+        let tail = parser.finish();
+        if !tail.accepted.is_empty() {
+            content.push_str(&tail.accepted);
             {
                 let agent = agent_manager.lock().await;
-                if !agent.append_chunk(&message_id, &tail).await {
+                if !agent.append_chunk(&message_id, &tail.accepted).await {
                     return StreamDriveResult::Stopped;
                 }
             }
@@ -510,16 +541,20 @@ impl RuntimeCore {
                 Event::StreamChunk {
                     session_id: session_id.clone(),
                     message_id: message_id.to_string(),
-                    chunk: tail,
+                    chunk: tail.accepted,
                 },
             );
         }
 
         tracing::debug!("Full content length: {}", content.len());
 
+        let invalid_script = tail.error.as_ref().map(|_| parser.invalid_block());
         StreamDriveResult::Completed {
             session_id,
             content,
+            script: tail.completed,
+            invalid_script,
+            protocol_error: tail.error,
         }
     }
 
@@ -544,7 +579,7 @@ impl RuntimeCore {
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
         let Some(active_stream) = self.take_active_stream(&session_id).await else {
-            return Ok(false);
+            return Ok(self.cancel_active_script(&session_id).await);
         };
 
         active_stream.abort_handle.abort();

@@ -1,24 +1,22 @@
 [workspace]
 members = [
   "crates/kraai-agent",
-  "crates/kraai-command-runner",
+  "crates/commands/kraai-command-open-files",
+  "crates/commands/kraai-command-close-files",
+  "crates/commands/kraai-command-edit-file",
+  "crates/kraai-command-core",
+  "crates/kraai-nushell-runtime",
+  "crates/kraai-sandbox",
+  "crates/kraai-script-protocol",
   "crates/kraai-eval",
   "crates/kraai-persistence",
   "crates/kraai-runtime",
-  "crates/kraai-toon-schema",
   "crates/kraai-tui",
   "crates/kraai-types",
+  "crates/kraai-workspace-fs",
   "crates/llm-providers/kraai-provider-core",
   "crates/llm-providers/kraai-provider-openai-chat-completions",
   "crates/llm-providers/kraai-provider-openai-codex",
-  "crates/tools/kraai-tool-bash",
-  "crates/tools/kraai-tool-close-file",
-  "crates/tools/kraai-tool-core",
-  "crates/tools/kraai-tool-edit-file",
-  "crates/tools/kraai-tool-list-files",
-  "crates/tools/kraai-tool-open-file",
-  "crates/tools/kraai-tool-read-file",
-  "crates/tools/kraai-tool-search-files",
 ]
 resolver = "3"
 
@@ -35,23 +33,21 @@ strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
 kraai-agent = { path = "crates/kraai-agent" }
-kraai-command-runner = { path = "crates/kraai-command-runner" }
+kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
+kraai-command-core = { path = "crates/kraai-command-core" }
+kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
+kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
 kraai-eval = { path = "crates/kraai-eval" }
+kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }
 kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
 kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }
 kraai-provider-openai-codex = { path = "crates/llm-providers/kraai-provider-openai-codex" }
 kraai-runtime = { path = "crates/kraai-runtime" }
-kraai-tool-bash = { path = "crates/tools/kraai-tool-bash" }
-kraai-tool-close-file = { path = "crates/tools/kraai-tool-close-file" }
-kraai-tool-core = { path = "crates/tools/kraai-tool-core" }
-kraai-tool-edit-file = { path = "crates/tools/kraai-tool-edit-file" }
-kraai-tool-list-files = { path = "crates/tools/kraai-tool-list-files" }
-kraai-tool-open-file = { path = "crates/tools/kraai-tool-open-file" }
-kraai-tool-read-file = { path = "crates/tools/kraai-tool-read-file" }
-kraai-tool-search-files = { path = "crates/tools/kraai-tool-search-files" }
-kraai-toon-schema = { path = "crates/kraai-toon-schema" }
+kraai-sandbox = { path = "crates/kraai-sandbox" }
+kraai-script-protocol = { path = "crates/kraai-script-protocol" }
 kraai-types = { path = "crates/kraai-types" }
+kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }
 
 arboard = "3.6.1"
 async-trait = "0.1.89"
@@ -63,14 +59,19 @@ color-eyre = "0.6.5"
 crossbeam-channel = "0.5.16"
 directories = "6.0.0"
 futures = "0.3.32"
-grep-matcher = "0.1.8"
-grep-regex = "0.1.14"
-grep-searcher = "0.1.16"
+hmac = "0.12.1"
 httpdate = "1.0.3"
 ignore = "0.4.28"
 libc = "0.2.186"
 nix = { version = "0.30.1", features = ["process", "signal"] }
 notify = "8.2.0"
+nu-cli = "=0.114.1"
+nu-cmd-lang = "=0.114.1"
+nu-command = "=0.114.1"
+nu-engine = "=0.114.1"
+nu-parser = "=0.114.1"
+nu-path = "=0.114.1"
+nu-protocol = "=0.114.1"
 proc-macro2 = "1.0.106"
 quote = "1.0.46"
 rand = "0.10.2"
@@ -82,17 +83,17 @@ ratatui = { version = "0.30.2", features = [
 ] }
 regex = "1.13.0"
 reqwest = { features = ["json", "stream"], version = "0.13.4" }
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "net", "pipe"] }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.150"
-sha2 = "0.11.0"
+sha2 = "0.10.9"
 syn = { version = "2.0.118", features = ["derive", "extra-traits", "full"] }
 tachyonfx = "0.25.1"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.52.3" }
+tokio-util = "0.7.18"
 toml = "1.1.2"
-toon-format = { version = "0.5.0", default-features = false }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

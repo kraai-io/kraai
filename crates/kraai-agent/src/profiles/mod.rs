@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use kraai_persistence::agent_state_root;
 use kraai_types::{
-    AgentProfileSource, AgentProfileSummary, AgentProfileWarning, RiskLevel, ToolId,
+    AgentProfileSource, AgentProfileSummary, AgentProfileWarning, CapabilityPermissionRules,
+    EnvironmentPolicy, EscalationPolicy, NushellStartup, PathPolicy, SandboxCapability,
+    SandboxPermissionSet, ScriptProfileSnapshot,
 };
 use serde::Deserialize;
 
@@ -13,8 +15,13 @@ pub struct AgentProfile {
     pub display_name: String,
     pub description: String,
     pub system_prompt: String,
-    pub tools: Vec<ToolId>,
-    pub default_risk_level: RiskLevel,
+    pub commands: Vec<String>,
+    pub permissions: SandboxPermissionSet,
+    pub permission_rules: CapabilityPermissionRules,
+    pub escalation_policy: EscalationPolicy,
+    pub environment: EnvironmentPolicy,
+    pub nushell_startup: NushellStartup,
+    pub path: PathPolicy,
     pub source: AgentProfileSource,
 }
 
@@ -24,9 +31,26 @@ impl AgentProfile {
             id: self.id.clone(),
             display_name: self.display_name.clone(),
             description: self.description.clone(),
-            tools: self.tools.iter().map(|tool| tool.to_string()).collect(),
-            default_risk_level: self.default_risk_level,
+            commands: self.commands.clone(),
+            capabilities: self.permissions.capabilities().clone(),
+            escalation_policy: self.escalation_policy,
+            environment: self.environment,
+            nushell_startup: self.nushell_startup,
+            path: self.path,
             source: self.source,
+        }
+    }
+
+    pub fn snapshot(&self) -> ScriptProfileSnapshot {
+        ScriptProfileSnapshot {
+            id: self.id.clone(),
+            commands: self.commands.clone(),
+            permissions: self.permissions.clone(),
+            permission_rules: self.permission_rules.clone(),
+            escalation_policy: self.escalation_policy,
+            environment: self.environment,
+            nushell_startup: self.nushell_startup,
+            path: self.path,
         }
     }
 }
@@ -49,13 +73,20 @@ struct ExternalProfile {
     display_name: String,
     description: String,
     system_prompt: String,
-    tools: Vec<String>,
-    default_risk_level: String,
+    #[serde(default)]
+    commands: Vec<String>,
+    capabilities: Vec<SandboxCapability>,
+    escalation_policy: EscalationPolicy,
+    #[serde(default)]
+    permission_rules: BTreeMap<SandboxCapability, EscalationPolicy>,
+    environment: EnvironmentPolicy,
+    nushell_startup: NushellStartup,
+    path: PathPolicy,
 }
 
 pub fn resolve_profiles(
     workspace_dir: &Path,
-    available_tools: &HashSet<String>,
+    available_commands: &HashSet<String>,
 ) -> ResolvedProfiles {
     let mut resolved = ResolvedProfiles {
         profiles: built_in_profiles(),
@@ -63,7 +94,7 @@ pub fn resolve_profiles(
     };
 
     if let Some(path) = global_profiles_path()
-        && let Err(warning) = load_layer(&path, AgentProfileSource::Global, available_tools)
+        && let Err(warning) = load_layer(&path, AgentProfileSource::Global, available_commands)
             .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
     {
         resolved.warnings.push(warning);
@@ -73,7 +104,7 @@ pub fn resolve_profiles(
     if let Err(warning) = load_layer(
         &workspace_path,
         AgentProfileSource::Workspace,
-        available_tools,
+        available_commands,
     )
     .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
     {
@@ -83,37 +114,60 @@ pub fn resolve_profiles(
     resolved
 }
 
+pub fn available_command_ids() -> HashSet<String> {
+    ["kraai-open-files", "kraai-close-files", "kraai-edit-file"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
 fn built_in_profiles() -> Vec<AgentProfile> {
+    let common = || {
+        (
+            CapabilityPermissionRules::default(),
+            EscalationPolicy::Prompt,
+            EnvironmentPolicy::AllowList,
+            NushellStartup::Clean,
+            PathPolicy::Packaged,
+        )
+    };
+    let (plan_rules, plan_escalation, plan_environment, plan_startup, plan_path) = common();
+    let (coding_rules, coding_escalation, coding_environment, coding_startup, coding_path) =
+        common();
     vec![
         AgentProfile {
-            id: String::from("plan-code"),
-            display_name: String::from("Plan Code"),
+            id: String::from("plan"),
+            display_name: String::from("Plan"),
             description: String::from("Read-only planning and investigation agent"),
             system_prompt: include_str!("plan_code.md").trim().to_string(),
-            tools: vec![
-                ToolId::new("close_files"),
-                ToolId::new("list_files"),
-                ToolId::new("open_files"),
-                ToolId::new("search_files"),
-                ToolId::new("bash"),
+            commands: vec![
+                String::from("kraai-open-files"),
+                String::from("kraai-close-files"),
             ],
-            default_risk_level: RiskLevel::ReadOnlyWorkspace,
+            permissions: SandboxPermissionSet::workspace_read(),
+            permission_rules: plan_rules,
+            escalation_policy: plan_escalation,
+            environment: plan_environment,
+            nushell_startup: plan_startup,
+            path: plan_path,
             source: AgentProfileSource::BuiltIn,
         },
         AgentProfile {
-            id: String::from("build-code"),
-            display_name: String::from("Build Code"),
+            id: String::from("coding"),
+            display_name: String::from("Coding"),
             description: String::from("Implementation agent with workspace write access"),
             system_prompt: include_str!("build_code.md").trim().to_string(),
-            tools: vec![
-                ToolId::new("close_files"),
-                ToolId::new("list_files"),
-                ToolId::new("open_files"),
-                ToolId::new("search_files"),
-                ToolId::new("edit_file"),
-                ToolId::new("bash"),
+            commands: vec![
+                String::from("kraai-open-files"),
+                String::from("kraai-close-files"),
+                String::from("kraai-edit-file"),
             ],
-            default_risk_level: RiskLevel::UndoableWorkspaceWrite,
+            permissions: SandboxPermissionSet::workspace_write(),
+            permission_rules: coding_rules,
+            escalation_policy: coding_escalation,
+            environment: coding_environment,
+            nushell_startup: coding_startup,
+            path: coding_path,
             source: AgentProfileSource::BuiltIn,
         },
     ]
@@ -130,7 +184,7 @@ fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {
 fn load_layer(
     path: &Path,
     source: AgentProfileSource,
-    available_tools: &HashSet<String>,
+    available_commands: &HashSet<String>,
 ) -> Result<Vec<AgentProfile>, AgentProfileWarning> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -141,7 +195,6 @@ fn load_layer(
         path: Some(path.display().to_string()),
         message: format!("Failed reading profile file: {error}"),
     })?;
-
     let parsed: ProfilesFile = toml::from_str(&contents).map_err(|error| AgentProfileWarning {
         source,
         path: Some(path.display().to_string()),
@@ -151,60 +204,104 @@ fn load_layer(
     let mut seen_ids = HashSet::new();
     let mut profiles = Vec::with_capacity(parsed.profiles.len());
     for profile in parsed.profiles {
+        if !valid_profile_id(&profile.id) {
+            return Err(profile_warning(
+                source,
+                path,
+                format!("Invalid profile id '{}'", profile.id),
+            ));
+        }
         if !seen_ids.insert(profile.id.clone()) {
-            return Err(AgentProfileWarning {
+            return Err(profile_warning(
                 source,
-                path: Some(path.display().to_string()),
-                message: format!("Duplicate profile id '{}'", profile.id),
-            });
+                path,
+                format!("Duplicate profile id '{}'", profile.id),
+            ));
         }
 
-        if profile.tools.is_empty() {
-            return Err(AgentProfileWarning {
-                source,
-                path: Some(path.display().to_string()),
-                message: format!("Profile '{}' must declare at least one tool", profile.id),
-            });
-        }
-
-        let Some(default_risk_level) = RiskLevel::parse(&profile.default_risk_level) else {
-            return Err(AgentProfileWarning {
-                source,
-                path: Some(path.display().to_string()),
-                message: format!(
-                    "Profile '{}' has invalid default_risk_level '{}'",
-                    profile.id, profile.default_risk_level
-                ),
-            });
-        };
-
-        let mut tools = Vec::with_capacity(profile.tools.len());
-        for tool in &profile.tools {
-            if !available_tools.contains(tool) {
-                return Err(AgentProfileWarning {
+        let mut seen_commands = HashSet::new();
+        for command in &profile.commands {
+            if !seen_commands.insert(command) {
+                return Err(profile_warning(
                     source,
-                    path: Some(path.display().to_string()),
-                    message: format!(
-                        "Profile '{}' references unknown tool '{}'",
-                        profile.id, tool
+                    path,
+                    format!(
+                        "Profile '{}' selects command '{}' more than once",
+                        profile.id, command
                     ),
-                });
+                ));
             }
-            tools.push(ToolId::new(tool));
+            if !available_commands.contains(command) {
+                return Err(profile_warning(
+                    source,
+                    path,
+                    format!(
+                        "Profile '{}' references unknown command '{}'",
+                        profile.id, command
+                    ),
+                ));
+            }
         }
 
+        let permissions = SandboxPermissionSet::new(profile.capabilities).map_err(|error| {
+            profile_warning(
+                source,
+                path,
+                format!("Profile '{}' has invalid capabilities: {error}", profile.id),
+            )
+        })?;
+        if profile.nushell_startup == NushellStartup::Inherit
+            && !permissions
+                .capabilities()
+                .contains(SandboxCapability::HostRead)
+            && !permissions
+                .capabilities()
+                .contains(SandboxCapability::NoSandbox)
+        {
+            return Err(profile_warning(
+                source,
+                path,
+                format!(
+                    "Profile '{}' uses inherited Nushell startup files without host-read or no-sandbox",
+                    profile.id
+                ),
+            ));
+        }
         profiles.push(AgentProfile {
             id: profile.id,
             display_name: profile.display_name,
             description: profile.description,
             system_prompt: profile.system_prompt.trim().to_string(),
-            tools,
-            default_risk_level,
+            commands: profile.commands,
+            permissions,
+            permission_rules: CapabilityPermissionRules::new(profile.permission_rules),
+            escalation_policy: profile.escalation_policy,
+            environment: profile.environment,
+            nushell_startup: profile.nushell_startup,
+            path: profile.path,
             source,
         });
     }
-
     Ok(profiles)
+}
+
+fn valid_profile_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn profile_warning(
+    source: AgentProfileSource,
+    path: &Path,
+    message: String,
+) -> AgentProfileWarning {
+    AgentProfileWarning {
+        source,
+        path: Some(path.display().to_string()),
+        message,
+    }
 }
 
 fn upsert_profiles(existing: &mut Vec<AgentProfile>, layer: Vec<AgentProfile>) {
@@ -220,126 +317,172 @@ fn upsert_profiles(existing: &mut Vec<AgentProfile>, layer: Vec<AgentProfile>) {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "tests use direct assertions for temporary profile setup and lookup"
+    reason = "profile tests use direct assertions for temporary configuration fixtures"
 )]
 mod tests {
-    use std::collections::HashSet;
     use std::fs;
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{AgentProfileSource, load_layer, resolve_profiles, workspace_profiles_path};
+    use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("agent-profiles-{name}-{nanos}"))
+        let path = std::env::temp_dir().join(format!("kraai-profiles-{name}-{nanos}"));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 
-    fn available_tools() -> HashSet<String> {
-        [
-            "close_files",
-            "bash",
-            "list_files",
-            "open_files",
-            "search_files",
-            "edit_file",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect()
+    fn commands() -> HashSet<String> {
+        available_command_ids()
     }
 
     #[test]
-    fn workspace_profiles_override_built_ins_by_id() {
-        let dir = temp_dir("workspace-override");
-        let profile_dir = dir.join(".kraai");
-        fs::create_dir_all(&profile_dir).unwrap();
-        fs::write(
-            workspace_profiles_path(&dir),
-            r#"
-[[profiles]]
-id = "plan-code"
-display_name = "Override"
-description = "Override description"
-system_prompt = "workspace"
-tools = ["list_files"]
-default_risk_level = "read_only_workspace"
-"#,
-        )
-        .unwrap();
-
-        let resolved = resolve_profiles(&dir, &available_tools());
+    fn built_ins_match_the_locked_command_and_capability_sets() {
+        let workspace = temp_dir("built-ins");
+        let resolved = resolve_profiles(&workspace, &commands());
         let plan = resolved
             .profiles
             .iter()
-            .find(|profile| profile.id == "plan-code")
+            .find(|profile| profile.id == "plan")
             .unwrap();
-        assert_eq!(plan.display_name, "Override");
-        assert_eq!(plan.source, AgentProfileSource::Workspace);
-
-        let _ = fs::remove_dir_all(dir);
+        let coding = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "coding")
+            .unwrap();
+        assert_eq!(plan.commands.len(), 2);
+        assert!(
+            plan.permissions
+                .capabilities()
+                .contains(SandboxCapability::WorkspaceRead)
+        );
+        assert!(
+            !plan
+                .permissions
+                .capabilities()
+                .contains(SandboxCapability::WorkspaceWrite)
+        );
+        assert_eq!(coding.commands.len(), 3);
+        assert!(
+            coding
+                .permissions
+                .capabilities()
+                .contains(SandboxCapability::WorkspaceWrite)
+        );
+        let _ = fs::remove_dir_all(workspace);
     }
 
     #[test]
-    fn invalid_workspace_layer_is_ignored_with_warning() {
-        let dir = temp_dir("workspace-invalid");
-        let profile_dir = dir.join(".kraai");
-        fs::create_dir_all(&profile_dir).unwrap();
+    fn workspace_profiles_replace_built_ins_without_legacy_fields() {
+        let workspace = temp_dir("workspace-layer");
+        let config_dir = workspace.join(".kraai");
+        fs::create_dir_all(&config_dir).unwrap();
         fs::write(
-            workspace_profiles_path(&dir),
-            r#"
-[[profiles]]
-id = "broken"
-display_name = "Broken"
-description = "Broken"
-system_prompt = "workspace"
-tools = ["missing_tool"]
-default_risk_level = "read_only_workspace"
+            config_dir.join("agents.toml"),
+            r#"[[profiles]]
+id = "plan"
+display_name = "Custom Plan"
+description = "custom"
+system_prompt = "custom prompt"
+commands = ["kraai-open-files"]
+capabilities = ["host-read"]
+escalation_policy = "deny"
+permission_rules = { network = "allow" }
+environment = "minimal"
+nushell_startup = "clean"
+path = "packaged"
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_profiles(&workspace, &commands());
+        assert!(resolved.warnings.is_empty());
+        let plan = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "plan")
+            .unwrap();
+        assert_eq!(plan.display_name, "Custom Plan");
+        assert_eq!(plan.escalation_policy, EscalationPolicy::Deny);
+        assert_eq!(plan.environment, EnvironmentPolicy::Minimal);
+        assert!(
+            plan.permissions
+                .capabilities()
+                .contains(SandboxCapability::HostRead)
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn unknown_commands_fail_the_entire_profile_layer() {
+        let workspace = temp_dir("unknown-command");
+        let config_dir = workspace.join(".kraai");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("agents.toml"),
+            r#"[[profiles]]
+id = "custom"
+display_name = "Custom"
+description = "custom"
+system_prompt = ""
+commands = ["not-installed"]
+capabilities = ["workspace-read"]
+escalation_policy = "prompt"
+environment = "allow-list"
+nushell_startup = "clean"
+path = "inherit"
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_profiles(&workspace, &commands());
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(
+            resolved
+                .warnings
+                .first()
+                .is_some_and(|warning| warning.message.contains("unknown command"))
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn inherited_nushell_startup_requires_host_visibility() {
+        let workspace = temp_dir("inherited-startup");
+        let config_dir = workspace.join(".kraai");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("agents.toml"),
+            r#"[[profiles]]
+id = "custom"
+display_name = "Custom"
+description = "custom"
+system_prompt = ""
+commands = []
+capabilities = ["workspace-read"]
+escalation_policy = "prompt"
+environment = "inherit"
+nushell_startup = "inherit"
+path = "inherit"
 "#,
         )
         .unwrap();
 
-        let resolved = resolve_profiles(&dir, &available_tools());
+        let resolved = resolve_profiles(&workspace, &commands());
+        assert_eq!(resolved.warnings.len(), 1);
         assert!(
             resolved
-                .profiles
-                .iter()
-                .any(|profile| profile.id == "plan-code")
+                .warnings
+                .first()
+                .is_some_and(|warning| warning.message.contains("without host-read or no-sandbox"))
         );
         assert!(
             resolved
                 .profiles
                 .iter()
-                .any(|profile| profile.id == "build-code")
+                .all(|profile| profile.id != "custom")
         );
-        assert!(!resolved.warnings.is_empty());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn layer_loader_rejects_invalid_risk_level() {
-        let dir = temp_dir("invalid-risk");
-        fs::write(
-            &dir,
-            r#"
-[[profiles]]
-id = "broken"
-display_name = "Broken"
-description = "Broken"
-system_prompt = "workspace"
-tools = ["list_files"]
-default_risk_level = "not_real"
-"#,
-        )
-        .unwrap();
-
-        let warning = load_layer(&dir, AgentProfileSource::Global, &available_tools()).unwrap_err();
-        assert!(warning.message.contains("invalid default_risk_level"));
-
-        let _ = fs::remove_file(dir);
+        let _ = fs::remove_dir_all(workspace);
     }
 }

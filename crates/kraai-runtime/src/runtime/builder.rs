@@ -7,15 +7,6 @@ use kraai_persistence::agent_state_root;
 use kraai_provider_core::{ProviderManager, ProviderRegistry};
 use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexFactory};
-use kraai_tool_bash::BashTool;
-use kraai_tool_close_file::CloseFileTool;
-use kraai_tool_core::ToolManager;
-use kraai_tool_edit_file::EditFileTool;
-use kraai_tool_list_files::ListFilesTool;
-use kraai_tool_open_file::OpenFileTool;
-use kraai_tool_read_file::ReadFileTool;
-use kraai_tool_search_files::SearchFilesTool;
-use kraai_types::{SandboxConfig, SandboxMode};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
@@ -27,7 +18,6 @@ use crate::settings::resolve_provider_config_path;
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     provider_config_path: Option<PathBuf>,
-    tool_sandbox: SandboxConfig,
 }
 
 impl RuntimeBuilder {
@@ -35,18 +25,11 @@ impl RuntimeBuilder {
     pub fn new() -> Self {
         Self {
             provider_config_path: None,
-            tool_sandbox: SandboxConfig::default(),
         }
     }
 
     pub fn provider_config_path(mut self, path: PathBuf) -> Self {
         self.provider_config_path = Some(path);
-        self
-    }
-
-    /// Set the sandbox mode used by command tools in every runtime session.
-    pub fn tool_sandbox_mode(mut self, mode: SandboxMode) -> Self {
-        self.tool_sandbox.mode = mode;
         self
     }
 
@@ -69,7 +52,6 @@ impl RuntimeBuilder {
         let command_tx_for_runtime = handle.command_tx.clone();
 
         let provider_config_path = self.provider_config_path.clone();
-        let tool_sandbox = self.tool_sandbox.clone();
         let thread_startup_tx = startup_tx.clone();
 
         let thread = std::thread::spawn(move || {
@@ -93,7 +75,6 @@ impl RuntimeBuilder {
                 command_rx,
                 shutdown_rx,
                 provider_config_path,
-                tool_sandbox,
                 thread_startup_tx.clone(),
             )) {
                 let error = format!("{error:#}");
@@ -112,12 +93,11 @@ impl RuntimeBuilder {
         command_rx: mpsc::Receiver<Command>,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
         provider_config_path_override: Option<PathBuf>,
-        tool_sandbox: SandboxConfig,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     ) -> Result<()> {
         Self::init_tracing()?;
 
-        let (message_store, session_store) = kraai_persistence::init()
+        let (message_store, session_store, execution_store) = kraai_persistence::init()
             .await
             .wrap_err("Failed to initialize persistence layer")?;
 
@@ -126,7 +106,6 @@ impl RuntimeBuilder {
             .and_then(|path| path.canonicalize())
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
-        let tools = build_default_tool_manager();
         let openai_codex_auth = Arc::new(
             OpenAiCodexAuthController::new().wrap_err("Failed to initialize OpenAI auth")?,
         );
@@ -135,20 +114,21 @@ impl RuntimeBuilder {
 
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
-            tools,
             default_workspace_dir,
-            tool_sandbox,
             message_store,
             session_store,
+            execution_store.clone(),
         )));
 
         let runtime = RuntimeCore {
             event_tx,
             command_tx,
             agent_manager,
+            execution_store,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            active_tool_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pending_script_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
             queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
             openai_codex_auth,
             provider_config_path,
@@ -211,18 +191,6 @@ impl Default for RuntimeBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub(crate) fn build_default_tool_manager() -> ToolManager {
-    let mut tools = ToolManager::new();
-    tools.register_tool(CloseFileTool);
-    tools.register_tool(ReadFileTool);
-    tools.register_tool(ListFilesTool);
-    tools.register_tool(OpenFileTool);
-    tools.register_tool(SearchFilesTool);
-    tools.register_tool(EditFileTool);
-    tools.register_tool(BashTool);
-    tools
 }
 
 pub(crate) fn build_provider_registry(

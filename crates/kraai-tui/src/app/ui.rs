@@ -11,25 +11,25 @@ use ratatui::{
 
 use crate::components::{ChatHistory, TextInput};
 
-use super::{AppState, ToolPhase, UiMode};
+use super::{AppState, ScriptPhase, UiMode};
 
 mod command_popup;
 mod menus;
 mod providers;
+mod script_approval;
 mod status;
-mod tool_approval;
 use command_popup::render_command_popup;
 use menus::{render_agent_menu, render_help_menu, render_model_menu, render_sessions_menu};
 pub(super) use providers::parse_settings_errors;
 use providers::render_providers_menu;
+use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;
 use status::statusline_line;
-use tool_approval::render_tool_approval_panel;
 
 pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
-    if state.mode == UiMode::Chat && state.tool_phase == ToolPhase::Deciding {
+    if state.mode == UiMode::Chat && state.script_phase == ScriptPhase::AwaitingApproval {
         10.min(area.height.saturating_sub(1).max(3))
     } else {
         TextInput::new(&state.input, state.input_cursor).get_height(area.width)
@@ -66,12 +66,12 @@ impl Widget for &AppState {
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
 
-        if self.mode == UiMode::Chat && self.tool_phase == ToolPhase::Deciding {
-            render_tool_approval_panel(self, input_area, buf);
+        if self.mode == UiMode::Chat && self.script_phase == ScriptPhase::AwaitingApproval {
+            render_script_approval_panel(self, input_area, buf);
         } else {
             TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
         }
-        if self.mode == UiMode::Chat && self.tool_phase != ToolPhase::Deciding {
+        if self.mode == UiMode::Chat && self.script_phase != ScriptPhase::AwaitingApproval {
             render_command_popup(self, area, input_area, buf);
         }
 

@@ -231,14 +231,17 @@ src/
 
 Responsibilities:
 
-- Accept an executable, argv, fixed working directory, environment, descriptors,
-  timeout, capability closure, runtime roots, and private temp configuration.
+- Accept an executable, argv, fixed working directory, environment, timeout,
+  capability closure, runtime roots, private temp configuration, and narrowly
+  declared private-IPC connect descriptors.
 - Fail closed if the requested restrictions cannot be established.
 - Keep protected workspace metadata read-only under `workspace-write`.
 - Implement `host-read`, `host-write`, network, and `no-sandbox` exactly as the
   shared capability contract defines.
 - Treat network as IP plus visible Unix-domain socket communication without
-  mounting socket paths itself.
+  mounting socket paths itself. A declared private-IPC descriptor is a narrow
+  internal exception for a socket path inside private temp and does not enable
+  arbitrary `connect` calls.
 - Own the entire descendant process tree through completion, timeout, or
   cancellation.
 - Provide private writable temp storage without granting filesystem write
@@ -525,7 +528,7 @@ Replace tool cards and risk-level UI with:
   difference from the default sandbox.
 - Allow-once and deny-once actions only.
 - Running, completed, denied, invalid, timed-out, cancelled,
-  sandbox-unavailable, and failed-to-start states.
+  sandbox-unavailable, failed-to-start, and runtime-error states.
 - Complete output and Nushell diagnostics without TOON decoding.
 
 Split execution rendering, approval input, and runtime event translation into

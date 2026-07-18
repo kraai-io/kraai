@@ -104,7 +104,9 @@ pinned Nushell engine.
 - Requests already satisfied by the profile's effective capabilities are
   harmless no-ops. `no-sandbox` must be requested alone. The `network`
   capability covers IP networking and visible Unix-domain sockets but does not
-  expose host socket paths by itself.
+  expose host socket paths by itself. Kraai's private parent/host transport is
+  an internal, descriptor-scoped seccomp exception inside private temp; it does
+  not broaden the profile's network permission.
 - Every block includes a model-authored timeout that applies to the complete
   script and its process tree. Timeout is invocation metadata, not Nushell code
   or a profile default.

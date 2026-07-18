@@ -63,15 +63,12 @@ impl Session {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingToolInfo {
-    pub call_id: String,
-    pub tool_id: String,
-    pub args: String,
-    pub description: String,
-    pub risk_level: String,
-    pub reasons: Vec<String>,
-    pub approved: Option<bool>,
-    pub queue_order: u64,
+pub struct PendingScriptInfo {
+    pub execution_id: String,
+    pub source: String,
+    pub requested_capabilities: Vec<String>,
+    pub capability_additions: Vec<String>,
+    pub timeout_millis: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -109,14 +106,6 @@ pub struct OpenAiCodexAuthStatus {
     pub error: Option<String>,
 }
 
-/// Tool batch outcome after tool results have been persisted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ToolBatchOutcome {
-    ContinuationScheduled,
-    ManualContinuationRequired,
-    PendingToolsRemaining,
-}
-
 /// Streaming events sent from the runtime to clients
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -124,9 +113,6 @@ pub enum Event {
     ConfigLoaded,
     /// General error
     Error(String),
-    /// Message completed (legacy)
-    MessageComplete(String),
-
     // Streaming events
     /// Stream started for a message
     StreamStart {
@@ -165,30 +151,14 @@ pub enum Event {
         reason: String,
     },
 
-    // Tool events
-    /// Tool call detected, awaiting permission
-    ToolCallDetected {
+    ScriptApprovalRequested {
         session_id: String,
-        call_id: String,
-        tool_id: String,
-        args: String,
-        description: String,
-        risk_level: String,
-        reasons: Vec<String>,
-        queue_order: u64,
+        script: PendingScriptInfo,
     },
-    /// Tool execution result ready
-    ToolResultReady {
+    ScriptResultReady {
         session_id: String,
-        call_id: String,
-        tool_id: String,
-        success: bool,
-        output: String,
-        denied: bool,
-    },
-    ToolBatchFinished {
-        session_id: String,
-        outcome: ToolBatchOutcome,
+        execution_id: String,
+        status: String,
     },
     ContinuationFailed {
         session_id: String,

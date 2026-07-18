@@ -102,11 +102,14 @@ description, examples, pipeline input, and `run` implementation. The same
 compile-time Kraai declaration can generate the static prompt metadata and the
 native command implementation.
 
-The child receives the script and control data through private descriptors, not
-argv interpolation. The request descriptor is consumed and closed before model
-source is evaluated. The trusted event path uses close-on-exec descriptors plus
-per-execution authenticated, sequenced frames; descriptor secrecy alone is not
-treated as an authorization boundary.
+The child receives the script and control data through a private Unix-domain
+socket inside the execution's private temporary mount, not argv interpolation.
+Only the socket path is passed in argv; exact source and control data remain in
+framed transport messages. The host moves the connected socket to one dedicated
+close-on-exec descriptor. Restricted seccomp permits `connect` only on that
+descriptor, so this internal channel does not grant general Unix-socket access.
+State-effect frames are also authenticated and sequenced; path or descriptor
+secrecy alone is not treated as an authorization boundary.
 
 ### Advantages
 
@@ -194,10 +197,12 @@ After approval, the parent creates one immutable internal request containing:
 This internal structure may use an efficient private serialization format. It is
 not model-authored, never enters the prompt, and is not the command API.
 
-The parent passes the request over a dedicated pipe or equivalent descriptor.
-The host reads it once, validates it, retains the authentication secret only in
-Rust memory, and closes the request descriptor before parsing model source. The
-script is never placed in a shell command string or interpolated into argv.
+The parent binds a dedicated socket within the already-private temporary mount.
+The host connects on its seccomp-authorized transport descriptor and reads one
+length-delimited request before parsing model source. It retains the same duplex
+channel for authenticated state effects and acknowledgments, with request and
+effect framing kept distinct by protocol phase. The script is never placed in a
+shell command string or interpolated into argv.
 
 Separate channels carry:
 
@@ -322,8 +327,8 @@ for `kraai-open-files`.
 
 The event writer lives in trusted Rust code and holds the per-execution secret
 outside Nushell values and environment variables. Frames are authenticated and
-sequenced so access to a process descriptor through `/proc` is not enough to
-forge or replay a state effect. Descriptors are also marked close-on-exec before
+sequenced so access to the transport through `/proc` is not enough to forge or
+replay a state effect. The transport descriptor is marked close-on-exec before
 model-launched external processes begin. The sandbox must independently deny
 process-memory inspection and tracing of the host; channel authentication is
 defense in depth, not a substitute for process isolation.
@@ -549,8 +554,8 @@ code:
    set.
 2. Register dummy native Kraai commands returning both a structured record and
    a lazy stream of records.
-3. Pass exact source over a private descriptor and run it inside the current
-   restricted sandbox.
+3. Pass exact source over the framed private socket and run it inside the
+   current restricted sandbox.
 4. Prove an external child cannot inherit or forge the trusted event channel.
 5. Pipe dummy command records through native filters and prove values remain
    structured without a parent round trip or eager collection.

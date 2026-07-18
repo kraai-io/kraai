@@ -118,7 +118,8 @@ src/
   protected metadata, and process-group termination into cohesive modules.
 - Replace `CommandRequest` with a generic launch plan capable of starting an
   absolute executable with explicit arguments, environment, current directory,
-  stdio, inherited private channels, runtime roots, and effective capabilities.
+  stdio, runtime roots, effective capabilities, and narrowly declared private
+  IPC descriptors.
 - Replace the old sandbox-mode/escalated-command vocabulary with the agreed
   capability set and resolved sandbox permission set.
 - Support `workspace-read`, `host-read`, `workspace-write`, `metadata-write`,
@@ -130,9 +131,10 @@ src/
 - Preserve an authoritative final capture containing every emitted byte.
 - Keep Nix paths, daemon access, and store behavior out of generic policy;
   optional Nix additions enter as explicit configuration and runtime roots.
-- Preserve `#![forbid(unsafe_code)]` where possible. If inherited-descriptor or
-  process setup cannot be expressed safely, isolate the minimum reviewed code
-  behind a narrow module rather than weakening the whole workspace.
+- Preserve `#![forbid(unsafe_code)]` where possible. Use safe OS abstractions for
+  private transport setup; if future process setup cannot be expressed safely,
+  isolate the minimum reviewed code behind a narrow module rather than weakening
+  the whole workspace.
 - Remove `kraai-command-runner` after its remaining callers use
   `kraai-sandbox`; do not retain it as an alias crate.
 

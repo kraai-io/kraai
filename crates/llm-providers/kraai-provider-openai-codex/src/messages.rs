@@ -41,18 +41,14 @@ pub fn normalize_chat_messages(messages: Vec<ChatMessage>) -> Result<NormalizedR
                 ChatRole::System => unreachable!("system messages are extracted to instructions"),
                 ChatRole::User => "user",
                 ChatRole::Assistant => "assistant",
-                ChatRole::Tool => "user",
+                ChatRole::ToolCallResult => "user",
             };
             let content_kind = if message.role == ChatRole::Assistant {
                 "output_text"
             } else {
                 "input_text"
             };
-            let text = if message.role == ChatRole::Tool {
-                format!("[Tool Result]\n{}", message.content)
-            } else {
-                message.content
-            };
+            let text = message.content;
 
             Some(ResponsesRequestMessage {
                 kind: "message",

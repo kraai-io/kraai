@@ -2,9 +2,9 @@ mod builder;
 mod config;
 mod core;
 mod dispatch;
+mod script_execution;
+mod scripts;
 mod streaming;
-mod tool_call_guard;
-mod tool_calls;
 
 pub use builder::RuntimeBuilder;
 

@@ -11,15 +11,15 @@ use ratatui::{
     widgets::Widget,
 };
 use regex::Regex;
-use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
 use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
 
-static TOOL_CALL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
+static TOOL_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)<tool_call\b[^>]*>\s*\n?(.*?)</tool_call>").expect("valid regex")
+});
 const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
@@ -256,47 +256,16 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn parse_tool_call(toon_content: &str) -> Option<(String, Option<String>)> {
-        let value: Value = toon_format::decode_default(toon_content).ok()?;
-        let object = value.as_object()?;
-        let tool_name = object.get("tool")?.as_str()?;
-
-        let mut args: Map<String, Value> = Map::new();
-        for (key, val) in object {
-            if key != "tool" {
-                args.insert(key.clone(), val.clone());
-            }
-        }
-
-        let args_text = if args.is_empty() {
-            None
-        } else {
-            Some(toon_format::encode_default(&Value::Object(args)).ok()?)
-        };
-
-        Some((tool_name.to_string(), args_text))
-    }
-
-    fn render_tool_call_card(toon_content: &str, width: usize) -> Option<Vec<RenderedLine>> {
-        let (tool_name, args_text) = Self::parse_tool_call(toon_content)?;
+    fn render_script_card(source: &str, width: usize) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
         let header_style = Style::default()
             .fg(Color::Rgb(255, 200, 80))
             .add_modifier(Modifier::BOLD);
         let body_style = Style::default().fg(Color::Rgb(130, 230, 255));
 
-        Self::push_wrapped_lines(&mut lines, &tool_name, width, header_style, "", "");
-
-        if let Some(args_text) = args_text {
-            Self::push_wrapped_lines(&mut lines, &args_text, width, body_style, "  ", "  ");
-        } else {
-            lines.push(Self::single_span_line(
-                Self::fit_to_width("  (no args)", width),
-                body_style,
-            ));
-        }
-
-        Some(lines)
+        Self::push_wrapped_lines(&mut lines, "Nushell", width, header_style, "", "");
+        Self::push_wrapped_lines(&mut lines, source, width, body_style, "  ", "  ");
+        lines
     }
 
     fn render_assistant_message(content: &str, width: usize) -> Vec<RenderedLine> {
@@ -318,19 +287,9 @@ impl<'a> ChatHistory<'a> {
                 lines.append(&mut before_lines);
             }
 
-            if let Some(raw_toon) = caps.get(1).map(|m| m.as_str()) {
-                if let Some(mut card_lines) = Self::render_tool_call_card(raw_toon, width) {
-                    lines.append(&mut card_lines);
-                } else {
-                    Self::push_wrapped_lines(
-                        &mut lines,
-                        full_match.as_str(),
-                        width,
-                        normal_style,
-                        "",
-                        "",
-                    );
-                }
+            if let Some(source) = caps.get(1).map(|m| m.as_str()) {
+                let mut card_lines = Self::render_script_card(source, width);
+                lines.append(&mut card_lines);
             }
 
             cursor = full_match.end();
@@ -352,24 +311,6 @@ impl<'a> ChatHistory<'a> {
         }
 
         lines
-    }
-
-    fn should_render_tool_message(content: &str) -> bool {
-        if content.contains("Failed to parse tool call:") {
-            return true;
-        }
-
-        if content.contains("was denied by user") {
-            return true;
-        }
-
-        if let Some((_, json)) = content.split_once("result:\n")
-            && let Ok(value) = serde_json::from_str::<Value>(json)
-        {
-            return value.get("error").is_some();
-        }
-
-        false
     }
 
     fn build_rendered_lines(&self, width: u16) -> Vec<RenderedLine> {
@@ -464,21 +405,10 @@ impl<'a> ChatHistory<'a> {
                 Self::render_assistant_message(&content, content_width),
                 '•',
             ),
-            ChatRole::Tool => {
-                if !Self::should_render_tool_message(&content) {
-                    Vec::new()
-                } else {
-                    let mut lines = Vec::new();
-                    for line in Self::wrap_with_prefix(&content, content_width, "tool: ", "      ")
-                    {
-                        lines.push(Self::single_span_line(
-                            line,
-                            Style::default().fg(Color::Yellow),
-                        ));
-                    }
-                    Self::add_message_gutter(lines, '•')
-                }
-            }
+            ChatRole::ToolCallResult => Self::add_message_gutter(
+                Self::render_assistant_message(&content, content_width),
+                '•',
+            ),
             ChatRole::System => Vec::new(),
         }
     }
@@ -640,8 +570,6 @@ mod tests {
             content: content.to_string(),
             status: MessageStatus::Complete,
             agent_profile_id: None,
-            tool_state_snapshot: None,
-            tool_state_deltas: Vec::new(),
             generation: None,
         }
     }
@@ -736,33 +664,32 @@ mod tests {
     }
 
     #[test]
-    fn renders_assistant_tool_call_in_pretty_format() {
+    fn renders_assistant_script_call_in_pretty_format() {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\nmax_size: 10\n</tool_call>",
+            "<tool_call timeout=\"10sec\" permissions=\"workspace-read\">\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
 
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| *line == " • read_file"));
+        assert!(rendered.iter().any(|line| *line == " • Nushell"));
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("   files[1]: /tmp/a.txt"))
+                .any(|line| { line.contains("open /tmp/a.txt | lines | first 10") })
         );
-        assert!(rendered.iter().any(|line| line.contains("max_size: 10")));
         assert!(!rendered.iter().any(|line| line.contains("<tool_call>")));
     }
 
     #[test]
-    fn renders_mixed_assistant_text_and_tool_call() {
+    fn renders_mixed_assistant_text_and_script_call() {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "before\n<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>\nafter",
+            "before\n<tool_call timeout=\"1sec\">\nls\n</tool_call>\nafter",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -770,71 +697,27 @@ mod tests {
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| *line == " • before"));
-        assert!(rendered.iter().any(|line| *line == "   read_file"));
+        assert!(rendered.iter().any(|line| *line == "   Nushell"));
         assert!(rendered.iter().any(|line| *line == "   after"));
     }
 
     #[test]
-    fn falls_back_to_raw_tool_call_block_on_parse_failure() {
+    fn renders_script_source_without_parsing_nushell() {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\ntool read_file\nbad\n</tool_call>",
+            "<tool_call timeout=\"1sec\">\nthis is not parsed here\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.contains(" • <tool_call>")));
-    }
-    #[test]
-    fn hides_successful_tool_messages() {
-        let tool = message(
-            "1",
-            ChatRole::Tool,
-            "Tool 'read_file' result:\n{\n  \"ok\": true\n}",
-        );
-        let refs = [&tool];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-
-        assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn shows_tool_error_messages() {
-        let tool = message(
-            "1",
-            ChatRole::Tool,
-            "Tool 'read_file' result:\n{\n  \"error\": \"denied\"\n}",
-        );
-        let refs = [&tool];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-
-        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains(" • tool: Tool 'read_file' result:"))
+                .any(|line| line.contains("this is not parsed here"))
         );
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("\"error\": \"denied\""))
-        );
-    }
-
-    #[test]
-    fn shows_denied_tool_messages() {
-        let tool = message("1", ChatRole::Tool, "Tool 'read_file' was denied by user");
-        let refs = [&tool];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-
-        assert_eq!(lines.len(), 1);
-        assert!(ChatHistory::line_text(&lines[0]).contains("denied by user"));
     }
 
     #[test]
@@ -914,32 +797,35 @@ mod tests {
     }
 
     #[test]
-    fn skips_leading_blank_line_before_assistant_tool_call() {
+    fn skips_leading_blank_line_before_assistant_script_call() {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>",
+            "<tool_call timeout=\"5sec\">\nkraai-open-files /tmp/a.txt\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert_eq!(rendered.first().map(String::as_str), Some(" • read_file"));
+        assert_eq!(rendered.first().map(String::as_str), Some(" • Nushell"));
     }
 
     #[test]
-    fn skips_whitespace_only_tail_after_assistant_tool_call() {
+    fn skips_whitespace_only_tail_after_assistant_script_call() {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\ntool: read_file\nfiles[1]: /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
+            "<tool_call timeout=\"5sec\">\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert_eq!(rendered, vec![" • read_file", "     files[1]: /tmp/a.txt"]);
+        assert_eq!(
+            rendered,
+            vec![" • Nushell", "     kraai-open-files /tmp/a.txt"]
+        );
     }
 }

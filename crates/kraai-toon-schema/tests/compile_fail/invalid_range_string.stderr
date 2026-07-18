@@ -1,5 +1,0 @@
-error: `min` must be a non-negative 32-bit integer literal
- --> tests/compile_fail/invalid_range_string.rs:7:33
-  |
-7 |             #[toon_schema(min = "one")]
-  |                                 ^^^^^

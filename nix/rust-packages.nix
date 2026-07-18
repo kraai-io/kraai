@@ -54,6 +54,7 @@
 
     cargoNix = mkCargoNix true;
     cargoCheckNix = mkCargoNix false;
+    nushellHost = cargoNix.workspaceMembers."kraai-nushell-runtime".build;
 
     mkCargoCheck = {
       name,
@@ -108,7 +109,14 @@
       postInstall =
         (old.postInstall or "")
         + ''
-          wrapProgram "$out/bin/kraai" --prefix PATH : ${lib.makeBinPath [pkgs.bubblewrap]}
+          install -Dm755 ${nushellHost}/bin/kraai-nushell-host "$out/bin/kraai-nushell-host"
+          wrapProgram "$out/bin/kraai" \
+            --prefix PATH : ${lib.makeBinPath [
+            pkgs.bubblewrap
+            pkgs.nushell
+            pkgs.ripgrep
+          ]} \
+            --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
         '';
       meta =
         (old.meta or {})

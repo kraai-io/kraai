@@ -83,10 +83,17 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
                     Style::default()
                 },
             ));
+            let capabilities = profile
+                .capabilities
+                .iter()
+                .map(kraai_types::SandboxCapability::as_str)
+                .collect::<Vec<_>>()
+                .join(",");
             lines.push(Line::raw(format!(
-                "  {} | risk={} | source={}",
+                "  {} | capabilities={} | escalation={} | source={}",
                 profile.description,
-                profile.default_risk_level.as_str(),
+                capabilities,
+                profile.escalation_policy.as_str(),
                 match profile.source {
                     kraai_runtime::AgentProfileSource::BuiltIn => "built-in",
                     kraai_runtime::AgentProfileSource::Global => "global",

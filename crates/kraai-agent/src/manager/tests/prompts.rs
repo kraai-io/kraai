@@ -1,11 +1,71 @@
 use super::super::*;
-use super::common::{cleanup_dir, open_file_state_delta, test_dir, test_manager};
+use super::common::{cleanup_dir, test_dir, test_manager};
 use color_eyre::eyre::Result;
-use serde_json::json;
+use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
+use kraai_types::{
+    CommandInvocationId, ContextStateDelta, SandboxCapabilities, ScriptExecutionId,
+    ScriptExecutionStatus, StateEffectRequest,
+};
+use std::time::Duration;
+use ulid::Ulid;
+
+async fn persist_open_effect(
+    manager: &mut AgentManager,
+    session_id: &str,
+    path: &Path,
+) -> Result<()> {
+    let session = manager.require_session(session_id).await?;
+    let profile = manager.resolve_selected_profile(&session)?;
+    let id = ScriptExecutionId::new(Ulid::new());
+    manager
+        .execution_store
+        .create(NewScriptExecution {
+            id: id.clone(),
+            session_id: session_id.to_string(),
+            source_message_id: MessageId::new(Ulid::new()),
+            profile: profile.snapshot(),
+            source: b"kraai-open-files notes.txt".to_vec(),
+            requested_capabilities: SandboxCapabilities::default(),
+            effective_capabilities: profile.permissions.capabilities().clone(),
+            timeout: Some(Duration::from_secs(10)),
+        })
+        .await?;
+    manager.execution_store.mark_running(&id).await?;
+    manager
+        .execution_store
+        .append_effect(
+            &id,
+            &StateEffectRequest {
+                sequence: 1,
+                invocation_id: CommandInvocationId::new(Ulid::new()),
+                command_id: String::from("kraai-open-files"),
+                deltas: vec![ContextStateDelta {
+                    namespace: String::from("opened_files"),
+                    operation: String::from("open"),
+                    payload: serde_json::json!({ "path": path.display().to_string() }),
+                }],
+            },
+        )
+        .await?;
+    manager
+        .execution_store
+        .finish(
+            &id,
+            ScriptExecutionCompletion {
+                status: ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+                sandbox_denied: false,
+                error: None,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        )
+        .await?;
+    Ok(())
+}
 
 #[tokio::test]
-async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_open_file()
--> Result<()> {
+async fn prepare_start_stream_injects_latest_acknowledged_open_file_effect() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-start");
     tokio::fs::create_dir_all(&workspace_dir).await?;
@@ -18,23 +78,9 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
-    manager
-        .add_message(&session_id, ChatRole::User, String::from("prior"), None)
-        .await?;
-    manager
-        .add_tool_results_to_history(
-            &session_id,
-            vec![ToolResult {
-                call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_files"),
-                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
-                permission_denied: false,
-                tool_state_deltas: vec![open_file_state_delta(&file_path)],
-            }],
-        )
-        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
     tokio::fs::write(&file_path, "new contents\nsecond line\n").await?;
 
     let request = manager
@@ -45,20 +91,6 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
             ProviderId::new("mock"),
         )
         .await?;
-
-    let history = manager.get_chat_history(&session_id).await?;
-    let user_message = history
-        .values()
-        .find(|message| message.role == ChatRole::User && message.content == "follow up")
-        .expect("new user message should exist");
-    let snapshot = user_message
-        .tool_state_snapshot
-        .as_ref()
-        .expect("user message should store tool state snapshot");
-    assert_eq!(
-        snapshot.entries["opened_files"]["paths"][0].as_str(),
-        Some(file_path_str.as_str())
-    );
 
     let system_prompt = request
         .provider_messages
@@ -87,7 +119,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let request = manager
@@ -109,17 +141,17 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(!system_prompt.content.contains(AGENTS_MD_FILE_NAME));
     let protocol_offset = system_prompt
         .content
-        .find("# Tool Execution Protocol")
-        .expect("tool execution protocol");
+        .find("# Script Execution Protocol")
+        .expect("script execution protocol");
     let first_tool_offset = system_prompt
         .content
-        .find("mock schema")
-        .expect("tool definition");
+        .find("# Kraai Commands")
+        .expect("command definitions");
     assert!(protocol_offset < first_tool_offset);
     assert!(
         system_prompt
             .content
-            .contains("A `<tool_call>` block is the tool invocation.")
+            .contains("one `<tool_call>` block containing a complete Nushell script")
     );
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
@@ -133,7 +165,7 @@ async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<(
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("build-code"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let request = manager
@@ -189,7 +221,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let request = manager
@@ -231,7 +263,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager
@@ -310,7 +342,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
         .set_workspace_dir(&session_id, workspace_a.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager
@@ -351,12 +383,11 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
 }
 
 #[tokio::test]
-async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
+async fn prepare_continuation_injects_acknowledged_open_file_effect() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-continuation");
     tokio::fs::create_dir_all(&workspace_dir).await?;
     let file_path = workspace_dir.join("notes.txt");
-    let file_path_str = file_path.display().to_string();
     tokio::fs::write(&file_path, "current\n").await?;
 
     let session_id = manager.create_session().await?;
@@ -364,23 +395,12 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
     manager
         .add_message(&session_id, ChatRole::User, String::from("prior"), None)
         .await?;
-    manager
-        .add_tool_results_to_history(
-            &session_id,
-            vec![ToolResult {
-                call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_files"),
-                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
-                permission_denied: false,
-                tool_state_deltas: vec![open_file_state_delta(&file_path)],
-            }],
-        )
-        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
 
     let session = manager.require_session(&session_id).await?;
     let profile = manager.resolve_selected_profile(&session)?;
@@ -393,20 +413,6 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-
-    let history = manager.get_chat_history(&session_id).await?;
-    let tool_message = history
-        .values()
-        .find(|message| message.role == ChatRole::Tool && !message.tool_state_deltas.is_empty())
-        .expect("tool result message should exist");
-    let snapshot = tool_message
-        .tool_state_snapshot
-        .as_ref()
-        .expect("tool result message should store tool state snapshot");
-    assert_eq!(
-        snapshot.entries["opened_files"]["paths"][0].as_str(),
-        Some(file_path_str.as_str())
-    );
 
     let system_prompt = request
         .provider_messages

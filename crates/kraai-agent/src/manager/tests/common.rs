@@ -1,43 +1,14 @@
 use super::super::*;
-use async_trait::async_trait;
 use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
 use kraai_provider_core::Provider;
-use kraai_tool_core::{ToolCallResult, ToolContext, TypedTool};
-use kraai_types::{ChatMessage as ProviderChatMessage, ToolStateDelta};
-use serde::Deserialize;
-use serde_json::json;
-use std::path::{Path, PathBuf};
+use kraai_types::ChatMessage as ProviderChatMessage;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) struct MockProvider {
     id: ProviderId,
-}
-
-#[derive(Clone, Deserialize)]
-pub(super) struct MockToolArgs {}
-
-#[derive(Clone)]
-pub(super) struct MockTool {
-    pub(super) name: &'static str,
-}
-
-#[async_trait]
-impl TypedTool for MockTool {
-    type Args = MockToolArgs;
-
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn schema(&self) -> &'static str {
-        "mock schema"
-    }
-
-    async fn call(&self, _args: Self::Args, _ctx: &ToolContext<'_>) -> ToolCallResult {
-        ToolCallResult::success(serde_json::json!({ "ok": true }))
-    }
 }
 
 #[async_trait::async_trait]
@@ -103,6 +74,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         &data_dir,
         message_store.clone(),
     ));
+    let execution_store = Arc::new(kraai_persistence::FileScriptExecutionStore::new(&data_dir));
 
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -112,38 +84,16 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         }),
     );
 
-    let mut tools = ToolManager::new();
-    tools.register_tool(MockTool {
-        name: "close_files",
-    });
-    tools.register_tool(MockTool { name: "list_files" });
-    tools.register_tool(MockTool { name: "open_files" });
-    tools.register_tool(MockTool {
-        name: "search_files",
-    });
-    tools.register_tool(MockTool { name: "read_files" });
-    tools.register_tool(MockTool { name: "edit_file" });
-    tools.register_tool(MockTool { name: "bash" });
-
     let manager = AgentManager::new(
         providers,
-        tools,
         PathBuf::from("/tmp/default-workspace"),
-        kraai_types::SandboxConfig::default(),
         message_store,
         session_store,
+        execution_store,
     );
     (manager, data_dir)
 }
 
 pub(super) async fn cleanup_dir(data_dir: PathBuf) {
     let _ = tokio::fs::remove_dir_all(data_dir).await;
-}
-
-pub(super) fn open_file_state_delta(path: &Path) -> ToolStateDelta {
-    ToolStateDelta {
-        namespace: String::from("opened_files"),
-        operation: String::from("open"),
-        payload: json!({ "path": path.display().to_string() }),
-    }
 }

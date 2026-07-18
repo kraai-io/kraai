@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{CallId, MessageId, ModelId, ProviderId};
+use kraai_types::{MessageId, ModelId, ProviderId, ScriptExecutionId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
-    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, PendingToolInfo, RuntimeStartupState,
-    Session, SessionContextUsage, SettingsDocument, WorkspaceState,
+    AgentProfilesState, Event, Model, OpenAiCodexAuthStatus, RuntimeStartupState, Session,
+    SessionContextUsage, SettingsDocument, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime
@@ -44,7 +44,6 @@ pub(crate) enum Command {
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
-        auto_approve: bool,
     },
     StartQueuedMessages {
         session_id: String,
@@ -90,26 +89,25 @@ pub(crate) enum Command {
         session_id: String,
         response: oneshot::Sender<Option<SessionContextUsage>>,
     },
-    GetPendingTools {
+    GetPendingScript {
         session_id: String,
-        response: oneshot::Sender<Vec<PendingToolInfo>>,
+        response: oneshot::Sender<Option<crate::PendingScriptInfo>>,
     },
-    ApproveTool {
+    ApproveScript {
         session_id: String,
-        call_id: CallId,
+        execution_id: ScriptExecutionId,
+        response: oneshot::Sender<Result<()>>,
     },
-    DenyTool {
+    DenyScript {
         session_id: String,
-        call_id: CallId,
+        execution_id: ScriptExecutionId,
+        response: oneshot::Sender<Result<()>>,
     },
     CancelStream {
         session_id: String,
         response: oneshot::Sender<Result<bool>>,
     },
     ContinueSession {
-        session_id: String,
-    },
-    ExecuteApprovedTools {
         session_id: String,
     },
     GetOpenAiCodexAuthStatus {
@@ -305,18 +303,6 @@ impl RuntimeHandle {
         model_id: String,
         provider_id: String,
     ) -> Result<()> {
-        self.send_message_with_options(session_id, message, model_id, provider_id, false)
-            .await
-    }
-
-    pub async fn send_message_with_options(
-        &self,
-        session_id: String,
-        message: String,
-        model_id: String,
-        provider_id: String,
-        auto_approve: bool,
-    ) -> Result<()> {
         let model_id =
             ModelId::try_new(model_id).map_err(|error| eyre!("invalid model_id: {error}"))?;
         let provider_id = ProviderId::try_new(provider_id)
@@ -327,7 +313,6 @@ impl RuntimeHandle {
                 message,
                 model_id,
                 provider_id,
-                auto_approve,
             })
             .await?;
         Ok(())
@@ -452,10 +437,13 @@ impl RuntimeHandle {
         Ok(rx.await?)
     }
 
-    pub async fn get_pending_tools(&self, session_id: String) -> Result<Vec<PendingToolInfo>> {
+    pub async fn get_pending_script(
+        &self,
+        session_id: String,
+    ) -> Result<Option<crate::PendingScriptInfo>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::GetPendingTools {
+            .send(Command::GetPendingScript {
                 session_id,
                 response: tx,
             })
@@ -463,30 +451,32 @@ impl RuntimeHandle {
         Ok(rx.await?)
     }
 
-    /// Approve a tool call
-    pub async fn approve_tool(&self, session_id: String, call_id: String) -> Result<()> {
-        let call_id =
-            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
+    pub async fn approve_script(&self, session_id: String, execution_id: String) -> Result<()> {
+        let execution_id = ScriptExecutionId::try_new(execution_id)
+            .map_err(|error| eyre!("invalid execution_id: {error}"))?;
+        let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::ApproveTool {
+            .send(Command::ApproveScript {
                 session_id,
-                call_id,
+                execution_id,
+                response: tx,
             })
             .await?;
-        Ok(())
+        rx.await?
     }
 
-    /// Deny a tool call
-    pub async fn deny_tool(&self, session_id: String, call_id: String) -> Result<()> {
-        let call_id =
-            CallId::try_new(call_id).map_err(|error| eyre!("invalid call_id: {error}"))?;
+    pub async fn deny_script(&self, session_id: String, execution_id: String) -> Result<()> {
+        let execution_id = ScriptExecutionId::try_new(execution_id)
+            .map_err(|error| eyre!("invalid execution_id: {error}"))?;
+        let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send(Command::DenyTool {
+            .send(Command::DenyScript {
                 session_id,
-                call_id,
+                execution_id,
+                response: tx,
             })
             .await?;
-        Ok(())
+        rx.await?
     }
 
     /// Cancel the active stream for a session.
@@ -504,14 +494,6 @@ impl RuntimeHandle {
     pub async fn continue_session(&self, session_id: String) -> Result<()> {
         self.command_tx
             .send(Command::ContinueSession { session_id })
-            .await?;
-        Ok(())
-    }
-
-    /// Execute all approved tools
-    pub async fn execute_approved_tools(&self, session_id: String) -> Result<()> {
-        self.command_tx
-            .send(Command::ExecuteApprovedTools { session_id })
             .await?;
         Ok(())
     }

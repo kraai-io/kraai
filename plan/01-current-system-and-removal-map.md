@@ -154,9 +154,9 @@ Replace or add:
 
 - The argv-only `CommandRequest` abstraction with a lower-level sandboxed
   process request that can safely launch the Nushell execution boundary.
-- Dedicated input and control channels. The current Linux path uses stdin for
-  the seccomp filter, so script input and structured control traffic need an
-  explicit descriptor design.
+- A dedicated framed duplex control channel. The Linux path keeps stdin for the
+  seccomp filter and uses a socket inside private temp, connected only through a
+  dedicated descriptor allowed by the restricted seccomp program.
 - Complete output capture with no compaction, truncation, or overflow-artifact
   feature in this redesign.
 - Clear separation between sandbox preparation and Nushell-specific execution.

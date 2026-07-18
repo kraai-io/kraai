@@ -8,18 +8,6 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
-        self.prepare_start_stream_with_options(session_id, message, model_id, provider_id, false)
-            .await
-    }
-
-    pub async fn prepare_start_stream_with_options(
-        &mut self,
-        session_id: &str,
-        message: String,
-        model_id: ModelId,
-        provider_id: ProviderId,
-        auto_approve: bool,
-    ) -> Result<PendingStreamRequest> {
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
@@ -31,23 +19,20 @@ impl AgentManager {
                     "Cannot send a new message while the current turn is active"
                 ));
             }
-            state.promote_pending_tool_config();
+            state.promote_pending_workspace_dir();
             state.last_model = Some(model_id.clone());
             state.last_provider = Some(provider_id.clone());
             state.active_turn_profile = Some(profile.clone());
-            state.active_turn_auto_approve = auto_approve;
-            state.active_tool_config.workspace_dir.clone()
+            state.active_workspace_dir.clone()
         };
         self.last_used_profile_id = Some(profile.id.clone());
 
         let user_message = match self
-            .append_message_with_tool_state(
+            .append_message(
                 session_id,
                 ChatRole::User,
                 message,
                 Some(profile.id.clone()),
-                None,
-                Vec::new(),
             )
             .await
         {
@@ -75,13 +60,10 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let mut tool_state_snapshot = resolve_snapshot_from_history(&context);
-        let system_prompt = match self.build_turn_system_prompt(
-            session_id,
-            &profile,
-            &workspace_dir,
-            &mut tool_state_snapshot,
-        ) {
+        let system_prompt = match self
+            .build_turn_system_prompt(session_id, &profile, &workspace_dir)
+            .await
+        {
             Ok(system_prompt) => system_prompt,
             Err(error) => {
                 self.clear_active_turn(session_id);
@@ -98,27 +80,6 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        if let Some(state) = self.session_states.get_mut(session_id) {
-            state.active_turn_tool_state_snapshot = Some(tool_state_snapshot.clone());
-        }
-        if let Err(error) = self
-            .persist_tool_state_snapshot(&user_msg_id, tool_state_snapshot.clone())
-            .await
-        {
-            self.clear_active_turn(session_id);
-            if let Err(rollback_error) = self
-                .conversation_store
-                .restore_appended_message(session_id, &user_message)
-                .await
-            {
-                tracing::error!(
-                    "Failed to roll back user message {} after tool-state snapshot failure: {rollback_error}",
-                    user_msg_id
-                );
-            }
-            return Err(error);
-        }
-
         let mut provider_messages: Vec<ChatMessage> = context
             .into_iter()
             .map(|m| ChatMessage {
@@ -134,7 +95,7 @@ impl AgentManager {
             });
         }
 
-        let call_id = CallId::new(Ulid::new());
+        let stream_id = StreamId::new(Ulid::new());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
@@ -147,7 +108,7 @@ impl AgentManager {
             .start_streaming_message(
                 session_id,
                 ChatRole::Assistant,
-                call_id,
+                stream_id,
                 Some(profile.id),
                 generation,
             )
@@ -198,7 +159,6 @@ impl AgentManager {
                 Some(profile) => profile,
                 None => {
                     state.active_turn_profile = Some(selected_profile.clone());
-                    state.active_turn_auto_approve = false;
                     selected_profile.clone()
                 }
             };
@@ -206,13 +166,9 @@ impl AgentManager {
                 model_id.clone(),
                 provider_id.clone(),
                 profile,
-                state.active_tool_config.workspace_dir.clone(),
+                state.active_workspace_dir.clone(),
             )
         };
-
-        if self.has_unfinished_tools(session_id) {
-            return Ok(None);
-        }
 
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
@@ -223,17 +179,8 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
-        let mut tool_state_snapshot = resolve_snapshot_from_history(&context);
-        let system_prompt = self.build_turn_system_prompt(
-            session_id,
-            &profile,
-            &workspace_dir,
-            &mut tool_state_snapshot,
-        )?;
-        if let Some(state) = self.session_states.get_mut(session_id) {
-            state.active_turn_tool_state_snapshot = Some(tool_state_snapshot.clone());
-        }
-        self.persist_tool_state_snapshot(&tip_id, tool_state_snapshot.clone())
+        let system_prompt = self
+            .build_turn_system_prompt(session_id, &profile, &workspace_dir)
             .await?;
 
         let mut provider_messages: Vec<ChatMessage> = context
@@ -251,7 +198,7 @@ impl AgentManager {
             });
         }
 
-        let call_id = CallId::new(Ulid::new());
+        let stream_id = StreamId::new(Ulid::new());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
@@ -264,7 +211,7 @@ impl AgentManager {
             .start_streaming_message(
                 session_id,
                 ChatRole::Assistant,
-                call_id,
+                stream_id,
                 Some(profile.id),
                 generation,
             )
@@ -286,48 +233,45 @@ impl AgentManager {
         content: String,
         agent_profile_id: Option<String>,
     ) -> Result<MessageId> {
-        self.add_message_with_tool_state(
-            session_id,
-            role,
-            content,
-            agent_profile_id,
-            None,
-            Vec::new(),
-        )
-        .await
-    }
-
-    pub(super) async fn add_message_with_tool_state(
-        &mut self,
-        session_id: &str,
-        role: ChatRole,
-        content: String,
-        agent_profile_id: Option<String>,
-        tool_state_snapshot: Option<ToolStateSnapshot>,
-        tool_state_deltas: Vec<kraai_types::ToolStateDelta>,
-    ) -> Result<MessageId> {
         Ok(self
-            .append_message_with_tool_state(
-                session_id,
-                role,
-                content,
-                agent_profile_id,
-                tool_state_snapshot,
-                tool_state_deltas,
-            )
+            .append_message(session_id, role, content, agent_profile_id)
             .await?
             .message
             .id)
     }
 
-    pub(super) async fn append_message_with_tool_state(
+    pub async fn add_script_result_to_history(
+        &mut self,
+        session_id: &str,
+        message_id: MessageId,
+        profile_id: String,
+        content: String,
+    ) -> Result<bool> {
+        self.require_session(session_id).await?;
+        let outcome = self
+            .conversation_store
+            .append_message_idempotent(
+                message_id,
+                AppendMessageRequest {
+                    session_id: session_id.to_string(),
+                    role: ChatRole::ToolCallResult,
+                    content,
+                    status: MessageStatus::Complete,
+                    agent_profile_id: Some(profile_id),
+                    generation: None,
+                    title_if_first_message: None,
+                },
+            )
+            .await?;
+        Ok(outcome.linked_now)
+    }
+
+    pub(super) async fn append_message(
         &mut self,
         session_id: &str,
         role: ChatRole,
         content: String,
         agent_profile_id: Option<String>,
-        tool_state_snapshot: Option<ToolStateSnapshot>,
-        tool_state_deltas: Vec<kraai_types::ToolStateDelta>,
     ) -> Result<AppendedMessage> {
         let title_if_first_message = if role == ChatRole::User {
             title_from_user_prompt(&content)
@@ -343,8 +287,6 @@ impl AgentManager {
                 content,
                 status: MessageStatus::Complete,
                 agent_profile_id,
-                tool_state_snapshot,
-                tool_state_deltas,
                 generation: None,
                 title_if_first_message,
             })
@@ -365,7 +307,7 @@ impl AgentManager {
         &mut self,
         session_id: &str,
         role: ChatRole,
-        call_id: CallId,
+        stream_id: StreamId,
         agent_profile_id: Option<String>,
         generation: Option<MessageGeneration>,
     ) -> Result<MessageId> {
@@ -381,10 +323,8 @@ impl AgentManager {
                 session_id: session_id.to_string(),
                 role,
                 content: String::new(),
-                status: MessageStatus::Streaming { call_id },
+                status: MessageStatus::Streaming { stream_id },
                 agent_profile_id,
-                tool_state_snapshot: None,
-                tool_state_deltas: Vec::new(),
                 generation,
                 title_if_first_message: None,
             })
