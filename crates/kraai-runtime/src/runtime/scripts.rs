@@ -1,3 +1,4 @@
+use color_eyre::eyre::{Context, Result, eyre};
 use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
 use kraai_types::{
@@ -712,4 +713,3 @@ fn copy_environment(names: &[&str], target: &mut BTreeMap<String, String>) {
         }
     }
 }
-use color_eyre::eyre::{Context, Result, eyre};
