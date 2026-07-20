@@ -71,9 +71,8 @@ feature-depth = 1
 # output a note when they are encountered.
 ignore = [
   # ignore for now
-  "RUSTSEC-2024-0320",
-  "RUSTSEC-2024-0436",
   "RUSTSEC-2025-0141",
+  "RUSTSEC-2026-0173",
   "RUSTSEC-2026-0195",
   "RUSTSEC-2026-0194",
 
@@ -97,15 +96,17 @@ ignore = [
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
 allow = [
   "Apache-2.0",
+  "BSD-2-Clause",
   "BSD-3-Clause",
   "BSL-1.0",
   "CC0-1.0",
+  "CC-PDDC",
   "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
   "MPL-2.0",
-  "OpenSSL",
   "Unicode-3.0",
+  "Unlicense",
   "Zlib",
 ]
 # The confidence threshold for detecting a license from license text.

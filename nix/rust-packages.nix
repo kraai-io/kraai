@@ -4,12 +4,11 @@
     pkgs,
     ...
   }: let
-    rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-      extensions = ["llvm-tools-preview"];
-    };
+    rustToolchain = pkgs.rust-bin.stable.latest.default;
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
+        ../.cargo/audit.toml
         ../Cargo.lock
         ../Cargo.toml
         ../Cargo.nix
