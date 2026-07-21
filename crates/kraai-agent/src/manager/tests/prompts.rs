@@ -1,12 +1,8 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_dir, test_manager};
 use color_eyre::eyre::Result;
-use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
-use kraai_types::{
-    CommandInvocationId, ContextStateDelta, SandboxCapabilities, ScriptExecutionId,
-    ScriptExecutionStatus, StateEffectRequest,
-};
-use std::time::Duration;
+use kraai_persistence::{ContextStateMutation, PinnedFileScope};
+use kraai_types::{CommandInvocationId, ScriptExecutionId};
 use ulid::Ulid;
 
 async fn persist_open_effect(
@@ -15,57 +11,28 @@ async fn persist_open_effect(
     path: &Path,
 ) -> Result<()> {
     let session = manager.require_session(session_id).await?;
-    let profile = manager.resolve_selected_profile(&session)?;
     let id = ScriptExecutionId::new(Ulid::new());
     manager
-        .execution_store
-        .create(NewScriptExecution {
-            id: id.clone(),
-            session_id: session_id.to_string(),
-            source_message_id: MessageId::new(Ulid::new()),
-            profile: profile.snapshot(),
-            source: b"kraai-open-files notes.txt".to_vec(),
-            requested_capabilities: SandboxCapabilities::default(),
-            effective_capabilities: profile.permissions.capabilities().clone(),
-            timeout: Some(Duration::from_secs(10)),
-        })
-        .await?;
-    manager.execution_store.mark_running(&id).await?;
-    manager
-        .execution_store
-        .append_effect(
+        .context_state_store
+        .append_command(
+            session_id,
             &id,
-            &StateEffectRequest {
-                sequence: 1,
-                invocation_id: CommandInvocationId::new(Ulid::new()),
-                command_id: String::from("kraai-open-files"),
-                deltas: vec![ContextStateDelta {
-                    namespace: String::from("opened_files"),
-                    operation: String::from("open"),
-                    payload: serde_json::json!({ "path": path.display().to_string() }),
-                }],
-            },
-        )
-        .await?;
-    manager
-        .execution_store
-        .finish(
-            &id,
-            ScriptExecutionCompletion {
-                status: ScriptExecutionStatus::Completed,
-                exit_code: Some(0),
-                sandbox_denied: false,
-                error: None,
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            },
+            1,
+            &CommandInvocationId::new(Ulid::new()),
+            "kraai-open-files",
+            vec![ContextStateMutation::PinFile {
+                path: path.to_path_buf(),
+                scope: PinnedFileScope::Workspace {
+                    root: session.workspace_dir,
+                },
+            }],
         )
         .await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn prepare_start_stream_injects_latest_acknowledged_open_file_effect() -> Result<()> {
+async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-start");
     tokio::fs::create_dir_all(&workspace_dir).await?;
@@ -102,6 +69,57 @@ async fn prepare_start_stream_injects_latest_acknowledged_open_file_effect() -> 
     assert!(system_prompt.content.contains(file_path_str.as_str()));
     assert!(system_prompt.content.contains("1|new contents"));
     assert!(system_prompt.content.contains("2|second line"));
+
+    let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_dir = test_dir("missing-pinned-file");
+    tokio::fs::create_dir_all(&workspace_dir).await?;
+    let file_path = workspace_dir.join("removed.txt");
+    tokio::fs::write(&file_path, "temporary\n").await?;
+
+    let session_id = manager.create_session().await?;
+    manager
+        .set_workspace_dir(&session_id, workspace_dir.clone())
+        .await?;
+    manager
+        .set_session_profile(&session_id, String::from("plan"))
+        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
+    tokio::fs::remove_file(&file_path).await?;
+
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("continue"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert_eq!(request.context_notifications.len(), 1);
+    assert!(request.context_notifications[0].contains("automatically unpinned"));
+    let system_prompt = request
+        .provider_messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ChatRole::System)
+        .expect("system prompt should be present");
+    assert!(system_prompt.content.contains("Pinned File Updates"));
+    assert!(system_prompt.content.contains("removed.txt"));
+    assert!(!system_prompt.content.contains("[temporarily unavailable:"));
+
+    let next_refresh = crate::context_state::refresh_context_state(
+        manager.context_state_store.as_ref(),
+        &session_id,
+    )
+    .await?;
+    assert!(next_refresh.notifications.is_empty());
+    assert!(next_refresh.prompt.is_empty());
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -383,7 +401,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
 }
 
 #[tokio::test]
-async fn prepare_continuation_injects_acknowledged_open_file_effect() -> Result<()> {
+async fn prepare_continuation_injects_pinned_file() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-continuation");
     tokio::fs::create_dir_all(&workspace_dir).await?;

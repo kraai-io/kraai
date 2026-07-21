@@ -10,12 +10,13 @@ Models use Nushell directly instead of serializing named tool calls.
 - **Capability sandbox**: Profiles grant filesystem, metadata, network, or
   no-sandbox capabilities and independently decide whether escalation is denied,
   prompted, or allowed.
-- **Stateful commands**: `kraai-open-files`, `kraai-close-files`, and
-  `kraai-edit-file` update durable context while the script is running.
-- **Crash-safe execution**: Exact source, stdout, stderr, completed state effects,
+- **Native commands**: `kraai-open-files` and `kraai-close-files` update durable
+  context while `kraai-edit-file` provides structured, exact text editing.
+- **Crash-safe execution**: Exact source, stdout, stderr, context-state events,
   and terminal status are persisted for recovery.
-- **Dynamic system prompt**: Current pinned-file contents and workspace
-  instructions are refreshed for each model request.
+- **Dynamic system prompt**: Authorized pinned-file contents and workspace
+  instructions are refreshed for each model request. Deleted or out-of-scope
+  pins are removed automatically and reported to the model and user.
 
 ### Script protocol
 
@@ -40,6 +41,12 @@ current on-disk contents and injects that current snapshot into future model
 requests until `kraai-close-files` removes it. A model can use ordinary Nushell
 commands such as `open`, `ls`, or an external `rg` when it needs immediate data
 instead of durable context.
+
+Pins retain the filesystem scope authorized when they were created. Workspace
+pins are refreshed through a root-anchored read that cannot follow replacement
+symlinks outside that workspace; host pins require `host-read` when created.
+Normal atomic file replacement keeps a pin active. Missing files are
+automatically unpinned and reported in the next model request.
 
 Use this simplified model:
 

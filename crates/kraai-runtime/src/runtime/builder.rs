@@ -97,9 +97,10 @@ impl RuntimeBuilder {
     ) -> Result<()> {
         Self::init_tracing()?;
 
-        let (message_store, session_store, execution_store) = kraai_persistence::init()
-            .await
-            .wrap_err("Failed to initialize persistence layer")?;
+        let (message_store, session_store, execution_store, context_state_store) =
+            kraai_persistence::init()
+                .await
+                .wrap_err("Failed to initialize persistence layer")?;
 
         let providers = ProviderManager::new();
         let default_workspace_dir = std::env::current_dir()
@@ -117,7 +118,7 @@ impl RuntimeBuilder {
             default_workspace_dir,
             message_store,
             session_store,
-            execution_store.clone(),
+            context_state_store.clone(),
         )));
 
         let runtime = RuntimeCore {
@@ -125,6 +126,7 @@ impl RuntimeBuilder {
             command_tx,
             agent_manager,
             execution_store,
+            context_state_store,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
             active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),

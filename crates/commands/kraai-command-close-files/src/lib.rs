@@ -20,7 +20,6 @@ declare_kraai_command! {
     name: "kraai-close-files";
     description: "Stop pinning one or more files in the context of future turns.";
     signature_help: "kraai-close-files <path>... -> record<success: bool, paths: list<string>>";
-    capabilities: [];
     examples: [
         {
             description: "Remove a file that is no longer needed from future context",

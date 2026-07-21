@@ -246,7 +246,6 @@ Each individual command crate supplies one command implementation through
 - Static prompt name, description, signature help, and complete examples.
 - The matching native Nushell `Command` name, `Signature`, examples, and
   adapter.
-- Required capability metadata.
 - Runtime registration metadata.
 
 Nushell parses and type-checks positional arguments, flags, and pipeline input.
@@ -286,14 +285,14 @@ produce records incrementally while the same script consumes them.
 
 The trusted command context contains:
 
-- Effective capability closure.
-- Workspace and explicitly scoped filesystem access.
 - Script and nested command invocation IDs.
 - The authenticated state-effect client.
 
-Registration enforces profile command availability. Every command also checks
-its required effective capabilities at execution as defense in depth, so a
-registry bug cannot silently grant a broader filesystem operation.
+Registration enforces profile command availability but is independent of the
+current sandbox capability set. Filesystem commands attempt their actual
+operation and let the sandbox produce the denial, keeping the command available
+so the model can retry with an explicit capability request. Durable host-side
+effects are authorized per action and resource after invocation.
 
 ### Durable state-effect handshake
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kraai_agent::AgentManager;
-use kraai_persistence::ScriptExecutionStore;
+use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::{MessageId, ModelId, ProviderId};
@@ -26,6 +26,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) agent_manager: Arc<Mutex<AgentManager>>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
+    pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,

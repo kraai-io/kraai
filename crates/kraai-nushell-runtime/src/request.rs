@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use kraai_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
+use kraai_types::{NushellStartup, ScriptExecutionId};
 use serde::{Deserialize, Serialize};
 
 pub const HOST_PROTOCOL_VERSION: u32 = 1;
@@ -13,7 +13,6 @@ pub struct HostRequest {
     pub source: Vec<u8>,
     pub workspace_root: PathBuf,
     pub environment: BTreeMap<String, String>,
-    pub capabilities: SandboxCapabilities,
     pub active_commands: Vec<String>,
     pub nushell_startup: NushellStartup,
     pub event_secret: [u8; 32],

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use kraai_command_core::declare_kraai_command;
-use kraai_types::{ContextStateDelta, SandboxCapability};
+use kraai_types::ContextStateDelta;
 use kraai_workspace_fs::validate_text_file;
 use nu_engine::CallExt;
 use nu_protocol::shell_error::generic::GenericError;
@@ -20,7 +20,6 @@ declare_kraai_command! {
     name: "kraai-open-files";
     description: "Pin one or more text files for fresh context injection on future turns.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
-    capabilities: [SandboxCapability::WorkspaceRead];
     examples: [
         {
             description: "Pin a source file for future turns",

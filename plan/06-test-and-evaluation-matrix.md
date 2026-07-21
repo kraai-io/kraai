@@ -196,10 +196,11 @@ policy and tested directly. Accidental divergence blocks the embedded-host gate.
 ### Platform contract
 
 - Declaration generates identical runtime name, signature, help, examples,
-  pipeline shape, capability metadata, and registry metadata.
+  pipeline shape, and registry metadata.
 - Compile failures catch unsupported declaration shapes.
 - Command absence is enforced by non-registration.
-- Execution repeats capability validation using the effective request.
+- Selected commands remain registered when the sandbox denies an operation, so
+  the result can guide an explicit capability retry.
 - Structured values pass directly to downstream Nushell stages.
 - Lazy producers respect downstream backpressure and cancellation.
 - Panics are contained as an execution failure rather than unwinding into the
@@ -214,6 +215,9 @@ policy and tested directly. Accidental divergence blocks the embedded-host gate.
 - A later path failure preserves already acknowledged paths.
 - Immediate output contains status/normalized paths and never file contents.
 - Future context reads the current on-disk contents, not contents cached at open.
+- Workspace refresh cannot escape its authorized root after symlink replacement.
+- Atomic replacement keeps the path pinned; deletion durably unpins it and
+  reports the change once to the model and user.
 - Missing, oversized, non-UTF-8, directory, and symlink cases retain intended
   read semantics.
 

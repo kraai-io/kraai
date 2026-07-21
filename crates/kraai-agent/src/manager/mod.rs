@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
-    AppendMessageRequest, AppendedMessage, ConversationStore, MessageStore, ScriptExecutionStore,
+    AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, MessageStore,
     SessionMeta, SessionStore,
 };
 use kraai_provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
@@ -54,6 +54,7 @@ pub struct PendingStreamRequest {
     pub provider_id: ProviderId,
     pub model_id: ModelId,
     pub provider_messages: Vec<ChatMessage>,
+    pub context_notifications: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +126,7 @@ pub struct AgentManager {
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
-    execution_store: Arc<dyn ScriptExecutionStore>,
+    context_state_store: Arc<dyn ContextStateStore>,
     session_states: HashMap<String, SessionRuntimeState>,
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).

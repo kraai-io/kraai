@@ -3,20 +3,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kraai_types::{ContextStateDelta, SandboxCapabilities, SandboxCapability};
+use kraai_types::ContextStateDelta;
 use nu_protocol::engine::Command;
 
 #[derive(Clone)]
 pub struct CommandRegistration {
     id: &'static str,
-    required_capabilities: &'static [SandboxCapability],
     command: Box<dyn Command>,
 }
 
 impl CommandRegistration {
     pub fn new(
         id: &'static str,
-        required_capabilities: &'static [SandboxCapability],
         command: impl Command + Clone + 'static,
     ) -> Result<Self, CommandRegistryError> {
         if id.is_empty()
@@ -28,17 +26,12 @@ impl CommandRegistration {
         }
         Ok(Self {
             id,
-            required_capabilities,
             command: Box::new(command),
         })
     }
 
     pub fn id(&self) -> &'static str {
         self.id
-    }
-
-    pub fn required_capabilities(&self) -> &'static [SandboxCapability] {
-        self.required_capabilities
     }
 
     pub fn command(&self) -> Box<dyn Command> {
@@ -50,7 +43,6 @@ impl std::fmt::Debug for CommandRegistration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CommandRegistration")
             .field("id", &self.id)
-            .field("required_capabilities", &self.required_capabilities)
             .field("command_name", &self.command.name())
             .finish()
     }
@@ -87,7 +79,6 @@ impl CommandRegistry {
     pub fn select(
         &self,
         active_ids: &[String],
-        capabilities: &SandboxCapabilities,
     ) -> Result<Vec<Box<dyn Command>>, CommandRegistryError> {
         let mut selected = Vec::with_capacity(active_ids.len());
         let mut seen = BTreeSet::new();
@@ -99,14 +90,6 @@ impl CommandRegistry {
                 .registrations
                 .get(id.as_str())
                 .ok_or_else(|| CommandRegistryError::UnknownId(id.clone()))?;
-            for capability in registration.required_capabilities() {
-                if !capabilities.contains(*capability) {
-                    return Err(CommandRegistryError::MissingCapability {
-                        id: id.clone(),
-                        capability: *capability,
-                    });
-                }
-            }
             selected.push(registration.command());
         }
         Ok(selected)
@@ -120,10 +103,6 @@ pub enum CommandRegistryError {
     DuplicateName(String),
     DuplicateSelection(String),
     UnknownId(String),
-    MissingCapability {
-        id: String,
-        capability: SandboxCapability,
-    },
 }
 
 impl std::fmt::Display for CommandRegistryError {
@@ -136,11 +115,6 @@ impl std::fmt::Display for CommandRegistryError {
                 write!(f, "command id '{id}' was selected more than once")
             }
             Self::UnknownId(id) => write!(f, "unknown command id '{id}'"),
-            Self::MissingCapability { id, capability } => write!(
-                f,
-                "command id '{id}' requires missing capability '{}'",
-                capability.as_str()
-            ),
         }
     }
 }
@@ -203,7 +177,6 @@ pub struct CommandMetadata {
     pub name: &'static str,
     pub description: &'static str,
     pub signature_help: &'static str,
-    pub required_capabilities: &'static [SandboxCapability],
     pub examples: &'static [CommandExample],
 }
 
@@ -223,7 +196,6 @@ macro_rules! declare_kraai_command {
         name: $name:literal;
         description: $description:literal;
         signature_help: $signature_help:literal;
-        capabilities: [$($capability:path),* $(,)?];
         examples: [
             $(
                 {
@@ -248,7 +220,6 @@ macro_rules! declare_kraai_command {
                 name: $name,
                 description: $description,
                 signature_help: $signature_help,
-                required_capabilities: &[$($capability),*],
                 examples: &[
                     $(
                         $crate::CommandExample {
@@ -275,7 +246,6 @@ macro_rules! declare_kraai_command {
             ) -> Result<$crate::CommandRegistration, $crate::CommandRegistryError> {
                 $crate::CommandRegistration::new(
                     Self::METADATA.id,
-                    Self::METADATA.required_capabilities,
                     Self::new(context),
                 )
             }

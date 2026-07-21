@@ -447,7 +447,17 @@ impl RuntimeCore {
             provider_id,
             model_id,
             provider_messages,
+            context_notifications,
         } = request;
+        if !context_notifications.is_empty() {
+            emit_event(
+                &event_tx,
+                Event::ContextStateChanged {
+                    session_id: session_id.clone(),
+                    notifications: context_notifications,
+                },
+            );
+        }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),

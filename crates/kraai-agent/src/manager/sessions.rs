@@ -31,7 +31,7 @@ impl AgentManager {
         default_workspace_dir: PathBuf,
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
-        execution_store: Arc<dyn ScriptExecutionStore>,
+        context_state_store: Arc<dyn ContextStateStore>,
     ) -> Self {
         let conversation_store =
             ConversationStore::new(message_store.clone(), session_store.clone());
@@ -41,7 +41,7 @@ impl AgentManager {
             conversation_store,
             message_store,
             session_store,
-            execution_store,
+            context_state_store,
             session_states: HashMap::new(),
             last_used_profile_id: None,
             streaming_messages: RwLock::new(HashMap::new()),
@@ -207,7 +207,8 @@ impl AgentManager {
         self.abort_streaming_messages_for_session(session_id)
             .await?;
         self.session_states.remove(session_id);
-        self.session_store.delete(session_id).await
+        self.session_store.delete(session_id).await?;
+        self.context_state_store.delete(session_id).await
     }
 
     pub async fn set_workspace_dir(

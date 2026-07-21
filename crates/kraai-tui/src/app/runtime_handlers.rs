@@ -138,6 +138,16 @@ impl App {
                         format!("Provider error, retry #{retry_number} in {delay_seconds}s");
                 }
             }
+            Event::ContextStateChanged {
+                session_id,
+                notifications,
+            } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str())
+                    && !notifications.is_empty()
+                {
+                    self.state.status = notifications.join(" ");
+                }
+            }
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;

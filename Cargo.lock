@@ -2723,6 +2723,7 @@ dependencies = [
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-types",
+ "kraai-workspace-fs",
  "serde",
  "serde_json",
  "tokio",

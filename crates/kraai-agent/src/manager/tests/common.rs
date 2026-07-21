@@ -74,7 +74,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         &data_dir,
         message_store.clone(),
     ));
-    let execution_store = Arc::new(kraai_persistence::FileScriptExecutionStore::new(&data_dir));
+    let context_state_store = Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
 
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -89,7 +89,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         PathBuf::from("/tmp/default-workspace"),
         message_store,
         session_store,
-        execution_store,
+        context_state_store,
     );
     (manager, data_dir)
 }

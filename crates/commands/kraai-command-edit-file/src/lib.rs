@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use kraai_command_core::declare_kraai_command;
-use kraai_types::SandboxCapability;
 use kraai_workspace_fs::{ExactTextEdit, create_text_file, edit_text_file};
 use nu_engine::CallExt;
 use nu_protocol::shell_error::generic::GenericError;
@@ -18,7 +17,6 @@ declare_kraai_command! {
     name: "kraai-edit-file";
     description: "Create a text file or atomically apply exact line-ranged replacements.";
     signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
-    capabilities: [SandboxCapability::WorkspaceWrite];
     examples: [
         {
             description: "Replace one exact source line",

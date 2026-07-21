@@ -272,13 +272,15 @@ src/
 Responsibilities:
 
 - Declare a command's name, description, examples, native Nushell signature,
-  pipeline input/output shape, streaming behavior, and required effective
-  capabilities once.
+  pipeline input/output shape, and streaming behavior once.
 - Generate concise prompt documentation and complete `<tool_call>` examples at
   compile time from that declaration.
 - Register only commands selected by the active profile.
-- Provide a trusted execution context containing scoped filesystem access,
-  effective capabilities, workspace identity, and a state-event sink.
+- Let the process sandbox remain authoritative for filesystem and network
+  access; do not hide a selected command merely because a capability is absent.
+- Provide stateful commands with an authenticated state-event sink. Parent-side
+  authorization derives durable action scope from the actual invocation and
+  effective execution rather than static command-wide capability metadata.
 - Allocate unforgeable nested invocation IDs and emit authenticated, sequenced
   state effects that wait for durable parent acknowledgment before success.
 

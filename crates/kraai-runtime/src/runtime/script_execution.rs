@@ -8,7 +8,8 @@ use std::time::Duration;
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan, StateEffectHandler};
 use kraai_persistence::{
-    NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
+    ContextStateMutation, ContextStateStore, NewScriptExecution, PersistedScriptOutput,
+    PinnedFileScope, ScriptExecutionCompletion, ScriptExecutionRecord,
 };
 use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
 use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
@@ -130,8 +131,8 @@ impl RuntimeCore {
             execution_id.clone(),
             host_executable,
             request.source,
-            request.workspace_root,
-            request.effective_capabilities,
+            request.workspace_root.clone(),
+            request.effective_capabilities.clone(),
             request.timeout,
         );
         plan.environment = request.environment;
@@ -146,7 +147,10 @@ impl RuntimeCore {
         plan.output_events = Some(output_tx);
         plan.state_effect_handler = Arc::new(DurableStateEffects {
             execution_id: execution_id.clone(),
-            store: self.execution_store.clone(),
+            session_id: request.session_id,
+            workspace_root: request.workspace_root,
+            effective_capabilities: request.effective_capabilities,
+            store: self.context_state_store.clone(),
         });
 
         let execution = kraai_nushell_runtime::execute(plan, cancellation).await;
@@ -174,7 +178,10 @@ impl RuntimeCore {
 
 struct DurableStateEffects {
     execution_id: ScriptExecutionId,
-    store: Arc<dyn kraai_persistence::ScriptExecutionStore>,
+    session_id: String,
+    workspace_root: PathBuf,
+    effective_capabilities: SandboxCapabilities,
+    store: Arc<dyn ContextStateStore>,
 }
 
 impl StateEffectHandler for DurableStateEffects {
@@ -183,13 +190,80 @@ impl StateEffectHandler for DurableStateEffects {
         request: &'a StateEffectRequest,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send + 'a>> {
         Box::pin(async move {
+            let mutations = authorize_context_mutations(
+                request,
+                &self.workspace_root,
+                &self.effective_capabilities,
+            )?;
             self.store
-                .append_effect(&self.execution_id, request)
+                .append_command(
+                    &self.session_id,
+                    &self.execution_id,
+                    request.sequence,
+                    &request.invocation_id,
+                    &request.command_id,
+                    mutations,
+                )
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string())
         })
     }
+}
+
+fn authorize_context_mutations(
+    request: &StateEffectRequest,
+    workspace_root: &Path,
+    effective_capabilities: &SandboxCapabilities,
+) -> std::result::Result<Vec<ContextStateMutation>, String> {
+    request
+        .deltas
+        .iter()
+        .map(|delta| {
+            if delta.namespace != "opened_files" {
+                return Err(format!(
+                    "command '{}' requested unsupported context namespace '{}'",
+                    request.command_id, delta.namespace
+                ));
+            }
+            let path = delta
+                .payload
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| String::from("opened-files mutation requires a string path"))?;
+            if !path.is_absolute() {
+                return Err(format!(
+                    "opened-files mutation path must be absolute: {}",
+                    path.display()
+                ));
+            }
+            match (request.command_id.as_str(), delta.operation.as_str()) {
+                ("kraai-open-files", "open") => {
+                    let scope = if path.starts_with(workspace_root) {
+                        PinnedFileScope::Workspace {
+                            root: workspace_root.to_path_buf(),
+                        }
+                    } else if effective_capabilities.contains(SandboxCapability::HostRead) {
+                        PinnedFileScope::Host
+                    } else {
+                        return Err(format!(
+                            "cannot pin host path without host-read: {}",
+                            path.display()
+                        ));
+                    };
+                    Ok(ContextStateMutation::PinFile { path, scope })
+                }
+                ("kraai-close-files", "close") => {
+                    Ok(ContextStateMutation::UnpinFile { path, reason: None })
+                }
+                _ => Err(format!(
+                    "command '{}' cannot apply opened-files operation '{}'",
+                    request.command_id, delta.operation
+                )),
+            }
+        })
+        .collect()
 }
 
 async fn persist_output_events(
@@ -308,4 +382,67 @@ fn canonical_executable(path: &Path) -> Result<PathBuf> {
         return Err(eyre!("Nushell host is not a file: {}", canonical.display()));
     }
     Ok(canonical)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "context mutation authorization tests use direct fixture assertions"
+)]
+mod tests {
+    use super::*;
+    use kraai_types::{CommandInvocationId, ContextStateDelta};
+    use ulid::Ulid;
+
+    fn open_request(path: &str) -> StateEffectRequest {
+        StateEffectRequest {
+            sequence: 1,
+            invocation_id: CommandInvocationId::new(Ulid::new()),
+            command_id: String::from("kraai-open-files"),
+            deltas: vec![ContextStateDelta {
+                namespace: String::from("opened_files"),
+                operation: String::from("open"),
+                payload: serde_json::json!({ "path": path }),
+            }],
+        }
+    }
+
+    #[test]
+    fn open_file_scope_is_derived_from_the_actual_path_and_execution_authority() {
+        let workspace = Path::new("/workspace");
+        let workspace_read = SandboxCapabilities::workspace_read();
+        let workspace_mutations = authorize_context_mutations(
+            &open_request("/workspace/src/lib.rs"),
+            workspace,
+            &workspace_read,
+        )
+        .unwrap();
+        assert!(matches!(
+            workspace_mutations.first(),
+            Some(ContextStateMutation::PinFile {
+                scope: PinnedFileScope::Workspace { root },
+                ..
+            }) if root == workspace
+        ));
+
+        let denied = authorize_context_mutations(
+            &open_request("/host/file.txt"),
+            workspace,
+            &workspace_read,
+        )
+        .unwrap_err();
+        assert!(denied.contains("without host-read"));
+
+        let host_read = SandboxCapabilities::new([SandboxCapability::HostRead]).unwrap();
+        let host_mutations =
+            authorize_context_mutations(&open_request("/host/file.txt"), workspace, &host_read)
+                .unwrap();
+        assert!(matches!(
+            host_mutations.first(),
+            Some(ContextStateMutation::PinFile {
+                scope: PinnedFileScope::Host,
+                ..
+            })
+        ));
+    }
 }

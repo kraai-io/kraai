@@ -75,7 +75,6 @@ pub async fn execute(
         source: plan.source,
         workspace_root: plan.workspace_root.clone(),
         environment: plan.environment.clone(),
-        capabilities: plan.capabilities.clone(),
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
         event_secret: secret,

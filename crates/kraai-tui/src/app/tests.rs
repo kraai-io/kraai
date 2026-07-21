@@ -118,6 +118,22 @@ fn script_approval_event_enters_single_script_decision_state() {
 }
 
 #[test]
+fn foreground_context_state_changes_are_reported_to_the_user() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("session"));
+    harness
+        .app
+        .handle_runtime_event(Event::ContextStateChanged {
+            session_id: String::from("session"),
+            notifications: vec![String::from(
+                "src/removed.rs was automatically unpinned because it no longer exists.",
+            )],
+        });
+
+    assert!(harness.app.state.status.contains("automatically unpinned"));
+}
+
+#[test]
 fn background_script_approval_does_not_replace_foreground_state() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(String::from("foreground"));

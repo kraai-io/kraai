@@ -149,8 +149,8 @@ Delete:
 
 - [ ] Extract reusable filesystem behavior into `kraai-workspace-fs` without
       command or policy dependencies.
-- [ ] Generate runtime signature, prompt docs/examples, capability metadata, and
-      registration from one declarative command declaration.
+- [ ] Generate runtime signature, prompt docs/examples, and registration from
+      one declarative command declaration.
 - [ ] `kraai-open-files` validates and pins paths without returning contents.
 - [ ] `kraai-close-files` removes paths from future injected context.
 - [ ] `kraai-edit-file` preserves validated create/edit semantics.
@@ -161,6 +161,8 @@ Delete:
 - [ ] Preserve acknowledged effects across later failure, timeout, cancellation,
       and restart.
 - [ ] Refresh opened-file contents from disk before future turns.
+- [ ] Keep pins through atomic replacement; automatically remove deleted or
+      out-of-scope pins and report the removal once.
 - [ ] Keep one command implementation crate per model-facing command.
 - [ ] Remove all legacy command aliases and old tool adapters.
 

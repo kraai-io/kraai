@@ -88,10 +88,10 @@ impl AgentManager {
             })
             .collect();
 
-        if !system_prompt.is_empty() {
+        if !system_prompt.content.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
-                content: system_prompt,
+                content: system_prompt.content,
             });
         }
 
@@ -136,6 +136,7 @@ impl AgentManager {
             provider_id,
             model_id,
             provider_messages,
+            context_notifications: system_prompt.context_notifications,
         })
     }
 
@@ -191,10 +192,10 @@ impl AgentManager {
             })
             .collect();
 
-        if !system_prompt.is_empty() {
+        if !system_prompt.content.is_empty() {
             provider_messages.push(ChatMessage {
                 role: ChatRole::System,
-                content: system_prompt,
+                content: system_prompt.content,
             });
         }
 
@@ -222,6 +223,7 @@ impl AgentManager {
             provider_id,
             model_id,
             provider_messages,
+            context_notifications: system_prompt.context_notifications,
         }))
     }
 

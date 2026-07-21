@@ -307,12 +307,15 @@ final shared and per-command crates.
   `kraai-command-open-files`, `kraai-command-close-files`, and
   `kraai-command-edit-file`.
 - Implement the declarative `kraai-command-core` declaration that produces the
-  native Nushell adapter, static prompt help, full examples, capability
-  metadata, and registration metadata from one source.
+  native Nushell adapter, static prompt help, full examples, and registration
+  metadata from one source.
 - Make Nushell own argument parsing, flags, pipeline input, and structured
   output.
 - Keep command execution inline with Nushell evaluation.
-- Require runtime capability checks in addition to registry selection.
+- Register selected commands independently from effective capabilities and let
+  the sandbox authorize ordinary filesystem/process operations.
+- Authorize durable parent-side effects from their actual resource and
+  operation rather than command-wide capability metadata.
 
 ### Command-specific contracts
 
@@ -330,8 +333,8 @@ final shared and per-command crates.
 
 - Compile-time prompt metadata matches the native command signature and
   examples.
-- Unregistered commands are absent, and registered commands still reject a
-  missing effective capability.
+- Unregistered commands are absent, while registered commands remain callable
+  and surface sandbox denials that the model can retry with escalation.
 - Open/close effects are acknowledged durably and survive a later statement
   failure, timeout, and runtime restart.
 - Opening several paths records every successful path according to actual

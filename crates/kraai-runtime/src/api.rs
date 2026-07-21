@@ -160,6 +160,10 @@ pub enum Event {
         execution_id: String,
         status: String,
     },
+    ContextStateChanged {
+        session_id: String,
+        notifications: Vec<String>,
+    },
     ContinuationFailed {
         session_id: String,
         error: String,

@@ -8362,6 +8362,10 @@ rec {
             packageId = "kraai-types";
           }
           {
+            name = "kraai-workspace-fs";
+            packageId = "kraai-workspace-fs";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];

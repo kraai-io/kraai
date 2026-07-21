@@ -19,6 +19,7 @@ kraai-command-open-files = { workspace = true }
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
 kraai-types = { workspace = true }
+kraai-workspace-fs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

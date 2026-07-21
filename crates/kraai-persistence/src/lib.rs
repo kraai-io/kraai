@@ -12,9 +12,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
+mod context;
 mod executions;
 mod turns;
 
+pub use context::{
+    ContextStateEvent, ContextStateEventSource, ContextStateMutation, ContextStateStore,
+    FileContextStateStore, PinnedFileScope,
+};
 pub use executions::{
     FileScriptExecutionStore, NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion,
     ScriptExecutionRecord, ScriptExecutionStore,
@@ -591,6 +596,7 @@ pub async fn init() -> Result<(
     Arc<FileMessageStore>,
     Arc<FileSessionStore>,
     Arc<FileScriptExecutionStore>,
+    Arc<FileContextStateStore>,
 )> {
     let data_dir = get_data_dir()?;
     fs::create_dir_all(&data_dir)
@@ -600,13 +606,19 @@ pub async fn init() -> Result<(
     let message_store = Arc::new(FileMessageStore::new(&data_dir));
     let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
     let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
+    let context_state_store = Arc::new(FileContextStateStore::new(&data_dir));
 
     session_store.load().await?;
 
     // Clean up any orphaned messages (e.g., from manually deleted sessions)
     session_store.cleanup_orphans().await?;
 
-    Ok((message_store, session_store, execution_store))
+    Ok((
+        message_store,
+        session_store,
+        execution_store,
+        context_state_store,
+    ))
 }
 
 #[cfg(test)]

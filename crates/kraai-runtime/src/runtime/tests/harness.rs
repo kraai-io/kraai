@@ -281,12 +281,14 @@ path = \"inherit\"\n",
         let message_store = Arc::new(FileMessageStore::new(&data_dir));
         let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
         let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
+        let context_state_store =
+            Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
         let agent_manager = Arc::new(Mutex::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
             message_store,
             session_store,
-            execution_store.clone(),
+            context_state_store.clone(),
         )));
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
@@ -311,6 +313,7 @@ path = \"inherit\"\n",
             command_tx,
             agent_manager,
             execution_store,
+            context_state_store,
             provider_registry: build_provider_registry(openai_codex_auth.clone())
                 .expect("provider registry"),
             active_streams: Arc::new(Mutex::new(HashMap::new())),

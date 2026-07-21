@@ -15,7 +15,7 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
     })?;
 
     let commands = registry
-        .select(&request.active_commands, &request.capabilities)
+        .select(&request.active_commands)
         .map_err(HostError::Commands)?;
     let mut engine_state = build_engine(&request, commands)?;
     let mut stack = Stack::new();

@@ -353,14 +353,14 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         &data_dir,
         message_store.clone(),
     ));
-    let execution_store = Arc::new(kraai_persistence::FileScriptExecutionStore::new(&data_dir));
+    let context_state_store = Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
     let manager_providers = ProviderManager::new();
     let mut manager = AgentManager::new(
         manager_providers,
         PathBuf::from("/tmp/default-workspace"),
         message_store,
         session_store,
-        execution_store,
+        context_state_store,
     );
 
     let session_id = manager.create_session().await?;

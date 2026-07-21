@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_types::{
     MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, StateEffectRequest,
+    ScriptOutputStream, ScriptProfileSnapshot,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -50,7 +50,6 @@ pub struct ScriptExecutionRecord {
     pub exit_code: Option<i32>,
     pub sandbox_denied: bool,
     pub error: Option<String>,
-    pub acknowledged_effects: Vec<StateEffectRequest>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,13 +94,6 @@ pub trait ScriptExecutionStore: Send + Sync {
         stream: ScriptOutputStream,
         bytes: &[u8],
     ) -> Result<()>;
-
-    /// Persist a state effect before acknowledging it to the command host.
-    async fn append_effect(
-        &self,
-        id: &ScriptExecutionId,
-        effect: &StateEffectRequest,
-    ) -> Result<ScriptExecutionRecord>;
 
     async fn finish(
         &self,
@@ -220,7 +212,6 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
             exit_code: None,
             sandbox_denied: false,
             error: None,
-            acknowledged_effects: Vec::new(),
         };
         self.persist_record(&execution_dir, &record).await?;
         Ok(record)
@@ -360,43 +351,6 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         Ok(())
     }
 
-    async fn append_effect(
-        &self,
-        id: &ScriptExecutionId,
-        effect: &StateEffectRequest,
-    ) -> Result<ScriptExecutionRecord> {
-        let lock = self.execution_lock(id).await;
-        let _guard = lock.lock().await;
-        let mut record = self.load_record(id).await?;
-        require_phase(&record, &[ScriptExecutionPhase::Running])?;
-        if record.acknowledged_effects.iter().any(|existing| {
-            existing.invocation_id == effect.invocation_id || existing.sequence == effect.sequence
-        }) {
-            return Err(eyre!(
-                "State effect invocation {} was already acknowledged for execution {}",
-                effect.invocation_id,
-                id
-            ));
-        }
-        let expected_sequence = u64::try_from(record.acknowledged_effects.len())
-            .ok()
-            .and_then(|count| count.checked_add(1))
-            .ok_or_else(|| eyre!("State effect sequence exhausted for execution {id}"))?;
-        if effect.sequence != expected_sequence {
-            return Err(eyre!(
-                "State effect sequence {} did not match expected {} for execution {}",
-                effect.sequence,
-                expected_sequence,
-                id
-            ));
-        }
-        record.acknowledged_effects.push(effect.clone());
-        record.updated_at_millis = now_millis();
-        self.persist_record(&self.execution_dir(id)?, &record)
-            .await?;
-        Ok(record)
-    }
-
     async fn finish(
         &self,
         id: &ScriptExecutionId,
@@ -481,8 +435,7 @@ fn now_millis() -> u64 {
 )]
 mod tests {
     use super::*;
-    use kraai_types::{CommandInvocationId, ContextStateDelta, SandboxCapability};
-    use serde_json::json;
+    use kraai_types::SandboxCapability;
     use ulid::Ulid;
 
     fn test_dir(name: &str) -> PathBuf {
@@ -513,79 +466,6 @@ mod tests {
                 .unwrap(),
             timeout: Some(Duration::from_secs(10)),
         }
-    }
-
-    fn effect(sequence: u64, id: &str, path: &str) -> StateEffectRequest {
-        StateEffectRequest {
-            sequence,
-            invocation_id: CommandInvocationId::new(id),
-            command_id: String::from("kraai-open-files"),
-            deltas: vec![ContextStateDelta {
-                namespace: String::from("opened_files"),
-                operation: String::from("open"),
-                payload: json!({ "path": path }),
-            }],
-        }
-    }
-
-    #[tokio::test]
-    async fn acknowledged_effects_survive_store_recreation_in_order() {
-        let data_dir = test_dir("durable-effects");
-        let id = ScriptExecutionId::new(Ulid::new());
-        let store = FileScriptExecutionStore::new(&data_dir);
-        store.create(execution(&id)).await.unwrap();
-        store.mark_running(&id).await.unwrap();
-        store
-            .append_effect(&id, &effect(1, "first", "a.rs"))
-            .await
-            .unwrap();
-        store
-            .append_effect(&id, &effect(2, "second", "b.rs"))
-            .await
-            .unwrap();
-        drop(store);
-
-        let reopened = FileScriptExecutionStore::new(&data_dir);
-        let record = reopened.get(&id).await.unwrap().unwrap();
-        assert_eq!(
-            record
-                .acknowledged_effects
-                .iter()
-                .map(|effect| effect.invocation_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["first", "second"]
-        );
-        assert_eq!(reopened.read_source(&id).await.unwrap(), b"1 + 1");
-        assert_eq!(
-            reopened
-                .list_for_session("session")
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|record| record.id)
-                .collect::<Vec<_>>(),
-            vec![id.clone()]
-        );
-        let _ = fs::remove_dir_all(data_dir).await;
-    }
-
-    #[tokio::test]
-    async fn duplicate_invocations_are_rejected_without_mutating_record() {
-        let data_dir = test_dir("duplicate-effect");
-        let id = ScriptExecutionId::new(Ulid::new());
-        let store = FileScriptExecutionStore::new(&data_dir);
-        store.create(execution(&id)).await.unwrap();
-        store.mark_running(&id).await.unwrap();
-        let duplicate = effect(1, "duplicate", "a.rs");
-        store.append_effect(&id, &duplicate).await.unwrap();
-
-        let error = store.append_effect(&id, &duplicate).await.unwrap_err();
-        assert!(error.to_string().contains("already acknowledged"));
-        assert_eq!(
-            store.get(&id).await.unwrap().unwrap().acknowledged_effects,
-            vec![duplicate]
-        );
-        let _ = fs::remove_dir_all(data_dir).await;
     }
 
     #[tokio::test]

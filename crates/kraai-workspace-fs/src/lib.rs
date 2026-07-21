@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use ulid::Ulid;
@@ -65,6 +65,64 @@ pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, Works
         source,
     })?;
     Ok(canonical)
+}
+
+/// Read a path while guaranteeing that resolution remains beneath `root`.
+///
+/// This is intended for host-side refreshes of paths that were authorized in a
+/// sandbox. Linux `openat2` performs resolution and opening atomically, so a
+/// concurrent symlink replacement cannot escape the approved root.
+#[cfg(target_os = "linux")]
+pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedReadError> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_error| ScopedReadError::OutsideRoot(path.to_path_buf()))?;
+    if relative.as_os_str().is_empty() {
+        return Err(ScopedReadError::NotFile(path.to_path_buf()));
+    }
+    let root_directory = File::open(root).map_err(|source| ScopedReadError::OpenRoot {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let descriptor = openat2(
+        &root_directory,
+        relative,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|error| match error {
+        rustix::io::Errno::NOENT => ScopedReadError::NotFound(path.to_path_buf()),
+        rustix::io::Errno::XDEV | rustix::io::Errno::LOOP => {
+            ScopedReadError::OutsideRoot(path.to_path_buf())
+        }
+        _ => ScopedReadError::Open {
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        },
+    })?;
+    let mut file = File::from(descriptor);
+    let metadata = file.metadata().map_err(|source| ScopedReadError::Inspect {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(ScopedReadError::NotFile(path.to_path_buf()));
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|source| ScopedReadError::ReadText {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(contents)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn read_scoped_text_file(_root: &Path, path: &Path) -> Result<String, ScopedReadError> {
+    Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
 }
 
 pub fn create_text_file(
@@ -435,6 +493,42 @@ pub enum WorkspaceFsError {
     },
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ScopedReadError {
+    #[error("path no longer exists: {0}")]
+    NotFound(PathBuf),
+    #[error("path resolves outside its authorized root: {0}")]
+    OutsideRoot(PathBuf),
+    #[error("path is not a regular file: {0}")]
+    NotFile(PathBuf),
+    #[error("unable to open authorized root {path}: {source}")]
+    OpenRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("unable to open {path}: {source}")]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("unable to inspect {path}: {source}")]
+    Inspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("file is not readable UTF-8 text at {path}: {source}")]
+    ReadText {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("scoped pinned-file reads are unsupported on this platform: {0}")]
+    UnsupportedPlatform(PathBuf),
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -500,5 +594,38 @@ mod tests {
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scoped_read_survives_atomic_replacement_but_rejects_escape_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("scoped-read");
+        let outside = temp_dir("scoped-read-outside");
+        let path = root.join("file.txt");
+        let outside_path = outside.join("secret.txt");
+        fs::write(&path, "first").unwrap();
+        fs::write(&outside_path, "outside").unwrap();
+        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "first");
+
+        atomic_write(
+            &path,
+            b"second",
+            WriteMode::Replace {
+                permissions: path.metadata().unwrap().permissions(),
+            },
+        )
+        .unwrap();
+        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "second");
+
+        fs::remove_file(&path).unwrap();
+        symlink(&outside_path, &path).unwrap();
+        assert!(matches!(
+            read_scoped_text_file(&root, &path),
+            Err(ScopedReadError::OutsideRoot(_))
+        ));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 }

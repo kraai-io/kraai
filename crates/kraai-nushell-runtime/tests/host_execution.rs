@@ -265,6 +265,53 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
+async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation() {
+    let workspace = TestWorkspace::new();
+    let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
+        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    let host = host_executable();
+    let mut execution = ScriptExecutionPlan::new(
+        kraai_types::ScriptExecutionId::new(Ulid::new()),
+        host.clone(),
+        b"kraai-edit-file denied.txt --create --contents 'denied'".to_vec(),
+        workspace.0.clone(),
+        capabilities,
+        Duration::from_secs(30),
+    );
+    execution.active_commands = vec![String::from("kraai-edit-file")];
+    execution
+        .environment
+        .insert(String::from("TERM"), String::from("dumb"));
+    execution.runtime_roots.push(
+        host.parent()
+            .unwrap_or_else(|| panic!("host executable has no parent"))
+            .to_path_buf(),
+    );
+    let nix_store = PathBuf::from("/nix/store");
+    if nix_store.exists() {
+        execution.runtime_roots.push(nix_store);
+    }
+
+    let result = match execute(execution, CancellationToken::new()).await {
+        Ok(result) => result,
+        Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
+        Err(error) => panic!("sandboxed host execution failed: {error}"),
+    };
+    assert_eq!(
+        result.output.termination,
+        Termination::Exited { code: Some(1) },
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.output.stdout),
+        String::from_utf8_lossy(&result.output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&result.output.stderr);
+    assert!(stderr.contains("Unable to create file"), "stderr: {stderr}");
+    assert!(!stderr.contains("invalid active command set"));
+    assert!(!workspace.0.join("denied.txt").exists());
+}
+
+#[tokio::test]
 async fn native_open_files_waits_for_an_authenticated_state_effect_ack() {
     let workspace = TestWorkspace::new();
     std::fs::write(workspace.0.join("notes.txt"), "fresh context")
