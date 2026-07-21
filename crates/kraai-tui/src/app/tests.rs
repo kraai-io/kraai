@@ -118,6 +118,26 @@ fn script_approval_event_enters_single_script_decision_state() {
 }
 
 #[test]
+fn ci_script_approval_fails_closed() {
+    let mut harness = test_harness();
+    harness.app.startup_options.ci = true;
+    harness.app.state.current_session_id = Some(String::from("session"));
+
+    harness
+        .app
+        .handle_runtime_event(Event::ScriptApprovalRequested {
+            session_id: String::from("session"),
+            script: pending_script("execution"),
+        });
+
+    assert_eq!(
+        harness.app.ci_error.as_deref(),
+        Some("CI mode cannot answer a script capability escalation prompt")
+    );
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
 fn foreground_context_state_changes_are_reported_to_the_user() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(String::from("session"));

@@ -26,15 +26,12 @@ fi
   --model-label "$model" \
   --codex-subscription-proxy \
   --runner-arg --ci \
-  --runner-arg --auto-approve \
-  --runner-arg --sandbox-mode \
-  --runner-arg external \
   --runner-arg --provider \
   --runner-arg "$provider" \
   --runner-arg --model \
   --runner-arg "$model" \
   --runner-arg --agent-profile \
-  --runner-arg build-code \
+  --runner-arg eval-coding \
   --runner-arg --message \
   --runner-arg '{prompt}' \
   --runner-arg --provider-config \

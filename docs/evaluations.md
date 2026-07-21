@@ -25,8 +25,10 @@ just eval-open-close-files <model-id>
 
 The recipe builds immutable Nix artifacts for both Kraai and `kraai-eval`, uses
 the current `~/.kraai/providers.toml`, starts the subscription proxy, and runs
-the `build-code` profile. Supply a different provider ID or stochastic attempt
-number as the second or third argument:
+an evaluation profile derived from `coding`. The profile inherits the
+evaluator's sanitized environment and trusts its outer sandbox. Supply a
+different provider ID or stochastic attempt number as the second or third
+argument:
 
 ```bash
 just eval-open-close-files <model-id> openai 1
@@ -217,13 +219,12 @@ kraai-eval run \
   --runner-version git:<full-commit> \
   --codex-subscription-proxy \
   --runner-arg --ci \
-  --runner-arg --auto-approve \
   --runner-arg --provider \
   --runner-arg '<provider-id>' \
   --runner-arg --model \
   --runner-arg '<model-id>' \
   --runner-arg --agent-profile \
-  --runner-arg build-code \
+  --runner-arg eval-coding \
   --runner-arg --message \
   --runner-arg '{prompt}' \
   --runner-arg --provider-config \
@@ -233,6 +234,11 @@ kraai-eval run \
 The sanitized config is committed into the immutable task base before the agent
 starts, so it does not appear in the submitted patch. The user's original config
 is read only and is not modified.
+
+The task's public fixture defines `eval-coding` by extending the built-in
+`coding` profile. Its inherited environment preserves the evaluator's offline
+Cargo configuration, and its capability policy relies on the evaluator's outer
+bubblewrap sandbox as the containment boundary.
 
 Use a different explicit attempt number for each stochastic repetition. An
 existing identity is never overwritten:

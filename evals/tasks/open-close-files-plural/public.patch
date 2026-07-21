@@ -1,0 +1,12 @@
+diff --git a/.kraai/agents.toml b/.kraai/agents.toml
+new file mode 100644
+index 0000000..01c634a
+--- /dev/null
++++ b/.kraai/agents.toml
+@@ -0,0 +1,6 @@
++[[profiles]]
++id = "eval-coding"
++extends = "coding"
++capabilities = ["workspace-read", "workspace-write"]
++escalation_policy = "allow"
++environment = "inherit"
