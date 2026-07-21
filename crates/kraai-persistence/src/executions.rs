@@ -407,9 +407,13 @@ fn require_completion_transition(
                     | ScriptExecutionPhase::Running
             )
         }
-        ScriptExecutionStatus::Completed
-        | ScriptExecutionStatus::TimedOut
-        | ScriptExecutionStatus::Cancelled => current == ScriptExecutionPhase::Running,
+        ScriptExecutionStatus::Cancelled => matches!(
+            current,
+            ScriptExecutionPhase::AwaitingApproval | ScriptExecutionPhase::Running
+        ),
+        ScriptExecutionStatus::Completed | ScriptExecutionStatus::TimedOut => {
+            current == ScriptExecutionPhase::Running
+        }
     };
     if valid {
         Ok(())

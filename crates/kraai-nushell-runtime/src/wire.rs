@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
 
 use crate::request::HostRequest;
@@ -29,19 +29,43 @@ pub(crate) fn connect_transport(path: &Path) -> Result<std::fs::File, WireError>
         None,
     )
     .map_err(|error| WireError::Descriptor(error.to_string()))?;
-    let transport = rustix::io::fcntl_dupfd_cloexec(&socket, TRANSPORT_DESCRIPTOR)
-        .map_err(|error| WireError::Descriptor(error.to_string()))?;
-    if transport.as_raw_fd() != TRANSPORT_DESCRIPTOR {
-        return Err(WireError::Descriptor(format!(
-            "descriptor {TRANSPORT_DESCRIPTOR} was unavailable"
-        )));
-    }
-    drop(socket);
+    let transport = claim_transport_descriptor(socket, TRANSPORT_DESCRIPTOR)?;
     let address = rustix::net::SocketAddrUnix::new(path)
         .map_err(|error| WireError::Descriptor(error.to_string()))?;
     rustix::net::connect(&transport, &address)
         .map_err(|error| WireError::Descriptor(error.to_string()))?;
     Ok(std::fs::File::from(transport))
+}
+
+fn claim_transport_descriptor(socket: OwnedFd, descriptor: RawFd) -> Result<OwnedFd, WireError> {
+    if socket.as_raw_fd() == descriptor {
+        return Ok(socket);
+    }
+
+    // Host startup is single-threaded. Claim the seccomp-authorized descriptor
+    // before constructing the Nushell engine so inherited descriptors cannot
+    // force the transport onto a different number.
+    match nix::unistd::close(ReservedDescriptor(descriptor)) {
+        Ok(()) | Err(nix::errno::Errno::EBADF) => {}
+        Err(error) => return Err(WireError::Descriptor(error.to_string())),
+    }
+
+    let transport = rustix::io::fcntl_dupfd_cloexec(&socket, descriptor)
+        .map_err(|error| WireError::Descriptor(error.to_string()))?;
+    if transport.as_raw_fd() != descriptor {
+        return Err(WireError::Descriptor(format!(
+            "descriptor {descriptor} was claimed concurrently"
+        )));
+    }
+    Ok(transport)
+}
+
+struct ReservedDescriptor(RawFd);
+
+impl IntoRawFd for ReservedDescriptor {
+    fn into_raw_fd(self) -> RawFd {
+        self.0
+    }
 }
 
 pub(crate) fn read_request(
@@ -81,3 +105,38 @@ impl std::fmt::Display for WireError {
 }
 
 impl std::error::Error for WireError {}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsRawFd, IntoRawFd};
+
+    use super::claim_transport_descriptor;
+
+    #[test]
+    fn transport_descriptor_replaces_an_inherited_collision()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let socket = rustix::net::socket_with(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::STREAM,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )?;
+        let occupied = std::fs::File::open("/dev/null")?;
+        let target = occupied.into_raw_fd();
+        if socket.as_raw_fd() == target {
+            return Err(std::io::Error::other("fixture descriptors collided").into());
+        }
+
+        let transport = claim_transport_descriptor(socket, target)?;
+
+        if transport.as_raw_fd() != target {
+            return Err(std::io::Error::other("transport used the wrong descriptor").into());
+        }
+        if !rustix::io::fcntl_getfd(&transport)?.contains(rustix::io::FdFlags::CLOEXEC) {
+            return Err(
+                std::io::Error::other("transport descriptor was inherited across exec").into(),
+            );
+        }
+        Ok(())
+    }
+}

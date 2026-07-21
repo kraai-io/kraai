@@ -2807,6 +2807,7 @@ dependencies = [
  "kraai-command-open-files",
  "kraai-sandbox",
  "kraai-types",
+ "nix 0.30.1",
  "nu-cli",
  "nu-cmd-lang",
  "nu-command",

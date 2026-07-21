@@ -1,9 +1,31 @@
 use color_eyre::eyre::Result;
 use kraai_persistence::{FileScriptExecutionStore, ScriptExecutionStore};
-use kraai_types::{ChatRole, ScriptExecutionStatus};
+use kraai_types::{ChatRole, ScriptExecutionPhase, ScriptExecutionStatus};
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
+
+#[test]
+fn interrupted_recovery_status_matches_the_last_phase() {
+    use super::super::scripts::interrupted_execution_outcome;
+
+    for (phase, expected) in [
+        (
+            ScriptExecutionPhase::Prepared,
+            ScriptExecutionStatus::FailedToStart,
+        ),
+        (
+            ScriptExecutionPhase::AwaitingApproval,
+            ScriptExecutionStatus::Cancelled,
+        ),
+        (
+            ScriptExecutionPhase::Running,
+            ScriptExecutionStatus::RuntimeError,
+        ),
+    ] {
+        assert_eq!(interrupted_execution_outcome(phase).0, expected);
+    }
+}
 
 #[tokio::test]
 async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<()> {
@@ -156,7 +178,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             "<tool_call permissions=\"workspace-write\" timeout=\"30sec\">\n'changed' | save result.txt\n</tool_call>",
         )],
         vec![ScriptedChunk::plain(
-            "The interrupted script was recovered as a runtime error.",
+            "The pending approval was cancelled without running the script.",
         )],
     ])
     .await
@@ -207,16 +229,21 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         .list_for_session(&session_id)
         .await?;
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].status, Some(ScriptExecutionStatus::RuntimeError));
+    assert_eq!(records[0].status, Some(ScriptExecutionStatus::Cancelled));
     assert!(
         records[0]
             .error
             .as_deref()
-            .is_some_and(|error| error.contains("AwaitingApproval"))
+            .is_some_and(|error| error.contains("awaiting approval") && error.contains("not run"))
     );
 
     harness.runtime.recover_script_executions().await?;
     let history = harness.handle.get_chat_history(session_id).await?;
+    let result = history
+        .values()
+        .find(|message| message.role == ChatRole::ToolCallResult)
+        .expect("recovered script result");
+    assert!(result.content.contains("status=\"cancelled\""));
     assert_eq!(
         history
             .values()

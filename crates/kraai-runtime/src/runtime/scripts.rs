@@ -3,7 +3,8 @@ use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
 use kraai_types::{
     EnvironmentPolicy, ModelId, PathPolicy, PermissionResolution, ProviderId, SandboxCapabilities,
-    SandboxCapability, ScriptExecutionId, ScriptExecutionStatus, ScriptProfileSnapshot,
+    SandboxCapability, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
+    ScriptProfileSnapshot,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,18 +31,16 @@ impl RuntimeCore {
                 }
             } else {
                 let output = self.execution_store.read_output(&record.id).await?;
+                let (status, error) = interrupted_execution_outcome(record.phase);
                 let record = self
                     .execution_store
                     .finish(
                         &record.id,
                         ScriptExecutionCompletion {
-                            status: ScriptExecutionStatus::RuntimeError,
+                            status,
                             exit_code: None,
                             sandbox_denied: record.sandbox_denied,
-                            error: Some(format!(
-                                "Kraai stopped while script execution was in phase {:?}",
-                                record.phase
-                            )),
+                            error: Some(error),
                             stdout: output.stdout.clone(),
                             stderr: output.stderr.clone(),
                         },
@@ -262,6 +261,29 @@ impl RuntimeCore {
         {
             self.fail_script_turn(&completed_session, error).await;
         }
+    }
+}
+
+pub(super) fn interrupted_execution_outcome(
+    phase: ScriptExecutionPhase,
+) -> (ScriptExecutionStatus, String) {
+    match phase {
+        ScriptExecutionPhase::Prepared => (
+            ScriptExecutionStatus::FailedToStart,
+            String::from("Kraai stopped before the prepared script could start"),
+        ),
+        ScriptExecutionPhase::AwaitingApproval => (
+            ScriptExecutionStatus::Cancelled,
+            String::from("Kraai stopped while the script was awaiting approval; it was not run"),
+        ),
+        ScriptExecutionPhase::Running => (
+            ScriptExecutionStatus::RuntimeError,
+            String::from("Kraai stopped while the script was running"),
+        ),
+        ScriptExecutionPhase::Finished => (
+            ScriptExecutionStatus::RuntimeError,
+            String::from("Kraai found a finished script without a terminal outcome"),
+        ),
     }
 }
 

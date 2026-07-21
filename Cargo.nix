@@ -8634,6 +8634,11 @@ rec {
             packageId = "kraai-types";
           }
           {
+            name = "nix";
+            packageId = "nix 0.30.1";
+            features = [ "process" "signal" ];
+          }
+          {
             name = "nu-cli";
             packageId = "nu-cli";
           }
