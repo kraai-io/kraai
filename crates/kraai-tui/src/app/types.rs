@@ -4,16 +4,18 @@ use kraai_runtime::{
     AgentProfileSummary, AgentProfilesState, Model, ProviderDefinition, Session,
     SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageId, RiskLevel, TokenUsage};
+use kraai_types::{
+    EnvironmentPolicy, EscalationPolicy, Message, MessageId, NushellStartup, PathPolicy,
+    SandboxCapabilities, TokenUsage,
+};
 
 use super::auth::ProviderAuthStatus;
 
-pub(super) const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+pub(super) const DEFAULT_AGENT_PROFILE_ID: &str = "plan";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
     pub ci: bool,
-    pub auto_approve: bool,
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
@@ -23,28 +25,34 @@ pub struct StartupOptions {
 pub(super) fn default_agent_profiles() -> Vec<AgentProfileSummary> {
     vec![
         AgentProfileSummary {
-            id: String::from("plan-code"),
-            display_name: String::from("Plan Code"),
+            id: String::from("plan"),
+            display_name: String::from("Plan"),
             description: String::from("Read-only planning agent"),
-            tools: vec![
-                String::from("list_files"),
-                String::from("search_files"),
-                String::from("read_files"),
+            commands: vec![
+                String::from("kraai-open-files"),
+                String::from("kraai-close-files"),
             ],
-            default_risk_level: RiskLevel::ReadOnlyWorkspace,
+            capabilities: SandboxCapabilities::workspace_read(),
+            escalation_policy: EscalationPolicy::Prompt,
+            environment: EnvironmentPolicy::AllowList,
+            nushell_startup: NushellStartup::Clean,
+            path: PathPolicy::Packaged,
             source: kraai_runtime::AgentProfileSource::BuiltIn,
         },
         AgentProfileSummary {
-            id: String::from("build-code"),
-            display_name: String::from("Build Code"),
+            id: String::from("coding"),
+            display_name: String::from("Coding"),
             description: String::from("Implementation agent"),
-            tools: vec![
-                String::from("list_files"),
-                String::from("search_files"),
-                String::from("read_files"),
-                String::from("edit_file"),
+            commands: vec![
+                String::from("kraai-open-files"),
+                String::from("kraai-close-files"),
+                String::from("kraai-edit-file"),
             ],
-            default_risk_level: RiskLevel::UndoableWorkspaceWrite,
+            capabilities: SandboxCapabilities::workspace_write(),
+            escalation_policy: EscalationPolicy::Prompt,
+            environment: EnvironmentPolicy::AllowList,
+            nushell_startup: NushellStartup::Clean,
+            path: PathPolicy::Packaged,
             source: kraai_runtime::AgentProfileSource::BuiltIn,
         },
     ]
@@ -69,17 +77,16 @@ pub(super) enum ProvidersView {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ToolApprovalAction {
+pub(super) enum ScriptApprovalAction {
     Allow,
     Reject,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ToolPhase {
+pub(super) enum ScriptPhase {
     Idle,
-    Deciding,
-    ExecutingBatch,
-    AwaitingManualContinuation,
+    AwaitingApproval,
+    Executing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,30 +134,12 @@ pub(super) enum ProvidersAdvancedFocus {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PendingTool {
-    pub(super) call_id: String,
-    pub(super) tool_id: String,
-    pub(super) args: String,
-    pub(super) description: String,
-    pub(super) risk_level: String,
-    pub(super) reasons: Vec<String>,
-    pub(super) approved: Option<bool>,
-    pub(super) queue_order: u64,
-}
-
-#[derive(Clone, Debug)]
 pub(super) struct OptimisticMessage {
     pub(super) local_id: String,
     pub(super) content: String,
     pub(super) content_key: String,
     pub(super) occurrence: usize,
     pub(super) is_queued: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct OptimisticToolMessage {
-    pub(super) local_id: String,
-    pub(super) content: String,
 }
 
 #[derive(Clone, Debug)]
@@ -199,7 +188,6 @@ pub(super) enum RuntimeRequest {
         message: String,
         model_id: String,
         provider_id: String,
-        auto_approve: bool,
     },
     SaveSettings {
         settings: SettingsDocument,
@@ -216,7 +204,7 @@ pub(super) enum RuntimeRequest {
     UndoLastUserMessage {
         session_id: String,
     },
-    GetPendingTools {
+    GetPendingScript {
         session_id: String,
     },
     LoadSession {
@@ -229,21 +217,18 @@ pub(super) enum RuntimeRequest {
     DeleteSession {
         session_id: String,
     },
-    ApproveTool {
+    ApproveScript {
         session_id: String,
-        call_id: String,
+        execution_id: String,
     },
-    DenyTool {
+    DenyScript {
         session_id: String,
-        call_id: String,
+        execution_id: String,
     },
     CancelStream {
         session_id: String,
     },
     ContinueSession {
-        session_id: String,
-    },
-    ExecuteApprovedTools {
         session_id: String,
     },
 }
@@ -288,9 +273,9 @@ pub(super) enum RuntimeResponse {
         session_id: String,
         result: Result<Option<String>, String>,
     },
-    PendingTools {
+    PendingScript {
         session_id: String,
-        result: Result<Vec<kraai_runtime::PendingToolInfo>, String>,
+        result: Result<Option<kraai_runtime::PendingScriptInfo>, String>,
     },
     LoadSession {
         session_id: String,
@@ -302,15 +287,16 @@ pub(super) enum RuntimeResponse {
         session_id: String,
         result: Result<(), String>,
     },
-    ApproveTool {
-        call_id: String,
+    ApproveScript {
+        session_id: String,
+        execution_id: String,
         result: Result<(), String>,
     },
-    DenyTool {
-        call_id: String,
+    DenyScript {
+        session_id: String,
+        execution_id: String,
         result: Result<(), String>,
     },
     CancelStream(Result<bool, String>),
     ContinueSession(Result<(), String>),
-    ExecuteApprovedTools(Result<(), String>),
 }

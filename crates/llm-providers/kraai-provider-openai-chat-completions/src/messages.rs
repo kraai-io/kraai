@@ -7,10 +7,10 @@ pub fn normalize_chat_messages(messages: Vec<ChatMessage>) -> Result<Vec<Request
     messages
         .into_iter()
         .map(|message| {
-            if message.role == ChatRole::Tool {
+            if message.role == ChatRole::ToolCallResult {
                 Ok(RequestMessage {
                     role: String::from("user"),
-                    content: format!("[Tool Result]\n{}", message.content),
+                    content: message.content,
                 })
             } else {
                 Ok(RequestMessage {
@@ -27,7 +27,7 @@ pub fn role_to_wire(role: ChatRole) -> &'static str {
         ChatRole::System => "system",
         ChatRole::User => "user",
         ChatRole::Assistant => "assistant",
-        ChatRole::Tool => "tool",
+        ChatRole::ToolCallResult => "user",
     }
 }
 
@@ -35,7 +35,7 @@ pub fn role_from_wire(role: &str) -> ChatRole {
     match role {
         "system" => ChatRole::System,
         "assistant" => ChatRole::Assistant,
-        "tool" => ChatRole::Tool,
+        "tool_call_result" => ChatRole::ToolCallResult,
         "user" => ChatRole::User,
         _ => ChatRole::User,
     }

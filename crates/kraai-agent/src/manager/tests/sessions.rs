@@ -1,49 +1,9 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
-use async_trait::async_trait;
-use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::MessageStore;
-use kraai_types::{ExecutionPolicy, MessageStatus};
+use color_eyre::eyre::Result;
+use kraai_types::MessageStatus;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-struct FailOnUserSnapshotMessageStore {
-    inner: Arc<dyn MessageStore>,
-}
-
-#[async_trait]
-impl MessageStore for FailOnUserSnapshotMessageStore {
-    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-        self.inner.get(id).await
-    }
-
-    async fn save(&self, message: &Message) -> Result<()> {
-        if message.role == ChatRole::User && message.tool_state_snapshot.is_some() {
-            return Err(eyre!("intentional user snapshot save failure"));
-        }
-        self.inner.save(message).await
-    }
-
-    async fn unload(&self, id: &MessageId) {
-        self.inner.unload(id).await;
-    }
-
-    async fn delete(&self, id: &MessageId) -> Result<()> {
-        self.inner.delete(id).await
-    }
-
-    async fn exists(&self, id: &MessageId) -> Result<bool> {
-        self.inner.exists(id).await
-    }
-
-    async fn list_all_on_disk(&self) -> Result<std::collections::HashSet<MessageId>> {
-        self.inner.list_all_on_disk().await
-    }
-
-    async fn list_hot(&self) -> Result<std::collections::HashSet<MessageId>> {
-        self.inner.list_hot().await
-    }
-}
 
 #[tokio::test]
 async fn create_session_returns_usable_session_id() -> Result<()> {
@@ -53,10 +13,7 @@ async fn create_session_returns_usable_session_id() -> Result<()> {
     let sessions = manager.list_sessions().await?;
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, session_id);
-    assert_eq!(
-        sessions[0].selected_profile_id.as_deref(),
-        Some("plan-code")
-    );
+    assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("plan"));
     assert_eq!(manager.get_tip(&session_id).await?, None);
 
     cleanup_dir(data_dir).await;
@@ -91,7 +48,7 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
     let _request = manager
         .prepare_start_stream(
@@ -103,69 +60,14 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
         .await?;
 
     let locked = manager
-        .set_session_profile(&session_id, String::from("build-code"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await;
     assert!(locked.is_err());
 
     manager.clear_active_turn(&session_id);
     manager
-        .set_session_profile(&session_id, String::from("build-code"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
-
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepare_start_stream_rolls_back_user_message_after_snapshot_failure() -> Result<()> {
-    let data_dir = super::common::test_dir("snapshot-rollback");
-    tokio::fs::create_dir_all(&data_dir).await.unwrap();
-
-    let base_message_store: Arc<dyn MessageStore> =
-        Arc::new(kraai_persistence::FileMessageStore::new(&data_dir));
-    let message_store: Arc<dyn MessageStore> = Arc::new(FailOnUserSnapshotMessageStore {
-        inner: base_message_store.clone(),
-    });
-    let session_store = Arc::new(kraai_persistence::FileSessionStore::new(
-        &data_dir,
-        message_store.clone(),
-    ));
-    let mut tools = ToolManager::new();
-    tools.register_tool(super::common::MockTool {
-        name: "close_files",
-    });
-    tools.register_tool(super::common::MockTool { name: "list_files" });
-    tools.register_tool(super::common::MockTool { name: "open_files" });
-    tools.register_tool(super::common::MockTool {
-        name: "search_files",
-    });
-    tools.register_tool(super::common::MockTool { name: "read_files" });
-    tools.register_tool(super::common::MockTool { name: "edit_file" });
-    tools.register_tool(super::common::MockTool { name: "bash" });
-    let mut manager = AgentManager::new(
-        ProviderManager::new(),
-        tools,
-        PathBuf::from("/tmp/default-workspace"),
-        kraai_types::SandboxConfig::default(),
-        message_store,
-        session_store,
-    );
-
-    let session_id = manager.create_session().await?;
-    let result = manager
-        .prepare_start_stream(
-            &session_id,
-            String::from("should not survive"),
-            ModelId::new("mock-model"),
-            ProviderId::new("mock"),
-        )
-        .await;
-
-    assert!(result.is_err());
-    assert_eq!(manager.get_tip(&session_id).await?, None);
-    assert!(manager.get_chat_history(&session_id).await?.is_empty());
-    assert!(base_message_store.list_all_on_disk().await?.is_empty());
-    assert!(!manager.is_turn_active(&session_id));
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -289,7 +191,7 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
         .start_streaming_message(
             &session_id,
             ChatRole::Assistant,
-            CallId::new("call-1"),
+            StreamId::new("call-1"),
             None,
             None,
         )
@@ -319,7 +221,7 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
 }
 
 #[tokio::test]
-async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
+async fn pending_workspace_changes_are_isolated_per_session() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
     let session_a = manager.create_session().await?;
@@ -329,41 +231,6 @@ async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
         .set_workspace_dir(&session_a, PathBuf::from("/tmp/workspace-a"))
         .await?;
 
-    let call_id = CallId::new("call-a");
-    manager
-        .session_states
-        .get_mut(&session_a)
-        .unwrap()
-        .pending_tool_calls
-        .insert(
-            call_id.clone(),
-            PendingToolCall {
-                call: ToolCall {
-                    call_id: call_id.clone(),
-                    tool_id: ToolId::new("list_files"),
-                    args: serde_json::json!({ "path": "." }),
-                },
-                source_message_id: MessageId::new("msg-a"),
-                prepared: manager
-                    .tools
-                    .prepare_tool(
-                        &ToolId::new("list_files"),
-                        serde_json::json!({ "path": "." }),
-                    )
-                    .expect("prepare list_files tool"),
-                description: String::from("test"),
-                assessment: ToolCallAssessment {
-                    risk: RiskLevel::ReadOnlyWorkspace,
-                    policy: ExecutionPolicy::AlwaysAsk,
-                    reasons: Vec::new(),
-                },
-                config: kraai_types::ToolCallGlobalConfig::new(PathBuf::from("/tmp/workspace-a")),
-                tool_state_snapshot: ToolStateSnapshot::default(),
-                status: PermissionStatus::Pending,
-                queue_order: 0,
-            },
-        );
-
     let workspace_a = manager.get_workspace_dir_state(&session_a).await?.unwrap();
     let workspace_b = manager.get_workspace_dir_state(&session_b).await?.unwrap();
 
@@ -371,10 +238,6 @@ async fn workspace_and_pending_tools_are_isolated_per_session() -> Result<()> {
     assert!(workspace_a.1);
     assert_eq!(workspace_b.0, PathBuf::from("/tmp/default-workspace"));
     assert!(!workspace_b.1);
-    assert!(manager.has_pending_tools(&session_a));
-    assert!(!manager.has_pending_tools(&session_b));
-    assert!(!manager.approve_tool(&session_b, call_id.clone()));
-    assert!(manager.approve_tool(&session_a, call_id));
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -386,7 +249,7 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
 
     let first_session = manager.create_session().await?;
     manager
-        .set_session_profile(&first_session, String::from("build-code"))
+        .set_session_profile(&first_session, String::from("coding"))
         .await?;
     let pending = manager
         .prepare_start_stream(
@@ -407,7 +270,7 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
         .find(|session| session.id == second_session)
         .unwrap();
 
-    assert_eq!(inherited.selected_profile_id.as_deref(), Some("build-code"));
+    assert_eq!(inherited.selected_profile_id.as_deref(), Some("coding"));
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -490,31 +353,19 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         &data_dir,
         message_store.clone(),
     ));
+    let context_state_store = Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
     let manager_providers = ProviderManager::new();
-    let mut tools = ToolManager::new();
-    tools.register_tool(super::common::MockTool {
-        name: "close_files",
-    });
-    tools.register_tool(super::common::MockTool { name: "list_files" });
-    tools.register_tool(super::common::MockTool { name: "open_files" });
-    tools.register_tool(super::common::MockTool {
-        name: "search_files",
-    });
-    tools.register_tool(super::common::MockTool { name: "read_files" });
-    tools.register_tool(super::common::MockTool { name: "edit_file" });
-    tools.register_tool(super::common::MockTool { name: "bash" });
     let mut manager = AgentManager::new(
         manager_providers,
-        tools,
         PathBuf::from("/tmp/default-workspace"),
-        kraai_types::SandboxConfig::default(),
         message_store,
         session_store,
+        context_state_store,
     );
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
     manager
         .add_message(&session_id, ChatRole::User, String::from("hello"), None)

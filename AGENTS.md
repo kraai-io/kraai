@@ -30,18 +30,21 @@ Long term maintainability is a core priority. If you add new functionality, firs
 
 ```
 crates/
-  kraai-agent/       - Core agent logic
-  kraai-runtime/     - Agent runtime
-  kraai-persistence/ - Data persistence layer
-  kraai-types/       - Shared type definitions
+  kraai-agent/           - Core agent logic, profiles, prompts, and context state
+  kraai-runtime/         - Agent runtime and script execution lifecycle
+  kraai-persistence/     - Message, execution, effect, and turn persistence
+  kraai-types/           - Shared protocol, profile, policy, and execution types
+  kraai-script-protocol/ - Streaming XML envelope and result rendering
+  kraai-sandbox/         - Capability-based process sandbox and output capture
+  kraai-nushell-runtime/ - Embedded Nushell host and authenticated effect transport
+  kraai-command-core/    - Native command declarations and registration contracts
+  kraai-workspace-fs/    - Shared workspace filesystem operations
+  commands/
+    kraai-command-*/     - One crate per native model-facing Kraai command
   llm-providers/
     kraai-provider-core/ - LLM provider trait definitions
     kraai-provider-*/    - LLM provider implementations
-  tools/
-    kraai-tool-core/ - Tool trait definitions
-    kraai-tool-*/    - Tool definitions
-  kraai-toon-schema/ - Schema definitions
-  kraai-tui/         - Terminal UI
+  kraai-tui/             - Terminal UI
 ```
 
 ## Commands

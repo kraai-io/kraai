@@ -83,7 +83,7 @@ impl App {
             return;
         }
 
-        if self.state.profile_locked && self.state.tool_phase == ToolPhase::Deciding {
+        if self.state.profile_locked && self.state.script_phase == ScriptPhase::AwaitingApproval {
             self.state.turn_timer.pause(now);
         } else {
             self.state.turn_timer.finish(now);
@@ -113,7 +113,7 @@ impl App {
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
             event_lag_session_resync_pending: false,
-            event_lag_tools_resync_pending: false,
+            event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
         };
@@ -162,7 +162,9 @@ impl App {
                 continue;
             }
 
-            if self.state.mode == UiMode::Chat && self.state.tool_phase == ToolPhase::Deciding {
+            if self.state.mode == UiMode::Chat
+                && self.state.script_phase == ScriptPhase::AwaitingApproval
+            {
                 terminal.hide_cursor()?;
             } else {
                 terminal.show_cursor()?;
@@ -238,11 +240,11 @@ impl App {
         for model_usage in self.state.exit_usage_totals.usage_by_model.values() {
             accumulate_token_usage(&mut usage, model_usage);
         }
-        let tool_calls = self
+        let script_executions = self
             .state
             .chat_history
             .values()
-            .filter(|message| message.role == kraai_types::ChatRole::Tool)
+            .filter(|message| message.role == kraai_types::ChatRole::ToolCallResult)
             .count();
         let usage = (usage.total_tokens != 0
             || usage.input_tokens != 0
@@ -261,7 +263,7 @@ impl App {
         serde_json::json!({
             "schema_version": 1,
             "turns": self.state.exit_usage_totals.completed_message_ids.len(),
-            "tool_calls": tool_calls,
+            "script_executions": script_executions,
             "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
             "usage": usage,
         })
@@ -301,7 +303,7 @@ impl App {
             RuntimeEventBridgeMessage::Event(event) => self.handle_runtime_event(event),
             RuntimeEventBridgeMessage::Lagged(skipped) => {
                 self.event_lag_session_resync_pending = true;
-                self.event_lag_tools_resync_pending = true;
+                self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
                 self.last_stream_history_request = None;
                 self.stream_event_content.clear();

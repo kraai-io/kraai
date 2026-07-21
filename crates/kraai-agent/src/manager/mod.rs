@@ -4,31 +4,22 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
-    AppendMessageRequest, AppendedMessage, ConversationStore, MessageStore, SessionMeta,
-    SessionStore,
+    AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, MessageStore,
+    SessionMeta, SessionStore,
 };
 use kraai_provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
-use kraai_tool_core::{
-    PreparedToolCall, ToolManager,
-    toon_parser::{self, ParseFailure, ParseFailureKind},
-};
 use kraai_types::{
-    AgentProfilesState, CallId, ChatMessage, ChatRole, Message, MessageGeneration, MessageId,
-    MessageStatus, ModelId, ProviderId, RiskLevel, TokenUsage, ToolCall, ToolCallAssessment,
-    ToolId, ToolResult, ToolStateSnapshot,
+    AgentProfilesState, ChatMessage, ChatRole, Message, MessageGeneration, MessageId,
+    MessageStatus, ModelId, ProviderId, ScriptProfileSnapshot, StreamId, TokenUsage,
 };
 use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
-use crate::tool_state::{
-    refresh_and_render_system_prompt as render_tool_state_prompt, resolve_snapshot_from_history,
-};
 
 mod prompts;
 mod sessions;
 mod streaming;
-mod tool_calls;
 
 #[cfg(test)]
 #[expect(
@@ -40,7 +31,7 @@ mod tool_calls;
 )]
 mod tests;
 
-const DEFAULT_AGENT_PROFILE_ID: &str = "plan-code";
+const DEFAULT_AGENT_PROFILE_ID: &str = "plan";
 const AGENTS_MD_FILE_NAME: &str = "AGENTS.md";
 const SESSION_TITLE_MAX_CHARS: usize = 60;
 
@@ -57,77 +48,19 @@ fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 
-#[derive(Clone)]
-pub struct PendingToolCall {
-    pub call: ToolCall,
-    pub source_message_id: MessageId,
-    pub prepared: PreparedToolCall,
-    pub description: String,
-    pub assessment: ToolCallAssessment,
-    pub config: kraai_types::ToolCallGlobalConfig,
-    pub tool_state_snapshot: ToolStateSnapshot,
-    pub status: PermissionStatus,
-    pub queue_order: u64,
-}
-
-impl std::fmt::Debug for PendingToolCall {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingToolCall")
-            .field("call", &self.call)
-            .field("source_message_id", &self.source_message_id)
-            .field("description", &self.description)
-            .field("assessment", &self.assessment)
-            .field("config", &self.config)
-            .field("tool_state_snapshot", &self.tool_state_snapshot)
-            .field("status", &self.status)
-            .field("queue_order", &self.queue_order)
-            .finish()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum PermissionStatus {
-    Pending,
-    Approved,
-    Denied,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingToolInfo {
-    pub call_id: CallId,
-    pub tool_id: ToolId,
-    pub args: serde_json::Value,
-    pub description: String,
-    pub risk_level: RiskLevel,
-    pub reasons: Vec<String>,
-    pub approved: Option<bool>,
-    pub queue_order: u64,
-}
-
-#[derive(Clone)]
-pub enum ToolExecutionPayload {
-    Approved {
-        prepared: PreparedToolCall,
-        config: kraai_types::ToolCallGlobalConfig,
-        tool_state_snapshot: ToolStateSnapshot,
-    },
-    Denied,
-}
-
-#[derive(Clone)]
-pub struct ToolExecutionRequest {
-    pub call_id: CallId,
-    pub tool_id: ToolId,
-    pub source_message_id: MessageId,
-    pub payload: ToolExecutionPayload,
-}
-
 #[derive(Clone, Debug)]
 pub struct PendingStreamRequest {
     pub message_id: MessageId,
     pub provider_id: ProviderId,
     pub model_id: ModelId,
     pub provider_messages: Vec<ChatMessage>,
+    pub context_notifications: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptTurnContext {
+    pub workspace_dir: PathBuf,
+    pub profile: ScriptProfileSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,48 +80,34 @@ pub struct SessionContextUsage {
 
 #[derive(Clone)]
 struct SessionRuntimeState {
-    active_tool_config: kraai_types::ToolCallGlobalConfig,
-    pending_tool_config: Option<kraai_types::ToolCallGlobalConfig>,
-    pending_tool_calls: HashMap<CallId, PendingToolCall>,
-    in_flight_tool_calls: HashMap<MessageId, usize>,
-    next_tool_queue_order: u64,
+    active_workspace_dir: PathBuf,
+    pending_workspace_dir: Option<PathBuf>,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
     active_turn_profile: Option<AgentProfile>,
-    active_turn_auto_approve: bool,
-    active_turn_tool_state_snapshot: Option<ToolStateSnapshot>,
 }
 
 impl SessionRuntimeState {
-    fn new(workspace_dir: PathBuf, sandbox: kraai_types::SandboxConfig) -> Self {
+    fn new(workspace_dir: PathBuf) -> Self {
         Self {
-            active_tool_config: kraai_types::ToolCallGlobalConfig {
-                workspace_dir,
-                sandbox,
-            },
-            pending_tool_config: None,
-            pending_tool_calls: HashMap::new(),
-            in_flight_tool_calls: HashMap::new(),
-            next_tool_queue_order: 0,
+            active_workspace_dir: workspace_dir,
+            pending_workspace_dir: None,
             last_model: None,
             last_provider: None,
             active_turn_profile: None,
-            active_turn_auto_approve: false,
-            active_turn_tool_state_snapshot: None,
         }
     }
 
     fn effective_workspace_dir(&self) -> PathBuf {
-        self.pending_tool_config
+        self.pending_workspace_dir
             .as_ref()
-            .unwrap_or(&self.active_tool_config)
-            .workspace_dir
+            .unwrap_or(&self.active_workspace_dir)
             .clone()
     }
 
-    fn promote_pending_tool_config(&mut self) {
-        if let Some(config) = self.pending_tool_config.take() {
-            self.active_tool_config = config;
+    fn promote_pending_workspace_dir(&mut self) {
+        if let Some(workspace_dir) = self.pending_workspace_dir.take() {
+            self.active_workspace_dir = workspace_dir;
         }
     }
 }
@@ -203,25 +122,13 @@ struct StreamingMessageState {
 
 pub struct AgentManager {
     providers: ProviderManager,
-    tools: ToolManager,
     default_workspace_dir: PathBuf,
-    default_tool_sandbox: kraai_types::SandboxConfig,
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
+    context_state_store: Arc<dyn ContextStateStore>,
     session_states: HashMap<String, SessionRuntimeState>,
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<HashMap<MessageId, StreamingMessageState>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DetectedToolCall {
-    pub call_id: CallId,
-    pub tool_id: String,
-    pub source_message_id: MessageId,
-    pub description: String,
-    pub assessment: ToolCallAssessment,
-    pub requires_confirmation: bool,
-    pub queue_order: u64,
 }

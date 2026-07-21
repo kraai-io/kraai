@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-use clap::{CommandFactory, Parser, ValueEnum, error::ErrorKind};
+use clap::{CommandFactory, Parser, error::ErrorKind};
 use color_eyre::eyre::Result;
 use kraai_runtime::RuntimeBuilder;
-use kraai_types::SandboxMode;
 use ratatui::crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
@@ -47,9 +46,6 @@ struct Cli {
     #[arg(long)]
     ci: bool,
 
-    #[arg(long)]
-    auto_approve: bool,
-
     #[arg(long, value_name = "ID")]
     provider: Option<String>,
 
@@ -64,34 +60,6 @@ struct Cli {
 
     #[arg(long = "provider-config", value_name = "PATH")]
     provider_config: Option<PathBuf>,
-
-    #[arg(
-        long = "sandbox-mode",
-        value_enum,
-        default_value_t,
-        help = "Command sandbox mode; external relies on an enclosing sandbox"
-    )]
-    sandbox_mode: CliSandboxMode,
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
-enum CliSandboxMode {
-    ReadOnly,
-    #[default]
-    WorkspaceWrite,
-    External,
-    DangerFullAccess,
-}
-
-impl From<CliSandboxMode> for SandboxMode {
-    fn from(mode: CliSandboxMode) -> Self {
-        match mode {
-            CliSandboxMode::ReadOnly => Self::ReadOnly,
-            CliSandboxMode::WorkspaceWrite => Self::WorkspaceWrite,
-            CliSandboxMode::External => Self::External,
-            CliSandboxMode::DangerFullAccess => Self::DangerFullAccess,
-        }
-    }
 }
 
 impl Cli {
@@ -126,7 +94,7 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse().validate().unwrap_or_else(|error| error.exit());
 
-    let runtime_builder = RuntimeBuilder::new().tool_sandbox_mode(cli.sandbox_mode.into());
+    let runtime_builder = RuntimeBuilder::new();
     let runtime_builder = if let Some(path) = cli.provider_config.clone() {
         runtime_builder.provider_config_path(path)
     } else {
@@ -136,7 +104,6 @@ fn main() -> Result<()> {
 
     let startup_options = StartupOptions {
         ci: cli.ci,
-        auto_approve: cli.auto_approve,
         provider_id: cli.provider,
         model_id: cli.model,
         agent_profile_id: cli.agent_profile,
@@ -205,27 +172,22 @@ mod tests {
         let cli = Cli::try_parse_from([
             "kraai",
             "--ci",
-            "--auto-approve",
             "--provider",
             "openai-chat-completions",
             "--model",
             "gpt-4o-mini",
             "--agent-profile",
-            "build-code",
+            "coding",
             "--message",
             "hello world",
-            "--sandbox-mode",
-            "external",
         ])
         .and_then(Cli::validate)
         .expect("complete ci args should parse");
 
         assert!(cli.ci);
-        assert!(cli.auto_approve);
         assert_eq!(cli.provider.as_deref(), Some("openai-chat-completions"));
         assert_eq!(cli.model.as_deref(), Some("gpt-4o-mini"));
-        assert_eq!(cli.agent_profile.as_deref(), Some("build-code"));
+        assert_eq!(cli.agent_profile.as_deref(), Some("coding"));
         assert_eq!(cli.message.as_deref(), Some("hello world"));
-        assert!(matches!(cli.sandbox_mode, super::CliSandboxMode::External));
     }
 }

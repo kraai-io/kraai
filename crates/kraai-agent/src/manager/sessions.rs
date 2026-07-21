@@ -1,24 +1,47 @@
 use super::*;
 
 impl AgentManager {
+    pub fn clear_active_turn(&mut self, session_id: &str) {
+        if let Some(state) = self.session_states.get_mut(session_id) {
+            state.active_turn_profile = None;
+        }
+    }
+
+    pub fn is_turn_active(&self, session_id: &str) -> bool {
+        self.session_states
+            .get(session_id)
+            .is_some_and(|state| state.active_turn_profile.is_some())
+    }
+
+    pub async fn streaming_session_ids(&self) -> HashSet<String> {
+        self.streaming_messages
+            .read()
+            .await
+            .values()
+            .map(|state| state.session_id.clone())
+            .collect()
+    }
+
+    pub fn cloned_provider_manager(&self) -> ProviderManager {
+        self.providers.clone()
+    }
+
     pub fn new(
         providers: ProviderManager,
-        tools: ToolManager,
         default_workspace_dir: PathBuf,
-        default_tool_sandbox: kraai_types::SandboxConfig,
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
+        context_state_store: Arc<dyn ContextStateStore>,
     ) -> Self {
         let conversation_store =
             ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
             providers,
-            tools,
             default_workspace_dir,
-            default_tool_sandbox,
             conversation_store,
             message_store,
             session_store,
+            context_state_store,
             session_states: HashMap::new(),
             last_used_profile_id: None,
             streaming_messages: RwLock::new(HashMap::new()),
@@ -61,6 +84,31 @@ impl AgentManager {
             }
             None => Ok(false),
         }
+    }
+
+    pub async fn prepare_script_recovery(
+        &mut self,
+        session_id: &str,
+        source_message_id: &MessageId,
+    ) -> Result<()> {
+        if !self.prepare_session(session_id).await? {
+            return Err(eyre!("Session not found: {session_id}"));
+        }
+        let source = self
+            .message_store
+            .get(source_message_id)
+            .await?
+            .ok_or_else(|| eyre!("Script source message not found: {source_message_id}"))?;
+        let generation = source.generation.ok_or_else(|| {
+            eyre!("Script source message {source_message_id} has no provider generation metadata")
+        })?;
+        let session = self.require_session(session_id).await?;
+        let profile = self.resolve_selected_profile(&session)?;
+        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+        state.last_model = Some(generation.model_id);
+        state.last_provider = Some(generation.provider_id);
+        state.active_turn_profile = Some(profile);
+        Ok(())
     }
 
     /// Roll back an assistant placeholder left by a process that stopped during a stream.
@@ -159,7 +207,8 @@ impl AgentManager {
         self.abort_streaming_messages_for_session(session_id)
             .await?;
         self.session_states.remove(session_id);
-        self.session_store.delete(session_id).await
+        self.session_store.delete(session_id).await?;
+        self.context_state_store.delete(session_id).await
     }
 
     pub async fn set_workspace_dir(
@@ -172,13 +221,8 @@ impl AgentManager {
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
 
-        let sandbox = self.default_tool_sandbox.clone();
-        let config = kraai_types::ToolCallGlobalConfig {
-            workspace_dir,
-            sandbox,
-        };
         self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_tool_config = Some(config);
+            .pending_workspace_dir = Some(workspace_dir);
         Ok(())
     }
 
@@ -236,7 +280,7 @@ impl AgentManager {
         let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
         Ok(Some((
             state.effective_workspace_dir(),
-            state.pending_tool_config.is_some(),
+            state.pending_workspace_dir.is_some(),
         )))
     }
 
@@ -276,38 +320,18 @@ impl AgentManager {
         Ok(())
     }
 
-    pub(super) async fn persist_tool_state_snapshot(
-        &self,
-        message_id: &MessageId,
-        snapshot: ToolStateSnapshot,
-    ) -> Result<()> {
-        if let Some(mut message) = self.message_store.get(message_id).await? {
-            message.tool_state_snapshot = Some(snapshot);
-            self.message_store.save(&message).await?;
-        }
-
-        Ok(())
-    }
-
     pub(super) fn ensure_runtime_state(
         &mut self,
         session_id: &str,
         workspace_dir: &Path,
     ) -> &mut SessionRuntimeState {
-        let sandbox = self.default_tool_sandbox.clone();
         self.session_states
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf(), sandbox))
+            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()))
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
-        let available_tools = self
-            .tools
-            .list_tools()
-            .into_iter()
-            .map(|tool_id| tool_id.to_string())
-            .collect::<HashSet<_>>();
-        resolve_profiles(workspace_dir, &available_tools)
+        resolve_profiles(workspace_dir, &crate::profiles::available_command_ids())
     }
 
     pub(super) fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {
@@ -329,10 +353,18 @@ impl AgentManager {
             .ok_or_else(|| eyre!("Session not found: {session_id}"))
     }
 
-    pub(super) fn current_turn_profile_id(&self, session_id: &str) -> Option<String> {
-        self.session_states
+    pub fn script_turn_context(&self, session_id: &str) -> Result<ScriptTurnContext> {
+        let state = self
+            .session_states
             .get(session_id)
-            .and_then(|state| state.active_turn_profile.as_ref())
-            .map(|profile| profile.id.clone())
+            .ok_or_else(|| eyre!("Session runtime state is unavailable: {session_id}"))?;
+        let profile = state
+            .active_turn_profile
+            .as_ref()
+            .ok_or_else(|| eyre!("Session has no active turn: {session_id}"))?;
+        Ok(ScriptTurnContext {
+            workspace_dir: state.active_workspace_dir.clone(),
+            profile: profile.snapshot(),
+        })
     }
 }

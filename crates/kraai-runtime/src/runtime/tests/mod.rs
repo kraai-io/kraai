@@ -1,10 +1,3 @@
 mod basic;
 mod harness;
-mod lifecycle;
-mod parsing;
-mod stream_control;
-mod streaming;
-mod tool_batches;
-mod tools;
-mod workspace;
-mod workspace_guards;
+mod scripts;

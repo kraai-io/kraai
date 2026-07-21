@@ -1,7 +1,20 @@
 #![forbid(unsafe_code)]
 
+mod permissions;
+mod policy;
+mod profile;
+mod script;
+
+pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
+pub use policy::{
+    CapabilityPermissionRules, EscalationPolicy, PermissionResolution, ResolvedPermissions,
+    SandboxPermissionSet,
+};
+pub use profile::{EnvironmentPolicy, NushellStartup, PathPolicy, ScriptProfileSnapshot};
+pub use script::{ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream};
+
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 fn validate_id(value: &str) -> Result<(), String> {
     if value.is_empty() {
@@ -39,8 +52,8 @@ pub enum ChatRole {
     User,
     #[serde(rename = "assistant")]
     Assistant,
-    #[serde(rename = "tool")]
-    Tool,
+    #[serde(rename = "tool_call_result")]
+    ToolCallResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,18 +66,13 @@ pub struct Message {
     #[serde(default)]
     pub agent_profile_id: Option<String>,
     #[serde(default)]
-    pub tool_state_snapshot: Option<ToolStateSnapshot>,
-    #[serde(default)]
-    pub tool_state_deltas: Vec<ToolStateDelta>,
-    #[serde(default)]
     pub generation: Option<MessageGeneration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageStatus {
     Complete,
-    Streaming { call_id: CallId },
-    ProcessingTools,
+    Streaming { stream_id: StreamId },
     Cancelled,
 }
 
@@ -101,153 +109,6 @@ pub struct MessageGeneration {
     pub usage: Option<TokenUsage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub call_id: CallId,
-    pub tool_id: ToolId,
-    pub args: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallGlobalConfig {
-    pub workspace_dir: PathBuf,
-    #[serde(default)]
-    pub sandbox: SandboxConfig,
-}
-
-impl ToolCallGlobalConfig {
-    pub fn new(workspace_dir: PathBuf) -> Self {
-        Self {
-            workspace_dir,
-            sandbox: SandboxConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SandboxConfig {
-    #[serde(default)]
-    pub mode: SandboxMode,
-    #[serde(default)]
-    pub network_access: NetworkAccess,
-    #[serde(default)]
-    pub writable_roots: Vec<PathBuf>,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            mode: SandboxMode::WorkspaceWrite,
-            network_access: NetworkAccess::Restricted,
-            writable_roots: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxMode {
-    ReadOnly,
-    #[default]
-    WorkspaceWrite,
-    /// Skip the process-local sandbox because the caller supplies an enclosing sandbox.
-    External,
-    DangerFullAccess,
-}
-
-impl SandboxMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::WorkspaceWrite => "workspace-write",
-            Self::External => "external",
-            Self::DangerFullAccess => "danger-full-access",
-        }
-    }
-
-    pub fn disables_inner_sandbox(self) -> bool {
-        matches!(self, Self::External | Self::DangerFullAccess)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NetworkAccess {
-    #[default]
-    Restricted,
-    Enabled,
-}
-
-impl NetworkAccess {
-    pub fn is_enabled(self) -> bool {
-        matches!(self, Self::Enabled)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxPermissions {
-    #[default]
-    UseDefault,
-    RequireEscalated,
-    WithAdditionalPermissions,
-}
-
-impl SandboxPermissions {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "use_default" => Some(Self::UseDefault),
-            "require_escalated" => Some(Self::RequireEscalated),
-            "with_additional_permissions" => Some(Self::WithAdditionalPermissions),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::UseDefault => "use_default",
-            Self::RequireEscalated => "require_escalated",
-            Self::WithAdditionalPermissions => "with_additional_permissions",
-        }
-    }
-
-    pub fn requires_escalated_permissions(self) -> bool {
-        matches!(self, Self::RequireEscalated)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum RiskLevel {
-    ReadOnlyWorkspace = 0,
-    UndoableWorkspaceWrite = 1,
-    NonUndoableWorkspaceWrite = 2,
-    ReadOnlyOutsideWorkspace = 3,
-    WriteOutsideWorkspace = 4,
-}
-
-impl RiskLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnlyWorkspace => "read_only_workspace",
-            Self::UndoableWorkspaceWrite => "undoable_workspace_write",
-            Self::NonUndoableWorkspaceWrite => "non_undoable_workspace_write",
-            Self::ReadOnlyOutsideWorkspace => "read_only_outside_workspace",
-            Self::WriteOutsideWorkspace => "write_outside_workspace",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "read_only_workspace" => Some(Self::ReadOnlyWorkspace),
-            "undoable_workspace_write" => Some(Self::UndoableWorkspaceWrite),
-            "non_undoable_workspace_write" => Some(Self::NonUndoableWorkspaceWrite),
-            "read_only_outside_workspace" => Some(Self::ReadOnlyOutsideWorkspace),
-            "write_outside_workspace" => Some(Self::WriteOutsideWorkspace),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentProfileSource {
     BuiltIn,
@@ -270,8 +131,12 @@ pub struct AgentProfileSummary {
     pub id: String,
     pub display_name: String,
     pub description: String,
-    pub tools: Vec<String>,
-    pub default_risk_level: RiskLevel,
+    pub commands: Vec<String>,
+    pub capabilities: SandboxCapabilities,
+    pub escalation_policy: EscalationPolicy,
+    pub environment: EnvironmentPolicy,
+    pub nushell_startup: NushellStartup,
+    pub path: PathPolicy,
     pub source: AgentProfileSource,
 }
 
@@ -291,66 +156,24 @@ pub struct AgentProfilesState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExecutionPolicy {
-    AutonomousUpTo(RiskLevel),
-    AlwaysAsk,
-    NeverAllow,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallAssessment {
-    pub risk: RiskLevel,
-    pub policy: ExecutionPolicy,
-    pub reasons: Vec<String>,
-}
-
-impl ToolCallAssessment {
-    pub fn is_auto_approved(&self, threshold: RiskLevel) -> bool {
-        self.is_autonomous_policy_approved() && self.risk <= threshold
-    }
-
-    pub fn is_autonomous_policy_approved(&self) -> bool {
-        matches!(
-            self.policy,
-            ExecutionPolicy::AutonomousUpTo(max_risk) if self.risk <= max_risk
-        )
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub call_id: CallId,
-    pub tool_id: ToolId,
-    pub output: serde_json::Value,
-    pub permission_denied: bool,
-    #[serde(default)]
-    pub tool_state_deltas: Vec<ToolStateDelta>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolStateSnapshot {
-    #[serde(default)]
-    pub entries: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolStateDelta {
+pub struct ContextStateDelta {
     pub namespace: String,
     pub operation: String,
     pub payload: serde_json::Value,
 }
 
-pub fn format_tool_result_message(
-    tool_id: &ToolId,
-    output: &serde_json::Value,
-    permission_denied: bool,
-) -> String {
-    if permission_denied {
-        format!("Tool '{tool_id}' was denied by user")
-    } else {
-        let output_str = serde_json::to_string_pretty(output).unwrap_or_else(|_| "{}".to_string());
-        format!("Tool '{tool_id}' result:\n{output_str}")
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateEffectRequest {
+    pub sequence: u64,
+    pub invocation_id: CommandInvocationId,
+    pub command_id: String,
+    pub deltas: Vec<ContextStateDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateEffectAck {
+    pub invocation_id: CommandInvocationId,
+    pub error: Option<String>,
 }
 
 /// Wrapper that gives type safety while keeping Arc<str> benefits
@@ -404,8 +227,9 @@ macro_rules! define_id {
 
 define_id!(MessageId, validate_message_id);
 define_id!(SessionId, validate_id);
-define_id!(CallId, validate_id);
-define_id!(ToolId, validate_id);
+define_id!(StreamId, validate_id);
+define_id!(ScriptExecutionId, validate_message_id);
+define_id!(CommandInvocationId, validate_message_id);
 define_id!(ProviderId, validate_id);
 define_id!(ModelId, validate_id);
 
@@ -414,7 +238,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn message_ids_reject_path_syntax() {
+    fn persisted_ids_reject_path_syntax() {
         for invalid in [
             "../sessions",
             "/tmp/message",
@@ -424,7 +248,17 @@ mod tests {
             ".",
         ] {
             assert!(MessageId::try_new(invalid).is_err(), "accepted {invalid:?}");
+            assert!(
+                ScriptExecutionId::try_new(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+            assert!(
+                CommandInvocationId::try_new(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
         }
         assert!(MessageId::try_new("01J_VALID-message_id").is_ok());
+        assert!(ScriptExecutionId::try_new("01J_VALID-execution_id").is_ok());
+        assert!(CommandInvocationId::try_new("01J_VALID-invocation_id").is_ok());
     }
 }

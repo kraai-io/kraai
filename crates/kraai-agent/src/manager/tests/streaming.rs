@@ -8,7 +8,7 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager
@@ -48,7 +48,7 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager

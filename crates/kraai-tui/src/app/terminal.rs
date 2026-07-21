@@ -56,11 +56,13 @@ impl App {
     }
 
     pub(super) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.state.mode == UiMode::Chat && self.state.tool_phase == ToolPhase::Deciding {
+        if self.state.mode == UiMode::Chat
+            && self.state.script_phase == ScriptPhase::AwaitingApproval
+        {
             if matches!(key_event.code, KeyCode::Esc) {
                 return;
             }
-            self.handle_tool_approval_key_event(key_event);
+            self.handle_script_approval_key_event(key_event);
             return;
         }
 
@@ -178,7 +180,7 @@ impl App {
 
     pub(super) fn handle_paste(&mut self, text: String) {
         if self.state.mode != UiMode::Chat
-            || self.state.tool_phase == ToolPhase::Deciding
+            || self.state.script_phase == ScriptPhase::AwaitingApproval
             || text.is_empty()
         {
             return;
@@ -387,11 +389,11 @@ impl App {
         }
     }
 
-    pub(super) fn handle_tool_approval_key_event(&mut self, key_event: KeyEvent) {
+    pub(super) fn handle_script_approval_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Left | KeyCode::BackTab => self.select_previous_tool_action(),
-            KeyCode::Right | KeyCode::Tab => self.select_next_tool_action(),
-            KeyCode::Enter => self.confirm_current_tool_action(),
+            KeyCode::Left | KeyCode::BackTab => self.select_previous_script_action(),
+            KeyCode::Right | KeyCode::Tab => self.select_next_script_action(),
+            KeyCode::Enter => self.confirm_current_script_action(),
             KeyCode::PageUp => self.scroll_chat_by(-10),
             KeyCode::PageDown => self.scroll_chat_by(10),
             KeyCode::Home => self.scroll_chat_to_top(),

@@ -1,11 +1,38 @@
 use super::super::*;
-use super::common::{cleanup_dir, open_file_state_delta, test_dir, test_manager};
+use super::common::{cleanup_dir, test_dir, test_manager};
 use color_eyre::eyre::Result;
-use serde_json::json;
+use kraai_persistence::{ContextStateMutation, PinnedFileScope};
+use kraai_types::{CommandInvocationId, ScriptExecutionId};
+use ulid::Ulid;
+
+async fn persist_open_effect(
+    manager: &mut AgentManager,
+    session_id: &str,
+    path: &Path,
+) -> Result<()> {
+    let session = manager.require_session(session_id).await?;
+    let id = ScriptExecutionId::new(Ulid::new());
+    manager
+        .context_state_store
+        .append_command(
+            session_id,
+            &id,
+            1,
+            &CommandInvocationId::new(Ulid::new()),
+            "kraai-open-files",
+            vec![ContextStateMutation::PinFile {
+                path: path.to_path_buf(),
+                scope: PinnedFileScope::Workspace {
+                    root: session.workspace_dir,
+                },
+            }],
+        )
+        .await?;
+    Ok(())
+}
 
 #[tokio::test]
-async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_open_file()
--> Result<()> {
+async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-start");
     tokio::fs::create_dir_all(&workspace_dir).await?;
@@ -18,23 +45,9 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
-    manager
-        .add_message(&session_id, ChatRole::User, String::from("prior"), None)
-        .await?;
-    manager
-        .add_tool_results_to_history(
-            &session_id,
-            vec![ToolResult {
-                call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_files"),
-                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
-                permission_denied: false,
-                tool_state_deltas: vec![open_file_state_delta(&file_path)],
-            }],
-        )
-        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
     tokio::fs::write(&file_path, "new contents\nsecond line\n").await?;
 
     let request = manager
@@ -45,20 +58,6 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
             ProviderId::new("mock"),
         )
         .await?;
-
-    let history = manager.get_chat_history(&session_id).await?;
-    let user_message = history
-        .values()
-        .find(|message| message.role == ChatRole::User && message.content == "follow up")
-        .expect("new user message should exist");
-    let snapshot = user_message
-        .tool_state_snapshot
-        .as_ref()
-        .expect("user message should store tool state snapshot");
-    assert_eq!(
-        snapshot.entries["opened_files"]["paths"][0].as_str(),
-        Some(file_path_str.as_str())
-    );
 
     let system_prompt = request
         .provider_messages
@@ -77,6 +76,57 @@ async fn prepare_start_stream_persists_snapshot_on_user_tip_and_injects_latest_o
 }
 
 #[tokio::test]
+async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_dir = test_dir("missing-pinned-file");
+    tokio::fs::create_dir_all(&workspace_dir).await?;
+    let file_path = workspace_dir.join("removed.txt");
+    tokio::fs::write(&file_path, "temporary\n").await?;
+
+    let session_id = manager.create_session().await?;
+    manager
+        .set_workspace_dir(&session_id, workspace_dir.clone())
+        .await?;
+    manager
+        .set_session_profile(&session_id, String::from("plan"))
+        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
+    tokio::fs::remove_file(&file_path).await?;
+
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("continue"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert_eq!(request.context_notifications.len(), 1);
+    assert!(request.context_notifications[0].contains("automatically unpinned"));
+    let system_prompt = request
+        .provider_messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ChatRole::System)
+        .expect("system prompt should be present");
+    assert!(system_prompt.content.contains("Pinned File Updates"));
+    assert!(system_prompt.content.contains("removed.txt"));
+    assert!(!system_prompt.content.contains("[temporarily unavailable:"));
+
+    let next_refresh = crate::context_state::refresh_context_state(
+        manager.context_state_store.as_ref(),
+        &session_id,
+    )
+    .await?;
+    assert!(next_refresh.notifications.is_empty());
+    assert!(next_refresh.prompt.is_empty());
+
+    let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-missing");
@@ -87,7 +137,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let request = manager
@@ -109,17 +159,17 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(!system_prompt.content.contains(AGENTS_MD_FILE_NAME));
     let protocol_offset = system_prompt
         .content
-        .find("# Tool Execution Protocol")
-        .expect("tool execution protocol");
+        .find("# Script Execution Protocol")
+        .expect("script execution protocol");
     let first_tool_offset = system_prompt
         .content
-        .find("mock schema")
-        .expect("tool definition");
+        .find("# Kraai Commands")
+        .expect("command definitions");
     assert!(protocol_offset < first_tool_offset);
     assert!(
         system_prompt
             .content
-            .contains("A `<tool_call>` block is the tool invocation.")
+            .contains("one `<tool_call>` block containing a complete Nushell script")
     );
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
@@ -133,7 +183,7 @@ async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<(
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("build-code"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let request = manager
@@ -189,7 +239,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let request = manager
@@ -231,7 +281,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager
@@ -310,7 +360,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
         .set_workspace_dir(&session_id, workspace_a.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
 
     let first_request = manager
@@ -351,12 +401,11 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
 }
 
 #[tokio::test]
-async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
+async fn prepare_continuation_injects_pinned_file() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-continuation");
     tokio::fs::create_dir_all(&workspace_dir).await?;
     let file_path = workspace_dir.join("notes.txt");
-    let file_path_str = file_path.display().to_string();
     tokio::fs::write(&file_path, "current\n").await?;
 
     let session_id = manager.create_session().await?;
@@ -364,23 +413,12 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan-code"))
+        .set_session_profile(&session_id, String::from("plan"))
         .await?;
     manager
         .add_message(&session_id, ChatRole::User, String::from("prior"), None)
         .await?;
-    manager
-        .add_tool_results_to_history(
-            &session_id,
-            vec![ToolResult {
-                call_id: CallId::new("open-call"),
-                tool_id: ToolId::new("open_files"),
-                output: json!({ "success": true, "paths": [file_path_str.clone()] }),
-                permission_denied: false,
-                tool_state_deltas: vec![open_file_state_delta(&file_path)],
-            }],
-        )
-        .await?;
+    persist_open_effect(&mut manager, &session_id, &file_path).await?;
 
     let session = manager.require_session(&session_id).await?;
     let profile = manager.resolve_selected_profile(&session)?;
@@ -393,20 +431,6 @@ async fn prepare_continuation_persists_snapshot_on_tool_tip() -> Result<()> {
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-
-    let history = manager.get_chat_history(&session_id).await?;
-    let tool_message = history
-        .values()
-        .find(|message| message.role == ChatRole::Tool && !message.tool_state_deltas.is_empty())
-        .expect("tool result message should exist");
-    let snapshot = tool_message
-        .tool_state_snapshot
-        .as_ref()
-        .expect("tool result message should store tool state snapshot");
-    assert_eq!(
-        snapshot.entries["opened_files"]["paths"][0].as_str(),
-        Some(file_path_str.as_str())
-    );
 
     let system_prompt = request
         .provider_messages

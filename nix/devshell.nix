@@ -33,6 +33,7 @@
           just
 
           ripgrep
+          nushell
           bubblewrap
           pkg-config
           openssl

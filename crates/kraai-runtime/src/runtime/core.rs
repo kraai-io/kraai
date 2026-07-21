@@ -3,12 +3,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kraai_agent::AgentManager;
+use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
+use tokio_util::sync::CancellationToken;
 
+use super::script_execution::PendingScriptApproval;
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
 use crate::handle::Command;
@@ -22,9 +25,12 @@ pub(crate) struct RuntimeCore {
     pub(crate) event_tx: broadcast::Sender<Event>,
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) agent_manager: Arc<Mutex<AgentManager>>,
+    pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
+    pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
-    pub(crate) active_tool_tasks: Arc<Mutex<HashMap<String, Vec<JoinHandle<()>>>>>,
+    pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
+    pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
@@ -37,12 +43,16 @@ pub(crate) struct ActiveStream {
     pub(crate) abort_handle: AbortHandle,
 }
 
+pub(crate) struct ActiveScriptTask {
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) join_handle: JoinHandle<()>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct QueuedMessage {
     pub(crate) message: String,
     pub(crate) model_id: ModelId,
     pub(crate) provider_id: ProviderId,
-    pub(crate) auto_approve: bool,
 }
 
 impl RuntimeCore {
@@ -66,9 +76,17 @@ impl RuntimeCore {
             self.spawn_openai_auth_forwarder(),
         ];
         match self.load_providers_config_and_emit().await {
-            Ok(()) => {
-                self.startup_tx.send_replace(RuntimeStartupState::Ready);
-            }
+            Ok(()) => match self.recover_script_executions().await {
+                Ok(()) => {
+                    self.startup_tx.send_replace(RuntimeStartupState::Ready);
+                }
+                Err(error) => {
+                    let error = format!("Failed to recover script executions: {error:#}");
+                    self.startup_tx
+                        .send_replace(RuntimeStartupState::Failed(error.clone()));
+                    self.send_error(error);
+                }
+            },
             Err(error) => {
                 let error = format!("Failed to load config: {error}");
                 self.startup_tx
@@ -125,18 +143,18 @@ impl RuntimeCore {
         for stream in active_streams {
             stream.abort_handle.abort();
         }
-        let active_tool_tasks = self
-            .active_tool_tasks
+        let active_script_tasks = self
+            .active_script_tasks
             .lock()
             .await
             .drain()
-            .flat_map(|(_, tasks)| tasks)
+            .map(|(_, task)| task)
             .collect::<Vec<_>>();
-        for task in &active_tool_tasks {
-            task.abort();
+        for task in &active_script_tasks {
+            task.cancellation.cancel();
         }
-        for task in active_tool_tasks {
-            let _ = task.await;
+        for task in active_script_tasks {
+            let _ = task.join_handle.await;
         }
     }
 

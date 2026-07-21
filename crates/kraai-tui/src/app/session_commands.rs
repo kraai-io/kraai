@@ -52,8 +52,8 @@ impl App {
         }
 
         let is_queueing = self.state.is_streaming
-            || self.state.tool_phase == ToolPhase::ExecutingBatch
-            || !self.state.pending_tools.is_empty();
+            || self.state.script_phase == ScriptPhase::Executing
+            || self.state.pending_script.is_some();
 
         if let Some(session_id) = self.state.current_session_id.clone() {
             self.dispatch_send_message(session_id, raw_input, model_id, provider_id, is_queueing);
@@ -341,8 +341,8 @@ impl App {
         }
 
         if self.state.is_streaming
-            || !self.state.pending_tools.is_empty()
-            || self.state.tool_phase != ToolPhase::Idle
+            || self.state.pending_script.is_some()
+            || self.state.script_phase != ScriptPhase::Idle
             || self.state.profile_locked
             || self.ci_metrics_history_pending
             || self.ci_metrics_context_pending

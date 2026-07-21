@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kraai_runtime::{
-    AgentProfileSummary, AgentProfileWarning, Model, ProviderDefinition, Session,
-    SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
+    AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
+    Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
 use kraai_types::{ChatRole, Message, MessageId, MessageStatus};
 
@@ -15,8 +15,8 @@ use crate::components::{ChatHistory, RenderedLine};
 use super::auth::ProviderAuthStatus;
 use super::types::{
     ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, ExitUsageTotals, OptimisticMessage,
-    OptimisticToolMessage, PendingSubmit, PendingTool, ProvidersAdvancedFocus, ProvidersView,
-    SettingsFocus, ToolApprovalAction, ToolPhase, UiMode, default_agent_profiles,
+    PendingSubmit, ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase,
+    SettingsFocus, UiMode, default_agent_profiles,
 };
 
 pub(super) struct AppState {
@@ -30,7 +30,6 @@ pub(super) struct AppState {
     pub(super) ctrl_c_exit_armed: bool,
     pub(super) chat_history: BTreeMap<MessageId, Message>,
     pub(super) optimistic_messages: Vec<OptimisticMessage>,
-    pub(super) optimistic_tool_messages: Vec<OptimisticToolMessage>,
     pub(super) optimistic_seq: u64,
     pub(super) chat_epoch: u64,
     pub(super) chat_render_cache: RefCell<ChatRenderCache>,
@@ -54,16 +53,15 @@ pub(super) struct AppState {
     pub(super) selected_provider_id: Option<String>,
     pub(super) selected_model_id: Option<String>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
-    pub(super) pending_tools: Vec<PendingTool>,
+    pub(super) pending_script: Option<PendingScriptInfo>,
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<String>,
     pub(super) current_tip_id: Option<String>,
     pub(super) agent_menu_index: usize,
     pub(super) model_menu_index: usize,
     pub(super) sessions_menu_index: usize,
-    pub(super) tool_approval_action: ToolApprovalAction,
-    pub(super) tool_phase: ToolPhase,
-    pub(super) tool_batch_execution_started: bool,
+    pub(super) script_approval_action: ScriptApprovalAction,
+    pub(super) script_phase: ScriptPhase,
     pub(super) command_completion_prefix: Option<String>,
     pub(super) command_completion_index: usize,
     pub(super) command_popup_dismissed: bool,
@@ -100,7 +98,6 @@ impl Default for AppState {
             ctrl_c_exit_armed: false,
             chat_history: BTreeMap::new(),
             optimistic_messages: Vec::new(),
-            optimistic_tool_messages: Vec::new(),
             optimistic_seq: 0,
             chat_epoch: 0,
             chat_render_cache: RefCell::new(ChatRenderCache::default()),
@@ -124,16 +121,15 @@ impl Default for AppState {
             selected_provider_id: None,
             selected_model_id: None,
             context_usage: None,
-            pending_tools: Vec::new(),
+            pending_script: None,
             sessions: Vec::new(),
             current_session_id: None,
             current_tip_id: None,
             agent_menu_index: 0,
             model_menu_index: 0,
             sessions_menu_index: 0,
-            tool_approval_action: ToolApprovalAction::Allow,
-            tool_phase: ToolPhase::Idle,
-            tool_batch_execution_started: false,
+            script_approval_action: ScriptApprovalAction::Allow,
+            script_phase: ScriptPhase::Idle,
             command_completion_prefix: None,
             command_completion_index: 0,
             command_popup_dismissed: false,
@@ -183,23 +179,20 @@ impl AppState {
     pub(super) fn runtime_is_active(&self) -> bool {
         self.is_streaming
             || self.retry_waiting
-            || self.tool_phase == ToolPhase::ExecutingBatch
+            || self.script_phase == ScriptPhase::Executing
             || (self.profile_locked
                 && !self.profile_lock_stale_after_terminal_event
-                && !matches!(
-                    self.tool_phase,
-                    ToolPhase::Deciding | ToolPhase::AwaitingManualContinuation
-                ))
+                && !matches!(self.script_phase, ScriptPhase::AwaitingApproval))
     }
 
     pub(super) fn turn_blocks_user_commands(&self) -> bool {
         self.is_streaming
             || self.retry_waiting
-            || self.tool_phase == ToolPhase::ExecutingBatch
-            || self.tool_phase == ToolPhase::Deciding
+            || self.script_phase == ScriptPhase::Executing
+            || self.script_phase == ScriptPhase::AwaitingApproval
             || (self.profile_locked
                 && !self.profile_lock_stale_after_terminal_event
-                && self.tool_phase != ToolPhase::AwaitingManualContinuation)
+                && self.script_phase != ScriptPhase::AwaitingApproval)
     }
 
     pub(super) fn chat_max_scroll(&self) -> u16 {
@@ -227,22 +220,6 @@ impl AppState {
                 content,
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
-                tool_state_snapshot: None,
-                tool_state_deltas: Vec::new(),
-                generation: None,
-            });
-        }
-
-        for optimistic in &self.optimistic_tool_messages {
-            rendered_messages.push(Message {
-                id: MessageId::new(optimistic.local_id.clone()),
-                parent_id: None,
-                role: ChatRole::Tool,
-                content: optimistic.content.clone(),
-                status: MessageStatus::Complete,
-                agent_profile_id: self.selected_profile_id.clone(),
-                tool_state_snapshot: None,
-                tool_state_deltas: Vec::new(),
                 generation: None,
             });
         }
@@ -432,17 +409,16 @@ fn message_fingerprint(msg: &Message) -> u64 {
         ChatRole::System => 0u8,
         ChatRole::User => 1u8,
         ChatRole::Assistant => 2u8,
-        ChatRole::Tool => 3u8,
+        ChatRole::ToolCallResult => 3u8,
     }
     .hash(&mut hasher);
     match &msg.status {
         MessageStatus::Complete => 0u8.hash(&mut hasher),
-        MessageStatus::Streaming { call_id } => {
+        MessageStatus::Streaming { stream_id } => {
             1u8.hash(&mut hasher);
-            call_id.as_str().hash(&mut hasher);
+            stream_id.as_str().hash(&mut hasher);
         }
-        MessageStatus::ProcessingTools => 2u8.hash(&mut hasher),
-        MessageStatus::Cancelled => 3u8.hash(&mut hasher),
+        MessageStatus::Cancelled => 2u8.hash(&mut hasher),
     }
     msg.content.hash(&mut hasher);
     hasher.finish()

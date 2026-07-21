@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManager;
-use kraai_tool_core::ToolManager;
 use kraai_types::{ChatRole, ProviderId, TokenUsage};
 use tokio::sync::broadcast;
 
@@ -102,8 +101,7 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
         }),
     );
 
-    let Some(harness) = RuntimeTestHarness::new_with_parts(providers, ToolManager::new()).await
-    else {
+    let Some(harness) = RuntimeTestHarness::new_with_parts(providers).await else {
         return Ok(());
     };
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
@@ -213,13 +211,13 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
     }
 
     let first_events = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         collect_events(&mut first, &session_id),
     )
     .await
     .map_err(|_| eyre!("timed out waiting for first subscriber events"))??;
     let second_events = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         collect_events(&mut second, &session_id),
     )
     .await
@@ -364,16 +362,16 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
 
     let approve_error = harness
         .handle
-        .approve_tool(String::from("session"), String::new())
+        .approve_script(String::from("session"), String::new())
         .await
         .unwrap_err();
-    assert!(approve_error.to_string().contains("call_id"));
+    assert!(approve_error.to_string().contains("execution_id"));
     let deny_error = harness
         .handle
-        .deny_tool(String::from("session"), String::new())
+        .deny_script(String::from("session"), String::new())
         .await
         .unwrap_err();
-    assert!(deny_error.to_string().contains("call_id"));
+    assert!(deny_error.to_string().contains("execution_id"));
 
     tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
     harness.shutdown().await;

@@ -1,5 +1,0 @@
-error: `max` must fit in a 32-bit unsigned integer: number too large to fit in target type
- --> tests/compile_fail/invalid_range_overflow.rs:7:33
-  |
-7 |             #[toon_schema(max = 4294967296)]
-  |                                 ^^^^^^^^^^

@@ -1,5 +1,0 @@
-error: tuple structs are not supported in `toon_tool!`
- --> tests/compile_fail/tuple_struct.rs:6:9
-  |
-6 |         #[derive(serde::Deserialize, serde::Serialize)]
-  |         ^

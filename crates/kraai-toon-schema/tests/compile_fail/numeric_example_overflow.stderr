@@ -1,5 +1,0 @@
-error: integer example is outside the supported 64-bit range: number too large to fit in target type
-  --> tests/compile_fail/numeric_example_overflow.rs:12:18
-   |
-12 |         { value: 18446744073709551616 }
-   |                  ^^^^^^^^^^^^^^^^^^^^

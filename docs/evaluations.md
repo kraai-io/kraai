@@ -151,7 +151,7 @@ submission workspace, so the report cannot become part of the submitted patch:
 {
   "schema_version": 1,
   "turns": 3,
-  "tool_calls": 8,
+  "script_executions": 8,
   "final_context_tokens": 42000,
   "usage": {
     "total_tokens": 50000,

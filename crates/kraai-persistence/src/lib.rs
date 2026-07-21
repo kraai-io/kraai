@@ -12,9 +12,21 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
+mod context;
+mod executions;
 mod turns;
 
-pub use turns::{AppendMessageRequest, AppendedMessage, ConversationStore};
+pub use context::{
+    ContextStateEvent, ContextStateEventSource, ContextStateMutation, ContextStateStore,
+    FileContextStateStore, PinnedFileScope,
+};
+pub use executions::{
+    FileScriptExecutionStore, NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion,
+    ScriptExecutionRecord, ScriptExecutionStore,
+};
+pub use turns::{
+    AppendMessageRequest, AppendedMessage, ConversationStore, IdempotentAppendOutcome,
+};
 
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +137,7 @@ impl FileMessageStore {
 /// platforms persist the file contents before replacement but may not expose a
 /// portable directory-sync operation.
 #[cfg(not(windows))]
-async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+pub(crate) async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
@@ -170,7 +182,7 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
 }
 
 #[cfg(windows)]
-async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+pub(crate) async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     use std::io::Write;
 
     let path = path.to_path_buf();
@@ -580,7 +592,12 @@ impl FileSessionStore {
 }
 
 /// Initialize the persistence layer
-pub async fn init() -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
+pub async fn init() -> Result<(
+    Arc<FileMessageStore>,
+    Arc<FileSessionStore>,
+    Arc<FileScriptExecutionStore>,
+    Arc<FileContextStateStore>,
+)> {
     let data_dir = get_data_dir()?;
     fs::create_dir_all(&data_dir)
         .await
@@ -588,13 +605,20 @@ pub async fn init() -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
 
     let message_store = Arc::new(FileMessageStore::new(&data_dir));
     let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
+    let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
+    let context_state_store = Arc::new(FileContextStateStore::new(&data_dir));
 
     session_store.load().await?;
 
     // Clean up any orphaned messages (e.g., from manually deleted sessions)
     session_store.cleanup_orphans().await?;
 
-    Ok((message_store, session_store))
+    Ok((
+        message_store,
+        session_store,
+        execution_store,
+        context_state_store,
+    ))
 }
 
 #[cfg(test)]
@@ -720,8 +744,6 @@ mod tests {
             content: content.to_string(),
             status: MessageStatus::Complete,
             agent_profile_id: None,
-            tool_state_snapshot: None,
-            tool_state_deltas: Vec::new(),
             generation: None,
         }
     }
@@ -766,8 +788,6 @@ mod tests {
                         content: String::from("unsafe"),
                         status: MessageStatus::Complete,
                         agent_profile_id: None,
-                        tool_state_snapshot: None,
-                        tool_state_deltas: Vec::new(),
                         generation: None,
                     };
 
