@@ -63,7 +63,7 @@ hmac = "0.12.1"
 httpdate = "1.0.3"
 ignore = "0.4.28"
 libc = "0.2.186"
-nix = { version = "0.30.1", features = ["process", "signal"] }
+nix = { version = "0.31.3", features = ["process", "signal"] }
 notify = "8.2.0"
 nu-cli = "=0.114.1"
 nu-cmd-lang = "=0.114.1"
