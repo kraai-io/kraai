@@ -8635,7 +8635,7 @@ rec {
           }
           {
             name = "nix";
-            packageId = "nix 0.30.1";
+            packageId = "nix 0.31.3";
             features = [ "process" "signal" ];
           }
           {
@@ -9083,7 +9083,7 @@ rec {
           }
           {
             name = "nix";
-            packageId = "nix 0.30.1";
+            packageId = "nix 0.31.3";
             features = [ "process" "signal" ];
           }
           {
@@ -10472,7 +10472,7 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "default" "feature" "fs" "process" "signal" "user" ];
+        resolvedDefaultFeatures = [ "default" "feature" "fs" "user" ];
       };
       "nix 0.31.3" = rec {
         crateName = "nix";
@@ -10517,7 +10517,7 @@ rec {
           "user" = [ "feature" ];
           "zerocopy" = [ "fs" "uio" ];
         };
-        resolvedDefaultFeatures = [ "dir" "feature" "fs" "poll" "process" "pthread" "resource" "signal" "term" "uio" "user" "zerocopy" ];
+        resolvedDefaultFeatures = [ "default" "dir" "feature" "fs" "poll" "process" "pthread" "resource" "signal" "term" "uio" "user" "zerocopy" ];
       };
       "nom 7.1.3" = rec {
         crateName = "nom";
