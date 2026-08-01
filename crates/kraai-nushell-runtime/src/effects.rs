@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use kraai_command_core::{StateEffectClient, StateEffectError};
 use kraai_types::{
     CommandInvocationId, ContextStateDelta, ScriptExecutionId, StateEffectAck, StateEffectRequest,
