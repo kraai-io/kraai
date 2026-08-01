@@ -59,7 +59,7 @@ color-eyre = "0.6.5"
 crossbeam-channel = "0.5.16"
 directories = "6.0.0"
 futures = "0.3.32"
-hmac = "0.12.1"
+hmac = "0.13.0"
 httpdate = "1.0.3"
 ignore = "0.4.28"
 libc = "0.2.186"
@@ -86,7 +86,7 @@ reqwest = { features = ["json", "stream"], version = "0.13.4" }
 rustix = { version = "1.1.4", features = ["fs", "net", "pipe"] }
 serde = { features = ["derive"], version = "1.0.228" }
 serde_json = "1.0.150"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 syn = { version = "2.0.118", features = ["derive", "extra-traits", "full"] }
 tachyonfx = "0.25.1"
 textwrap = "0.16.2"
