@@ -822,7 +822,8 @@ mod tests {
             Ok::<_, color_eyre::Report>(())
         });
 
-        let root = std::env::temp_dir().join(format!("kraai-eval-proxy-{}", ulid::Ulid::new()));
+        let root =
+            std::env::temp_dir().join(format!("kraai-eval-proxy-{}", ulid::Ulid::generate()));
         fs::create_dir(&root)?;
         let log_path = root.join("proxy.events.jsonl");
         let proxy = ModelProxy::start(ProxyServerConfig {
@@ -979,7 +980,7 @@ data: [DONE]
         });
 
         let root =
-            std::env::temp_dir().join(format!("kraai-eval-codex-proxy-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("kraai-eval-codex-proxy-{}", ulid::Ulid::generate()));
         fs::create_dir(&root)?;
         let auth_path = root.join("auth.json");
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({

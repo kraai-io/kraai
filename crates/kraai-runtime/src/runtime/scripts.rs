@@ -327,7 +327,7 @@ impl RuntimeCore {
             ),
         };
         let request = EffectiveScriptRequest {
-            id: ScriptExecutionId::new(Ulid::new()),
+            id: ScriptExecutionId::new(Ulid::generate()),
             session_id: session_id.clone(),
             source_message_id,
             profile: turn.profile.clone(),
@@ -395,7 +395,7 @@ impl RuntimeCore {
             .lock()
             .await
             .script_turn_context(session_id)?;
-        let id = ScriptExecutionId::new(Ulid::new());
+        let id = ScriptExecutionId::new(Ulid::generate());
         self.execution_store
             .create(NewScriptExecution {
                 id: id.clone(),

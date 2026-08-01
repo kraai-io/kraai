@@ -228,7 +228,7 @@ fn temp_write_path(path: &Path) -> PathBuf {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| String::from("state"));
-    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()))
+    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::generate()))
 }
 
 #[async_trait::async_trait]
@@ -707,7 +707,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("agent-persistence-{name}-{nanos}-{}", Ulid::new()))
+        std::env::temp_dir().join(format!(
+            "agent-persistence-{name}-{nanos}-{}",
+            Ulid::generate()
+        ))
     }
 
     async fn with_test_store<T, F, Fut>(name: &str, f: F) -> T

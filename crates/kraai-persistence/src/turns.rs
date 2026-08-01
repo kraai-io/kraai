@@ -28,7 +28,7 @@ impl ConversationStore {
     }
 
     pub async fn append_message(&self, request: AppendMessageRequest) -> Result<AppendedMessage> {
-        self.append_new_message(MessageId::new(Ulid::new()), request)
+        self.append_new_message(MessageId::new(Ulid::generate()), request)
             .await
     }
 
@@ -288,7 +288,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("agent-persistence-{name}-{nanos}-{}", Ulid::new()))
+        std::env::temp_dir().join(format!(
+            "agent-persistence-{name}-{nanos}-{}",
+            Ulid::generate()
+        ))
     }
 
     async fn with_test_store<T, F, Fut>(name: &str, f: F) -> T
@@ -706,7 +709,7 @@ mod tests {
                         ChatRole::Assistant,
                         "",
                         MessageStatus::Streaming {
-                            stream_id: kraai_types::StreamId::new(Ulid::new()),
+                            stream_id: kraai_types::StreamId::new(Ulid::generate()),
                         },
                         None,
                     ))
@@ -773,7 +776,7 @@ mod tests {
                         ChatRole::Assistant,
                         "",
                         MessageStatus::Streaming {
-                            stream_id: kraai_types::StreamId::new(Ulid::new()),
+                            stream_id: kraai_types::StreamId::new(Ulid::generate()),
                         },
                         None,
                     ))
@@ -815,7 +818,7 @@ mod tests {
                     ))
                     .await
                     .unwrap();
-                let result_id = MessageId::new(Ulid::new());
+                let result_id = MessageId::new(Ulid::generate());
                 message_store
                     .save(&Message {
                         id: result_id.clone(),

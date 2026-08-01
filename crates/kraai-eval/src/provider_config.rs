@@ -89,8 +89,10 @@ mod tests {
 
     #[test]
     fn sanitizer_keeps_only_selected_codex_provider_and_models() -> Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("kraai-eval-provider-config-{}", ulid::Ulid::new()));
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-provider-config-{}",
+            ulid::Ulid::generate()
+        ));
         fs::create_dir(&root)?;
         let source = root.join("providers.toml");
         fs::write(

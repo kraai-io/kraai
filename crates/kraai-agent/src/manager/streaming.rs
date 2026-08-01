@@ -95,7 +95,7 @@ impl AgentManager {
             });
         }
 
-        let stream_id = StreamId::new(Ulid::new());
+        let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
@@ -199,7 +199,7 @@ impl AgentManager {
             });
         }
 
-        let stream_id = StreamId::new(Ulid::new());
+        let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),

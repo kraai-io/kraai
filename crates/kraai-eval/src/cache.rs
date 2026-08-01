@@ -80,7 +80,10 @@ impl ResultStore {
 
     pub fn begin(&self) -> Result<PathBuf> {
         fs::create_dir_all(self.root.join("tmp"))?;
-        let path = self.root.join("tmp").join(ulid::Ulid::new().to_string());
+        let path = self
+            .root
+            .join("tmp")
+            .join(ulid::Ulid::generate().to_string());
         fs::create_dir(&path)?;
         Ok(path)
     }

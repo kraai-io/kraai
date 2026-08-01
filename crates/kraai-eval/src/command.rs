@@ -85,7 +85,7 @@ fn file_size(path: &Path) -> u64 {
 }
 
 fn temporary_log_root() -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("kraai-eval-command-{}", ulid::Ulid::new()));
+    let path = std::env::temp_dir().join(format!("kraai-eval-command-{}", ulid::Ulid::generate()));
     fs::create_dir(&path)?;
     Ok(path)
 }

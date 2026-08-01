@@ -211,7 +211,7 @@ mod tests {
     fn capture_submission_excludes_ignored_build_artifacts() -> Result<()> {
         let workspace = std::env::temp_dir().join(format!(
             "kraai-eval-capture-submission-{}",
-            ulid::Ulid::new()
+            ulid::Ulid::generate()
         ));
         fs::create_dir(&workspace)?;
         fs::write(workspace.join(".gitignore"), "target/\n")?;

@@ -346,7 +346,7 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
         .file_name()
         .ok_or_else(|| WorkspaceFsError::MissingFileName(path.to_path_buf()))?
         .to_string_lossy();
-    let temp_path = parent.join(format!(".{file_name}.{}.tmp", Ulid::new()));
+    let temp_path = parent.join(format!(".{file_name}.{}.tmp", Ulid::generate()));
     let result = (|| {
         let mut temp = OpenOptions::new()
             .write(true)
@@ -538,7 +538,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("kraai-workspace-fs-{name}-{}", Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("kraai-workspace-fs-{name}-{}", Ulid::generate()));
         fs::create_dir(&path).unwrap();
         path
     }

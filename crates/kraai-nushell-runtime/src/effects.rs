@@ -80,7 +80,7 @@ impl StateEffectClient for DescriptorEffectClient {
             .next_sequence
             .checked_add(1)
             .ok_or_else(|| StateEffectError::new("state effect sequence exhausted"))?;
-        let invocation_id = CommandInvocationId::new(Ulid::new());
+        let invocation_id = CommandInvocationId::new(Ulid::generate());
         let request = StateEffectRequest {
             sequence,
             invocation_id: invocation_id.clone(),
