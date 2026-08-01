@@ -7,15 +7,27 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+    groups:
+      cargo-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: nix
     directory: "/"
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      nix-dependencies:
+        patterns:
+          - "*"
