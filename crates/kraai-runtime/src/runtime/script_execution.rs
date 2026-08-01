@@ -397,7 +397,7 @@ mod tests {
     fn open_request(path: &str) -> StateEffectRequest {
         StateEffectRequest {
             sequence: 1,
-            invocation_id: CommandInvocationId::new(Ulid::new()),
+            invocation_id: CommandInvocationId::new(Ulid::generate()),
             command_id: String::from("kraai-open-files"),
             deltas: vec![ContextStateDelta {
                 namespace: String::from("opened_files"),

@@ -54,7 +54,7 @@ impl AgentManager {
             .unwrap_or(std::time::Duration::ZERO)
             .as_secs();
 
-        let session_id = Ulid::new().to_string();
+        let session_id = Ulid::generate().to_string();
         let session = SessionMeta {
             id: session_id.clone(),
             tip_id: None,

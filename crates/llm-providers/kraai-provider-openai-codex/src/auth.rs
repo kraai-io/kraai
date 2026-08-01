@@ -1417,7 +1417,7 @@ mod tests {
 
     fn temp_auth_path() -> PathBuf {
         std::env::temp_dir()
-            .join(format!("agent-openai-codex-{}", Ulid::new()))
+            .join(format!("agent-openai-codex-{}", Ulid::generate()))
             .join("auth.json")
     }
 

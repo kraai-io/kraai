@@ -21328,16 +21328,16 @@ rec {
       };
       "ulid" = rec {
         crateName = "ulid";
-        version = "1.2.1";
+        version = "3.0.0";
         edition = "2018";
-        sha256 = "1ghzggz7194hw345idz8afd8g1lw8qmknlhl7ka3j6ysj5jvy3a7";
+        sha256 = "173893rv5cicjhywh5lx178syqbjrbhd9njf0igcq56mnrixwzcl";
         authors = [
           "dylanhart <dylan96hart@gmail.com>"
         ];
         dependencies = [
           {
             name = "rand";
-            packageId = "rand 0.9.4";
+            packageId = "rand 0.10.2";
             optional = true;
           }
           {
@@ -21349,13 +21349,12 @@ rec {
         features = {
           "default" = [ "std" ];
           "postgres" = [ "dep:postgres-types" "dep:bytes" ];
-          "rand" = [ "dep:rand" ];
           "rkyv" = [ "dep:rkyv" ];
           "serde" = [ "dep:serde" ];
-          "std" = [ "rand" ];
+          "std" = [ "dep:rand" ];
           "uuid" = [ "dep:uuid" ];
         };
-        resolvedDefaultFeatures = [ "default" "rand" "std" ];
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "umask" = rec {
         crateName = "umask";

@@ -172,7 +172,7 @@ impl FileContextStateStore {
             ));
         }
         let event = ContextStateEvent {
-            id: Ulid::new().to_string(),
+            id: Ulid::generate().to_string(),
             source,
             mutations,
         };
@@ -253,7 +253,7 @@ mod tests {
     use super::*;
 
     fn test_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::new()))
+        std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::generate()))
     }
 
     fn pin(path: &str) -> ContextStateMutation {
@@ -268,8 +268,8 @@ mod tests {
     #[tokio::test]
     async fn command_and_runtime_events_survive_recreation_in_order() {
         let data_dir = test_dir("durable");
-        let execution_id = ScriptExecutionId::new(Ulid::new());
-        let invocation_id = CommandInvocationId::new(Ulid::new());
+        let execution_id = ScriptExecutionId::new(Ulid::generate());
+        let invocation_id = CommandInvocationId::new(Ulid::generate());
         let store = FileContextStateStore::new(&data_dir);
         store
             .append_command(
@@ -312,8 +312,8 @@ mod tests {
     #[tokio::test]
     async fn duplicate_command_effects_do_not_mutate_the_log() {
         let data_dir = test_dir("duplicate");
-        let execution_id = ScriptExecutionId::new(Ulid::new());
-        let invocation_id = CommandInvocationId::new(Ulid::new());
+        let execution_id = ScriptExecutionId::new(Ulid::generate());
+        let invocation_id = CommandInvocationId::new(Ulid::generate());
         let store = FileContextStateStore::new(&data_dir);
         store
             .append_command(

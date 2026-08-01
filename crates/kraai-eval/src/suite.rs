@@ -71,7 +71,7 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     }
     let started = Instant::now();
     let started_at_ms = unix_timestamp_ms()?;
-    let suite_id = ulid::Ulid::new().to_string();
+    let suite_id = ulid::Ulid::generate().to_string();
     let first_run = request.runs.first();
     let harness_name = first_run
         .and_then(|run| run.harness_name.as_deref())

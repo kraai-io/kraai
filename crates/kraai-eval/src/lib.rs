@@ -300,7 +300,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
 
     let run_root = cache_dir
         .join("work")
-        .join(format!("{}-{}", task.id, ulid::Ulid::new()));
+        .join(format!("{}-{}", task.id, ulid::Ulid::generate()));
     fs::create_dir_all(&run_root)?;
     let artifact_dir = store.begin()?;
     let started = Instant::now();
@@ -398,7 +398,7 @@ fn persist_launch_failure(request: &RunRequest, error: &color_eyre::Report) -> R
     let directory = request
         .cache_dir
         .join("failures")
-        .join(ulid::Ulid::new().to_string());
+        .join(ulid::Ulid::generate().to_string());
     fs::create_dir_all(&directory)?;
     let path = directory.join("failure.json");
     fs::write(

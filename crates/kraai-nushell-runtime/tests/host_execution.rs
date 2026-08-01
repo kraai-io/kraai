@@ -25,7 +25,7 @@ struct TestWorkspace(PathBuf);
 
 impl TestWorkspace {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("kraai-nu-host-{}", Ulid::new()));
+        let path = std::env::temp_dir().join(format!("kraai-nu-host-{}", Ulid::generate()));
         std::fs::create_dir(&path)
             .unwrap_or_else(|error| panic!("unable to create test workspace: {error}"));
         Self(path)
@@ -42,7 +42,7 @@ fn plan(source: impl Into<Vec<u8>>, workspace: &TestWorkspace) -> ScriptExecutio
     let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let mut plan = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::new()),
+        kraai_types::ScriptExecutionId::new(Ulid::generate()),
         host_executable(),
         source.into(),
         workspace.0.clone(),
@@ -177,7 +177,7 @@ async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
     let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::new()),
+        kraai_types::ScriptExecutionId::new(Ulid::generate()),
         external_executable("true"),
         b"'unreachable'".to_vec(),
         workspace.0.clone(),
@@ -226,7 +226,7 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let host = host_executable();
     let mut execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::new()),
+        kraai_types::ScriptExecutionId::new(Ulid::generate()),
         host.clone(),
         b"{transport: private, engine: embedded} | to json --raw".to_vec(),
         workspace.0.clone(),
@@ -272,7 +272,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let host = host_executable();
     let mut execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::new()),
+        kraai_types::ScriptExecutionId::new(Ulid::generate()),
         host.clone(),
         b"kraai-edit-file denied.txt --create --contents 'denied'".to_vec(),
         workspace.0.clone(),

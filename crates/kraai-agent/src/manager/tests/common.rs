@@ -62,7 +62,7 @@ pub(super) fn test_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    std::env::temp_dir().join(format!("agent-core-{name}-{nanos}-{}", Ulid::new()))
+    std::env::temp_dir().join(format!("agent-core-{name}-{nanos}-{}", Ulid::generate()))
 }
 
 pub(super) async fn test_manager() -> (AgentManager, PathBuf) {

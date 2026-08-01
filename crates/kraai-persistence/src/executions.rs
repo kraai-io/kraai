@@ -198,7 +198,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         let timestamp = now_millis();
         let record = ScriptExecutionRecord {
             id: execution.id,
-            result_message_id: MessageId::new(Ulid::new()),
+            result_message_id: MessageId::new(Ulid::generate()),
             session_id: execution.session_id,
             source_message_id: execution.source_message_id,
             profile: execution.profile,
@@ -443,7 +443,7 @@ mod tests {
     use ulid::Ulid;
 
     fn test_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-executions-{name}-{}", Ulid::new()))
+        std::env::temp_dir().join(format!("kraai-executions-{name}-{}", Ulid::generate()))
     }
 
     fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
@@ -475,7 +475,7 @@ mod tests {
     #[tokio::test]
     async fn output_is_written_before_terminal_record_is_exposed() {
         let data_dir = test_dir("terminal-output");
-        let id = ScriptExecutionId::new(Ulid::new());
+        let id = ScriptExecutionId::new(Ulid::generate());
         let store = FileScriptExecutionStore::new(&data_dir);
         store.create(execution(&id)).await.unwrap();
         store.mark_running(&id).await.unwrap();

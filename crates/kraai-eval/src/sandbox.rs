@@ -389,7 +389,7 @@ mod tests {
             return Ok(());
         }
         let workspace =
-            std::env::temp_dir().join(format!("kraai-eval-sandbox-env-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("kraai-eval-sandbox-env-{}", ulid::Ulid::generate()));
         fs::create_dir_all(workspace.join(".git"))?;
         let outcome = run_sandboxed(SandboxRequest {
             command: vec![
@@ -429,7 +429,7 @@ mod tests {
             return Ok(());
         }
         let workspace =
-            std::env::temp_dir().join(format!("kraai-eval-sandbox-ca-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("kraai-eval-sandbox-ca-{}", ulid::Ulid::generate()));
         fs::create_dir_all(workspace.join(".git"))?;
         let outcome = run_sandboxed(SandboxRequest {
             command: vec![

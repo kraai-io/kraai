@@ -11,14 +11,14 @@ async fn persist_open_effect(
     path: &Path,
 ) -> Result<()> {
     let session = manager.require_session(session_id).await?;
-    let id = ScriptExecutionId::new(Ulid::new());
+    let id = ScriptExecutionId::new(Ulid::generate());
     manager
         .context_state_store
         .append_command(
             session_id,
             &id,
             1,
-            &CommandInvocationId::new(Ulid::new()),
+            &CommandInvocationId::new(Ulid::generate()),
             "kraai-open-files",
             vec![ContextStateMutation::PinFile {
                 path: path.to_path_buf(),
