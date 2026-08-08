@@ -820,7 +820,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
             usesDefaultFeatures = false;
             features = [ "clone-impls" "full" "parsing" "printing" "proc-macro" "visit-mut" ];
           }
@@ -16434,7 +16434,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
           }
         ];
 
@@ -18407,7 +18407,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
             usesDefaultFeatures = false;
             features = [ "clone-impls" "derive" "parsing" "printing" "proc-macro" ];
           }
@@ -19342,11 +19342,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "clone-impls" "default" "derive" "extra-traits" "fold" "full" "parsing" "printing" "proc-macro" "visit" "visit-mut" ];
       };
-      "syn 3.0.0" = rec {
+      "syn 3.0.3" = rec {
         crateName = "syn";
-        version = "3.0.0";
+        version = "3.0.3";
         edition = "2021";
-        sha256 = "0rzrdj92phvvz6552zmj4b4zpfz9lmhl5sx9c5pa7jadlqac7ypj";
+        sha256 = "18srnql3cd39j9q6hf1az02p67rlr1rf6njx9zx4vxj9i3jvmsak";
         authors = [
           "David Tolnay <dtolnay@gmail.com>"
         ];
@@ -20132,7 +20132,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
           }
         ];
 
