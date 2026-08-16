@@ -801,9 +801,9 @@ rec {
       };
       "async-trait" = rec {
         crateName = "async-trait";
-        version = "0.1.91";
+        version = "0.1.92";
         edition = "2021";
-        sha256 = "1v3cm8mzg66037wm392p1vsdx0lq8bid6y2ivr7z03lpfx0xqdmf";
+        sha256 = "0rqn5iga1hlv2lm8xzav1zhar46jb4dvx89i6kfv93kb53maxxl2";
         procMacro = true;
         libName = "async_trait";
         authors = [
@@ -820,7 +820,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
             usesDefaultFeatures = false;
             features = [ "clone-impls" "full" "parsing" "printing" "proc-macro" "visit-mut" ];
           }
@@ -1072,11 +1072,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "default" "std" ];
       };
-      "base64 0.23.0" = rec {
+      "base64 0.23.1" = rec {
         crateName = "base64";
-        version = "0.23.0";
+        version = "0.23.1";
         edition = "2021";
-        sha256 = "1a9x0g0gsi1iqh5c7mxdvnr340w8rn5bi4xjwp2q7p9w5kgmammj";
+        sha256 = "19cdw4vh3d8qndbxjmbf6ddvmpicyddg704b4fjxjlchz7ncs1xc";
         authors = [
           "Marshall Pierce <marshall@mpierce.org>"
         ];
@@ -3629,7 +3629,7 @@ rec {
         dependencies = [
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
         ];
         features = {
@@ -4799,7 +4799,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tracing";
@@ -5139,7 +5139,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
         ];
         features = {
@@ -7308,9 +7308,9 @@ rec {
       };
       "ignore" = rec {
         crateName = "ignore";
-        version = "0.4.31";
+        version = "0.4.32";
         edition = "2024";
-        sha256 = "10sgi3sggi8jqiy2f45bcxvda2sd1m4cxjlirp8a35g62617p2kz";
+        sha256 = "0vnn1d82dv9c9nr237fm47p2wb0k34zh6yqsfh3l3fd2f0apf5qb";
         authors = [
           "Andrew Gallant <jamslam@gmail.com>"
         ];
@@ -8119,7 +8119,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "windows-link";
@@ -8312,7 +8312,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
             usesDefaultFeatures = false;
           }
         ];
@@ -8687,7 +8687,7 @@ rec {
         dependencies = [
           {
             name = "base64";
-            packageId = "base64 0.23.0";
+            packageId = "base64 0.23.1";
           }
           {
             name = "clap";
@@ -8903,7 +8903,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tokio";
@@ -8964,7 +8964,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tokio";
@@ -9050,7 +9050,7 @@ rec {
           }
           {
             name = "base64";
-            packageId = "base64 0.23.0";
+            packageId = "base64 0.23.1";
           }
           {
             name = "color-eyre";
@@ -9297,7 +9297,7 @@ rec {
           }
           {
             name = "base64";
-            packageId = "base64 0.23.0";
+            packageId = "base64 0.23.1";
           }
           {
             name = "clap";
@@ -9391,7 +9391,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "ulid";
@@ -12129,7 +12129,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
         ];
 
@@ -12501,7 +12501,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "typetag";
@@ -15276,7 +15276,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tokio";
@@ -15403,7 +15403,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tinyvec";
@@ -15884,7 +15884,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
             usesDefaultFeatures = false;
           }
           {
@@ -16308,7 +16308,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
         ];
         features = {
@@ -16366,7 +16366,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "unicase";
@@ -16434,7 +16434,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
           }
         ];
 
@@ -17265,7 +17265,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
             usesDefaultFeatures = false;
           }
         ];
@@ -18407,7 +18407,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
             usesDefaultFeatures = false;
             features = [ "clone-impls" "derive" "parsing" "printing" "proc-macro" ];
           }
@@ -19342,11 +19342,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "clone-impls" "default" "derive" "extra-traits" "fold" "full" "parsing" "printing" "proc-macro" "visit" "visit-mut" ];
       };
-      "syn 3.0.0" = rec {
+      "syn 3.0.3" = rec {
         crateName = "syn";
-        version = "3.0.0";
+        version = "3.0.3";
         edition = "2021";
-        sha256 = "0rzrdj92phvvz6552zmj4b4zpfz9lmhl5sx9c5pa7jadlqac7ypj";
+        sha256 = "18srnql3cd39j9q6hf1az02p67rlr1rf6njx9zx4vxj9i3jvmsak";
         authors = [
           "David Tolnay <dtolnay@gmail.com>"
         ];
@@ -20066,18 +20066,18 @@ rec {
         ];
 
       };
-      "thiserror 2.0.19" = rec {
+      "thiserror 2.0.20" = rec {
         crateName = "thiserror";
-        version = "2.0.19";
+        version = "2.0.20";
         edition = "2021";
-        sha256 = "1ngwxsjsa64v1n7vb90h2b0i3fqk1piwaf0z6fqdacqfhjc3b909";
+        sha256 = "0kxs6p295jffxhzaxpxv1dwaaf5iqlm6sx8h0djp6ancbxgj71pc";
         authors = [
           "David Tolnay <dtolnay@gmail.com>"
         ];
         dependencies = [
           {
             name = "thiserror-impl";
-            packageId = "thiserror-impl 2.0.19";
+            packageId = "thiserror-impl 2.0.20";
           }
         ];
         features = {
@@ -20111,11 +20111,11 @@ rec {
         ];
 
       };
-      "thiserror-impl 2.0.19" = rec {
+      "thiserror-impl 2.0.20" = rec {
         crateName = "thiserror-impl";
-        version = "2.0.19";
+        version = "2.0.20";
         edition = "2021";
-        sha256 = "1ka10pqy1g8zy5al9m8yadg30jp8hx0q80j8awmd8131yw6gxjs3";
+        sha256 = "1bwjc94gi0xn5jz26h1a8bjj1wdkvvr6jifamyc4mp9n28zcs15w";
         procMacro = true;
         libName = "thiserror_impl";
         authors = [
@@ -20132,7 +20132,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 3.0.0";
+            packageId = "syn 3.0.3";
           }
         ];
 
@@ -21111,7 +21111,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "time";
@@ -22162,7 +22162,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "uucore";
@@ -22250,7 +22250,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "uucore";
@@ -22310,7 +22310,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "uucore";
@@ -22378,7 +22378,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "uucore";
@@ -22533,7 +22533,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "unic-langid";
@@ -23163,7 +23163,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "walkdir";
@@ -24261,7 +24261,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.48.0";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -25799,7 +25799,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_IO" "Win32_System_Pipes" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_IO" "Win32_System_Pipes" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.52.0" = rec {
         crateName = "windows-sys";
@@ -26047,7 +26047,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.59.0" = rec {
         crateName = "windows-sys";
@@ -27478,7 +27478,7 @@ rec {
           }
           {
             name = "thiserror";
-            packageId = "thiserror 2.0.19";
+            packageId = "thiserror 2.0.20";
           }
           {
             name = "tree_magic_mini";
