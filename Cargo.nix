@@ -587,7 +587,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -612,7 +612,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -746,7 +746,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_DataExchange" "Win32_System_Memory" "Win32_System_Ole" "Win32_UI_Shell" ];
           }
@@ -889,9 +889,9 @@ rec {
       };
       "atomic-write-file" = rec {
         crateName = "atomic-write-file";
-        version = "0.3.0";
+        version = "0.3.1";
         edition = "2024";
-        sha256 = "0gb6a949lkajawjm4wx71vmp13iaw966mw8b2cshsjvhnmahqyc4";
+        sha256 = "1nqfnr3maq45sffgvmm93snikj59z3dkvnyql40w2wp97v0darxf";
         libName = "atomic_write_file";
         authors = [
           "Andrea Corbellini <corbellini.andrea@gmail.com>"
@@ -899,13 +899,13 @@ rec {
         dependencies = [
           {
             name = "nix";
-            packageId = "nix 0.30.1";
+            packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "user" ];
           }
           {
             name = "rand";
-            packageId = "rand 0.9.4";
+            packageId = "rand 0.10.2";
           }
         ];
         features = {
@@ -2166,10 +2166,10 @@ rec {
       };
       "clap" = rec {
         crateName = "clap";
-        version = "4.6.3";
+        version = "4.6.6";
         edition = "2024";
         crateBin = [];
-        sha256 = "0xnp40g68nnzzbsjq4zzskk4kjd58rh7k8dlnygrk04rh5jrbf8g";
+        sha256 = "1jmx5z8d6jbvxdz6dybh599s4rd7ns6sl90p2rrdga09yh3pwg27";
         dependencies = [
           {
             name = "clap_builder";
@@ -2208,9 +2208,9 @@ rec {
       };
       "clap_builder" = rec {
         crateName = "clap_builder";
-        version = "4.6.2";
+        version = "4.6.6";
         edition = "2024";
-        sha256 = "12sl6fyj6w2djxj0lsc1lkj1h3wpx74fjhb37izvaf65vjpji5ph";
+        sha256 = "12cqg25zpjc3k82cpqa2v9h7s3vk1vydpgnwl8lfg6lfm2jzwj3v";
         dependencies = [
           {
             name = "anstream";
@@ -2252,9 +2252,9 @@ rec {
       };
       "clap_derive" = rec {
         crateName = "clap_derive";
-        version = "4.6.3";
+        version = "4.6.4";
         edition = "2024";
-        sha256 = "0xzhblqgw7xl9xgnlmlqdz5b5cjp5shz6zkj7mx5a5kzmqp3kwij";
+        sha256 = "0qd0v7pa2arwxjjinmjim6xrjy61bc28m1yryhc7zjjssswx44nh";
         procMacro = true;
         dependencies = [
           {
@@ -2271,7 +2271,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 2.0.119";
+            packageId = "syn 3.0.3";
             features = [ "full" ];
           }
         ];
@@ -3977,7 +3977,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_UI_Shell" "Win32_Foundation" "Win32_Globalization" "Win32_System_Com" ];
           }
@@ -4293,7 +4293,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -4566,7 +4566,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_IO" ];
           }
@@ -5237,9 +5237,9 @@ rec {
       };
       "futures" = rec {
         crateName = "futures";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "066j5aqz8an05xh4hn5ljdnjn80z3g335v4grx4gaifr57wg3358";
+        sha256 = "18yhwmbdalhz2z9i1vm10hy2v0cfm82dkgcb6vr2msxazfix4ccs";
         dependencies = [
           {
             name = "futures-channel";
@@ -5299,9 +5299,9 @@ rec {
       };
       "futures-channel" = rec {
         crateName = "futures-channel";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "1bn5hlhfkl1sgypmiachaqcgwmr6wmjal7dyhfyb1zkazvs90996";
+        sha256 = "1i4kwcanpaphn1ax62ci3nx176kglxqx0gnhzqpqdr1rkpbf7ydi";
         libName = "futures_channel";
         dependencies = [
           {
@@ -5327,9 +5327,9 @@ rec {
       };
       "futures-core" = rec {
         crateName = "futures-core";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "1iqdbvcdlplfr2g43h7xrfkv2sg5p1a26x8acz1xgxl07i3hrm9c";
+        sha256 = "0pjgv4fx0np6hrs5sz5a2phabwv0z70yr51v03injbi44bjrkmlj";
         libName = "futures_core";
         features = {
           "default" = [ "std" ];
@@ -5340,9 +5340,9 @@ rec {
       };
       "futures-executor" = rec {
         crateName = "futures-executor";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "0n3lpkmcfrsnh40i4armn040gnqbpd257hz5qs46zipjr6f8fm37";
+        sha256 = "0cjl3y7jgg60wwb96ikxj23r6q91ylvx8v675yychv1w3b7lf6q3";
         libName = "futures_executor";
         dependencies = [
           {
@@ -5370,9 +5370,9 @@ rec {
       };
       "futures-io" = rec {
         crateName = "futures-io";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "0yjx13qdm9b2p4w00ddw85k6yccnnmqrlrrz8yfmi5jg7jmfqxs5";
+        sha256 = "1v9z6wj92ra18kpv0xig21hgpzrvcwmcr8fszyzh64yyay0zmh2k";
         libName = "futures_io";
         features = {
           "default" = [ "std" ];
@@ -5381,9 +5381,9 @@ rec {
       };
       "futures-macro" = rec {
         crateName = "futures-macro";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "02xiyd5y1nk9b805aympj4wq2czgvxnhcml9w9xkc665d3g3qv9d";
+        sha256 = "0i0czvcvsqq4hrccibq2f23004si5z34zjwdxfmqhlrmm15nbfcz";
         procMacro = true;
         libName = "futures_macro";
         dependencies = [
@@ -5397,7 +5397,7 @@ rec {
           }
           {
             name = "syn";
-            packageId = "syn 2.0.119";
+            packageId = "syn 3.0.3";
             features = [ "full" ];
           }
         ];
@@ -5405,9 +5405,9 @@ rec {
       };
       "futures-sink" = rec {
         crateName = "futures-sink";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "01z38z344hpryw84b6r0rbwcb669d8pyvl2szg10aqwx96n1hi73";
+        sha256 = "07cfvrgc3vxk6sw5g8a8dnrm1mzg6d5mwy08ywa1sgyhyxml4i0r";
         libName = "futures_sink";
         features = {
           "default" = [ "std" ];
@@ -5417,9 +5417,9 @@ rec {
       };
       "futures-task" = rec {
         crateName = "futures-task";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "02f1y1yvjg1cv998zkgl1706pi9y4fyc9045l1hlmyqyhclfscdj";
+        sha256 = "1zfilqs8nwlfqz4prk7ihvpp5avvzins87ibzlxzq5fhs7ipshfd";
         libName = "futures_task";
         features = {
           "default" = [ "std" ];
@@ -5429,9 +5429,9 @@ rec {
       };
       "futures-util" = rec {
         crateName = "futures-util";
-        version = "0.3.33";
+        version = "0.3.34";
         edition = "2018";
-        sha256 = "1anyg40j5www5l22r2jbn1birsafz4q1w9qmcjk4vqzwasi90ym7";
+        sha256 = "1g3r9ghzq7c2fh34lis43i72xavk9p84npgfwgb5vfpqcwjajl0d";
         libName = "futures_util";
         dependencies = [
           {
@@ -7796,7 +7796,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: ("windows" == target."os" or null);
             features = [ "Win32_Storage_FileSystem" ];
           }
@@ -10584,54 +10584,6 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "fs" "memoffset" "mman" "net" "socket" ];
       };
-      "nix 0.30.1" = rec {
-        crateName = "nix";
-        version = "0.30.1";
-        edition = "2021";
-        sha256 = "1dixahq9hk191g0c2ydc0h1ppxj0xw536y6rl63vlnp06lx3ylkl";
-        authors = [
-          "The nix-rust Project Developers"
-        ];
-        dependencies = [
-          {
-            name = "bitflags";
-            packageId = "bitflags 2.13.0";
-          }
-          {
-            name = "cfg-if";
-            packageId = "cfg-if";
-          }
-          {
-            name = "libc";
-            packageId = "libc";
-            features = [ "extra_traits" ];
-          }
-        ];
-        buildDependencies = [
-          {
-            name = "cfg_aliases";
-            packageId = "cfg_aliases";
-          }
-        ];
-        features = {
-          "aio" = [ "pin-utils" ];
-          "dir" = [ "fs" ];
-          "event" = [ "poll" ];
-          "memoffset" = [ "dep:memoffset" ];
-          "mount" = [ "uio" ];
-          "mqueue" = [ "fs" ];
-          "net" = [ "socket" ];
-          "pin-utils" = [ "dep:pin-utils" ];
-          "ptrace" = [ "process" ];
-          "sched" = [ "process" ];
-          "signal" = [ "process" ];
-          "socket" = [ "memoffset" ];
-          "ucontext" = [ "signal" ];
-          "user" = [ "feature" ];
-          "zerocopy" = [ "fs" "uio" ];
-        };
-        resolvedDefaultFeatures = [ "default" "feature" "fs" "user" ];
-      };
       "nix 0.31.3" = rec {
         crateName = "nix";
         version = "0.31.3";
@@ -11123,7 +11075,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.59.0";
             rename = "windows";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
@@ -15470,7 +15422,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_IO" "Win32_Networking_WinSock" ];
           }
@@ -17547,7 +17499,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_NetworkManagement_IpHelper" "Win32_System_Threading" ];
           }
@@ -17658,7 +17610,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -17930,7 +17882,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -18055,7 +18007,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -18982,7 +18934,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" ];
           }
@@ -19667,7 +19619,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -19709,7 +19661,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_Threading" "Win32_Security" ];
@@ -19738,7 +19690,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" ];
           }
@@ -24261,7 +24213,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.52.0";
+            packageId = "windows-sys 0.48.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -25799,7 +25751,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_IO" "Win32_System_Pipes" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_IO" "Win32_System_Pipes" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.52.0" = rec {
         crateName = "windows-sys";
@@ -26047,7 +25999,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_System" "Win32_System_Threading" "default" ];
       };
       "windows-sys 0.59.0" = rec {
         crateName = "windows-sys";
@@ -26306,7 +26258,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_LibraryLoader" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.60.2" = rec {
         crateName = "windows-sys";
@@ -26571,7 +26523,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Registry" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -27418,7 +27370,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.59.0";
             features = [ "Win32_Foundation" "Win32_System_Time" "Win32_System_Registry" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Diagnostics_Debug" ];
           }
         ];
