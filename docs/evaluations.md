@@ -273,7 +273,11 @@ Completed dependency bundles are cached by task and lockfile identity, then thei
 registry and Git dependency directories are mounted read-only into both the
 harness and grader sandboxes. Cargo remains forced offline inside both sandboxes,
 and build artifacts remain in the disposable task workspace. The host's Cargo
-cache, credentials, and Git checkouts are never mounted.
+cache, credentials, and Git checkouts are never mounted. Dependency fetches also
+run with a cleared environment, an isolated home, system and global Git
+configuration disabled, interactive authentication disabled, and a `PATH`
+constructed only from the resolved Rust environment. By default, completed
+bundles live under `.kraai-eval-cache/dependencies/<key>/cargo-home`.
 
 Dependency fetching is controller setup rather than part of the scored run. A
 missing or stale lockfile, unavailable registry, or failed fetch produces a

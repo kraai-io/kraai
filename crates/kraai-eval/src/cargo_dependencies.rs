@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -6,7 +6,7 @@ use std::time::Duration;
 use color_eyre::eyre::{Context, Result, bail};
 
 use crate::cache::hash_chunks;
-use crate::command::run_trusted_with_environment;
+use crate::command::run_trusted_with_clean_environment;
 use crate::sandbox::RustEnvironment;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(600);
@@ -53,7 +53,7 @@ pub(crate) fn prepare(
         .join(ulid::Ulid::generate().to_string());
     let staging_home = staging.join("cargo-home");
     fs::create_dir_all(&staging_home)?;
-    let result = fetch(&cargo, workspace, &manifest, &staging_home).and_then(|()| {
+    let result = fetch(&cargo, workspace, &manifest, &staging_home, rust).and_then(|()| {
         fs::write(staging.join("complete"), format!("{key}\n"))?;
         match fs::rename(&staging, &final_dir) {
             Ok(()) => Ok(false),
@@ -82,7 +82,13 @@ fn is_complete(directory: &Path, expected_key: &str) -> bool {
             .is_ok_and(|contents| contents.trim() == expected_key)
 }
 
-fn fetch(cargo: &Path, workspace: &Path, manifest: &Path, cargo_home: &Path) -> Result<()> {
+fn fetch(
+    cargo: &Path,
+    workspace: &Path,
+    manifest: &Path,
+    cargo_home: &Path,
+    rust: &RustEnvironment,
+) -> Result<()> {
     let command = vec![
         cargo.to_string_lossy().into_owned(),
         String::from("fetch"),
@@ -96,8 +102,21 @@ fn fetch(cargo: &Path, workspace: &Path, manifest: &Path, cargo_home: &Path) -> 
             cargo_home.to_string_lossy().into_owned(),
         ),
         (String::from("CARGO_NET_OFFLINE"), String::from("false")),
+        (
+            String::from("CARGO_NET_GIT_FETCH_WITH_CLI"),
+            String::from("false"),
+        ),
+        (String::from("GIT_CONFIG_GLOBAL"), String::from("/dev/null")),
+        (String::from("GIT_CONFIG_NOSYSTEM"), String::from("1")),
+        (String::from("GIT_TERMINAL_PROMPT"), String::from("0")),
+        (
+            String::from("HOME"),
+            cargo_home.to_string_lossy().into_owned(),
+        ),
+        (String::from("PATH"), trusted_program_path(cargo, rust)?),
     ]);
-    let outcome = run_trusted_with_environment(&command, workspace, FETCH_TIMEOUT, &environment)?;
+    let outcome =
+        run_trusted_with_clean_environment(&command, workspace, FETCH_TIMEOUT, &environment)?;
     if outcome.timed_out {
         bail!(
             "cargo fetch timed out after {} seconds",
@@ -114,6 +133,23 @@ fn fetch(cargo: &Path, workspace: &Path, manifest: &Path, cargo_home: &Path) -> 
         );
     }
     Ok(())
+}
+
+fn trusted_program_path(cargo: &Path, rust: &RustEnvironment) -> Result<String> {
+    let directories = std::iter::once(cargo)
+        .chain(rust.programs.iter().map(PathBuf::as_path))
+        .filter_map(Path::parent)
+        .map(Path::to_path_buf)
+        .collect::<BTreeSet<_>>();
+    std::env::join_paths(directories)
+        .wrap_err("construct trusted Cargo fetch PATH")?
+        .into_string()
+        .map_err(|path| {
+            color_eyre::eyre::eyre!(
+                "trusted Cargo fetch PATH is not valid UTF-8: {}",
+                path.to_string_lossy()
+            )
+        })
 }
 
 #[cfg(all(test, unix))]
@@ -154,9 +190,16 @@ mod tests {
             ),
         )?;
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+        let mkdir = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join("mkdir"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("test requires mkdir"))?;
         let rust = RustEnvironment {
             cargo: cargo.clone(),
-            programs: vec![cargo],
+            programs: vec![cargo, mkdir],
         };
 
         let first = prepare(&cache, &workspace, "task-digest", &rust)?;
