@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# < 3 )); then
-  echo "usage: $0 <run|suite> <model> <provider> [evaluation arguments...]" >&2
+if (( $# < 2 )); then
+  echo "usage: $0 <run|suite> <model> [evaluation arguments...]" >&2
   exit 2
 fi
 
 mode="$1"
 model="$2"
-provider="$3"
-shift 3
+shift 2
 
 runner="$(nix build .#kraai --no-link --print-out-paths)"
 evaluator="$(nix build .#kraai-eval --no-link --print-out-paths)"
@@ -27,7 +26,7 @@ fi
   --codex-subscription-proxy \
   --runner-arg --ci \
   --runner-arg --provider \
-  --runner-arg "$provider" \
+  --runner-arg '{provider_id}' \
   --runner-arg --model \
   --runner-arg "$model" \
   --runner-arg --agent-profile \

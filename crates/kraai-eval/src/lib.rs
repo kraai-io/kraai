@@ -487,12 +487,18 @@ fn execute(
     let provider_config_path = provider_config_relative
         .as_ref()
         .map(|path| agent_workspace.join(path));
+    let provider_id = request
+        .kraai_provider_config
+        .as_ref()
+        .map(KraaiProviderConfigRequest::selected_provider_id)
+        .transpose()?;
     let runner_command = expand_runner_command(
         request,
         task,
         &agent_workspace,
         proxy_url.as_deref(),
         provider_config_path.as_deref(),
+        provider_id.as_deref(),
     )?;
     let harness_metrics_path = artifact_dir.join("harness-metrics.json");
     File::create(&harness_metrics_path)?;
@@ -668,6 +674,7 @@ fn expand_runner_command(
     workspace: &Path,
     proxy_url: Option<&str>,
     provider_config: Option<&Path>,
+    provider_id: Option<&str>,
 ) -> Result<Vec<String>> {
     if proxy_url.is_none()
         && request
@@ -685,6 +692,14 @@ fn expand_runner_command(
     {
         bail!("runner arguments use {{provider_config}} without a sanitized provider config");
     }
+    if provider_id.is_none()
+        && request
+            .runner_args
+            .iter()
+            .any(|argument| argument.contains("{provider_id}"))
+    {
+        bail!("runner arguments use {{provider_id}} without a selected Kraai provider");
+    }
     let program = request
         .runner_program
         .canonicalize()
@@ -695,6 +710,7 @@ fn expand_runner_command(
         arg.replace("{workspace}", &workspace)
             .replace("{prompt}", &task.prompt)
             .replace("{proxy_url}", proxy_url.unwrap_or_default())
+            .replace("{provider_id}", provider_id.unwrap_or_default())
             .replace(
                 "{provider_config}",
                 &provider_config

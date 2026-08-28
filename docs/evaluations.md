@@ -17,7 +17,7 @@ The repository includes an evaluation derived from the parent of Jujutsu change
 plural, then grades the submitted patch with tests that were not present in the
 agent workspace.
 
-Pass a model ID available through the `openai` Codex subscription provider:
+Pass a model ID available through the selected Codex subscription provider:
 
 ```bash
 just eval-open-close-files <model-id>
@@ -26,19 +26,19 @@ just eval-open-close-files <model-id>
 The recipe builds immutable Nix artifacts for both Kraai and `kraai-eval`, uses
 the current `~/.kraai/providers.toml`, starts the subscription proxy, and runs
 an evaluation profile derived from `coding`. The profile inherits the
-evaluator's sanitized environment and trusts its outer sandbox. Supply a
-different provider ID or stochastic attempt number as the second or third
-argument:
+evaluator's sanitized environment and trusts its outer sandbox. The provider ID
+is read from the sanitized configuration. Supply a stochastic attempt number as
+the second argument:
 
 ```bash
-just eval-open-close-files <model-id> openai 1
+just eval-open-close-files <model-id> 1
 ```
 
 Run three attempts and print an aggregate success-rate, timing, and token
 summary with:
 
 ```bash
-just eval-open-close-files-suite <model-id> openai 3 0
+just eval-open-close-files-suite <model-id> 3 0
 ```
 
 Suites always reuse matching immutable attempt results, so an interrupted suite
@@ -220,7 +220,7 @@ kraai-eval run \
   --codex-subscription-proxy \
   --runner-arg --ci \
   --runner-arg --provider \
-  --runner-arg '<provider-id>' \
+  --runner-arg '{provider_id}' \
   --runner-arg --model \
   --runner-arg '<model-id>' \
   --runner-arg --agent-profile \
@@ -231,9 +231,10 @@ kraai-eval run \
   --runner-arg '{provider_config}'
 ```
 
-The sanitized config is committed into the immutable task base before the agent
-starts, so it does not appear in the submitted patch. The user's original config
-is read only and is not modified.
+`{provider_id}` expands to the provider selected from that sanitized
+configuration. The sanitized config is committed into the immutable task base
+before the agent starts, so it does not appear in the submitted patch. The
+user's original config is read only and is not modified.
 
 The task's public fixture defines `eval-coding` by extending the built-in
 `coding` profile. Its inherited environment preserves the evaluator's offline
