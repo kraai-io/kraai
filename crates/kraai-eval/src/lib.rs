@@ -529,8 +529,7 @@ fn execute(
         resource_limits: Some(resource_limits(task)),
     })?;
     let proxy_record = proxy.as_ref().map(proxy::ModelProxy::record);
-    let proxy_metrics = proxy.as_ref().map(proxy::ModelProxy::metrics).transpose()?;
-    drop(proxy);
+    let proxy_metrics = proxy.map(proxy::ModelProxy::finish).transpose()?;
     let harness_metrics = match HarnessMetrics::load(&harness_metrics_path) {
         Ok(metrics) => metrics,
         Err(error) => {

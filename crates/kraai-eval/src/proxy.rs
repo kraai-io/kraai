@@ -26,6 +26,7 @@ const CHATGPT_UPSTREAM: &str = "https://chatgpt.com";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
@@ -290,16 +291,25 @@ impl ModelProxy {
     fn url(&self) -> String {
         format!("http://{}{}", self.address, self.base_path)
     }
-}
 
-impl Drop for ModelProxy {
-    fn drop(&mut self) {
+    pub(crate) fn finish(mut self) -> Result<ProxyMetrics> {
+        self.shutdown_and_join();
+        self.metrics()
+    }
+
+    fn shutdown_and_join(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+impl Drop for ModelProxy {
+    fn drop(&mut self) {
+        self.shutdown_and_join();
     }
 }
 
@@ -391,7 +401,13 @@ async fn run_server(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
         }
     }
-    tasks.abort_all();
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
+        tasks.abort_all();
+    }
     while tasks.join_next().await.is_some() {}
     Ok(())
 }
@@ -1016,6 +1032,80 @@ mod tests {
             !log.contains("real-secret"),
             "upstream credential leaked into logs"
         );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Result<()> {
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let upstream_address = upstream.local_addr()?;
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let upstream_task = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await?;
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 1024];
+                let read = stream.read(&mut chunk).await?;
+                if read == 0 {
+                    bail!("upstream client disconnected before headers");
+                }
+                request.extend_from_slice(chunk.get(..read).unwrap_or_default());
+                if find_header_end(&request).is_some() {
+                    break;
+                }
+            }
+            let _ = accepted_tx.send(());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let body = b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            stream.write_all(body).await?;
+            stream.shutdown().await?;
+            Ok::<_, color_eyre::Report>(())
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-proxy-finish-drain-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let log_path = root.join("proxy.events.jsonl");
+        let proxy = ModelProxy::start(ProxyServerConfig {
+            upstream: format!("http://{upstream_address}"),
+            credentials: UpstreamCredentials::OpenAiApiKey {
+                credential: String::from("real-secret"),
+                credential_env: String::from("TEST_API_KEY"),
+            },
+            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+            kind: String::from("openai"),
+            base_path: String::from("/v1"),
+            log_path: log_path.clone(),
+            max_requests: 1,
+        })?;
+        let mut downstream = std::net::TcpStream::connect(proxy.address)?;
+        downstream.write_all(
+            format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+                proxy.address, proxy.token
+            )
+            .as_bytes(),
+        )?;
+        accepted_rx.await?;
+
+        let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
+        upstream_task.await??;
+        ensure!(metrics.requests == 1 && metrics.successful_requests == 1);
+        ensure!(metrics.usage.total_tokens == 30);
+        ensure!(fs::read_to_string(&log_path)?.contains("/v1/responses"));
+        drop(downstream);
         fs::remove_dir_all(root)?;
         Ok(())
     }
