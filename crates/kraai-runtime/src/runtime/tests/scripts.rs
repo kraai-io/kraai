@@ -198,6 +198,85 @@ async fn post_boundary_drain_stops_before_unbounded_trailing_events() -> Result<
 }
 
 #[tokio::test]
+async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(vec![vec![
+        ScriptedChunk::plain(
+            "<tool_call permissions=\"workspace-write\" timeout=\"30sec\">\n^cargo test\n</tool_call>",
+        ),
+        ScriptedChunk::error("transport failed after completed script"),
+    ]])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("test it"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+
+    let events = harness
+        .events
+        .wait_for("script approval or stream error", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+                    || matches!(event, Event::StreamError { session_id: event_session, .. } if event_session == &session_id)
+            })
+        })
+        .await;
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(event, Event::StreamError { session_id: event_session, .. } if event_session == &session_id)
+    }));
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::error(
+        "transport failed before completed script",
+    )]])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("test it"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+
+    let events = harness
+        .events
+        .wait_for("pre-boundary stream error", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamError { session_id: event_session, .. } if event_session == &session_id)
+            })
+        })
+        .await;
+    assert!(!events.iter().any(|event| {
+        matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+    }));
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(

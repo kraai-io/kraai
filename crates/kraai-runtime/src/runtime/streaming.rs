@@ -581,6 +581,13 @@ impl RuntimeCore {
                     }
                 }
                 Err(error) => {
+                    if completed_boundary.is_some() {
+                        tracing::warn!(
+                            error = %error,
+                            "Stopping provider stream drain after error"
+                        );
+                        break;
+                    }
                     return StreamDriveResult::FailedDuringStream {
                         error: error.to_string(),
                     };
