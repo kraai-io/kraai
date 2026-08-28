@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# < 2 )); then
-  echo "usage: $0 <run|suite> <model> [evaluation arguments...]" >&2
+if (( $# < 3 )); then
+  echo "usage: $0 <run|suite> <model> <provider-or-empty> [evaluation arguments...]" >&2
   exit 2
 fi
 
 mode="$1"
 model="$2"
-shift 2
+provider="$3"
+shift 3
+
+provider_args=()
+if [[ -n "$provider" ]]; then
+  provider_args=(--kraai-provider-id "$provider")
+fi
 
 runner="$(nix build .#kraai --no-link --print-out-paths)"
 evaluator="$(nix build .#kraai-eval --no-link --print-out-paths)"
@@ -24,6 +30,7 @@ fi
   --harness-name kraai \
   --model-label "$model" \
   --codex-subscription-proxy \
+  "${provider_args[@]}" \
   --runner-arg --ci \
   --runner-arg --provider \
   --runner-arg '{provider_id}' \

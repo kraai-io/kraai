@@ -17,28 +17,29 @@ The repository includes an evaluation derived from the parent of Jujutsu change
 plural, then grades the submitted patch with tests that were not present in the
 agent workspace.
 
-Pass a model ID available through the selected Codex subscription provider:
+Pass a model ID and the configured Codex subscription provider ID:
 
 ```bash
-just eval-open-close-files <model-id>
+just eval-open-close-files <model-id> <provider-id>
 ```
 
 The recipe builds immutable Nix artifacts for both Kraai and `kraai-eval`, uses
 the current `~/.kraai/providers.toml`, starts the subscription proxy, and runs
 an evaluation profile derived from `coding`. The profile inherits the
 evaluator's sanitized environment and trusts its outer sandbox. The provider ID
-is read from the sanitized configuration. Supply a stochastic attempt number as
-the second argument:
+selects which Codex provider is retained in the sanitized configuration; it is
+not hardcoded by the recipe. Both the model ID and provider ID are required.
+Supply a stochastic attempt number after the provider ID:
 
 ```bash
-just eval-open-close-files <model-id> 1
+just eval-open-close-files <model-id> <provider-id> 1
 ```
 
 Run three attempts and print an aggregate success-rate, timing, and token
 summary with:
 
 ```bash
-just eval-open-close-files-suite <model-id> 3 0
+just eval-open-close-files-suite <model-id> <provider-id> 3 0
 ```
 
 Suites always reuse matching immutable attempt results, so an interrupted suite

@@ -65,8 +65,8 @@ lint-fix-dirty:
 
 check: generate-cargo-nix format lint test
 
-eval-open-close-files model attempt="0":
-    @evals/run-open-close-files run '{{ model }}' --attempt '{{ attempt }}'
+eval-open-close-files model provider attempt="0":
+    @evals/run-open-close-files run '{{ model }}' '{{ provider }}' --attempt '{{ attempt }}'
 
-eval-open-close-files-suite model attempts="3" start_attempt="0":
-    @evals/run-open-close-files suite '{{ model }}' --attempts '{{ attempts }}' --start-attempt '{{ start_attempt }}'
+eval-open-close-files-suite model provider attempts="3" start_attempt="0":
+    @evals/run-open-close-files suite '{{ model }}' '{{ provider }}' --attempts '{{ attempts }}' --start-attempt '{{ start_attempt }}'
