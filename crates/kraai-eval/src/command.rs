@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,6 +31,15 @@ pub(crate) fn run_trusted(
     cwd: &Path,
     timeout: Duration,
 ) -> Result<CommandOutcome> {
+    run_trusted_with_environment(command, cwd, timeout, &BTreeMap::new())
+}
+
+pub(crate) fn run_trusted_with_environment(
+    command: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
+) -> Result<CommandOutcome> {
     let Some(program) = command.first() else {
         bail!("command must not be empty");
     };
@@ -39,12 +49,17 @@ pub(crate) fn run_trusted(
     let stdout = File::create(&stdout_path)?;
     let stderr = File::create(&stderr_path)?;
     let started = Instant::now();
-    let mut child = Command::new(program)
+    let mut process = Command::new(program);
+    process
         .args(command.get(1..).unwrap_or_default())
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    for (name, value) in environment {
+        process.env(name, value);
+    }
+    let mut child = process
         .spawn()
         .wrap_err_with(|| format!("spawn trusted command {program}"))?;
     let (status, timed_out, output_limit_exceeded) = loop {

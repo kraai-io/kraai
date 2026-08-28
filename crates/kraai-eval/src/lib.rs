@@ -2,6 +2,7 @@
 #![deny(clippy::all)]
 
 mod cache;
+mod cargo_dependencies;
 mod command;
 mod manifest;
 mod metrics;
@@ -309,6 +310,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         request,
         &task,
         task_dir,
+        &cache_dir,
         &run_root,
         &experiment_id,
         &runner_artifact_sha256,
@@ -428,6 +430,7 @@ fn execute(
     request: &RunRequest,
     task: &TaskManifest,
     task_dir: &Path,
+    cache_dir: &Path,
     run_root: &Path,
     experiment_id: &str,
     runner_artifact_sha256: &str,
@@ -456,6 +459,26 @@ fn execute(
         }),
     )?;
 
+    set_progress(request, "materializing source revision");
+    let base = run_root.join("base");
+    events.write("source_materialization_started", serde_json::json!({}))?;
+    materialize_base(task, task_dir, &base)?;
+    let cargo_dependencies = if let Some(rust_environment) = rust_environment {
+        set_progress(request, "fetching Rust dependencies");
+        events.write("rust_dependencies_fetch_started", serde_json::json!({}))?;
+        let dependencies =
+            cargo_dependencies::prepare(cache_dir, &base, task_sha256, rust_environment)?;
+        events.write(
+            "rust_dependencies_fetch_finished",
+            serde_json::json!({
+                "cache_key": dependencies.key,
+                "reused": dependencies.reused,
+            }),
+        )?;
+        Some(dependencies)
+    } else {
+        None
+    };
     set_progress(request, "starting credential proxy");
     let proxy = request
         .model_proxy
@@ -463,11 +486,6 @@ fn execute(
         .map(|config| config.start(artifact_dir.join("proxy.events.jsonl")))
         .transpose()?;
     let proxy_url = proxy.as_ref().map(proxy::ModelProxy::base_url);
-
-    set_progress(request, "materializing source revision");
-    let base = run_root.join("base");
-    events.write("source_materialization_started", serde_json::json!({}))?;
-    materialize_base(task, task_dir, &base)?;
     let provider_config_relative = if let Some(config) = &request.kraai_provider_config {
         let proxy_url = proxy_url.as_deref().ok_or_else(|| {
             color_eyre::eyre::eyre!("provider config requires an active model proxy")
@@ -524,7 +542,9 @@ fn execute(
         extra_programs: rust_environment
             .map(|environment| environment.programs.clone())
             .unwrap_or_default(),
-        cargo_registry: rust_environment.map(|environment| environment.registry.clone()),
+        cargo_home: cargo_dependencies
+            .as_ref()
+            .map(|dependencies| dependencies.home.clone()),
         metrics_output: Some(harness_metrics_path.clone()),
         resource_limits: Some(resource_limits(task)),
     })?;
@@ -591,7 +611,9 @@ fn execute(
                 extra_programs: rust_environment
                     .map(|environment| environment.programs.clone())
                     .unwrap_or_default(),
-                cargo_registry: rust_environment.map(|environment| environment.registry.clone()),
+                cargo_home: cargo_dependencies
+                    .as_ref()
+                    .map(|dependencies| dependencies.home.clone()),
                 metrics_output: None,
                 resource_limits: Some(resource_limits(task)),
             })?;

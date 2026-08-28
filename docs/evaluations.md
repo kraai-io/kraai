@@ -266,9 +266,18 @@ sandbox has:
 
 Tasks with `runner.rust_toolchain = true` additionally receive the current Rust
 toolchain and common source-inspection commands from their immutable Nix store
-closures. The Cargo registry is mounted read-only and Cargo is forced offline;
-build artifacts remain inside the disposable task workspace. This exposes
-downloaded public crate sources, but not Cargo credentials or Git checkouts.
+closures. Before the harness starts, the evaluator runs `cargo fetch --locked`
+against the materialized public source using a fresh evaluator-owned Cargo home.
+Completed dependency bundles are cached by task and lockfile identity, then their
+registry and Git dependency directories are mounted read-only into both the
+harness and grader sandboxes. Cargo remains forced offline inside both sandboxes,
+and build artifacts remain in the disposable task workspace. The host's Cargo
+cache, credentials, and Git checkouts are never mounted.
+
+Dependency fetching is controller setup rather than part of the scored run. A
+missing or stale lockfile, unavailable registry, or failed fetch produces a
+`controller_failed` result before the harness receives the task. Repeated runs
+reuse a completed dependency bundle and never reuse a partially fetched one.
 
 The grader always runs without network access. Enabling runner network access
 is recorded in the experiment identity and result. The credential proxy
