@@ -10,7 +10,7 @@ use crate::command::run_trusted_with_clean_environment;
 use crate::sandbox::RustEnvironment;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(600);
-const CACHE_SCHEMA: &[u8] = b"kraai-eval-cargo-dependencies-v1";
+const CACHE_SCHEMA: &[u8] = b"kraai-eval-cargo-dependencies-v2";
 
 pub(crate) struct CargoDependencies {
     pub home: PathBuf,
@@ -53,7 +53,7 @@ pub(crate) fn prepare(
         .join(ulid::Ulid::generate().to_string());
     let staging_home = staging.join("cargo-home");
     fs::create_dir_all(&staging_home)?;
-    let result = fetch(&cargo, workspace, &manifest, &staging_home, rust).and_then(|()| {
+    let result = fetch(&cargo, &manifest, &staging_home, rust).and_then(|()| {
         fs::write(staging.join("complete"), format!("{key}\n"))?;
         match fs::rename(&staging, &final_dir) {
             Ok(()) => Ok(false),
@@ -82,13 +82,7 @@ fn is_complete(directory: &Path, expected_key: &str) -> bool {
             .is_ok_and(|contents| contents.trim() == expected_key)
 }
 
-fn fetch(
-    cargo: &Path,
-    workspace: &Path,
-    manifest: &Path,
-    cargo_home: &Path,
-    rust: &RustEnvironment,
-) -> Result<()> {
+fn fetch(cargo: &Path, manifest: &Path, cargo_home: &Path, rust: &RustEnvironment) -> Result<()> {
     let command = vec![
         cargo.to_string_lossy().into_owned(),
         String::from("fetch"),
@@ -116,7 +110,7 @@ fn fetch(
         (String::from("PATH"), trusted_program_path(cargo, rust)?),
     ]);
     let outcome =
-        run_trusted_with_clean_environment(&command, workspace, FETCH_TIMEOUT, &environment)?;
+        run_trusted_with_clean_environment(&command, cargo_home, FETCH_TIMEOUT, &environment)?;
     if outcome.timed_out {
         bail!(
             "cargo fetch timed out after {} seconds",
@@ -161,7 +155,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fetches_into_isolated_cache_and_reuses_completed_bundle() -> Result<()> {
+    fn fetches_outside_task_with_isolated_cache_and_reuses_completed_bundle() -> Result<()> {
         let root = std::env::temp_dir().join(format!(
             "kraai-eval-cargo-dependencies-{}",
             ulid::Ulid::generate()
@@ -174,6 +168,11 @@ mod tests {
             "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
         )?;
         fs::write(workspace.join("Cargo.lock"), "version = 4\n")?;
+        fs::create_dir_all(workspace.join(".cargo"))?;
+        fs::write(
+            workspace.join(".cargo/config.toml"),
+            "[registry]\nglobal-credential-providers = [\"cargo:token-from-stdout credential-provider-sentinel\"]\n",
+        )?;
         let shell = std::env::var_os("PATH")
             .and_then(|path| {
                 std::env::split_paths(&path)
@@ -181,12 +180,24 @@ mod tests {
                     .find(|candidate| candidate.is_file())
             })
             .ok_or_else(|| color_eyre::eyre::eyre!("test requires sh"))?;
+        let sentinel_marker = root.join("credential-provider-ran");
+        let sentinel = workspace.join("credential-provider-sentinel");
+        fs::write(
+            &sentinel,
+            format!(
+                "#!{}\nset -eu\nprintf ran > {}\n",
+                shell.display(),
+                sentinel_marker.display()
+            ),
+        )?;
+        fs::set_permissions(&sentinel, fs::Permissions::from_mode(0o755))?;
         let cargo = root.join("fake-cargo");
         fs::write(
             &cargo,
             format!(
-                "#!{}\nset -eu\ntest \"$1\" = fetch\ntest \"$2\" = --locked\nmkdir -p \"$CARGO_HOME/registry/index\" \"$CARGO_HOME/registry/cache\" \"$CARGO_HOME/git/db\"\nprintf fetched > \"$CARGO_HOME/fetched\"\n",
-                shell.display()
+                "#!{}\nset -eu\ntest \"$1\" = fetch\ntest \"$2\" = --locked\nprintf '%s' \"$PWD\" > \"$CARGO_HOME/fetch-cwd\"\nif [ -f .cargo/config.toml ]; then {} ; fi\nmkdir -p \"$CARGO_HOME/registry/index\" \"$CARGO_HOME/registry/cache\" \"$CARGO_HOME/git/db\"\nprintf fetched > \"$CARGO_HOME/fetched\"\n",
+                shell.display(),
+                sentinel.display()
             ),
         )?;
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
@@ -207,6 +218,15 @@ mod tests {
         ensure!(first.home.join("fetched").is_file());
         ensure!(first.home.join("registry/cache").is_dir());
         ensure!(first.home.join("git/db").is_dir());
+        let fetch_cwd = PathBuf::from(fs::read_to_string(first.home.join("fetch-cwd"))?);
+        ensure!(
+            !fetch_cwd.starts_with(&workspace),
+            "dependency fetch ran inside the task workspace"
+        );
+        ensure!(
+            !sentinel_marker.exists(),
+            "task-local credential provider was executed"
+        );
 
         let second = prepare(&cache, &workspace, "task-digest", &rust)?;
         ensure!(second.reused, "completed cache was not reused");

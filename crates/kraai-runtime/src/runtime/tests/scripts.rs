@@ -2,6 +2,7 @@ use color_eyre::eyre::Result;
 use kraai_persistence::{FileScriptExecutionStore, ScriptExecutionStore};
 use kraai_types::{ChatRole, ScriptExecutionPhase, ScriptExecutionStatus, TokenUsage};
 
+use super::super::streaming::MAX_POST_BOUNDARY_DRAIN_EVENTS;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
@@ -134,6 +135,63 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
     assert!(history.values().any(|message| {
         message.role == ChatRole::ToolCallResult && message.content.contains("status=\"denied\"")
     }));
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_boundary_drain_stops_before_unbounded_trailing_events() -> Result<()> {
+    let mut chunks = vec![ScriptedChunk::plain(
+        "<tool_call permissions=\"workspace-write\" timeout=\"30sec\">\n^cargo test\n</tool_call>",
+    )];
+    chunks.extend(
+        std::iter::repeat_with(|| ScriptedChunk::plain("discarded trailing output"))
+            .take(MAX_POST_BOUNDARY_DRAIN_EVENTS),
+    );
+    chunks.push(ScriptedChunk::usage(TokenUsage {
+        total_tokens: 42,
+        input_tokens: 20,
+        output_tokens: 12,
+        reasoning_tokens: 6,
+        cache_read_tokens: 4,
+    }));
+    let Some(harness) = RuntimeTestHarness::new(vec![chunks]).await else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("test it"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+
+    harness
+        .events
+        .wait_for("bounded-drain script approval", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+            })
+        })
+        .await;
+    let history = harness.handle.get_chat_history(session_id).await?;
+    let assistant = history
+        .values()
+        .find(|message| message.role == ChatRole::Assistant)
+        .expect("assistant script message");
+    assert!(!assistant.content.contains("discarded trailing output"));
+    assert!(
+        assistant
+            .generation
+            .as_ref()
+            .and_then(|generation| generation.usage.as_ref())
+            .is_none(),
+        "usage after the drain event limit should not be consumed"
+    );
 
     harness.shutdown().await;
     Ok(())

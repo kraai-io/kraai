@@ -235,7 +235,7 @@ kraai-eval run \
 `{provider_id}` expands to the provider selected from that sanitized
 configuration. The sanitized config is committed into the immutable task base
 before the agent starts, so it does not appear in the submitted patch. The
-user's original config is read only and is not modified.
+user's original config is read-only and is not modified.
 
 The task's public fixture defines `eval-coding` by extending the built-in
 `coding` profile. Its inherited environment preserves the evaluator's offline
@@ -276,8 +276,10 @@ and build artifacts remain in the disposable task workspace. The host's Cargo
 cache, credentials, and Git checkouts are never mounted. Dependency fetches also
 run with a cleared environment, an isolated home, system and global Git
 configuration disabled, interactive authentication disabled, and a `PATH`
-constructed only from the resolved Rust environment. By default, completed
-bundles live under `.kraai-eval-cache/dependencies/<key>/cargo-home`.
+constructed only from the resolved Rust environment. Fetches run outside the
+task workspace, so task-local Cargo configuration and credential-provider
+declarations are not discovered. By default, completed bundles live under
+`.kraai-eval-cache/dependencies/<key>/cargo-home`.
 
 Dependency fetching is controller setup rather than part of the scored run. A
 missing or stale lockfile, unavailable registry, or failed fetch produces a
