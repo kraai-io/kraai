@@ -22,6 +22,12 @@ struct RuntimeRetryObserver {
     event_tx: tokio::sync::broadcast::Sender<Event>,
 }
 
+struct CompletedProtocolBoundary {
+    script: Option<ScriptBlock>,
+    invalid_script: Option<InvalidScriptBlock>,
+    protocol_error: Option<ProtocolError>,
+}
+
 impl ProviderRetryObserver for RuntimeRetryObserver {
     fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
         emit_event(
@@ -489,10 +495,18 @@ impl RuntimeCore {
 
         let mut content = String::new();
         let mut parser = ScriptProtocolParser::new();
+        let mut completed_boundary = None;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(ProviderStreamEvent::TextDelta(chunk)) => {
+                    if completed_boundary.is_some() {
+                        tracing::trace!(
+                            discarded_bytes = chunk.len(),
+                            "Discarding text after script protocol boundary"
+                        );
+                        continue;
+                    }
                     let parsed = parser.ingest(&chunk);
                     if !parsed.accepted.is_empty() {
                         content.push_str(&parsed.accepted);
@@ -513,14 +527,14 @@ impl RuntimeCore {
                     }
                     if parsed.should_stop {
                         let invalid_script = parsed.error.as_ref().map(|_| parser.invalid_block());
-                        tracing::debug!("Stopping stream at script protocol boundary");
-                        return StreamDriveResult::Completed {
-                            session_id,
-                            content,
+                        tracing::debug!(
+                            "Script protocol boundary reached; draining provider stream for usage"
+                        );
+                        completed_boundary = Some(CompletedProtocolBoundary {
                             script: parsed.completed,
                             invalid_script,
                             protocol_error: parsed.error,
-                        };
+                        });
                     }
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
@@ -535,6 +549,17 @@ impl RuntimeCore {
                     };
                 }
             }
+        }
+
+        if let Some(boundary) = completed_boundary {
+            tracing::debug!("Provider stream drained after script protocol boundary");
+            return StreamDriveResult::Completed {
+                session_id,
+                content,
+                script: boundary.script,
+                invalid_script: boundary.invalid_script,
+                protocol_error: boundary.protocol_error,
+            };
         }
 
         let tail = parser.finish();

@@ -1022,8 +1022,10 @@ mod tests {
 
     #[tokio::test]
     async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("kraai-eval-proxy-disconnect-{}", ulid::Ulid::new()));
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-proxy-disconnect-{}",
+            ulid::Ulid::generate()
+        ));
         fs::create_dir(&root)?;
         let log_path = root.join("proxy.events.jsonl");
         let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));

@@ -171,6 +171,11 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
             .content
             .contains("one `<tool_call>` block containing a complete Nushell script")
     );
+    assert!(
+        system_prompt
+            .content
+            .contains("end the response immediately after it")
+    );
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
