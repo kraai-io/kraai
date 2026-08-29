@@ -34,16 +34,13 @@ fn load_startup_files(request: &HostRequest, engine_state: &mut EngineState, sta
     if request.nushell_startup != NushellStartup::Inherit {
         return;
     }
-    let Some(config_dir) = nu_path::nu_config_dir() else {
+    if !engine_state.config_dirs.is_resolved() {
         return;
-    };
-    nu_cli::eval_config_contents(config_dir.join("env.nu").into(), engine_state, stack, false);
-    nu_cli::eval_config_contents(
-        config_dir.join("config.nu").into(),
-        engine_state,
-        stack,
-        false,
-    );
+    }
+    let env_file = engine_state.config_dirs.env_file.to_path_buf();
+    let config_file = engine_state.config_dirs.config_file.to_path_buf();
+    nu_cli::eval_config_contents(env_file, engine_state, stack, false);
+    nu_cli::eval_config_contents(config_file, engine_state, stack, false);
 }
 
 fn validate_request(request: &HostRequest) -> Result<(), HostError> {
@@ -68,6 +65,11 @@ fn build_engine(
 ) -> Result<EngineState, HostError> {
     let mut engine_state =
         nu_command::add_shell_command_context(nu_cmd_lang::create_default_context());
+    if let Ok((config_dirs, _warnings)) =
+        nu_config::resolve_paths(&nu_config::SystemEnv, &nu_config::CliOverrides::default())
+    {
+        engine_state.config_dirs = config_dirs;
+    }
     nu_cli::gather_parent_env_vars(&mut engine_state, &request.workspace_root);
 
     let mut working_set = StateWorkingSet::new(&engine_state);
