@@ -587,7 +587,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -612,7 +612,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -746,7 +746,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_DataExchange" "Win32_System_Memory" "Win32_System_Ole" "Win32_UI_Shell" ];
           }
@@ -3444,22 +3444,22 @@ rec {
           "subtle" = [ "dep:subtle" ];
         };
       };
-      "darling" = rec {
+      "darling 0.21.3" = rec {
         crateName = "darling";
-        version = "0.23.0";
+        version = "0.21.3";
         edition = "2021";
-        sha256 = "179fj6p6ajw4dnkrik51wjhifxwy02x5zhligyymcb905zd17bi5";
+        sha256 = "1h281ah78pz05450r71h3gwm2n24hy8yngbz58g426l4j1q37pww";
         authors = [
           "Ted Driggs <ted.driggs@outlook.com>"
         ];
         dependencies = [
           {
             name = "darling_core";
-            packageId = "darling_core";
+            packageId = "darling_core 0.21.3";
           }
           {
             name = "darling_macro";
-            packageId = "darling_macro";
+            packageId = "darling_macro 0.21.3";
           }
         ];
         features = {
@@ -3470,7 +3470,76 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "suggestions" ];
       };
-      "darling_core" = rec {
+      "darling 0.23.0" = rec {
+        crateName = "darling";
+        version = "0.23.0";
+        edition = "2021";
+        sha256 = "179fj6p6ajw4dnkrik51wjhifxwy02x5zhligyymcb905zd17bi5";
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "darling_core";
+            packageId = "darling_core 0.23.0";
+          }
+          {
+            name = "darling_macro";
+            packageId = "darling_macro 0.23.0";
+          }
+        ];
+        features = {
+          "default" = [ "suggestions" ];
+          "diagnostics" = [ "darling_core/diagnostics" ];
+          "serde" = [ "darling_core/serde" ];
+          "suggestions" = [ "darling_core/suggestions" ];
+        };
+        resolvedDefaultFeatures = [ "default" "suggestions" ];
+      };
+      "darling_core 0.21.3" = rec {
+        crateName = "darling_core";
+        version = "0.21.3";
+        edition = "2021";
+        sha256 = "193ya45qgac0a4siwghk0bl8im8h89p3cald7kw8ag3yrmg1jiqj";
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "fnv";
+            packageId = "fnv";
+          }
+          {
+            name = "ident_case";
+            packageId = "ident_case";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "strsim";
+            packageId = "strsim";
+            optional = true;
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "full" "extra-traits" ];
+          }
+        ];
+        features = {
+          "serde" = [ "dep:serde" ];
+          "strsim" = [ "dep:strsim" ];
+          "suggestions" = [ "strsim" ];
+        };
+        resolvedDefaultFeatures = [ "strsim" "suggestions" ];
+      };
+      "darling_core 0.23.0" = rec {
         crateName = "darling_core";
         version = "0.23.0";
         edition = "2021";
@@ -3509,7 +3578,32 @@ rec {
         };
         resolvedDefaultFeatures = [ "strsim" "suggestions" ];
       };
-      "darling_macro" = rec {
+      "darling_macro 0.21.3" = rec {
+        crateName = "darling_macro";
+        version = "0.21.3";
+        edition = "2021";
+        sha256 = "10ac85n4lnx3rmf5rw8lijl2c0sbl6ghcpgfmzh0s26ihbghi0yk";
+        procMacro = true;
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "darling_core";
+            packageId = "darling_core 0.21.3";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+          }
+        ];
+
+      };
+      "darling_macro 0.23.0" = rec {
         crateName = "darling_macro";
         version = "0.23.0";
         edition = "2021";
@@ -3521,7 +3615,7 @@ rec {
         dependencies = [
           {
             name = "darling_core";
-            packageId = "darling_core";
+            packageId = "darling_core 0.23.0";
           }
           {
             name = "quote";
@@ -3710,7 +3804,7 @@ rec {
           "try_unwrap" = [ "derive_more-impl/try_unwrap" ];
           "unwrap" = [ "derive_more-impl/unwrap" ];
         };
-        resolvedDefaultFeatures = [ "debug" "default" "is_variant" "std" ];
+        resolvedDefaultFeatures = [ "debug" "default" "display" "is_variant" "std" ];
       };
       "derive_more-impl" = rec {
         crateName = "derive_more-impl";
@@ -3773,7 +3867,40 @@ rec {
           "try_unwrap" = [ "dep:convert_case" ];
           "unwrap" = [ "dep:convert_case" ];
         };
-        resolvedDefaultFeatures = [ "debug" "default" "is_variant" ];
+        resolvedDefaultFeatures = [ "debug" "default" "display" "is_variant" ];
+      };
+      "derive_setters" = rec {
+        crateName = "derive_setters";
+        version = "0.1.9";
+        edition = "2021";
+        sha256 = "1fgqkpaazyfsqgbz4k4jimcbimzvqyrq82qjhbh4mh833zxgdrmp";
+        procMacro = true;
+        authors = [
+          "Alissa Rao <aura@aura.moe>"
+        ];
+        dependencies = [
+          {
+            name = "darling";
+            packageId = "darling 0.21.3";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+          }
+        ];
+        features = {
+          "__NOT_PUBLIC__nightly_testing" = [ "trybuild" ];
+          "nightly" = [ "proc-macro2/nightly" ];
+          "trybuild" = [ "dep:trybuild" ];
+        };
       };
       "devicons" = rec {
         crateName = "devicons";
@@ -4293,7 +4420,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -4457,6 +4584,44 @@ rec {
         version = "0.18.0";
         edition = "2018";
         sha256 = "0xvjlhqf3waq02ss4d9j4qmrms5vcvavvi2i2g7xz0i01p6xmqg1";
+        libName = "fancy_regex";
+        authors = [
+          "Raph Levien <raph@google.com>"
+          "Robin Stocker <robin@nibor.org>"
+          "Keith Hall <keith.hall@available.systems>"
+        ];
+        dependencies = [
+          {
+            name = "bit-set";
+            packageId = "bit-set 0.8.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "regex-automata";
+            packageId = "regex-automata";
+            usesDefaultFeatures = false;
+            features = [ "alloc" "syntax" "meta" "nfa" "dfa" "hybrid" ];
+          }
+          {
+            name = "regex-syntax";
+            packageId = "regex-syntax";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "default" = [ "unicode" "perf" "std" "variable-lookbehinds" ];
+          "perf" = [ "regex-automata/perf" ];
+          "std" = [ "regex-automata/std" "regex-syntax/std" "bit-set/std" ];
+          "unicode" = [ "regex-automata/unicode" "regex-syntax/unicode" ];
+          "variable-lookbehinds" = [ "regex-automata/dfa-search" ];
+        };
+        resolvedDefaultFeatures = [ "default" "perf" "std" "unicode" "variable-lookbehinds" ];
+      };
+      "fancy-regex 0.19.0" = rec {
+        crateName = "fancy-regex";
+        version = "0.19.0";
+        edition = "2018";
+        sha256 = "1rl0sln9b1ji1q425364aqfvyc5l837z3s2fma889vzjvlxyfva7";
         libName = "fancy_regex";
         authors = [
           "Raph Levien <raph@google.com>"
@@ -7609,7 +7774,7 @@ rec {
         dependencies = [
           {
             name = "darling";
-            packageId = "darling";
+            packageId = "darling 0.23.0";
           }
           {
             name = "indoc";
@@ -8576,11 +8741,11 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.115.0";
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
           }
           {
             name = "serde_json";
@@ -8602,7 +8767,7 @@ rec {
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
           }
         ];
 
@@ -8628,11 +8793,11 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.115.0";
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
           }
         ];
 
@@ -8658,11 +8823,11 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.115.0";
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
           }
           {
             name = "serde_json";
@@ -8813,19 +8978,19 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.115.0";
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.115.0";
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.115.0";
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
           }
           {
             name = "rand";
@@ -9423,7 +9588,7 @@ rec {
           "spin_no_std" = [ "spin" ];
         };
       };
-      "lean_string" = rec {
+      "lean_string 0.6.1" = rec {
         crateName = "lean_string";
         version = "0.6.1";
         edition = "2024";
@@ -9451,6 +9616,44 @@ rec {
             packageId = "serde_core";
             optional = true;
             usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "arbitrary" = [ "dep:arbitrary" ];
+          "default" = [ "std" ];
+          "loom" = [ "dep:loom" ];
+          "serde" = [ "dep:serde_core" ];
+        };
+        resolvedDefaultFeatures = [ "default" "serde" "std" ];
+      };
+      "lean_string 0.7.0" = rec {
+        crateName = "lean_string";
+        version = "0.7.0";
+        edition = "2024";
+        sha256 = "1rpr1mkmkiinaavgaj12hvnbw7k4v5wsjpj9hvw42lhbf9r9v2fq";
+        authors = [
+          "ryota2357"
+        ];
+        dependencies = [
+          {
+            name = "castaway";
+            packageId = "castaway";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+          {
+            name = "itoa";
+            packageId = "itoa";
+          }
+          {
+            name = "serde_core";
+            packageId = "serde_core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zmij";
+            packageId = "zmij";
           }
         ];
         features = {
@@ -11137,7 +11340,7 @@ rec {
           }
           {
             name = "nu-cmd-base";
-            packageId = "nu-cmd-base";
+            packageId = "nu-cmd-base 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11153,39 +11356,39 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
             features = [ "os" ];
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-glob";
-            packageId = "nu-glob";
+            packageId = "nu-glob 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
             features = [ "os" ];
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11238,7 +11441,7 @@ rec {
           "system-clipboard" = [ "reedline/system_clipboard" ];
         };
       };
-      "nu-cmd-base" = rec {
+      "nu-cmd-base 0.114.1" = rec {
         crateName = "nu-cmd-base";
         version = "0.114.1";
         edition = "2024";
@@ -11258,22 +11461,63 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
+            usesDefaultFeatures = false;
+          }
+        ];
+
+      };
+      "nu-cmd-base 0.115.0" = rec {
+        crateName = "nu-cmd-base";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "1fswwdzdsggh9dnx4skqw293lhx2kpk2c2av0n79khi4fz2agj9d";
+        libName = "nu_cmd_base";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "indexmap";
+            packageId = "indexmap";
+          }
+          {
+            name = "miette";
+            packageId = "miette";
+          }
+          {
+            name = "nu-engine";
+            packageId = "nu-engine 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-parser";
+            packageId = "nu-parser 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-path";
+            packageId = "nu-path 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
             usesDefaultFeatures = false;
           }
         ];
@@ -11281,9 +11525,9 @@ rec {
       };
       "nu-cmd-lang" = rec {
         crateName = "nu-cmd-lang";
-        version = "0.114.1";
+        version = "0.115.0";
         edition = "2024";
-        sha256 = "10snr1q0p7pim2p8m6cwvh3nfp764231av60kl6f0n74nv52243n";
+        sha256 = "11548qq741c87gnqyjq7v3hphydvyzdq8m77ahyf7zvm8g7gynpr";
         libName = "nu_cmd_lang";
         authors = [
           "The Nushell Project Developers"
@@ -11295,32 +11539,32 @@ rec {
           }
           {
             name = "nu-cmd-base";
-            packageId = "nu-cmd-base";
+            packageId = "nu-cmd-base 0.115.0";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.115.0";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.115.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.115.0";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.115.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11364,7 +11608,7 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11374,7 +11618,7 @@ rec {
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11598,7 +11842,7 @@ rec {
           }
           {
             name = "nu-cmd-base";
-            packageId = "nu-cmd-base";
+            packageId = "nu-cmd-base 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11608,17 +11852,17 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-glob";
-            packageId = "nu-glob";
+            packageId = "nu-glob 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11635,12 +11879,12 @@ rec {
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11650,12 +11894,12 @@ rec {
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-system";
-            packageId = "nu-system";
+            packageId = "nu-system 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11670,7 +11914,7 @@ rec {
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -11895,7 +12139,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             target = { target, features }: (!("wasm32" == target."arch" or null));
             features = [ "mode" ];
           }
@@ -11980,7 +12224,49 @@ rec {
         };
         resolvedDefaultFeatures = [ "aegis-password-generator" "crossterm" "default" "dns-lookup" "getrandom" "js" "multipart-rs" "network" "notify-debouncer-full" "open" "os" "os_pipe" "rand" "reedline" "rusqlite" "rustls-tls" "sqlite" "update-informer" "ureq" "uu_cp" "uu_mkdir" "uu_mktemp" "uu_mv" "uu_touch" "uu_uname" "uu_whoami" "uuid" "which" ];
       };
-      "nu-derive-value" = rec {
+      "nu-config" = rec {
+        crateName = "nu-config";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "02kf2c2vn47fm32bpd9135p2iadamdxbbvh7926phfc71s4rwb94";
+        libName = "nu_config";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "derive_more";
+            packageId = "derive_more";
+            features = [ "display" ];
+          }
+          {
+            name = "derive_setters";
+            packageId = "derive_setters";
+          }
+          {
+            name = "dirs";
+            packageId = "dirs 6.0.0";
+          }
+          {
+            name = "nu-path";
+            packageId = "nu-path 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.20";
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_UI_Shell" "Win32_Globalization" "Win32_System_Com" ];
+          }
+        ];
+        features = {
+        };
+      };
+      "nu-derive-value 0.114.1" = rec {
         crateName = "nu-derive-value";
         version = "0.114.1";
         edition = "2024";
@@ -12014,7 +12300,41 @@ rec {
         ];
 
       };
-      "nu-engine" = rec {
+      "nu-derive-value 0.115.1" = rec {
+        crateName = "nu-derive-value";
+        version = "0.115.1";
+        edition = "2024";
+        sha256 = "08x95nb6jv7bylksg4k0my3pg4r8hrxybvn5ks3m54hnrxw6l5pn";
+        procMacro = true;
+        libName = "nu_derive_value";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "heck";
+            packageId = "heck";
+          }
+          {
+            name = "proc-macro-error2";
+            packageId = "proc-macro-error2";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.3";
+          }
+        ];
+
+      };
+      "nu-engine 0.114.1" = rec {
         crateName = "nu-engine";
         version = "0.114.1";
         edition = "2024";
@@ -12034,27 +12354,78 @@ rec {
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-glob";
-            packageId = "nu-glob";
+            packageId = "nu-glob 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "default" = [ "os" ];
+          "os" = [ "nu-protocol/os" "nu-utils/os" ];
+          "plugin" = [ "nu-protocol/plugin" "os" ];
+        };
+        resolvedDefaultFeatures = [ "os" ];
+      };
+      "nu-engine 0.115.0" = rec {
+        crateName = "nu-engine";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "15wacan5k7rnl8whn70cnjygifg8izxj36w3n9fnakicm50a676s";
+        libName = "nu_engine";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "fancy-regex";
+            packageId = "fancy-regex 0.19.0";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "nu-experimental";
+            packageId = "nu-experimental 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-glob";
+            packageId = "nu-glob 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-path";
+            packageId = "nu-path 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-utils";
+            packageId = "nu-utils 0.115.1";
             usesDefaultFeatures = false;
           }
         ];
@@ -12065,7 +12436,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "os" ];
       };
-      "nu-experimental" = rec {
+      "nu-experimental 0.114.1" = rec {
         crateName = "nu-experimental";
         version = "0.114.1";
         edition = "2024";
@@ -12086,7 +12457,28 @@ rec {
         ];
 
       };
-      "nu-glob" = rec {
+      "nu-experimental 0.115.1" = rec {
+        crateName = "nu-experimental";
+        version = "0.115.1";
+        edition = "2024";
+        sha256 = "1y4j7vmfa26jyazxzrj8485bb7z7bqhj1mlwkiij8rcj7iz0y926";
+        libName = "nu_experimental";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "itertools";
+            packageId = "itertools 0.15.0";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.20";
+          }
+        ];
+
+      };
+      "nu-glob 0.114.1" = rec {
         crateName = "nu-glob";
         version = "0.114.1";
         edition = "2024";
@@ -12107,7 +12499,38 @@ rec {
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rayon";
+            packageId = "rayon";
+          }
+        ];
+
+      };
+      "nu-glob 0.115.1" = rec {
+        crateName = "nu-glob";
+        version = "0.115.1";
+        edition = "2024";
+        sha256 = "0g4v1i45g1dm1d0izhky02zawrdadjdad0ysz4da89q3mjl7k1kq";
+        libName = "nu_glob";
+        authors = [
+          "The Nushell Project Developers"
+          "The Rust Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "nu-experimental";
+            packageId = "nu-experimental 0.115.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12129,7 +12552,7 @@ rec {
         dependencies = [
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
         ];
@@ -12156,13 +12579,13 @@ rec {
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             optional = true;
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12192,7 +12615,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "linked-hash-map" "nu-protocol" "preserve_order" ];
       };
-      "nu-parser" = rec {
+      "nu-parser 0.114.1" = rec {
         crateName = "nu-parser";
         version = "0.114.1";
         edition = "2024";
@@ -12222,27 +12645,27 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12259,11 +12682,109 @@ rec {
           "plugin" = [ "nu-plugin-engine" "nu-engine/plugin" ];
         };
       };
-      "nu-path" = rec {
+      "nu-parser 0.115.0" = rec {
+        crateName = "nu-parser";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "0hlcag69cv053vlap6s9f7vizw3vrvvbsfzqz1y9l7nganrbq7vv";
+        libName = "nu_parser";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "bytesize";
+            packageId = "bytesize";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
+          }
+          {
+            name = "itertools";
+            packageId = "itertools 0.15.0";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "nu-engine";
+            packageId = "nu-engine 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-experimental";
+            packageId = "nu-experimental 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-path";
+            packageId = "nu-path 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-protocol";
+            packageId = "nu-protocol 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-utils";
+            packageId = "nu-utils 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "semver";
+            packageId = "semver";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+        ];
+        features = {
+          "nu-plugin-engine" = [ "dep:nu-plugin-engine" ];
+          "plugin" = [ "nu-plugin-engine" "nu-engine/plugin" ];
+        };
+      };
+      "nu-path 0.114.1" = rec {
         crateName = "nu-path";
         version = "0.114.1";
         edition = "2024";
         sha256 = "0h78mm13ib9v5xqzi2a5872crijpm4ldpcbrfhgz37cz9jsf39jg";
+        libName = "nu_path";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "dirs";
+            packageId = "dirs 6.0.0";
+          }
+          {
+            name = "omnipath";
+            packageId = "omnipath";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "pwd";
+            packageId = "pwd";
+            target = { target, features }: ((target."unix" or false) && (!("macos" == target."os" or null)) && (!("android" == target."os" or null)));
+          }
+          {
+            name = "ref-cast";
+            packageId = "ref-cast";
+          }
+        ];
+
+      };
+      "nu-path 0.115.0" = rec {
+        crateName = "nu-path";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "0iign5z7jlhc9lbm37c23vz9gfg7a5yd2v544z5zj8gvwxf5wdr6";
         libName = "nu_path";
         authors = [
           "The Nushell Project Developers"
@@ -12308,7 +12829,7 @@ rec {
         ];
 
       };
-      "nu-protocol" = rec {
+      "nu-protocol 0.114.1" = rec {
         crateName = "nu-protocol";
         version = "0.114.1";
         edition = "2024";
@@ -12392,32 +12913,32 @@ rec {
           }
           {
             name = "nu-derive-value";
-            packageId = "nu-derive-value";
+            packageId = "nu-derive-value 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-experimental";
-            packageId = "nu-experimental";
+            packageId = "nu-experimental 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-glob";
-            packageId = "nu-glob";
+            packageId = "nu-glob 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-path";
-            packageId = "nu-path";
+            packageId = "nu-path 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-system";
-            packageId = "nu-system";
+            packageId = "nu-system 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12482,7 +13003,7 @@ rec {
         devDependencies = [
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12503,9 +13024,212 @@ rec {
           "plugin" = [ "brotli" "os" "rmp-serde" ];
           "rmp-serde" = [ "dep:rmp-serde" ];
         };
+        resolvedDefaultFeatures = [ "os" "os_pipe" ];
+      };
+      "nu-protocol 0.115.0" = rec {
+        crateName = "nu-protocol";
+        version = "0.115.0";
+        edition = "2024";
+        sha256 = "16j29d3w87743sm2ywmh1cz0gwy6s9fz7l0fpw44h4an4kqp24cl";
+        libName = "nu_protocol";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "bstr";
+            packageId = "bstr";
+          }
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            features = [ "serde" "std" "unstable-locales" ];
+          }
+          {
+            name = "chrono-humanize";
+            packageId = "chrono-humanize";
+          }
+          {
+            name = "derive_more";
+            packageId = "derive_more";
+            features = [ "debug" ];
+          }
+          {
+            name = "dirs";
+            packageId = "dirs 6.0.0";
+          }
+          {
+            name = "dirs-sys";
+            packageId = "dirs-sys 0.5.0";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "fancy-regex";
+            packageId = "fancy-regex 0.19.0";
+          }
+          {
+            name = "heck";
+            packageId = "heck";
+          }
+          {
+            name = "humantime";
+            packageId = "humantime";
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "lru";
+            packageId = "lru";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+          }
+          {
+            name = "miette";
+            packageId = "miette";
+            features = [ "fancy-no-backtrace" ];
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "signal" ];
+          }
+          {
+            name = "nu-config";
+            packageId = "nu-config";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-derive-value";
+            packageId = "nu-derive-value 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-experimental";
+            packageId = "nu-experimental 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-glob";
+            packageId = "nu-glob 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-path";
+            packageId = "nu-path 0.115.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-system";
+            packageId = "nu-system 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nu-utils";
+            packageId = "nu-utils 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "num-format";
+            packageId = "num-format";
+          }
+          {
+            name = "os_pipe";
+            packageId = "os_pipe";
+            optional = true;
+            features = [ "io_safety" "io_safety" ];
+          }
+          {
+            name = "semver";
+            packageId = "semver";
+            features = [ "serde" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "strum";
+            packageId = "strum 0.28.0";
+            features = [ "derive" ];
+          }
+          {
+            name = "strum_macros";
+            packageId = "strum_macros 0.28.0";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.20";
+          }
+          {
+            name = "typetag";
+            packageId = "typetag";
+          }
+          {
+            name = "web-time";
+            packageId = "web-time";
+          }
+          {
+            name = "windows";
+            packageId = "windows";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_UI_Shell" ];
+          }
+          {
+            name = "winnow";
+            packageId = "winnow 1.0.3";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "nu-utils";
+            packageId = "nu-utils 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "os_pipe";
+            packageId = "os_pipe";
+            features = [ "io_safety" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+        ];
+        features = {
+          "brotli" = [ "dep:brotli" ];
+          "default" = [ "os" ];
+          "os" = [ "nu-utils/os" "os_pipe" ];
+          "os_pipe" = [ "dep:os_pipe" ];
+          "plugin" = [ "brotli" "nu-config/plugin" "os" "rmp-serde" ];
+          "rmp-serde" = [ "dep:rmp-serde" ];
+        };
         resolvedDefaultFeatures = [ "default" "os" "os_pipe" ];
       };
-      "nu-system" = rec {
+      "nu-system 0.114.1" = rec {
         crateName = "nu-system";
         version = "0.114.1";
         edition = "2024";
@@ -12559,7 +13283,7 @@ rec {
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12573,7 +13297,92 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
+            target = { target, features }: (builtins.elem "unix" target."family");
+            features = [ "mode" ];
+          }
+          {
+            name = "web-time";
+            packageId = "web-time";
+          }
+          {
+            name = "windows";
+            packageId = "windows";
+            target = { target, features }: ("windows" == target."os" or null);
+            features = [ "Wdk_System_SystemServices" "Wdk_System_Threading" "Win32_Foundation" "Win32_Security" "Win32_System_Diagnostics_Debug" "Win32_System_Diagnostics_ToolHelp" "Win32_System_Kernel" "Win32_System_Memory" "Win32_System_ProcessStatus" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_UI_Shell" ];
+          }
+        ];
+
+      };
+      "nu-system 0.115.1" = rec {
+        crateName = "nu-system";
+        version = "0.115.1";
+        edition = "2024";
+        sha256 = "0fz2rfxpmc5pp0g11v1sip24sh5ilmcnmrwnjx0y6vkwssjg0jhm";
+        libName = "nu_system";
+        authors = [
+          "The Nushell Project Developers"
+          "procs creators"
+        ];
+        dependencies = [
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            target = { target, features }: ("windows" == target."os" or null);
+            features = [ "clock" ];
+          }
+          {
+            name = "itertools";
+            packageId = "itertools 0.15.0";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "libproc";
+            packageId = "libproc";
+            target = { target, features }: ("macos" == target."os" or null);
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "mach2";
+            packageId = "mach2";
+            target = { target, features }: ("macos" == target."os" or null);
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            usesDefaultFeatures = false;
+            target = { target, features }: (builtins.elem "unix" target."family");
+            features = [ "fs" "term" "process" "signal" ];
+          }
+          {
+            name = "ntapi";
+            packageId = "ntapi";
+            target = { target, features }: ("windows" == target."os" or null);
+          }
+          {
+            name = "nu-utils";
+            packageId = "nu-utils 0.115.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "procfs";
+            packageId = "procfs";
+            target = { target, features }: (("linux" == target."os" or null) || ("android" == target."os" or null));
+          }
+          {
+            name = "sysinfo";
+            packageId = "sysinfo";
+          }
+          {
+            name = "uucore";
+            packageId = "uucore 0.10.0";
             target = { target, features }: (builtins.elem "unix" target."family");
             features = [ "mode" ];
           }
@@ -12615,17 +13424,17 @@ rec {
           }
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12649,7 +13458,7 @@ rec {
         dependencies = [
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
           {
@@ -12659,7 +13468,7 @@ rec {
         ];
 
       };
-      "nu-utils" = rec {
+      "nu-utils 0.114.1" = rec {
         crateName = "nu-utils";
         version = "0.114.1";
         edition = "2024";
@@ -12695,7 +13504,109 @@ rec {
           }
           {
             name = "lean_string";
-            packageId = "lean_string";
+            packageId = "lean_string 0.6.1";
+            features = [ "serde" ];
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "lscolors";
+            packageId = "lscolors";
+            usesDefaultFeatures = false;
+            features = [ "nu-ansi-term" ];
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "user" "fs" ];
+          }
+          {
+            name = "num-format";
+            packageId = "num-format";
+          }
+          {
+            name = "parking_lot";
+            packageId = "parking_lot";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "strip-ansi-escapes";
+            packageId = "strip-ansi-escapes";
+          }
+          {
+            name = "sys-locale";
+            packageId = "sys-locale";
+          }
+          {
+            name = "unicase";
+            packageId = "unicase";
+          }
+          {
+            name = "web-time";
+            packageId = "web-time";
+            target = { target, features }: ("wasm32" == target."arch" or null);
+          }
+        ];
+        features = {
+          "crossterm" = [ "dep:crossterm" ];
+          "default" = [ "os" ];
+          "os" = [ "crossterm" ];
+        };
+        resolvedDefaultFeatures = [ "crossterm" "os" ];
+      };
+      "nu-utils 0.115.1" = rec {
+        crateName = "nu-utils";
+        version = "0.115.1";
+        edition = "2024";
+        crateBin = [];
+        sha256 = "00si5ylmh86g32h30xb8lma55ijcwswv67b3y7xkllckksh5c4f0";
+        libName = "nu_utils";
+        authors = [
+          "The Nushell Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "byteyarn";
+            packageId = "byteyarn";
+          }
+          {
+            name = "crossterm";
+            packageId = "crossterm 0.29.0";
+            optional = true;
+          }
+          {
+            name = "crossterm_winapi";
+            packageId = "crossterm_winapi";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "derive_more";
+            packageId = "derive_more";
+            features = [ "debug" ];
+          }
+          {
+            name = "fancy-regex";
+            packageId = "fancy-regex 0.19.0";
+          }
+          {
+            name = "lean_string";
+            packageId = "lean_string 0.7.0";
             features = [ "serde" ];
           }
           {
@@ -12978,22 +13889,22 @@ rec {
         dependencies = [
           {
             name = "nu-engine";
-            packageId = "nu-engine";
+            packageId = "nu-engine 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-parser";
-            packageId = "nu-parser";
+            packageId = "nu-parser 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-protocol";
-            packageId = "nu-protocol";
+            packageId = "nu-protocol 0.114.1";
             usesDefaultFeatures = false;
           }
           {
             name = "nu-utils";
-            packageId = "nu-utils";
+            packageId = "nu-utils 0.114.1";
             usesDefaultFeatures = false;
           }
         ];
@@ -15422,7 +16333,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_IO" "Win32_Networking_WinSock" ];
           }
@@ -17610,7 +18521,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -17649,7 +18560,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "std" "stdio" "system" "termios" "thread" "use-libc-auxv" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "std" "stdio" "system" "termios" "thread" "time" "use-libc-auxv" ];
       };
       "rustls" = rec {
         crateName = "rustls";
@@ -17882,7 +18793,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -18007,7 +18918,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -18934,7 +19845,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" ];
           }
@@ -19103,7 +20014,7 @@ rec {
           "phf" = [ "dep:phf" ];
           "strum_macros" = [ "dep:strum_macros" ];
         };
-        resolvedDefaultFeatures = [ "derive" "std" "strum_macros" ];
+        resolvedDefaultFeatures = [ "default" "derive" "std" "strum_macros" ];
       };
       "strum_macros 0.27.2" = rec {
         crateName = "strum_macros";
@@ -19600,7 +20511,7 @@ rec {
           }
           {
             name = "getrandom";
-            packageId = "getrandom 0.4.3";
+            packageId = "getrandom 0.3.4";
             optional = true;
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || (target."windows" or false) || ("wasi" == target."os" or null));
@@ -19619,7 +20530,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -19661,7 +20572,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_Threading" "Win32_Security" ];
@@ -22118,7 +23029,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "backup-control" "buf-copy" "entries" "fs" "fsxattr" "parser" "perms" "mode" "safe-copy" "update-control" ];
           }
           {
@@ -22129,7 +23040,7 @@ rec {
         devDependencies = [
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "benchmark" ];
           }
         ];
@@ -22165,7 +23076,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "fs" "mode" "fsxattr" ];
           }
         ];
@@ -22206,7 +23117,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
           }
         ];
 
@@ -22266,7 +23177,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "backup-control" "fs" "fsxattr" "perms" "safe-copy" "update-control" ];
           }
           {
@@ -22280,7 +23191,7 @@ rec {
         devDependencies = [
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "benchmark" ];
           }
         ];
@@ -22334,7 +23245,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "libc" "parser" ];
           }
           {
@@ -22370,7 +23281,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
           }
         ];
 
@@ -22394,7 +23305,7 @@ rec {
           }
           {
             name = "uucore";
-            packageId = "uucore";
+            packageId = "uucore 0.9.0";
             features = [ "entries" "process" ];
           }
           {
@@ -22407,7 +23318,155 @@ rec {
         ];
 
       };
-      "uucore" = rec {
+      "uucore 0.10.0" = rec {
+        crateName = "uucore";
+        version = "0.10.0";
+        edition = "2024";
+        sha256 = "1m5qw1m923j2fms72ii78gwx72jbp71mdyd9zfpi5vdjigyx0zg9";
+        libPath = "src/lib/lib.rs";
+        dependencies = [
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "wrap_help" "cargo" "color" ];
+          }
+          {
+            name = "fluent";
+            packageId = "fluent";
+          }
+          {
+            name = "fluent-syntax";
+            packageId = "fluent-syntax";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            optional = true;
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "dir" "fs" "poll" "signal" "uio" "user" "zerocopy" ];
+          }
+          {
+            name = "os_display";
+            packageId = "os_display";
+          }
+          {
+            name = "rustc-hash";
+            packageId = "rustc-hash";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.4";
+            features = [ "param" "use-libc-auxv" "time" "fs" "net" "pipe" "process" ];
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.20";
+          }
+          {
+            name = "unic-langid";
+            packageId = "unic-langid";
+          }
+          {
+            name = "unicode-width";
+            packageId = "unicode-width 0.2.2";
+          }
+          {
+            name = "uucore_procs";
+            packageId = "uucore_procs 0.10.0";
+          }
+          {
+            name = "wild";
+            packageId = "wild";
+            target = { target, features }: ("windows" == target."os" or null);
+          }
+        ];
+        features = {
+          "base64-simd" = [ "dep:base64-simd" ];
+          "benchmark" = [ "divan" "itertools" "tempfile" ];
+          "bigdecimal" = [ "dep:bigdecimal" ];
+          "blake2b_simd" = [ "dep:blake2b_simd" ];
+          "blake3" = [ "dep:blake3" ];
+          "bstr" = [ "dep:bstr" ];
+          "checksum" = [ "quoting-style" "sum" "base64-simd" ];
+          "crc-fast" = [ "dep:crc-fast" ];
+          "data-encoding" = [ "dep:data-encoding" ];
+          "data-encoding-macro" = [ "dep:data-encoding-macro" ];
+          "default" = [ "signals" ];
+          "digest" = [ "dep:digest" ];
+          "divan" = [ "dep:divan" ];
+          "dns-lookup" = [ "dep:dns-lookup" ];
+          "dunce" = [ "dep:dunce" ];
+          "encoding" = [ "data-encoding" "data-encoding-macro" "z85" "base64-simd" ];
+          "entries" = [ "libc" ];
+          "extendedbigdecimal" = [ "bigdecimal" "num-traits" ];
+          "feat_systemd_logind" = [ "utmpx" "libc" ];
+          "format" = [ "bigdecimal" "extendedbigdecimal" "itertools" "parser-num" "num-traits" "quoting-style" "unit-prefix" ];
+          "fs" = [ "dunce" "libc" "winapi-util" "windows-sys" ];
+          "fsext" = [ "libc" "windows-sys" "bstr" ];
+          "fsxattr" = [ "xattr" "itertools" "libc" ];
+          "glob" = [ "dep:glob" ];
+          "hex" = [ "dep:hex" ];
+          "i18n-all" = [ "i18n-charmap" "i18n-collator" "i18n-decimal" "i18n-datetime" ];
+          "i18n-charmap" = [ "i18n-common" ];
+          "i18n-collator" = [ "i18n-common" "icu_collator" ];
+          "i18n-common" = [ "icu_locale" ];
+          "i18n-datetime" = [ "i18n-common" "icu_calendar" "icu_datetime" "jiff-icu" "jiff" ];
+          "i18n-decimal" = [ "i18n-common" "icu_decimal" "icu_provider" ];
+          "icu_calendar" = [ "dep:icu_calendar" ];
+          "icu_collator" = [ "dep:icu_collator" ];
+          "icu_datetime" = [ "dep:icu_datetime" ];
+          "icu_decimal" = [ "dep:icu_decimal" ];
+          "icu_locale" = [ "dep:icu_locale" ];
+          "icu_provider" = [ "dep:icu_provider" ];
+          "itertools" = [ "dep:itertools" ];
+          "jiff" = [ "dep:jiff" ];
+          "jiff-icu" = [ "dep:jiff-icu" ];
+          "libc" = [ "dep:libc" ];
+          "md-5" = [ "dep:md-5" ];
+          "memchr" = [ "dep:memchr" ];
+          "mode" = [ "libc" ];
+          "num-traits" = [ "dep:num-traits" ];
+          "openssl" = [ "dep:openssl" ];
+          "parser" = [ "parser-num" "parser-size" "parser-glob" ];
+          "parser-glob" = [ "glob" ];
+          "parser-num" = [ "extendedbigdecimal" "num-traits" ];
+          "parser-size" = [ "parser-num" "procfs" ];
+          "perms" = [ "entries" "libc" "walkdir" ];
+          "pipes" = [ "fs" ];
+          "proc-info" = [ "tty" "walkdir" ];
+          "process" = [ "libc" "windows-sys" ];
+          "procfs" = [ "dep:procfs" ];
+          "quoting-style" = [ "i18n-common" ];
+          "safe-traversal" = [ "libc" ];
+          "selinux" = [ "dep:selinux" ];
+          "sha1" = [ "dep:sha1" ];
+          "sha2" = [ "dep:sha2" ];
+          "sha3" = [ "dep:sha3" ];
+          "shake" = [ "dep:shake" ];
+          "sm3" = [ "dep:sm3" ];
+          "smack" = [ "xattr" ];
+          "sum" = [ "digest" "hex" "memchr" "md-5" "sha1" "sha2" "sha3" "shake" "blake2b_simd" "blake3" "sm3" "crc-fast" "data-encoding" ];
+          "tempfile" = [ "dep:tempfile" ];
+          "time" = [ "jiff" ];
+          "unit-prefix" = [ "dep:unit-prefix" ];
+          "update-control" = [ "parser" ];
+          "uptime" = [ "jiff" "libc" "windows-sys" "utmpx" "utmp-classic" ];
+          "utmp-classic" = [ "dep:utmp-classic" ];
+          "utmpx" = [ "time" "time/macros" "libc" "dns-lookup" ];
+          "walkdir" = [ "dep:walkdir" ];
+          "winapi-util" = [ "dep:winapi-util" ];
+          "windows-sys" = [ "dep:windows-sys" ];
+          "xattr" = [ "dep:xattr" ];
+          "z85" = [ "dep:z85" ];
+        };
+        resolvedDefaultFeatures = [ "default" "libc" "mode" "signals" ];
+      };
+      "uucore 0.9.0" = rec {
         crateName = "uucore";
         version = "0.9.0";
         edition = "2024";
@@ -22493,7 +23552,7 @@ rec {
           }
           {
             name = "uucore_procs";
-            packageId = "uucore_procs";
+            packageId = "uucore_procs 0.9.0";
           }
           {
             name = "walkdir";
@@ -22607,7 +23666,25 @@ rec {
         };
         resolvedDefaultFeatures = [ "backup-control" "bigdecimal" "buf-copy" "default" "dunce" "entries" "extendedbigdecimal" "fs" "fsxattr" "glob" "itertools" "libc" "mode" "num-traits" "parser" "parser-glob" "parser-num" "parser-size" "perms" "process" "procfs" "safe-copy" "signals" "update-control" "walkdir" "winapi-util" "windows-sys" "xattr" ];
       };
-      "uucore_procs" = rec {
+      "uucore_procs 0.10.0" = rec {
+        crateName = "uucore_procs";
+        version = "0.10.0";
+        edition = "2024";
+        sha256 = "0n0z86zsa29gw7mpbgrp36j77f4anh2qz2dxnk6l5sj6h211nzwh";
+        procMacro = true;
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+        ];
+
+      };
+      "uucore_procs 0.9.0" = rec {
         crateName = "uucore_procs";
         version = "0.9.0";
         edition = "2024";
@@ -25999,7 +27076,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_System" "Win32_System_Threading" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Threading" "default" ];
       };
       "windows-sys 0.59.0" = rec {
         crateName = "windows-sys";
@@ -26258,7 +27335,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.60.2" = rec {
         crateName = "windows-sys";
@@ -26523,7 +27600,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -26785,7 +27862,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.42.2" = rec {
         crateName = "windows-targets";
