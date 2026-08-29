@@ -1,5 +1,6 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use futures::{FutureExt, StreamExt};
@@ -15,11 +16,20 @@ use tokio::sync::Notify;
 use super::core::{ActiveStream, RuntimeCore, emit_event};
 use crate::api::Event;
 
+const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
+
 struct RuntimeRetryObserver {
     session_id: String,
     provider_id: ProviderId,
     model_id: ModelId,
     event_tx: tokio::sync::broadcast::Sender<Event>,
+}
+
+struct CompletedProtocolBoundary {
+    script: Option<ScriptBlock>,
+    invalid_script: Option<InvalidScriptBlock>,
+    protocol_error: Option<ProtocolError>,
 }
 
 impl ProviderRetryObserver for RuntimeRetryObserver {
@@ -489,10 +499,44 @@ impl RuntimeCore {
 
         let mut content = String::new();
         let mut parser = ScriptProtocolParser::new();
+        let mut completed_boundary = None;
+        let mut post_boundary_deadline = None;
+        let mut post_boundary_events = 0_usize;
 
-        while let Some(chunk_result) = stream.next().await {
+        loop {
+            let next_event = if let Some(deadline) = post_boundary_deadline {
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(event) => event,
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
+                            "Stopping provider stream drain after timeout"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+            let Some(chunk_result) = next_event else {
+                break;
+            };
+            let draining_after_boundary = completed_boundary.is_some();
+            if draining_after_boundary {
+                post_boundary_events = post_boundary_events.saturating_add(1);
+                if post_boundary_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
+                    tokio::task::yield_now().await;
+                }
+            }
             match chunk_result {
                 Ok(ProviderStreamEvent::TextDelta(chunk)) => {
+                    if completed_boundary.is_some() {
+                        tracing::trace!(
+                            discarded_bytes = chunk.len(),
+                            "Discarding text after script protocol boundary"
+                        );
+                        continue;
+                    }
                     let parsed = parser.ingest(&chunk);
                     if !parsed.accepted.is_empty() {
                         content.push_str(&parsed.accepted);
@@ -513,14 +557,16 @@ impl RuntimeCore {
                     }
                     if parsed.should_stop {
                         let invalid_script = parsed.error.as_ref().map(|_| parser.invalid_block());
-                        tracing::debug!("Stopping stream at script protocol boundary");
-                        return StreamDriveResult::Completed {
-                            session_id,
-                            content,
+                        tracing::debug!(
+                            "Script protocol boundary reached; draining provider stream for usage"
+                        );
+                        completed_boundary = Some(CompletedProtocolBoundary {
                             script: parsed.completed,
                             invalid_script,
                             protocol_error: parsed.error,
-                        };
+                        });
+                        post_boundary_deadline =
+                            Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                     }
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
@@ -528,13 +574,42 @@ impl RuntimeCore {
                     if !agent.set_streaming_message_usage(&message_id, usage).await {
                         return StreamDriveResult::Stopped;
                     }
+                    drop(agent);
+                    if draining_after_boundary {
+                        tracing::debug!(
+                            drained_events = post_boundary_events,
+                            "Provider usage received after script protocol boundary"
+                        );
+                        break;
+                    }
                 }
                 Err(error) => {
+                    if completed_boundary.is_some() {
+                        tracing::warn!(
+                            error = %error,
+                            "Stopping provider stream drain after error"
+                        );
+                        break;
+                    }
                     return StreamDriveResult::FailedDuringStream {
                         error: error.to_string(),
                     };
                 }
             }
+        }
+
+        if let Some(boundary) = completed_boundary {
+            tracing::debug!(
+                drained_events = post_boundary_events,
+                "Provider stream drain finished after script protocol boundary"
+            );
+            return StreamDriveResult::Completed {
+                session_id,
+                content,
+                script: boundary.script,
+                invalid_script: boundary.invalid_script,
+                protocol_error: boundary.protocol_error,
+            };
         }
 
         let tail = parser.finish();

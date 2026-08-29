@@ -70,6 +70,8 @@ pub struct ProxyMetrics {
     pub requests: u64,
     pub successful_requests: u64,
     pub failed_requests: u64,
+    #[serde(default)]
+    pub client_disconnects: u64,
     pub duration_ms: u128,
     pub usage: UsageMetrics,
 }
@@ -124,5 +126,15 @@ mod tests {
             }),
         };
         assert_eq!(metrics.usage(), Some(&proxy_usage));
+    }
+
+    #[test]
+    fn proxy_metrics_default_client_disconnects_when_loading_older_results() -> Result<()> {
+        let metrics: ProxyMetrics = serde_json::from_str(
+            r#"{"requests":1,"successful_requests":1,"failed_requests":0,"duration_ms":2,"usage":{"total_tokens":3,"input_tokens":2,"output_tokens":1,"reasoning_tokens":0,"cache_read_tokens":0}}"#,
+        )?;
+
+        color_eyre::eyre::ensure!(metrics.client_disconnects == 0);
+        Ok(())
     }
 }

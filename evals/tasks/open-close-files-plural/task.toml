@@ -6,6 +6,7 @@ Replace the singular open_file and close_file tool interfaces with plural open_f
 schema_version = 1
 
 [source]
+public_patch = "public.patch"
 repository = "../../.."
 revision = "029a5df51f60886efc29def554526fe9be2fe739"
 

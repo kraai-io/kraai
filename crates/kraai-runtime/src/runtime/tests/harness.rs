@@ -37,6 +37,7 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 enum ScriptedChunkKind {
     Text(String),
     Usage(TokenUsage),
+    Error(String),
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,12 @@ impl ScriptedChunk {
     pub(super) fn usage(usage: TokenUsage) -> Self {
         Self {
             kind: ScriptedChunkKind::Usage(usage),
+        }
+    }
+
+    pub(super) fn error(error: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptedChunkKind::Error(error.into()),
         }
     }
 }
@@ -106,16 +113,17 @@ impl kraai_provider_core::Provider for ScriptedProvider {
             .pop_front()
             .ok_or_else(|| eyre!("no scripted stream remaining"))?;
 
-        Ok(Box::pin(stream::iter(script.into_iter().map(|chunk| {
-            Ok(match chunk.kind {
+        Ok(Box::pin(stream::iter(script.into_iter().map(
+            |chunk| match chunk.kind {
                 ScriptedChunkKind::Text(text) => {
-                    kraai_provider_core::ProviderStreamEvent::TextDelta(text)
+                    Ok(kraai_provider_core::ProviderStreamEvent::TextDelta(text))
                 }
                 ScriptedChunkKind::Usage(usage) => {
-                    kraai_provider_core::ProviderStreamEvent::Usage(usage)
+                    Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
                 }
-            })
-        }))))
+                ScriptedChunkKind::Error(error) => Err(eyre!(error)),
+            },
+        ))))
     }
 }
 

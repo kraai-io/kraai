@@ -16,7 +16,7 @@ pub(crate) struct SandboxRequest {
     pub network: NetworkPolicy,
     pub environment: BTreeMap<String, String>,
     pub extra_programs: Vec<PathBuf>,
-    pub cargo_registry: Option<PathBuf>,
+    pub cargo_home: Option<PathBuf>,
     pub metrics_output: Option<PathBuf>,
     pub resource_limits: Option<ResourceLimits>,
 }
@@ -29,8 +29,8 @@ pub(crate) struct ResourceLimits {
 }
 
 pub(crate) struct RustEnvironment {
+    pub cargo: PathBuf,
     pub programs: Vec<PathBuf>,
-    pub registry: PathBuf,
 }
 
 impl RustEnvironment {
@@ -54,21 +54,6 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
     let cargo = find_program("cargo").ok_or_else(|| {
         color_eyre::eyre::eyre!("task requires a Rust toolchain, but cargo was not found on PATH")
     })?;
-    let home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "task requires a Rust toolchain, but CARGO_HOME and HOME are unset"
-            )
-        })?;
-    let registry = home.join("registry");
-    if !registry.is_dir() {
-        bail!(
-            "task requires a populated Cargo registry cache: {}",
-            registry.display()
-        );
-    }
     let required_program = |name: &str| {
         find_program(name).ok_or_else(|| {
             color_eyre::eyre::eyre!(
@@ -77,7 +62,7 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
         })
     };
     let mut programs = vec![
-        cargo,
+        cargo.clone(),
         required_program("cc")?,
         required_program("git")?,
         required_program("rg")?,
@@ -87,7 +72,7 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
     if let Some(pkg_config) = find_program("pkg-config") {
         programs.push(pkg_config);
     }
-    Ok(RustEnvironment { programs, registry })
+    Ok(RustEnvironment { cargo, programs })
 }
 
 pub(crate) fn run_sandboxed(request: SandboxRequest) -> Result<CommandOutcome> {
@@ -211,12 +196,19 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
         String::from("PATH"),
         path_entries.join(":"),
     ]);
-    if let Some(registry) = &request.cargo_registry {
-        let registry = registry.canonicalize()?;
+    if let Some(cargo_home) = &request.cargo_home {
+        let cargo_home = cargo_home.canonicalize()?;
+        for directory in ["registry", "git"] {
+            let source = cargo_home.join(directory);
+            if source.is_dir() {
+                args.extend([
+                    String::from("--ro-bind"),
+                    source.to_string_lossy().into_owned(),
+                    format!("/home/eval/.cargo/{directory}"),
+                ]);
+            }
+        }
         args.extend([
-            String::from("--ro-bind"),
-            registry.to_string_lossy().into_owned(),
-            String::from("/home/eval/.cargo/registry"),
             String::from("--setenv"),
             String::from("CARGO_HOME"),
             String::from("/home/eval/.cargo"),
@@ -407,7 +399,7 @@ mod tests {
                 String::from("short-lived"),
             )]),
             extra_programs: Vec::new(),
-            cargo_registry: None,
+            cargo_home: None,
             metrics_output: None,
             resource_limits: None,
         })?;
@@ -444,7 +436,7 @@ mod tests {
             network: NetworkPolicy::Disabled,
             environment: BTreeMap::new(),
             extra_programs: Vec::new(),
-            cargo_registry: None,
+            cargo_home: None,
             metrics_output: None,
             resource_limits: None,
         })?;

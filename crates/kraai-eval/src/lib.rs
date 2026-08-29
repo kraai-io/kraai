@@ -2,6 +2,7 @@
 #![deny(clippy::all)]
 
 mod cache;
+mod cargo_dependencies;
 mod command;
 mod manifest;
 mod metrics;
@@ -309,6 +310,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         request,
         &task,
         task_dir,
+        &cache_dir,
         &run_root,
         &experiment_id,
         &runner_artifact_sha256,
@@ -428,6 +430,7 @@ fn execute(
     request: &RunRequest,
     task: &TaskManifest,
     task_dir: &Path,
+    cache_dir: &Path,
     run_root: &Path,
     experiment_id: &str,
     runner_artifact_sha256: &str,
@@ -456,6 +459,26 @@ fn execute(
         }),
     )?;
 
+    set_progress(request, "materializing source revision");
+    let base = run_root.join("base");
+    events.write("source_materialization_started", serde_json::json!({}))?;
+    materialize_base(task, task_dir, &base)?;
+    let cargo_dependencies = if let Some(rust_environment) = rust_environment {
+        set_progress(request, "fetching Rust dependencies");
+        events.write("rust_dependencies_fetch_started", serde_json::json!({}))?;
+        let dependencies =
+            cargo_dependencies::prepare(cache_dir, &base, task_sha256, rust_environment)?;
+        events.write(
+            "rust_dependencies_fetch_finished",
+            serde_json::json!({
+                "cache_key": dependencies.key,
+                "reused": dependencies.reused,
+            }),
+        )?;
+        Some(dependencies)
+    } else {
+        None
+    };
     set_progress(request, "starting credential proxy");
     let proxy = request
         .model_proxy
@@ -463,11 +486,6 @@ fn execute(
         .map(|config| config.start(artifact_dir.join("proxy.events.jsonl")))
         .transpose()?;
     let proxy_url = proxy.as_ref().map(proxy::ModelProxy::base_url);
-
-    set_progress(request, "materializing source revision");
-    let base = run_root.join("base");
-    events.write("source_materialization_started", serde_json::json!({}))?;
-    materialize_base(task, task_dir, &base)?;
     let provider_config_relative = if let Some(config) = &request.kraai_provider_config {
         let proxy_url = proxy_url.as_deref().ok_or_else(|| {
             color_eyre::eyre::eyre!("provider config requires an active model proxy")
@@ -487,12 +505,18 @@ fn execute(
     let provider_config_path = provider_config_relative
         .as_ref()
         .map(|path| agent_workspace.join(path));
+    let provider_id = request
+        .kraai_provider_config
+        .as_ref()
+        .map(KraaiProviderConfigRequest::selected_provider_id)
+        .transpose()?;
     let runner_command = expand_runner_command(
         request,
         task,
         &agent_workspace,
         proxy_url.as_deref(),
         provider_config_path.as_deref(),
+        provider_id.as_deref(),
     )?;
     let harness_metrics_path = artifact_dir.join("harness-metrics.json");
     File::create(&harness_metrics_path)?;
@@ -518,13 +542,14 @@ fn execute(
         extra_programs: rust_environment
             .map(|environment| environment.programs.clone())
             .unwrap_or_default(),
-        cargo_registry: rust_environment.map(|environment| environment.registry.clone()),
+        cargo_home: cargo_dependencies
+            .as_ref()
+            .map(|dependencies| dependencies.home.clone()),
         metrics_output: Some(harness_metrics_path.clone()),
         resource_limits: Some(resource_limits(task)),
     })?;
     let proxy_record = proxy.as_ref().map(proxy::ModelProxy::record);
-    let proxy_metrics = proxy.as_ref().map(proxy::ModelProxy::metrics).transpose()?;
-    drop(proxy);
+    let proxy_metrics = proxy.map(proxy::ModelProxy::finish).transpose()?;
     let harness_metrics = match HarnessMetrics::load(&harness_metrics_path) {
         Ok(metrics) => metrics,
         Err(error) => {
@@ -586,7 +611,9 @@ fn execute(
                 extra_programs: rust_environment
                     .map(|environment| environment.programs.clone())
                     .unwrap_or_default(),
-                cargo_registry: rust_environment.map(|environment| environment.registry.clone()),
+                cargo_home: cargo_dependencies
+                    .as_ref()
+                    .map(|dependencies| dependencies.home.clone()),
                 metrics_output: None,
                 resource_limits: Some(resource_limits(task)),
             })?;
@@ -668,6 +695,7 @@ fn expand_runner_command(
     workspace: &Path,
     proxy_url: Option<&str>,
     provider_config: Option<&Path>,
+    provider_id: Option<&str>,
 ) -> Result<Vec<String>> {
     if proxy_url.is_none()
         && request
@@ -685,6 +713,14 @@ fn expand_runner_command(
     {
         bail!("runner arguments use {{provider_config}} without a sanitized provider config");
     }
+    if provider_id.is_none()
+        && request
+            .runner_args
+            .iter()
+            .any(|argument| argument.contains("{provider_id}"))
+    {
+        bail!("runner arguments use {{provider_id}} without a selected Kraai provider");
+    }
     let program = request
         .runner_program
         .canonicalize()
@@ -695,6 +731,7 @@ fn expand_runner_command(
         arg.replace("{workspace}", &workspace)
             .replace("{prompt}", &task.prompt)
             .replace("{proxy_url}", proxy_url.unwrap_or_default())
+            .replace("{provider_id}", provider_id.unwrap_or_default())
             .replace(
                 "{provider_config}",
                 &provider_config

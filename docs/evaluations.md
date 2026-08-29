@@ -17,26 +17,29 @@ The repository includes an evaluation derived from the parent of Jujutsu change
 plural, then grades the submitted patch with tests that were not present in the
 agent workspace.
 
-Pass a model ID available through the `openai` Codex subscription provider:
+Pass a model ID and the configured Codex subscription provider ID:
 
 ```bash
-just eval-open-close-files <model-id>
+just eval-open-close-files <model-id> <provider-id>
 ```
 
 The recipe builds immutable Nix artifacts for both Kraai and `kraai-eval`, uses
 the current `~/.kraai/providers.toml`, starts the subscription proxy, and runs
-the `build-code` profile. Supply a different provider ID or stochastic attempt
-number as the second or third argument:
+an evaluation profile derived from `coding`. The profile inherits the
+evaluator's sanitized environment and trusts its outer sandbox. The provider ID
+selects which Codex provider is retained in the sanitized configuration; it is
+not hardcoded by the recipe. Both the model ID and provider ID are required.
+Supply a stochastic attempt number after the provider ID:
 
 ```bash
-just eval-open-close-files <model-id> openai 1
+just eval-open-close-files <model-id> <provider-id> 1
 ```
 
 Run three attempts and print an aggregate success-rate, timing, and token
 summary with:
 
 ```bash
-just eval-open-close-files-suite <model-id> openai 3 0
+just eval-open-close-files-suite <model-id> <provider-id> 3 0
 ```
 
 Suites always reuse matching immutable attempt results, so an interrupted suite
@@ -217,22 +220,27 @@ kraai-eval run \
   --runner-version git:<full-commit> \
   --codex-subscription-proxy \
   --runner-arg --ci \
-  --runner-arg --auto-approve \
   --runner-arg --provider \
-  --runner-arg '<provider-id>' \
+  --runner-arg '{provider_id}' \
   --runner-arg --model \
   --runner-arg '<model-id>' \
   --runner-arg --agent-profile \
-  --runner-arg build-code \
+  --runner-arg eval-coding \
   --runner-arg --message \
   --runner-arg '{prompt}' \
   --runner-arg --provider-config \
   --runner-arg '{provider_config}'
 ```
 
-The sanitized config is committed into the immutable task base before the agent
-starts, so it does not appear in the submitted patch. The user's original config
-is read only and is not modified.
+`{provider_id}` expands to the provider selected from that sanitized
+configuration. The sanitized config is committed into the immutable task base
+before the agent starts, so it does not appear in the submitted patch. The
+user's original config is read-only and is not modified.
+
+The task's public fixture defines `eval-coding` by extending the built-in
+`coding` profile. Its inherited environment preserves the evaluator's offline
+Cargo configuration, and its capability policy relies on the evaluator's outer
+bubblewrap sandbox as the containment boundary.
 
 Use a different explicit attempt number for each stochastic repetition. An
 existing identity is never overwritten:
@@ -259,9 +267,24 @@ sandbox has:
 
 Tasks with `runner.rust_toolchain = true` additionally receive the current Rust
 toolchain and common source-inspection commands from their immutable Nix store
-closures. The Cargo registry is mounted read-only and Cargo is forced offline;
-build artifacts remain inside the disposable task workspace. This exposes
-downloaded public crate sources, but not Cargo credentials or Git checkouts.
+closures. Before the harness starts, the evaluator runs `cargo fetch --locked`
+against the materialized public source using a fresh evaluator-owned Cargo home.
+Completed dependency bundles are cached by task and lockfile identity, then their
+registry and Git dependency directories are mounted read-only into both the
+harness and grader sandboxes. Cargo remains forced offline inside both sandboxes,
+and build artifacts remain in the disposable task workspace. The host's Cargo
+cache, credentials, and Git checkouts are never mounted. Dependency fetches also
+run with a cleared environment, an isolated home, system and global Git
+configuration disabled, interactive authentication disabled, and a `PATH`
+constructed only from the resolved Rust environment. Fetches run outside the
+task workspace, so task-local Cargo configuration and credential-provider
+declarations are not discovered. By default, completed bundles live under
+`.kraai-eval-cache/dependencies/<key>/cargo-home`.
+
+Dependency fetching is controller setup rather than part of the scored run. A
+missing or stale lockfile, unavailable registry, or failed fetch produces a
+`controller_failed` result before the harness receives the task. Repeated runs
+reuse a completed dependency bundle and never reuse a partially fetched one.
 
 The grader always runs without network access. Enabling runner network access
 is recorded in the experiment identity and result. The credential proxy

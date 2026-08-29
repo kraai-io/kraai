@@ -70,18 +70,17 @@ struct ProfilesFile {
 #[derive(Debug, Deserialize)]
 struct ExternalProfile {
     id: String,
-    display_name: String,
-    description: String,
-    system_prompt: String,
-    #[serde(default)]
-    commands: Vec<String>,
-    capabilities: Vec<SandboxCapability>,
-    escalation_policy: EscalationPolicy,
-    #[serde(default)]
-    permission_rules: BTreeMap<SandboxCapability, EscalationPolicy>,
-    environment: EnvironmentPolicy,
-    nushell_startup: NushellStartup,
-    path: PathPolicy,
+    extends: Option<String>,
+    display_name: Option<String>,
+    description: Option<String>,
+    system_prompt: Option<String>,
+    commands: Option<Vec<String>>,
+    capabilities: Option<Vec<SandboxCapability>>,
+    escalation_policy: Option<EscalationPolicy>,
+    permission_rules: Option<BTreeMap<SandboxCapability, EscalationPolicy>>,
+    environment: Option<EnvironmentPolicy>,
+    nushell_startup: Option<NushellStartup>,
+    path: Option<PathPolicy>,
 }
 
 pub fn resolve_profiles(
@@ -93,22 +92,27 @@ pub fn resolve_profiles(
         warnings: Vec::new(),
     };
 
-    if let Some(path) = global_profiles_path()
-        && let Err(warning) = load_layer(&path, AgentProfileSource::Global, available_commands)
-            .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
-    {
-        resolved.warnings.push(warning);
+    if let Some(path) = global_profiles_path() {
+        match load_layer(
+            &path,
+            AgentProfileSource::Global,
+            available_commands,
+            &resolved.profiles,
+        ) {
+            Ok(profiles) => upsert_profiles(&mut resolved.profiles, profiles),
+            Err(warning) => resolved.warnings.push(warning),
+        }
     }
 
     let workspace_path = workspace_profiles_path(workspace_dir);
-    if let Err(warning) = load_layer(
+    match load_layer(
         &workspace_path,
         AgentProfileSource::Workspace,
         available_commands,
-    )
-    .map(|profiles| upsert_profiles(&mut resolved.profiles, profiles))
-    {
-        resolved.warnings.push(warning);
+        &resolved.profiles,
+    ) {
+        Ok(profiles) => upsert_profiles(&mut resolved.profiles, profiles),
+        Err(warning) => resolved.warnings.push(warning),
     }
 
     resolved
@@ -185,6 +189,7 @@ fn load_layer(
     path: &Path,
     source: AgentProfileSource,
     available_commands: &HashSet<String>,
+    inherited_profiles: &[AgentProfile],
 ) -> Result<Vec<AgentProfile>, AgentProfileWarning> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -203,21 +208,23 @@ fn load_layer(
 
     let mut seen_ids = HashSet::new();
     let mut profiles = Vec::with_capacity(parsed.profiles.len());
-    for profile in parsed.profiles {
-        if !valid_profile_id(&profile.id) {
+    for external in parsed.profiles {
+        if !valid_profile_id(&external.id) {
             return Err(profile_warning(
                 source,
                 path,
-                format!("Invalid profile id '{}'", profile.id),
+                format!("Invalid profile id '{}'", external.id),
             ));
         }
-        if !seen_ids.insert(profile.id.clone()) {
+        if !seen_ids.insert(external.id.clone()) {
             return Err(profile_warning(
                 source,
                 path,
-                format!("Duplicate profile id '{}'", profile.id),
+                format!("Duplicate profile id '{}'", external.id),
             ));
         }
+
+        let profile = resolve_external_profile(external, inherited_profiles, source, path)?;
 
         let mut seen_commands = HashSet::new();
         for command in &profile.commands {
@@ -243,18 +250,13 @@ fn load_layer(
             }
         }
 
-        let permissions = SandboxPermissionSet::new(profile.capabilities).map_err(|error| {
-            profile_warning(
-                source,
-                path,
-                format!("Profile '{}' has invalid capabilities: {error}", profile.id),
-            )
-        })?;
         if profile.nushell_startup == NushellStartup::Inherit
-            && !permissions
+            && !profile
+                .permissions
                 .capabilities()
                 .contains(SandboxCapability::HostRead)
-            && !permissions
+            && !profile
+                .permissions
                 .capabilities()
                 .contains(SandboxCapability::NoSandbox)
         {
@@ -267,22 +269,123 @@ fn load_layer(
                 ),
             ));
         }
-        profiles.push(AgentProfile {
-            id: profile.id,
-            display_name: profile.display_name,
-            description: profile.description,
-            system_prompt: profile.system_prompt.trim().to_string(),
-            commands: profile.commands,
-            permissions,
-            permission_rules: CapabilityPermissionRules::new(profile.permission_rules),
-            escalation_policy: profile.escalation_policy,
-            environment: profile.environment,
-            nushell_startup: profile.nushell_startup,
-            path: profile.path,
-            source,
-        });
+        profiles.push(profile);
     }
     Ok(profiles)
+}
+
+fn resolve_external_profile(
+    external: ExternalProfile,
+    inherited_profiles: &[AgentProfile],
+    source: AgentProfileSource,
+    path: &Path,
+) -> Result<AgentProfile, AgentProfileWarning> {
+    let base = external
+        .extends
+        .as_ref()
+        .map(|base_id| {
+            inherited_profiles
+                .iter()
+                .find(|profile| profile.id == *base_id)
+                .cloned()
+                .ok_or_else(|| {
+                    profile_warning(
+                        source,
+                        path,
+                        format!(
+                            "Profile '{}' extends unknown profile '{base_id}'",
+                            external.id
+                        ),
+                    )
+                })
+        })
+        .transpose()?;
+    let field = |name: &str| {
+        profile_warning(
+            source,
+            path,
+            format!(
+                "Profile '{}' must define '{name}' or extend another profile",
+                external.id
+            ),
+        )
+    };
+
+    let display_name = external
+        .display_name
+        .or_else(|| base.as_ref().map(|profile| profile.display_name.clone()))
+        .ok_or_else(|| field("display_name"))?;
+    let description = external
+        .description
+        .or_else(|| base.as_ref().map(|profile| profile.description.clone()))
+        .ok_or_else(|| field("description"))?;
+    let system_prompt = external
+        .system_prompt
+        .or_else(|| base.as_ref().map(|profile| profile.system_prompt.clone()))
+        .ok_or_else(|| field("system_prompt"))?;
+    let commands = external
+        .commands
+        .or_else(|| base.as_ref().map(|profile| profile.commands.clone()))
+        .unwrap_or_default();
+    let permissions = external.capabilities.map_or_else(
+        || {
+            base.as_ref()
+                .map(|profile| profile.permissions.clone())
+                .ok_or_else(|| field("capabilities"))
+        },
+        |capabilities| {
+            SandboxPermissionSet::new(capabilities).map_err(|error| {
+                profile_warning(
+                    source,
+                    path,
+                    format!(
+                        "Profile '{}' has invalid capabilities: {error}",
+                        external.id
+                    ),
+                )
+            })
+        },
+    )?;
+    let permission_rules = external.permission_rules.map_or_else(
+        || {
+            base.as_ref()
+                .map_or_else(CapabilityPermissionRules::default, |profile| {
+                    profile.permission_rules.clone()
+                })
+        },
+        CapabilityPermissionRules::new,
+    );
+    let escalation_policy = external
+        .escalation_policy
+        .or_else(|| base.as_ref().map(|profile| profile.escalation_policy))
+        .ok_or_else(|| field("escalation_policy"))?;
+    let environment = external
+        .environment
+        .or_else(|| base.as_ref().map(|profile| profile.environment))
+        .ok_or_else(|| field("environment"))?;
+    let nushell_startup = external
+        .nushell_startup
+        .or_else(|| base.as_ref().map(|profile| profile.nushell_startup))
+        .ok_or_else(|| field("nushell_startup"))?;
+    let path_policy = external
+        .path
+        .or_else(|| base.as_ref().map(|profile| profile.path))
+        .ok_or_else(|| field("path"))?;
+
+    Ok(AgentProfile {
+        id: external.id,
+        display_name,
+        description,
+        system_prompt: system_prompt.trim().to_string(),
+        commands,
+        permissions,
+        permission_rules,
+        escalation_policy,
+        environment,
+        nushell_startup,
+        path: path_policy,
+        source,
+    })
 }
 
 fn valid_profile_id(id: &str) -> bool {
@@ -411,6 +514,90 @@ path = "packaged"
             plan.permissions
                 .capabilities()
                 .contains(SandboxCapability::HostRead)
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn workspace_profiles_extend_built_ins_with_partial_overrides() {
+        let workspace = temp_dir("workspace-extends");
+        let config_dir = workspace.join(".kraai");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("agents.toml"),
+            r#"[[profiles]]
+id = "eval-coding"
+extends = "coding"
+capabilities = ["host-read", "workspace-write"]
+escalation_policy = "allow"
+environment = "inherit"
+path = "inherit"
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_profiles(&workspace, &commands());
+        assert!(resolved.warnings.is_empty());
+        let coding = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "coding")
+            .unwrap();
+        let eval = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "eval-coding")
+            .unwrap();
+        assert_eq!(eval.display_name, coding.display_name);
+        assert_eq!(eval.description, coding.description);
+        assert_eq!(eval.system_prompt, coding.system_prompt);
+        assert_eq!(eval.commands, coding.commands);
+        assert_eq!(eval.environment, EnvironmentPolicy::Inherit);
+        assert_eq!(eval.escalation_policy, EscalationPolicy::Allow);
+        assert_eq!(eval.nushell_startup, NushellStartup::Clean);
+        assert_eq!(eval.path, PathPolicy::Inherit);
+        assert!(
+            eval.permissions
+                .capabilities()
+                .contains(SandboxCapability::HostRead)
+        );
+        assert!(
+            eval.permissions
+                .capabilities()
+                .contains(SandboxCapability::WorkspaceWrite)
+        );
+        assert_eq!(eval.source, AgentProfileSource::Workspace);
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn extending_an_unknown_profile_rejects_the_layer() {
+        let workspace = temp_dir("unknown-extends");
+        let config_dir = workspace.join(".kraai");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("agents.toml"),
+            r#"[[profiles]]
+id = "custom"
+extends = "missing"
+environment = "inherit"
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_profiles(&workspace, &commands());
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(
+            resolved
+                .warnings
+                .first()
+                .is_some_and(|warning| warning.message.contains("unknown profile 'missing'"))
+        );
+        assert!(
+            resolved
+                .profiles
+                .iter()
+                .all(|profile| profile.id != "custom")
         );
         let _ = fs::remove_dir_all(workspace);
     }

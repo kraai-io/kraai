@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,6 +31,34 @@ pub(crate) fn run_trusted(
     cwd: &Path,
     timeout: Duration,
 ) -> Result<CommandOutcome> {
+    run_trusted_with_environment(command, cwd, timeout, &BTreeMap::new())
+}
+
+pub(crate) fn run_trusted_with_environment(
+    command: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
+) -> Result<CommandOutcome> {
+    run_trusted_with_environment_inheritance(command, cwd, timeout, environment, true)
+}
+
+pub(crate) fn run_trusted_with_clean_environment(
+    command: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
+) -> Result<CommandOutcome> {
+    run_trusted_with_environment_inheritance(command, cwd, timeout, environment, false)
+}
+
+fn run_trusted_with_environment_inheritance(
+    command: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
+    inherit_environment: bool,
+) -> Result<CommandOutcome> {
     let Some(program) = command.first() else {
         bail!("command must not be empty");
     };
@@ -39,12 +68,20 @@ pub(crate) fn run_trusted(
     let stdout = File::create(&stdout_path)?;
     let stderr = File::create(&stderr_path)?;
     let started = Instant::now();
-    let mut child = Command::new(program)
+    let mut process = Command::new(program);
+    if !inherit_environment {
+        process.env_clear();
+    }
+    process
         .args(command.get(1..).unwrap_or_default())
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    for (name, value) in environment {
+        process.env(name, value);
+    }
+    let mut child = process
         .spawn()
         .wrap_err_with(|| format!("spawn trusted command {program}"))?;
     let (status, timed_out, output_limit_exceeded) = loop {
@@ -78,6 +115,43 @@ pub(crate) fn run_trusted(
     };
     fs::remove_dir_all(log_root)?;
     Ok(outcome)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use color_eyre::eyre::ensure;
+
+    use super::*;
+
+    #[test]
+    fn clean_environment_does_not_inherit_controller_values() -> Result<()> {
+        let env_program = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join("env"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("test requires env"))?;
+        let command = vec![env_program.to_string_lossy().into_owned()];
+
+        let outcome = run_trusted_with_clean_environment(
+            &command,
+            Path::new("/"),
+            Duration::from_secs(5),
+            &BTreeMap::new(),
+        )?;
+
+        ensure!(outcome.success(), "environment command failed");
+        ensure!(
+            outcome.stdout.is_empty(),
+            "clean command inherited environment"
+        );
+        ensure!(
+            outcome.stderr.is_empty(),
+            "environment command wrote stderr"
+        );
+        Ok(())
+    }
 }
 
 fn file_size(path: &Path) -> u64 {

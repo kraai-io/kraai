@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,12 +9,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, bail};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method};
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
@@ -26,6 +26,7 @@ const CHATGPT_UPSTREAM: &str = "https://chatgpt.com";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
@@ -290,16 +291,25 @@ impl ModelProxy {
     fn url(&self) -> String {
         format!("http://{}{}", self.address, self.base_path)
     }
-}
 
-impl Drop for ModelProxy {
-    fn drop(&mut self) {
+    pub(crate) fn finish(mut self) -> Result<ProxyMetrics> {
+        self.shutdown_and_join();
+        self.metrics()
+    }
+
+    fn shutdown_and_join(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+impl Drop for ModelProxy {
+    fn drop(&mut self) {
+        self.shutdown_and_join();
     }
 }
 
@@ -319,7 +329,25 @@ struct ProxyEvent<'a> {
     method: &'a str,
     path: &'a str,
     status: u16,
+    delivery: DownstreamDelivery,
     duration_ms: u128,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DownstreamDelivery {
+    Complete,
+    ClientDisconnected,
+}
+
+struct ForwardOutcome {
+    status: u16,
+    delivery: DownstreamDelivery,
+}
+
+struct RelayedResponse {
+    body: Vec<u8>,
+    delivery: DownstreamDelivery,
 }
 
 async fn run_server(
@@ -373,7 +401,13 @@ async fn run_server(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
         }
     }
-    tasks.abort_all();
+    let drain = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
+        tasks.abort_all();
+    }
     while tasks.join_next().await.is_some() {}
     Ok(())
 }
@@ -407,22 +441,30 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Res
             return Err(error);
         }
     };
-    let status = forward_request(&mut stream, &state, &request).await?;
+    let outcome = forward_request(&mut stream, &state, &request).await?;
     let duration = started.elapsed();
-    record_request_metrics(&state, status, duration)?;
-    write_event(&state, &request, status, duration)?;
-    stream.shutdown().await?;
+    record_request_metrics(&state, &outcome, duration)?;
+    write_event(&state, &request, &outcome, duration)?;
+    if outcome.delivery == DownstreamDelivery::Complete {
+        stream.shutdown().await?;
+    }
     Ok(())
 }
 
-async fn forward_request(
-    stream: &mut TcpStream,
+async fn forward_request<W>(
+    stream: &mut W,
     state: &ProxyState,
     request: &ParsedRequest,
-) -> Result<u16> {
+) -> Result<ForwardOutcome>
+where
+    W: AsyncWrite + Unpin,
+{
     if !state.allowed_paths.contains(&request.path) {
         write_error(stream, 404, "Not Found").await?;
-        return Ok(404);
+        return Ok(ForwardOutcome {
+            status: 404,
+            delivery: DownstreamDelivery::Complete,
+        });
     }
     let authorized = request
         .headers
@@ -431,23 +473,35 @@ async fn forward_request(
         .is_some_and(|(_, value)| constant_time_eq(value, &format!("Bearer {}", state.token)));
     if !authorized {
         write_error(stream, 401, "Unauthorized").await?;
-        return Ok(401);
+        return Ok(ForwardOutcome {
+            status: 401,
+            delivery: DownstreamDelivery::Complete,
+        });
     }
     let method = Method::from_bytes(request.method.as_bytes())?;
     if !matches!(method, Method::GET | Method::POST) {
         write_error(stream, 405, "Method Not Allowed").await?;
-        return Ok(405);
+        return Ok(ForwardOutcome {
+            status: 405,
+            delivery: DownstreamDelivery::Complete,
+        });
     }
     if state.request_count.fetch_add(1, Ordering::Relaxed) >= state.max_requests {
         write_error(stream, 429, "Proxy Request Limit Exceeded").await?;
-        return Ok(429);
+        return Ok(ForwardOutcome {
+            status: 429,
+            delivery: DownstreamDelivery::Complete,
+        });
     }
     let response = match send_upstream(state, method, request).await {
         Ok(response) => response,
         Err(error) => {
             write_error(stream, 502, "Bad Gateway").await?;
             tracing_fallback(&format!("model proxy upstream request failed: {error}"));
-            return Ok(502);
+            return Ok(ForwardOutcome {
+                status: 502,
+                delivery: DownstreamDelivery::Complete,
+            });
         }
     };
     let status = response.status();
@@ -457,52 +511,124 @@ async fn forward_request(
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream");
-    stream
-        .write_all(
-            format!(
-                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-                status.as_u16(), reason, content_type
-            )
-            .as_bytes(),
+    let mut delivery = DownstreamDelivery::Complete;
+    write_downstream(
+        stream,
+        &mut delivery,
+        format!(
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            status.as_u16(), reason, content_type
         )
-        .await?;
-    let mut body = response.bytes_stream();
+        .as_bytes(),
+    )
+    .await?;
+    let relayed = relay_response(stream, delivery, response.bytes_stream()).await?;
+    record_usage_metrics(state, &relayed.body)?;
+    Ok(ForwardOutcome {
+        status: status.as_u16(),
+        delivery: relayed.delivery,
+    })
+}
+
+async fn relay_response<W, S, B, E>(
+    stream: &mut W,
+    mut delivery: DownstreamDelivery,
+    body: S,
+) -> Result<RelayedResponse>
+where
+    W: AsyncWrite + Unpin,
+    S: Stream<Item = std::result::Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: Into<color_eyre::Report>,
+{
+    futures::pin_mut!(body);
     let mut response_bytes = 0_usize;
     let mut captured_body = Vec::new();
     while let Some(chunk) = body.next().await {
-        let chunk = chunk?;
+        let chunk = chunk.map_err(Into::into)?;
+        let chunk = chunk.as_ref();
         response_bytes = response_bytes.saturating_add(chunk.len());
         if response_bytes > MAX_RESPONSE_BODY_BYTES {
             bail!("model proxy response body exceeds limit");
         }
-        captured_body.extend_from_slice(&chunk);
-        stream
-            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
-            .await?;
-        stream.write_all(&chunk).await?;
-        stream.write_all(b"\r\n").await?;
+        captured_body.extend_from_slice(chunk);
+        write_downstream(
+            stream,
+            &mut delivery,
+            format!("{:x}\r\n", chunk.len()).as_bytes(),
+        )
+        .await?;
+        write_downstream(stream, &mut delivery, chunk).await?;
+        write_downstream(stream, &mut delivery, b"\r\n").await?;
     }
-    stream.write_all(b"0\r\n\r\n").await?;
-    if let Some(usage) = usage_from_response_body(&captured_body) {
-        let mut metrics = state
-            .metrics
-            .lock()
-            .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
-        metrics.usage.accumulate(&usage);
-    }
-    Ok(status.as_u16())
+    write_downstream(stream, &mut delivery, b"0\r\n\r\n").await?;
+    Ok(RelayedResponse {
+        body: captured_body,
+        delivery,
+    })
 }
 
-fn record_request_metrics(state: &ProxyState, status: u16, duration: Duration) -> Result<()> {
+fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<()> {
+    let Some(usage) = usage_from_response_body(body) else {
+        return Ok(());
+    };
+    let mut metrics = state
+        .metrics
+        .lock()
+        .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
+    metrics.usage.accumulate(&usage);
+    drop(metrics);
+    Ok(())
+}
+
+async fn write_downstream<W>(
+    stream: &mut W,
+    delivery: &mut DownstreamDelivery,
+    bytes: &[u8],
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    if *delivery == DownstreamDelivery::ClientDisconnected {
+        return Ok(());
+    }
+    match stream.write_all(bytes).await {
+        Ok(()) => Ok(()),
+        Err(error) if is_client_disconnect(&error) => {
+            *delivery = DownstreamDelivery::ClientDisconnected;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn is_client_disconnect(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+    )
+}
+
+fn record_request_metrics(
+    state: &ProxyState,
+    outcome: &ForwardOutcome,
+    duration: Duration,
+) -> Result<()> {
     let mut metrics = state
         .metrics
         .lock()
         .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
     metrics.requests = metrics.requests.saturating_add(1);
-    if (200..400).contains(&status) {
+    if (200..400).contains(&outcome.status) {
         metrics.successful_requests = metrics.successful_requests.saturating_add(1);
     } else {
         metrics.failed_requests = metrics.failed_requests.saturating_add(1);
+    }
+    if outcome.delivery == DownstreamDelivery::ClientDisconnected {
+        metrics.client_disconnects = metrics.client_disconnects.saturating_add(1);
     }
     metrics.duration_ms = metrics.duration_ms.saturating_add(duration.as_millis());
     drop(metrics);
@@ -698,7 +824,10 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
-async fn write_error(stream: &mut TcpStream, status: u16, reason: &str) -> Result<()> {
+async fn write_error<W>(stream: &mut W, status: u16, reason: &str) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let body = format!("{status} {reason}\n");
     stream
         .write_all(
@@ -715,7 +844,7 @@ async fn write_error(stream: &mut TcpStream, status: u16, reason: &str) -> Resul
 fn write_event(
     state: &ProxyState,
     request: &ParsedRequest,
-    status: u16,
+    outcome: &ForwardOutcome,
     duration: Duration,
 ) -> Result<()> {
     let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
@@ -723,7 +852,8 @@ fn write_event(
         timestamp_ms,
         method: &request.method,
         path: &request.path,
-        status,
+        status: outcome.status,
+        delivery: outcome.delivery,
         duration_ms: duration.as_millis(),
     };
     let mut log = state
@@ -902,6 +1032,153 @@ mod tests {
             !log.contains("real-secret"),
             "upstream credential leaked into logs"
         );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Result<()> {
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let upstream_address = upstream.local_addr()?;
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let upstream_task = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await?;
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 1024];
+                let read = stream.read(&mut chunk).await?;
+                if read == 0 {
+                    bail!("upstream client disconnected before headers");
+                }
+                request.extend_from_slice(chunk.get(..read).unwrap_or_default());
+                if find_header_end(&request).is_some() {
+                    break;
+                }
+            }
+            let _ = accepted_tx.send(());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let body = b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            stream.write_all(body).await?;
+            stream.shutdown().await?;
+            Ok::<_, color_eyre::Report>(())
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-proxy-finish-drain-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let log_path = root.join("proxy.events.jsonl");
+        let proxy = ModelProxy::start(ProxyServerConfig {
+            upstream: format!("http://{upstream_address}"),
+            credentials: UpstreamCredentials::OpenAiApiKey {
+                credential: String::from("real-secret"),
+                credential_env: String::from("TEST_API_KEY"),
+            },
+            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+            kind: String::from("openai"),
+            base_path: String::from("/v1"),
+            log_path: log_path.clone(),
+            max_requests: 1,
+        })?;
+        let mut downstream = std::net::TcpStream::connect(proxy.address)?;
+        downstream.write_all(
+            format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+                proxy.address, proxy.token
+            )
+            .as_bytes(),
+        )?;
+        accepted_rx.await?;
+
+        let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
+        upstream_task.await??;
+        ensure!(metrics.requests == 1 && metrics.successful_requests == 1);
+        ensure!(metrics.usage.total_tokens == 30);
+        ensure!(fs::read_to_string(&log_path)?.contains("/v1/responses"));
+        drop(downstream);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-proxy-disconnect-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let log_path = root.join("proxy.events.jsonl");
+        let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
+        let state = ProxyState {
+            upstream: String::from("http://proxy-test.invalid"),
+            credentials: UpstreamCredentials::OpenAiApiKey {
+                credential: String::from("real-secret"),
+                credential_env: String::from("TEST_API_KEY"),
+            },
+            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+            token: String::from("client-token"),
+            client: Client::builder().redirect(Policy::none()).build()?,
+            log: Arc::new(Mutex::new(File::create(&log_path)?)),
+            max_requests: 1,
+            request_count: AtomicU64::new(0),
+            metrics: Arc::clone(&metrics),
+        };
+        let request = ParsedRequest {
+            method: String::from("POST"),
+            target: String::from("/v1/responses"),
+            path: String::from("/v1/responses"),
+            headers: vec![
+                (
+                    String::from("authorization"),
+                    String::from("Bearer client-token"),
+                ),
+                (
+                    String::from("content-type"),
+                    String::from("application/json"),
+                ),
+            ],
+            body: b"{}".to_vec(),
+        };
+        let (mut downstream, downstream_peer) = tokio::io::duplex(64);
+        drop(downstream_peer);
+        let body = futures::stream::iter(vec![
+            Ok::<_, io::Error>(b"data: {\"type\":\"response.".to_vec()),
+            Ok(b"completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n".to_vec()),
+        ]);
+
+        let relayed = relay_response(&mut downstream, DownstreamDelivery::Complete, body).await?;
+        record_usage_metrics(&state, &relayed.body)?;
+        let outcome = ForwardOutcome {
+            status: 200,
+            delivery: relayed.delivery,
+        };
+        ensure!(
+            outcome.delivery == DownstreamDelivery::ClientDisconnected,
+            "closed downstream was not detected"
+        );
+        record_request_metrics(&state, &outcome, Duration::from_millis(5))?;
+        write_event(&state, &request, &outcome, Duration::from_millis(5))?;
+
+        let captured = metrics
+            .lock()
+            .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?
+            .clone();
+        ensure!(captured.requests == 1 && captured.successful_requests == 1);
+        ensure!(captured.client_disconnects == 1);
+        ensure!(captured.usage.total_tokens == 30);
+        let log = fs::read_to_string(log_path)?;
+        ensure!(log.contains("\"delivery\":\"client_disconnected\""));
+        ensure!(log.contains("\"path\":\"/v1/responses\""));
         fs::remove_dir_all(root)?;
         Ok(())
     }

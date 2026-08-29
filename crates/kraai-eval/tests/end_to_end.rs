@@ -16,12 +16,21 @@ fn agent_cannot_see_hidden_test_and_submission_is_graded_from_clean_base() -> Re
 
     let root = temporary_directory("hidden-grader")?;
     let repository = root.join("source");
-    fs::create_dir_all(&repository)?;
+    fs::create_dir_all(repository.join("src"))?;
     fs::write(repository.join("answer.txt"), "broken\n")?;
+    fs::write(
+        repository.join("Cargo.toml"),
+        "[package]\nname = \"eval-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )?;
+    fs::write(
+        repository.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"eval-fixture\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(repository.join("src/lib.rs"), "pub fn fixture() {}\n")?;
     run_git(&repository, &["init", "--quiet"])?;
     run_git(&repository, &["config", "user.name", "eval-test"])?;
     run_git(&repository, &["config", "user.email", "eval-test@invalid"])?;
-    run_git(&repository, &["add", "answer.txt"])?;
+    run_git(&repository, &["add", "."])?;
     run_git(&repository, &["commit", "--quiet", "-m", "base"])?;
     let revision = git_output(&repository, &["rev-parse", "HEAD"])?;
 
@@ -46,9 +55,14 @@ revision = "{}"
 [runner]
 timeout_seconds = 10
 network = "disabled"
+rust_toolchain = true
 
 [grader]
 hidden_patch = "hidden.patch"
+
+[[grader.commands]]
+command = ["cargo", "test", "--locked", "--offline"]
+timeout_seconds = 10
 
 [[grader.commands]]
 command = ["{}", "-c", "read -r actual < answer.txt; read -r expected < hidden.expected; [ \"$actual\" = \"$expected\" ]"]

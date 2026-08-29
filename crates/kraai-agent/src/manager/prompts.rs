@@ -1,7 +1,7 @@
 use super::*;
 
 const SCRIPT_EXECUTION_PROTOCOL_PROMPT: &str = r#"# Script Execution Protocol
-You have a clean Nushell environment for inspecting and changing the workspace. Invoke it by emitting one `<tool_call>` block containing a complete Nushell script. Ordinary assistant text may appear before the block, but nothing after its closing tag is accepted.
+You have a clean Nushell environment for inspecting and changing the workspace. Invoke it by emitting one `<tool_call>` block containing a complete Nushell script. Ordinary assistant text may appear before the block. The closing `</tool_call>` tag must be the final content in the response: end the response immediately after it without emitting whitespace, commentary, or any other tokens.
 
 Every block requires a positive Nushell duration in its `timeout` attribute. Request capability additions only when this script needs them, using a comma-separated `permissions` attribute. Available capability names are `workspace-read`, `host-read`, `workspace-write`, `metadata-write`, `host-write`, `network`, and `no-sandbox`.
 

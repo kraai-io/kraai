@@ -28,6 +28,16 @@ impl KraaiProviderConfigRequest {
         ]))
     }
 
+    pub(crate) fn selected_provider_id(&self) -> Result<String> {
+        let config = self.selected_config("http://eval-proxy.invalid/backend-api")?;
+        config
+            .providers
+            .into_iter()
+            .next()
+            .map(|provider| provider.id.to_string())
+            .ok_or_else(|| color_eyre::eyre::eyre!("sanitized provider config is empty"))
+    }
+
     pub(crate) fn materialize(&self, workspace: &Path, proxy_url: &str) -> Result<PathBuf> {
         let config = self.selected_config(proxy_url)?;
         let directory = workspace.join(".kraai-eval");
@@ -120,6 +130,7 @@ provider_id = "api-key-provider"
 "#,
         )?;
         let request = KraaiProviderConfigRequest::new(source, Some(String::from("codex-main")));
+        ensure!(request.selected_provider_id()? == "codex-main");
         let workspace = root.join("workspace");
         fs::create_dir(&workspace)?;
         let output = request.materialize(&workspace, "http://127.0.0.1:1234/backend-api")?;
