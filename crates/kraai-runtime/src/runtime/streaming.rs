@@ -17,7 +17,7 @@ use super::core::{ActiveStream, RuntimeCore, emit_event};
 use crate::api::Event;
 
 const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
-pub(super) const MAX_POST_BOUNDARY_DRAIN_EVENTS: usize = 256;
+pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
 struct RuntimeRetryObserver {
     session_id: String,
@@ -504,15 +504,6 @@ impl RuntimeCore {
         let mut post_boundary_events = 0_usize;
 
         loop {
-            if completed_boundary.is_some()
-                && post_boundary_events >= MAX_POST_BOUNDARY_DRAIN_EVENTS
-            {
-                tracing::warn!(
-                    drained_events = post_boundary_events,
-                    "Stopping provider stream drain after event limit"
-                );
-                break;
-            }
             let next_event = if let Some(deadline) = post_boundary_deadline {
                 match tokio::time::timeout_at(deadline, stream.next()).await {
                     Ok(event) => event,
@@ -530,8 +521,12 @@ impl RuntimeCore {
             let Some(chunk_result) = next_event else {
                 break;
             };
-            if completed_boundary.is_some() {
+            let draining_after_boundary = completed_boundary.is_some();
+            if draining_after_boundary {
                 post_boundary_events = post_boundary_events.saturating_add(1);
+                if post_boundary_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
+                    tokio::task::yield_now().await;
+                }
             }
             match chunk_result {
                 Ok(ProviderStreamEvent::TextDelta(chunk)) => {
@@ -578,6 +573,14 @@ impl RuntimeCore {
                     let agent = agent_manager.lock().await;
                     if !agent.set_streaming_message_usage(&message_id, usage).await {
                         return StreamDriveResult::Stopped;
+                    }
+                    drop(agent);
+                    if draining_after_boundary {
+                        tracing::debug!(
+                            drained_events = post_boundary_events,
+                            "Provider usage received after script protocol boundary"
+                        );
+                        break;
                     }
                 }
                 Err(error) => {
