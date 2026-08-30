@@ -3,7 +3,7 @@ use std::time::Duration;
 use kraai_types::SandboxCapabilities;
 
 use crate::ProtocolError;
-use crate::start_tag::parse_start_tag;
+use crate::payload::parse_script_input;
 
 const OPEN_PREFIX: &str = "<tool_call";
 const CLOSE_TAG: &str = "</tool_call>";
@@ -12,6 +12,7 @@ const THINK_CLOSE_TAG: &str = "</think>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptBlock {
+    pub input: String,
     pub source: Vec<u8>,
     pub timeout: Duration,
     pub requested_capabilities: SandboxCapabilities,
@@ -19,6 +20,7 @@ pub struct ScriptBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidScriptBlock {
+    pub input: String,
     pub source: Vec<u8>,
     pub timeout: Option<Duration>,
     pub requested_capabilities: SandboxCapabilities,
@@ -37,7 +39,6 @@ pub struct ScriptProtocolParser {
     phase: Phase,
     buffer: String,
     source: Vec<u8>,
-    start_tag: Option<StartMetadata>,
     think_depth: usize,
 }
 
@@ -47,12 +48,6 @@ enum Phase {
     Preamble,
     Script,
     Finished,
-}
-
-#[derive(Debug)]
-struct StartMetadata {
-    timeout: Duration,
-    requested_capabilities: SandboxCapabilities,
 }
 
 impl ScriptProtocolParser {
@@ -95,14 +90,9 @@ impl ScriptProtocolParser {
                         };
                         let tag_end = end + 1;
                         let tag = self.buffer[..tag_end].to_owned();
-                        result.accepted.push_str(&tag);
                         self.buffer.drain(..tag_end);
-                        match parse_start_tag(&tag) {
-                            Ok(metadata) => {
-                                self.start_tag = Some(StartMetadata {
-                                    timeout: metadata.timeout,
-                                    requested_capabilities: metadata.requested_capabilities,
-                                });
+                        match parse_open_tag(&tag) {
+                            Ok(()) => {
                                 self.phase = Phase::Script;
                             }
                             Err(error) => {
@@ -126,19 +116,13 @@ impl ScriptProtocolParser {
                 Phase::Script => {
                     if let Some(close) = self.buffer.find(CLOSE_TAG) {
                         self.source.extend(self.buffer.bytes().take(close));
-                        let close_end = close + CLOSE_TAG.len();
-                        result.accepted.push_str(&self.buffer[..close_end]);
                         self.buffer.clear();
                         self.phase = Phase::Finished;
                         result.should_stop = true;
-                        if self.source.iter().all(u8::is_ascii_whitespace) {
-                            result.error = Some(ProtocolError::EmptyScript);
-                        } else if let Some(metadata) = self.start_tag.take() {
-                            result.completed = Some(ScriptBlock {
-                                source: std::mem::take(&mut self.source),
-                                timeout: metadata.timeout,
-                                requested_capabilities: metadata.requested_capabilities,
-                            });
+                        let input = String::from_utf8_lossy(&self.source).into_owned();
+                        match parse_script_input(&input) {
+                            Ok(script) => result.completed = Some(script),
+                            Err(error) => result.error = Some(error),
                         }
                         break;
                     }
@@ -148,7 +132,6 @@ impl ScriptProtocolParser {
                         break;
                     }
                     self.source.extend(self.buffer.bytes().take(safe));
-                    result.accepted.push_str(&self.buffer[..safe]);
                     self.buffer.drain(..safe);
                 }
                 Phase::Finished => {
@@ -169,10 +152,9 @@ impl ScriptProtocolParser {
             },
             Phase::Script => {
                 self.source.extend_from_slice(self.buffer.as_bytes());
-                let accepted = std::mem::take(&mut self.buffer);
+                self.buffer.clear();
                 self.phase = Phase::Finished;
                 IngestResult {
-                    accepted,
                     error: Some(ProtocolError::IncompleteScript),
                     should_stop: true,
                     ..IngestResult::default()
@@ -186,15 +168,23 @@ impl ScriptProtocolParser {
     }
 
     pub fn invalid_block(&self) -> InvalidScriptBlock {
+        let input = String::from_utf8_lossy(&self.source).into_owned();
         InvalidScriptBlock {
+            input,
             source: self.source.clone(),
-            timeout: self.start_tag.as_ref().map(|metadata| metadata.timeout),
-            requested_capabilities: self
-                .start_tag
-                .as_ref()
-                .map(|metadata| metadata.requested_capabilities.clone())
-                .unwrap_or_default(),
+            timeout: None,
+            requested_capabilities: SandboxCapabilities::default(),
         }
+    }
+}
+
+fn parse_open_tag(tag: &str) -> Result<(), ProtocolError> {
+    if tag == "<tool_call>" {
+        Ok(())
+    } else {
+        Err(ProtocolError::MalformedStartTag(String::from(
+            "attributes are not allowed; put timeout and permissions in the # kraai header",
+        )))
     }
 }
 
@@ -234,21 +224,18 @@ mod tests {
     fn streams_preamble_and_discards_same_chunk_trailing_output() {
         let mut parser = ScriptProtocolParser::new();
         let result = parser.ingest(
-            "I will inspect it.\n<tool_call timeout=\"30sec\">\nls | where size > 0\n</tool_call>\nwaiting",
+            "I will inspect it.\n<tool_call>\n# kraai timeout=30sec\nls | where size > 0\n</tool_call>\nwaiting",
         );
         assert!(result.should_stop);
-        assert_eq!(
-            result.accepted,
-            "I will inspect it.\n<tool_call timeout=\"30sec\">\nls | where size > 0\n</tool_call>"
-        );
+        assert_eq!(result.accepted, "I will inspect it.\n");
         let completed = result.completed.expect("completed script");
-        assert_eq!(completed.source, b"\nls | where size > 0\n");
+        assert_eq!(completed.source, b"ls | where size > 0\n");
         assert_eq!(completed.timeout, Duration::from_secs(30));
     }
 
     #[test]
     fn delimiter_and_attribute_splits_are_equivalent_at_every_boundary() {
-        let input = "Préamble 🦀\n<tool_call permissions=\"workspace-write, network\" timeout=\"1.5sec\">\n[1 2] | math sum\n</tool_call>ignored";
+        let input = "Préamble 🦀\n<tool_call>\n# kraai timeout=1.5sec permissions=workspace-write,network\n[1 2] | math sum\n</tool_call>ignored";
         let boundaries = input
             .char_indices()
             .map(|(index, _)| index)
@@ -259,16 +246,12 @@ mod tests {
             let first = parser.ingest(&input[..boundary]);
             let second = parser.ingest(&input[boundary..]);
             let accepted = format!("{}{}", first.accepted, second.accepted);
-            assert_eq!(
-                accepted,
-                "Préamble 🦀\n<tool_call permissions=\"workspace-write, network\" timeout=\"1.5sec\">\n[1 2] | math sum\n</tool_call>",
-                "boundary {boundary}"
-            );
+            assert_eq!(accepted, "Préamble 🦀\n", "boundary {boundary}");
             let completed = first
                 .completed
                 .or(second.completed)
                 .expect("completed script");
-            assert_eq!(completed.source, b"\n[1 2] | math sum\n");
+            assert_eq!(completed.source, b"[1 2] | math sum\n");
             assert_eq!(completed.timeout, Duration::from_millis(1500));
             assert!(
                 completed
@@ -286,12 +269,13 @@ mod tests {
     #[test]
     fn malformed_and_incomplete_scripts_fail_closed() {
         let mut parser = ScriptProtocolParser::new();
-        let result = parser.ingest("<tool_call permissions=\"network\">echo hi</tool_call>");
+        let result =
+            parser.ingest("<tool_call>\n# kraai permissions=network\necho hi\n</tool_call>");
         assert_eq!(result.error, Some(ProtocolError::MissingTimeout));
         assert!(result.should_stop);
 
         let mut parser = ScriptProtocolParser::new();
-        let first = parser.ingest("<tool_call timeout=\"1sec\">echo hi");
+        let first = parser.ingest("<tool_call>\n# kraai timeout=1sec\necho hi");
         assert!(first.error.is_none());
         let end = parser.finish();
         assert_eq!(end.error, Some(ProtocolError::IncompleteScript));
@@ -311,7 +295,7 @@ mod tests {
 
     #[test]
     fn tool_calls_inside_think_blocks_are_inert_across_every_split() {
-        let input = "<think>\n<tool_call timeout=\"1sec\">bad\n</tool_call>\n</think>\n<tool_call timeout=\"2sec\">good\n</tool_call>ignored";
+        let input = "<think>\n<tool_call timeout=\"1sec\">bad\n</tool_call>\n</think>\n<tool_call>\n# kraai timeout=2sec\ngood\n</tool_call>ignored";
         for split in input
             .char_indices()
             .map(|(index, _)| index)

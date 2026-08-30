@@ -628,7 +628,7 @@ pub async fn init() -> Result<(
 )]
 mod tests {
     use super::*;
-    use kraai_types::{ChatRole, MessageStatus};
+    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, MessageStatus};
     use std::future::Future;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -743,8 +743,12 @@ mod tests {
         Message {
             id: MessageId::new(id),
             parent_id: parent_id.cloned(),
-            role: ChatRole::Assistant,
-            content: content.to_string(),
+            content: ConversationItem::Assistant {
+                items: vec![AssistantItem::Text {
+                    phase: AssistantPhase::FinalAnswer,
+                    text: content.to_string(),
+                }],
+            },
             status: MessageStatus::Complete,
             agent_profile_id: None,
             generation: None,
@@ -787,8 +791,12 @@ mod tests {
                     let unsafe_message = Message {
                         id: id.clone(),
                         parent_id: None,
-                        role: ChatRole::Assistant,
-                        content: String::from("unsafe"),
+                        content: ConversationItem::Assistant {
+                            items: vec![AssistantItem::Text {
+                                phase: AssistantPhase::FinalAnswer,
+                                text: String::from("unsafe"),
+                            }],
+                        },
                         status: MessageStatus::Complete,
                         agent_profile_id: None,
                         generation: None,

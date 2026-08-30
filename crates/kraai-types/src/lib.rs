@@ -38,12 +38,6 @@ fn validate_message_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ChatRole {
     #[serde(rename = "system")]
@@ -56,17 +50,106 @@ pub enum ChatRole {
     ToolCallResult,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantPhase {
+    Commentary,
+    FinalAnswer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AssistantItem {
+    Text {
+        phase: AssistantPhase,
+        text: String,
+    },
+    ScriptCall {
+        call_id: ToolCallId,
+        name: String,
+        input: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConversationItem {
+    System { text: String },
+    User { text: String },
+    Assistant { items: Vec<AssistantItem> },
+    ScriptResult { call_id: ToolCallId, output: String },
+}
+
+impl ConversationItem {
+    pub fn role(&self) -> ChatRole {
+        match self {
+            Self::System { .. } => ChatRole::System,
+            Self::User { .. } => ChatRole::User,
+            Self::Assistant { .. } => ChatRole::Assistant,
+            Self::ScriptResult { .. } => ChatRole::ToolCallResult,
+        }
+    }
+
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::System { text } | Self::User { text } => Some(text),
+            Self::Assistant { .. } | Self::ScriptResult { .. } => None,
+        }
+    }
+
+    pub fn assistant_items(&self) -> Option<&[AssistantItem]> {
+        match self {
+            Self::Assistant { items } => Some(items),
+            _ => None,
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        match self {
+            Self::System { text } | Self::User { text } => text.clone(),
+            Self::Assistant { items } => render_assistant_items(items),
+            Self::ScriptResult { output, .. } => output.clone(),
+        }
+    }
+}
+
+fn render_assistant_items(items: &[AssistantItem]) -> String {
+    let mut rendered = String::new();
+    for item in items {
+        let next = match item {
+            AssistantItem::Text { text, .. } => text.clone(),
+            AssistantItem::ScriptCall { input, .. } => {
+                format!("<tool_call>\n{input}\n</tool_call>")
+            }
+        };
+        if !rendered.is_empty() && !next.is_empty() {
+            rendered.push_str("\n\n");
+        }
+        rendered.push_str(&next);
+    }
+    rendered
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
     pub parent_id: Option<MessageId>,
-    pub role: ChatRole,
-    pub content: String,
+    pub content: ConversationItem,
     pub status: MessageStatus,
     #[serde(default)]
     pub agent_profile_id: Option<String>,
     #[serde(default)]
     pub generation: Option<MessageGeneration>,
+}
+
+impl Message {
+    pub fn role(&self) -> ChatRole {
+        self.content.role()
+    }
+
+    pub fn display_text(&self) -> String {
+        self.content.display_text()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,6 +313,7 @@ define_id!(SessionId, validate_id);
 define_id!(StreamId, validate_id);
 define_id!(ScriptExecutionId, validate_message_id);
 define_id!(CommandInvocationId, validate_message_id);
+define_id!(ToolCallId, validate_id);
 define_id!(ProviderId, validate_id);
 define_id!(ModelId, validate_id);
 

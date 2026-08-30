@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use color_eyre::Result;
 use futures::{future::join_all, stream::BoxStream};
-use kraai_types::{ChatMessage, ModelId, ProviderId};
+use kraai_types::{ModelId, ProviderId};
 
 use crate::config::{ModelConfig, ProviderManagerConfig};
 use crate::definition::ValidationError;
 use crate::error::{ProviderError, ProviderModelCacheRefreshError};
 use crate::http_retry::ProviderRequestContext;
-use crate::provider::{Model, Provider};
+use crate::provider::{Model, Provider, ProviderRequest, ScriptToolTransport};
 use crate::registry::ProviderRegistry;
 use crate::stream::ProviderStreamEvent;
 
@@ -204,27 +204,23 @@ impl ProviderManager {
         }
     }
 
-    pub async fn generate_reply(
+    pub fn script_tool_transport(
         &self,
-        provider_id: ProviderId,
+        provider_id: &ProviderId,
         model_id: &ModelId,
-        messages: Vec<ChatMessage>,
-        request_context: ProviderRequestContext,
-    ) -> Result<ChatMessage> {
+    ) -> Result<ScriptToolTransport> {
         let provider = self
             .providers
-            .get(&provider_id)
+            .get(provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        provider
-            .generate_reply(model_id, messages, &request_context)
-            .await
+        Ok(provider.script_tool_transport(model_id))
     }
 
     pub async fn generate_reply_stream(
         &self,
         provider_id: ProviderId,
         model_id: &ModelId,
-        messages: Vec<ChatMessage>,
+        request: ProviderRequest,
         request_context: ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let provider = self
@@ -232,7 +228,7 @@ impl ProviderManager {
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
         provider
-            .generate_reply_stream(model_id, messages, &request_context)
+            .generate_reply_stream(model_id, request, &request_context)
             .await
     }
 }
@@ -317,19 +313,10 @@ mod tests {
                 Ok(())
             }
 
-            async fn generate_reply(
-                &self,
-                _model_id: &ModelId,
-                _messages: Vec<ChatMessage>,
-                _request_context: &ProviderRequestContext,
-            ) -> Result<ChatMessage> {
-                unreachable!("not used by this test")
-            }
-
             async fn generate_reply_stream(
                 &self,
                 _model_id: &ModelId,
-                _messages: Vec<ChatMessage>,
+                _request: ProviderRequest,
                 _request_context: &ProviderRequestContext,
             ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
                 unreachable!("not used by this test")
@@ -574,19 +561,10 @@ mod tests {
                 Ok(())
             }
 
-            async fn generate_reply(
-                &self,
-                _model_id: &ModelId,
-                _messages: Vec<ChatMessage>,
-                _request_context: &ProviderRequestContext,
-            ) -> Result<ChatMessage> {
-                unreachable!("not used by this test")
-            }
-
             async fn generate_reply_stream(
                 &self,
                 _model_id: &ModelId,
-                _messages: Vec<ChatMessage>,
+                _request: ProviderRequest,
                 _request_context: &ProviderRequestContext,
             ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
                 unreachable!("not used by this test")

@@ -189,11 +189,16 @@ impl AgentManager {
                 if history.len() >= limit {
                     return Ok(history);
                 }
-                if message.role != ChatRole::User {
+                if message.role() != ChatRole::User {
                     continue;
                 }
 
-                let content = message.content.trim().to_string();
+                let content = message
+                    .content
+                    .text()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
                 if !content.is_empty() {
                     history.push(content);
                 }

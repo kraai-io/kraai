@@ -13,6 +13,9 @@ fn agent_cannot_see_hidden_test_and_submission_is_graded_from_clean_base() -> Re
     if find_program("bwrap").is_none() {
         return Ok(());
     }
+    if !user_scope_available() {
+        return Ok(());
+    }
 
     let root = temporary_directory("hidden-grader")?;
     let repository = root.join("source");
@@ -95,9 +98,16 @@ timeout_seconds = 10
         progress: None,
     };
     let result = kraai_eval::run(&request)?;
+    let result_artifacts = cache.join(&result.artifact_path);
+    let runner_stderr = fs::read_to_string(result_artifacts.join("runner.stderr.log"))
+        .unwrap_or_else(|error| format!("<unavailable: {error}>"));
     ensure!(
         result.status == RunStatus::Passed,
-        "evaluation did not pass"
+        "evaluation did not pass: status={:?}, runner={:?}, graders={:?}, stderr={runner_stderr:?}, artifacts={}",
+        result.status,
+        result.runner,
+        result.graders,
+        result_artifacts.display()
     );
     ensure!(
         result
@@ -308,6 +318,21 @@ fn find_program(name: &str) -> Option<PathBuf> {
             .map(|directory| directory.join(name))
             .find(|candidate| candidate.is_file())
     })
+}
+
+fn user_scope_available() -> bool {
+    let Some(systemd_run) = find_program("systemd-run") else {
+        return false;
+    };
+    let Some(true_program) = find_program("true") else {
+        return false;
+    };
+
+    Command::new(systemd_run)
+        .args(["--user", "--scope", "--quiet"])
+        .arg(true_program)
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn temporary_directory(name: &str) -> Result<PathBuf> {

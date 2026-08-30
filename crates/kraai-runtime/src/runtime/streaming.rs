@@ -7,11 +7,14 @@ use futures::{FutureExt, StreamExt};
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::{
     ProviderManager, ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver,
-    ProviderStreamEvent,
+    ProviderStreamEvent, ScriptToolTransport,
 };
-use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, ScriptProtocolParser};
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_script_protocol::{
+    InvalidScriptBlock, ProtocolError, ScriptBlock, ScriptProtocolParser, parse_script_input,
+};
+use kraai_types::{MessageId, ModelId, ProviderId, SandboxCapabilities, ToolCallId};
 use tokio::sync::Notify;
+use ulid::Ulid;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
 use crate::api::Event;
@@ -27,6 +30,7 @@ struct RuntimeRetryObserver {
 }
 
 struct CompletedProtocolBoundary {
+    call_id: ToolCallId,
     script: Option<ScriptBlock>,
     invalid_script: Option<InvalidScriptBlock>,
     protocol_error: Option<ProtocolError>,
@@ -51,20 +55,19 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
 
 #[derive(Debug)]
 pub(crate) enum StreamDriveResult {
-    Completed {
-        session_id: String,
-        content: String,
-        script: Option<ScriptBlock>,
-        invalid_script: Option<InvalidScriptBlock>,
-        protocol_error: Option<ProtocolError>,
-    },
-    FailedToStart {
-        error: String,
-    },
-    FailedDuringStream {
-        error: String,
-    },
+    Completed(Box<CompletedStreamOutput>),
+    FailedToStart { error: String },
+    FailedDuringStream { error: String },
     Stopped,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompletedStreamOutput {
+    session_id: String,
+    call_id: Option<ToolCallId>,
+    script: Option<ScriptBlock>,
+    invalid_script: Option<InvalidScriptBlock>,
+    protocol_error: Option<ProtocolError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,13 +208,14 @@ impl RuntimeCore {
         result: StreamDriveResult,
     ) {
         match result {
-            StreamDriveResult::Completed {
-                session_id: _completed_session,
-                content,
-                script,
-                invalid_script,
-                protocol_error,
-            } => {
+            StreamDriveResult::Completed(completed) => {
+                let CompletedStreamOutput {
+                    session_id: _completed_session,
+                    call_id,
+                    script,
+                    invalid_script,
+                    protocol_error,
+                } = *completed;
                 let completed_session = {
                     let agent = self.agent_manager.lock().await;
                     agent.complete_message(&message_id).await
@@ -247,7 +251,7 @@ impl RuntimeCore {
                 self.process_completed_stream_output(
                     completed_session,
                     message_id,
-                    content,
+                    call_id,
                     script,
                     invalid_script,
                     protocol_error,
@@ -456,7 +460,8 @@ impl RuntimeCore {
             message_id,
             provider_id,
             model_id,
-            provider_messages,
+            provider_request,
+            script_tool_transport,
             context_notifications,
         } = request;
         if !context_notifications.is_empty() {
@@ -478,7 +483,7 @@ impl RuntimeCore {
             session_id.clone(),
         );
         let mut stream = match providers
-            .generate_reply_stream(provider_id, &model_id, provider_messages, request_context)
+            .generate_reply_stream(provider_id, &model_id, provider_request, request_context)
             .await
         {
             Ok(stream) => stream,
@@ -497,11 +502,11 @@ impl RuntimeCore {
             },
         );
 
-        let mut content = String::new();
         let mut parser = ScriptProtocolParser::new();
         let mut completed_boundary = None;
         let mut post_boundary_deadline = None;
         let mut post_boundary_events = 0_usize;
+        let mut last_text_item = None;
 
         loop {
             let next_event = if let Some(deadline) = post_boundary_deadline {
@@ -529,38 +534,101 @@ impl RuntimeCore {
                 }
             }
             match chunk_result {
-                Ok(ProviderStreamEvent::TextDelta(chunk)) => {
+                Ok(ProviderStreamEvent::TextDelta {
+                    item_id,
+                    phase,
+                    delta,
+                }) => {
                     if completed_boundary.is_some() {
                         tracing::trace!(
-                            discarded_bytes = chunk.len(),
+                            discarded_bytes = delta.len(),
                             "Discarding text after script protocol boundary"
                         );
                         continue;
                     }
-                    let parsed = parser.ingest(&chunk);
-                    if !parsed.accepted.is_empty() {
-                        content.push_str(&parsed.accepted);
-                        {
+                    if script_tool_transport == ScriptToolTransport::NativeCustom {
+                        let visible = {
                             let agent = agent_manager.lock().await;
-                            if !agent.append_chunk(&message_id, &parsed.accepted).await {
-                                return StreamDriveResult::Stopped;
-                            }
+                            agent
+                                .append_text_chunk(&message_id, &item_id, phase, &delta)
+                                .await
+                        };
+                        let Some(visible) = visible else {
+                            return StreamDriveResult::Stopped;
+                        };
+                        if !visible.is_empty() {
+                            emit_event(
+                                &event_tx,
+                                Event::StreamChunk {
+                                    session_id: session_id.clone(),
+                                    message_id: message_id.to_string(),
+                                    chunk: visible,
+                                },
+                            );
                         }
+                        continue;
+                    }
+
+                    last_text_item = Some((item_id.clone(), phase));
+
+                    let parsed = parser.ingest(&delta);
+                    if !parsed.accepted.is_empty() {
+                        let visible = {
+                            let agent = agent_manager.lock().await;
+                            agent
+                                .append_text_chunk(&message_id, &item_id, phase, &parsed.accepted)
+                                .await
+                        };
+                        let Some(visible) = visible else {
+                            return StreamDriveResult::Stopped;
+                        };
                         emit_event(
                             &event_tx,
                             Event::StreamChunk {
                                 session_id: session_id.clone(),
                                 message_id: message_id.to_string(),
-                                chunk: parsed.accepted,
+                                chunk: visible,
                             },
                         );
                     }
                     if parsed.should_stop {
                         let invalid_script = parsed.error.as_ref().map(|_| parser.invalid_block());
+                        let input = parsed
+                            .completed
+                            .as_ref()
+                            .map(|script| script.input.clone())
+                            .or_else(|| {
+                                invalid_script.as_ref().map(|invalid| invalid.input.clone())
+                            })
+                            .unwrap_or_default();
+                        let call_id = ToolCallId::new(format!("kraai-{}", Ulid::generate()));
+                        let visible = {
+                            let agent = agent_manager.lock().await;
+                            agent
+                                .append_script_call(
+                                    &message_id,
+                                    call_id.clone(),
+                                    String::from("kraai_nushell"),
+                                    input,
+                                )
+                                .await
+                        };
+                        let Some(visible) = visible else {
+                            return StreamDriveResult::Stopped;
+                        };
+                        emit_event(
+                            &event_tx,
+                            Event::StreamChunk {
+                                session_id: session_id.clone(),
+                                message_id: message_id.to_string(),
+                                chunk: visible,
+                            },
+                        );
                         tracing::debug!(
                             "Script protocol boundary reached; draining provider stream for usage"
                         );
                         completed_boundary = Some(CompletedProtocolBoundary {
+                            call_id,
                             script: parsed.completed,
                             invalid_script,
                             protocol_error: parsed.error,
@@ -568,6 +636,71 @@ impl RuntimeCore {
                         post_boundary_deadline =
                             Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                     }
+                }
+                Ok(ProviderStreamEvent::ScriptCall {
+                    call_id,
+                    name,
+                    input,
+                }) => {
+                    if completed_boundary.is_some() {
+                        return StreamDriveResult::FailedDuringStream {
+                            error: String::from(
+                                "provider emitted more than one script call in one response",
+                            ),
+                        };
+                    }
+                    if script_tool_transport != ScriptToolTransport::NativeCustom {
+                        return StreamDriveResult::FailedDuringStream {
+                            error: String::from(
+                                "text-envelope provider emitted an unexpected native script call",
+                            ),
+                        };
+                    }
+                    if name != "kraai_nushell" {
+                        return StreamDriveResult::FailedDuringStream {
+                            error: format!("provider called unexpected custom tool '{name}'"),
+                        };
+                    }
+
+                    let (script, invalid_script, protocol_error) = match parse_script_input(&input)
+                    {
+                        Ok(script) => (Some(script), None, None),
+                        Err(error) => (
+                            None,
+                            Some(InvalidScriptBlock {
+                                input: input.clone(),
+                                source: input.as_bytes().to_vec(),
+                                timeout: None,
+                                requested_capabilities: SandboxCapabilities::default(),
+                            }),
+                            Some(error),
+                        ),
+                    };
+                    let visible = {
+                        let agent = agent_manager.lock().await;
+                        agent
+                            .append_script_call(&message_id, call_id.clone(), name, input)
+                            .await
+                    };
+                    let Some(visible) = visible else {
+                        return StreamDriveResult::Stopped;
+                    };
+                    emit_event(
+                        &event_tx,
+                        Event::StreamChunk {
+                            session_id: session_id.clone(),
+                            message_id: message_id.to_string(),
+                            chunk: visible,
+                        },
+                    );
+                    completed_boundary = Some(CompletedProtocolBoundary {
+                        call_id,
+                        script,
+                        invalid_script,
+                        protocol_error,
+                    });
+                    post_boundary_deadline =
+                        Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
                     let agent = agent_manager.lock().await;
@@ -603,44 +736,54 @@ impl RuntimeCore {
                 drained_events = post_boundary_events,
                 "Provider stream drain finished after script protocol boundary"
             );
-            return StreamDriveResult::Completed {
+            return StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
                 session_id,
-                content,
+                call_id: Some(boundary.call_id),
                 script: boundary.script,
                 invalid_script: boundary.invalid_script,
                 protocol_error: boundary.protocol_error,
-            };
+            }));
         }
 
-        let tail = parser.finish();
+        let tail = if script_tool_transport == ScriptToolTransport::TextEnvelope {
+            parser.finish()
+        } else {
+            Default::default()
+        };
         if !tail.accepted.is_empty() {
-            content.push_str(&tail.accepted);
-            {
+            let (item_id, phase) = last_text_item.unwrap_or_else(|| {
+                (
+                    String::from("text-envelope-message"),
+                    kraai_types::AssistantPhase::FinalAnswer,
+                )
+            });
+            let visible = {
                 let agent = agent_manager.lock().await;
-                if !agent.append_chunk(&message_id, &tail.accepted).await {
-                    return StreamDriveResult::Stopped;
-                }
-            }
+                agent
+                    .append_text_chunk(&message_id, &item_id, phase, &tail.accepted)
+                    .await
+            };
+            let Some(visible) = visible else {
+                return StreamDriveResult::Stopped;
+            };
             emit_event(
                 &event_tx,
                 Event::StreamChunk {
                     session_id: session_id.clone(),
                     message_id: message_id.to_string(),
-                    chunk: tail.accepted,
+                    chunk: visible,
                 },
             );
         }
 
-        tracing::debug!("Full content length: {}", content.len());
-
         let invalid_script = tail.error.as_ref().map(|_| parser.invalid_block());
-        StreamDriveResult::Completed {
+        StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
             session_id,
-            content,
+            call_id: None,
             script: tail.completed,
             invalid_script,
             protocol_error: tail.error,
-        }
+        }))
     }
 
     pub(crate) async fn clear_active_stream(

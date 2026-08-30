@@ -3,7 +3,7 @@ use std::io;
 
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{Event, PendingScriptInfo};
-use kraai_types::{ChatRole, Message, MessageId, MessageStatus, SandboxCapability};
+use kraai_types::{Message, MessageId, MessageStatus, SandboxCapability};
 
 use super::{
     App, AppState, RuntimeRequest, RuntimeResponse, ScriptApprovalAction, ScriptPhase,
@@ -315,8 +315,10 @@ fn evaluation_metrics_count_script_results() {
         Message {
             id: MessageId::new("result"),
             parent_id: None,
-            role: ChatRole::ToolCallResult,
-            content: String::from("<tool_call_result status=\"completed\" />"),
+            content: kraai_types::ConversationItem::ScriptResult {
+                call_id: kraai_types::ToolCallId::new("call-1"),
+                output: String::from("<tool_call_result status=\"completed\" />"),
+            },
             status: MessageStatus::Complete,
             agent_profile_id: Some(String::from("coding")),
             generation: None,

@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use color_eyre::{Result, eyre::eyre};
 use futures::{StreamExt, stream::BoxStream};
-use kraai_types::{ChatMessage, ChatRole, ModelId, ProviderId};
+use kraai_types::{AssistantPhase, ModelId, ProviderId};
 
 use crate::config::{DynamicConfig, DynamicValue, ModelConfig};
 use crate::definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
 use crate::http_retry::ProviderRequestContext;
-use crate::provider::{Model, Provider};
+use crate::provider::{Model, Provider, ProviderRequest};
 use crate::registry::ProviderFactory;
 use crate::stream::ProviderStreamEvent;
 
@@ -70,30 +70,27 @@ impl Provider for MockProvider {
         Ok(())
     }
 
-    async fn generate_reply(
-        &self,
-        _model_id: &ModelId,
-        messages: Vec<ChatMessage>,
-        _request_context: &ProviderRequestContext,
-    ) -> Result<ChatMessage> {
-        self.reply_count.fetch_add(1, Ordering::SeqCst);
-        let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
-        Ok(ChatMessage {
-            role: ChatRole::Assistant,
-            content: format!("Response to: {last_content}"),
-        })
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
-        messages: Vec<ChatMessage>,
+        request: ProviderRequest,
         _request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         self.reply_count.fetch_add(1, Ordering::SeqCst);
-        let last_content = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+        let last_content = request
+            .messages
+            .last()
+            .map(kraai_types::ConversationItem::display_text)
+            .unwrap_or_default();
         let response = format!("Streamed response to: {last_content}");
-        Ok(futures::stream::iter(vec![Ok(ProviderStreamEvent::TextDelta(response))]).boxed())
+        Ok(
+            futures::stream::iter(vec![Ok(ProviderStreamEvent::TextDelta {
+                item_id: String::from("mock-message"),
+                phase: AssistantPhase::FinalAnswer,
+                delta: response,
+            })])
+            .boxed(),
+        )
     }
 }
 

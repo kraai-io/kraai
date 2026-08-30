@@ -1,8 +1,15 @@
-use color_eyre::eyre::Result;
-use kraai_types::{ChatMessage, ChatRole};
+use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
 use serde::Serialize;
 
 const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex, a coding agent.";
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ResponsesRequestItem {
+    Message(ResponsesRequestMessage),
+    CustomToolCall(ResponsesCustomToolCall),
+    CustomToolCallOutput(ResponsesCustomToolCallOutput),
+}
 
 #[derive(Serialize)]
 pub struct ResponsesRequestMessage {
@@ -10,6 +17,8 @@ pub struct ResponsesRequestMessage {
     kind: &'static str,
     role: &'static str,
     content: Vec<MessageContentItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -19,131 +28,175 @@ struct MessageContentItem {
     text: String,
 }
 
-pub struct NormalizedResponsesInput {
-    pub instructions: String,
-    pub input: Vec<ResponsesRequestMessage>,
+#[derive(Serialize)]
+pub struct ResponsesCustomToolCall {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    call_id: String,
+    name: String,
+    input: String,
 }
 
-pub fn normalize_chat_messages(messages: Vec<ChatMessage>) -> Result<NormalizedResponsesInput> {
+#[derive(Serialize)]
+pub struct ResponsesCustomToolCallOutput {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    call_id: String,
+    output: String,
+}
+
+pub struct NormalizedResponsesInput {
+    pub instructions: String,
+    pub input: Vec<ResponsesRequestItem>,
+}
+
+pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResponsesInput {
     let mut instructions = Vec::new();
-    let input = messages
-        .into_iter()
-        .filter_map(|message| {
-            if message.role == ChatRole::System {
-                let text = message.content.trim();
+    let mut input = Vec::new();
+
+    for message in messages {
+        match message {
+            ConversationItem::System { text } => {
+                let text = text.trim();
                 if !text.is_empty() {
                     instructions.push(text.to_string());
                 }
-                return None;
             }
-
-            let role = match message.role {
-                ChatRole::System => unreachable!("system messages are extracted to instructions"),
-                ChatRole::User => "user",
-                ChatRole::Assistant => "assistant",
-                ChatRole::ToolCallResult => "user",
-            };
-            let content_kind = if message.role == ChatRole::Assistant {
-                "output_text"
-            } else {
-                "input_text"
-            };
-            let text = message.content;
-
-            Some(ResponsesRequestMessage {
-                kind: "message",
-                role,
-                content: vec![MessageContentItem {
-                    kind: content_kind,
+            ConversationItem::User { text } => {
+                input.push(ResponsesRequestItem::Message(text_message(
+                    "user",
+                    "input_text",
                     text,
-                }],
-            })
-        })
-        .collect();
+                    None,
+                )));
+            }
+            ConversationItem::Assistant { items } => {
+                for item in items {
+                    match item {
+                        AssistantItem::Text { phase, text } => {
+                            input.push(ResponsesRequestItem::Message(text_message(
+                                "assistant",
+                                "output_text",
+                                text,
+                                Some(phase_to_wire(phase)),
+                            )));
+                        }
+                        AssistantItem::ScriptCall {
+                            call_id,
+                            name,
+                            input: tool_input,
+                        } => input.push(ResponsesRequestItem::CustomToolCall(
+                            ResponsesCustomToolCall {
+                                kind: "custom_tool_call",
+                                call_id: call_id.to_string(),
+                                name,
+                                input: tool_input,
+                            },
+                        )),
+                    }
+                }
+            }
+            ConversationItem::ScriptResult { call_id, output } => {
+                input.push(ResponsesRequestItem::CustomToolCallOutput(
+                    ResponsesCustomToolCallOutput {
+                        kind: "custom_tool_call_output",
+                        call_id: call_id.to_string(),
+                        output,
+                    },
+                ));
+            }
+        }
+    }
 
-    let instructions = if instructions.is_empty() {
-        DEFAULT_CODEX_INSTRUCTIONS.to_string()
-    } else {
-        instructions.join("\n\n")
-    };
-
-    Ok(NormalizedResponsesInput {
-        instructions,
+    NormalizedResponsesInput {
+        instructions: if instructions.is_empty() {
+            DEFAULT_CODEX_INSTRUCTIONS.to_string()
+        } else {
+            instructions.join("\n\n")
+        },
         input,
-    })
+    }
+}
+
+fn text_message(
+    role: &'static str,
+    content_kind: &'static str,
+    text: String,
+    phase: Option<&'static str>,
+) -> ResponsesRequestMessage {
+    ResponsesRequestMessage {
+        kind: "message",
+        role,
+        content: vec![MessageContentItem {
+            kind: content_kind,
+            text,
+        }],
+        phase,
+    }
+}
+
+fn phase_to_wire(phase: AssistantPhase) -> &'static str {
+    match phase {
+        AssistantPhase::Commentary => "commentary",
+        AssistantPhase::FinalAnswer => "final_answer",
+    }
 }
 
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    reason = "tests use direct assertions for normalized message fixtures"
+    reason = "tests use direct assertions for serialized wire fixtures"
 )]
 mod tests {
     use super::*;
-    use kraai_types::ChatRole;
+    use kraai_types::ToolCallId;
     use serde_json::json;
 
     #[test]
-    fn normalize_chat_messages_extracts_system_messages_into_instructions() {
-        let normalized = normalize_chat_messages(vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "System A".to_string(),
+    fn normalizes_typed_cross_provider_history() {
+        let normalized = normalize_conversation(vec![
+            ConversationItem::System {
+                text: "System".to_string(),
             },
-            ChatMessage {
-                role: ChatRole::User,
-                content: "User".to_string(),
+            ConversationItem::Assistant {
+                items: vec![
+                    AssistantItem::Text {
+                        phase: AssistantPhase::Commentary,
+                        text: "Checking.".to_string(),
+                    },
+                    AssistantItem::ScriptCall {
+                        call_id: ToolCallId::new("call-1"),
+                        name: "kraai_nushell".to_string(),
+                        input: "# kraai timeout=10sec\nls".to_string(),
+                    },
+                ],
             },
-            ChatMessage {
-                role: ChatRole::System,
-                content: "System B".to_string(),
+            ConversationItem::ScriptResult {
+                call_id: ToolCallId::new("call-1"),
+                output: "result".to_string(),
             },
-        ])
-        .expect("normalized");
+        ]);
 
-        assert_eq!(normalized.instructions, "System A\n\nSystem B");
-        assert_eq!(normalized.input.len(), 1);
-    }
-
-    #[test]
-    fn normalize_chat_messages_uses_default_instructions_when_missing() {
-        let normalized = normalize_chat_messages(vec![ChatMessage {
-            role: ChatRole::User,
-            content: "User".to_string(),
-        }])
-        .expect("normalized");
-
-        assert_eq!(normalized.instructions, DEFAULT_CODEX_INSTRUCTIONS);
-        assert_eq!(normalized.input.len(), 1);
-    }
-
-    #[test]
-    fn normalize_chat_messages_uses_output_text_for_assistant_history() {
-        let normalized = normalize_chat_messages(vec![
-            ChatMessage {
-                role: ChatRole::User,
-                content: "User".to_string(),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "Assistant".to_string(),
-            },
-        ])
-        .expect("normalized");
-
-        let json = serde_json::to_value(&normalized.input).expect("serialized");
+        assert_eq!(normalized.instructions, "System");
         assert_eq!(
-            json,
+            serde_json::to_value(normalized.input).expect("serialized input"),
             json!([
                 {
                     "type": "message",
-                    "role": "user",
-                    "content": [{ "type": "input_text", "text": "User" }]
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Checking."}]
                 },
                 {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{ "type": "output_text", "text": "Assistant" }]
+                    "type": "custom_tool_call",
+                    "call_id": "call-1",
+                    "name": "kraai_nushell",
+                    "input": "# kraai timeout=10sec\nls"
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-1",
+                    "output": "result"
                 }
             ])
         );

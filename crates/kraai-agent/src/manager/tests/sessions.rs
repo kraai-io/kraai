@@ -95,8 +95,14 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
 
     assert_eq!(history_a.len(), 1);
     assert_eq!(history_b.len(), 1);
-    assert_eq!(history_a.get(&a_message).unwrap().content, "hello a");
-    assert_eq!(history_b.get(&b_message).unwrap().content, "hello b");
+    assert_eq!(
+        history_a.get(&a_message).unwrap().content.text(),
+        Some("hello a")
+    );
+    assert_eq!(
+        history_b.get(&b_message).unwrap().content.text(),
+        Some("hello b")
+    );
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -384,7 +390,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         .generate_reply_stream(
             request.provider_id,
             &request.model_id,
-            request.provider_messages,
+            request.provider_request,
             kraai_provider_core::ProviderRequestContext::default(),
         )
         .await;
@@ -395,7 +401,9 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
     let history = manager.get_chat_history(&session_id).await?;
     let latest_user_message = history
         .values()
-        .find(|message| message.role == ChatRole::User && message.content == "trigger failure")
+        .find(|message| {
+            message.role() == ChatRole::User && message.content.text() == Some("trigger failure")
+        })
         .unwrap();
 
     assert_eq!(tip, Some(latest_user_message.id.clone()));
@@ -435,7 +443,10 @@ async fn loading_session_recovers_persisted_interrupted_stream() -> Result<()> {
     assert_eq!(history.len(), 1);
     let user_message = history
         .values()
-        .find(|message| message.role == ChatRole::User && message.content == "preserve this prompt")
+        .find(|message| {
+            message.role() == ChatRole::User
+                && message.content.text() == Some("preserve this prompt")
+        })
         .expect("persisted user message");
     assert_eq!(
         manager.get_tip(&session_id).await?,

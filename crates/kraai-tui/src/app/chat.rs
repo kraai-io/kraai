@@ -415,8 +415,8 @@ impl App {
         );
         let mut seen_users: HashMap<String, usize> = HashMap::new();
         for msg in visible_chain {
-            if msg.role == ChatRole::User {
-                let key = msg.content.trim().to_string();
+            if msg.role() == ChatRole::User {
+                let key = msg.content.text().unwrap_or_default().trim().to_string();
                 *seen_users.entry(key).or_insert(0) += 1;
             }
         }
@@ -439,8 +439,8 @@ impl App {
             self.state.current_tip_id.as_deref(),
         )
         .into_iter()
-        .filter(|message| message.role == ChatRole::User)
-        .filter(|message| message.content.trim() == content_key)
+        .filter(|message| message.role() == ChatRole::User)
+        .filter(|message| message.content.text().unwrap_or_default().trim() == content_key)
         .count()
     }
 

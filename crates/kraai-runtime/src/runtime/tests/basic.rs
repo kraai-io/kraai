@@ -314,7 +314,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
     let history = harness.handle.get_chat_history(session_id).await?;
     let assistant = history
         .values()
-        .find(|message| message.role == ChatRole::Assistant)
+        .find(|message| message.role() == ChatRole::Assistant)
         .expect("assistant message should be present");
     let generation = assistant
         .generation
