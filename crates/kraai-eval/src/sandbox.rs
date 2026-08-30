@@ -9,6 +9,9 @@ use color_eyre::eyre::{Result, bail};
 use crate::NetworkPolicy;
 use crate::command::{CommandOutcome, run_trusted};
 
+pub(crate) const SANDBOX_CARGO_RUNTIME_ROOTS: [&str; 2] =
+    ["/home/eval/.cargo/registry", "/home/eval/.cargo/git"];
+
 pub(crate) struct SandboxRequest {
     pub command: Vec<String>,
     pub workspace: PathBuf,
@@ -457,6 +460,66 @@ mod tests {
         })?;
         ensure!(outcome.success(), "sandbox CA bundle was not readable");
         fs::remove_dir_all(workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_exposes_prepared_cargo_roots_read_only_for_nested_scripts() -> Result<()> {
+        let Some(shell) = find_program("sh") else {
+            return Ok(());
+        };
+        if find_program("bwrap").is_none() {
+            return Ok(());
+        }
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-cargo-runtime-roots-{}",
+            ulid::Ulid::generate()
+        ));
+        let workspace = root.join("workspace");
+        let cargo_home = root.join("cargo-home");
+        fs::create_dir_all(workspace.join(".git"))?;
+        fs::create_dir_all(cargo_home.join("registry"))?;
+        fs::create_dir_all(cargo_home.join("git"))?;
+        fs::write(cargo_home.join("registry/marker"), b"registry")?;
+        fs::write(cargo_home.join("git/marker"), b"git")?;
+        let runtime_roots = std::env::join_paths(SANDBOX_CARGO_RUNTIME_ROOTS)?
+            .into_string()
+            .map_err(|value| {
+                color_eyre::eyre::eyre!("sandbox Cargo roots are not UTF-8: {value:?}")
+            })?;
+        let outcome = run_sandboxed(SandboxRequest {
+            command: vec![
+                shell.to_string_lossy().into_owned(),
+                String::from("-c"),
+                String::from(
+                    "[ \"$CARGO_HOME\" = /home/eval/.cargo ] && [ \"$CARGO_NET_OFFLINE\" = true ] && [ \"$KRAAI_SCRIPT_RUNTIME_ROOTS\" = /home/eval/.cargo/registry:/home/eval/.cargo/git ] && [ -r /home/eval/.cargo/registry/marker ] && [ -r /home/eval/.cargo/git/marker ] && ! printf tampered > /home/eval/.cargo/registry/marker",
+                ),
+            ],
+            workspace: workspace.clone(),
+            timeout: Duration::from_secs(5),
+            network: NetworkPolicy::Disabled,
+            environment: BTreeMap::from([(
+                String::from("KRAAI_SCRIPT_RUNTIME_ROOTS"),
+                runtime_roots,
+            )]),
+            extra_programs: Vec::new(),
+            cargo_home: Some(cargo_home.clone()),
+            metrics_output: None,
+            script_executions_dir: None,
+            resource_limits: None,
+        })?;
+        ensure!(
+            outcome.success(),
+            "sandbox Cargo roots contract failed: exit_code={:?}, stdout={}, stderr={}",
+            outcome.exit_code,
+            String::from_utf8_lossy(&outcome.stdout),
+            String::from_utf8_lossy(&outcome.stderr)
+        );
+        ensure!(
+            fs::read(cargo_home.join("registry/marker"))? == b"registry",
+            "sandbox modified the prepared Cargo registry"
+        );
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 

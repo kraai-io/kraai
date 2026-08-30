@@ -305,7 +305,9 @@ fn bwrap_args_encode_capability_boundaries() {
     let private_temp = temp_dir("args-private");
     std::fs::create_dir_all(workspace.join(".kraai")).expect("create metadata dir");
     std::fs::create_dir_all(&private_temp).expect("create private temp");
-    let plan = shell_plan(
+    let runtime_root = temp_dir("args-runtime-root");
+    std::fs::create_dir_all(&runtime_root).expect("create runtime root");
+    let mut plan = shell_plan(
         &workspace,
         "true",
         capabilities([
@@ -314,6 +316,7 @@ fn bwrap_args_encode_capability_boundaries() {
         ]),
         Duration::from_secs(1),
     );
+    plan.runtime_roots.push(runtime_root.clone());
     let args = build_bwrap_args(&plan, &private_temp);
 
     assert!(contains_mount(&args, "--bind", &workspace));
@@ -323,10 +326,12 @@ fn bwrap_args_encode_capability_boundaries() {
         &workspace.join(".kraai")
     ));
     assert!(contains_mount(&args, "--bind", &private_temp));
+    assert!(contains_mount(&args, "--ro-bind", &runtime_root));
     assert!(args.iter().any(|arg| arg == "--share-net"));
     assert!(!args.iter().any(|arg| arg == "--seccomp"));
     let _ = std::fs::remove_dir_all(workspace);
     let _ = std::fs::remove_dir_all(private_temp);
+    let _ = std::fs::remove_dir_all(runtime_root);
 }
 
 #[cfg(target_os = "linux")]
