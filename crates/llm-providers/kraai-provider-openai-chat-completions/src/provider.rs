@@ -5,21 +5,21 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequestContext, ProviderStreamEvent, SseEvent,
+    ProviderFactory, ProviderRequest, ProviderRequestContext, ProviderStreamEvent, SseEvent,
     build_streaming_http_client, finite_request, send_with_retry, stream_sse_data,
 };
-use kraai_types::{ChatMessage, ModelId, ProviderId};
+use kraai_types::{AssistantPhase, ModelId, ProviderId};
 use reqwest::{Client, Response};
 use tokio::sync::RwLock;
 
 use crate::auth::ApiKeyAuth;
-use crate::messages::{normalize_chat_messages, role_from_wire};
+use crate::messages::normalize_chat_messages;
 use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
 use crate::wire::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionStreamOptions, ChatCompletionUsage, ListModelsResponse,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamOptions, ChatCompletionUsage,
+    ListModelsResponse,
 };
 
 #[derive(Clone)]
@@ -152,48 +152,20 @@ where
         Ok(())
     }
 
-    async fn generate_reply(
-        &self,
-        model_id: &ModelId,
-        messages: Vec<ChatMessage>,
-        request_context: &ProviderRequestContext,
-    ) -> Result<ChatMessage> {
-        let request = ChatCompletionRequest {
-            model: model_id.to_string(),
-            messages: normalize_chat_messages(messages)?,
-            stream: false,
-            stream_options: None,
-        };
-
-        let response = self
-            .send_chat_completion_request("chat completions", &request, request_context)
-            .await?
-            .json::<ChatCompletionResponse>()
-            .await?;
-        let _usage = response.usage.as_ref().cloned().and_then(normalize_usage);
-
-        let message = response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| eyre!("Invalid response: missing choices"))?
-            .message;
-
-        Ok(ChatMessage {
-            role: role_from_wire(&message.role),
-            content: message.content.unwrap_or_default(),
-        })
-    }
-
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
-        messages: Vec<ChatMessage>,
+        provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        if provider_request.script_tool.is_some() {
+            return Err(eyre!(
+                "text-envelope provider received a native script tool definition"
+            ));
+        }
         let request = ChatCompletionRequest {
             model: model_id.to_string(),
-            messages: normalize_chat_messages(messages)?,
+            messages: normalize_chat_messages(provider_request.messages),
             stream: true,
             stream_options: Some(ChatCompletionStreamOptions {
                 include_usage: true,
@@ -258,7 +230,11 @@ fn events_from_chunk(chunk: ChatCompletionChunk) -> Vec<Result<ProviderStreamEve
         .into_iter()
         .find_map(|choice| choice.delta.content)
     {
-        events.push(Ok(ProviderStreamEvent::TextDelta(delta)));
+        events.push(Ok(ProviderStreamEvent::TextDelta {
+            item_id: String::from("chat-completions-message"),
+            phase: AssistantPhase::FinalAnswer,
+            delta,
+        }));
     }
     if let Some(usage) = chunk.usage.and_then(normalize_usage) {
         events.push(Ok(ProviderStreamEvent::Usage(usage)));
@@ -512,7 +488,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_reply_forwards_retry_observer_to_http_retry_layer() {
+    async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "429 Too Many Requests",
@@ -520,7 +496,7 @@ mod tests {
             },
             ScriptedResponse::Status {
                 status_line: "200 OK",
-                body: r#"{"choices":[{"message":{"role":"assistant","content":"ok after retry"}}]}"#,
+                body: "data: {\"choices\":[{\"delta\":{\"content\":\"ok after retry\"}}]}\n\ndata: [DONE]\n\n",
             },
         ])
         .await;
@@ -545,25 +521,33 @@ mod tests {
         };
 
         let collector = Arc::new(RetryCollector::default());
-        let reply = provider
-            .generate_reply(
+        let events = provider
+            .generate_reply_stream(
                 &ModelId::new("gpt-4.1-mini"),
-                vec![ChatMessage {
-                    role: kraai_types::ChatRole::User,
-                    content: String::from("hello"),
-                }],
+                ProviderRequest {
+                    messages: vec![kraai_types::ConversationItem::User {
+                        text: String::from("hello"),
+                    }],
+                    script_tool: None,
+                },
                 &ProviderRequestContext::with_retry_observer(collector.clone()),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
 
-        assert_eq!(reply.content, "ok after retry");
+        assert!(matches!(
+            events.first(),
+            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. }))
+                if delta == "ok after retry"
+        ));
 
-        let events = collector.snapshot();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].operation, "chat completions");
-        assert_eq!(events[0].retry_number, 1);
-        assert_eq!(events[0].reason, "HTTP 429 Too Many Requests");
+        let retries = collector.snapshot();
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries[0].operation, "chat completions stream");
+        assert_eq!(retries[0].retry_number, 1);
+        assert_eq!(retries[0].reason, "HTTP 429 Too Many Requests");
     }
 
     #[test]
@@ -606,7 +590,11 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ProviderStreamEvent::TextDelta(String::from("hello")),
+                ProviderStreamEvent::TextDelta {
+                    item_id: String::from("chat-completions-message"),
+                    phase: AssistantPhase::FinalAnswer,
+                    delta: String::from("hello"),
+                },
                 ProviderStreamEvent::Usage(kraai_types::TokenUsage {
                     total_tokens: 3,
                     input_tokens: 2,
@@ -630,7 +618,7 @@ mod tests {
 
         assert!(matches!(
             events.first(),
-            Some(Ok(ProviderStreamEvent::TextDelta(delta))) if delta == "partial"
+            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
         ));
         assert!(events.get(1).is_some_and(Result::is_err));
     }

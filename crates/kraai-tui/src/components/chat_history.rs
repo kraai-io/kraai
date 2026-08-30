@@ -17,9 +17,8 @@ use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
 
-static TOOL_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call\b[^>]*>\s*\n?(.*?)</tool_call>").expect("valid regex")
-});
+static TOOL_CALL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
 const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
@@ -380,13 +379,14 @@ impl<'a> ChatHistory<'a> {
 
     pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
         let width = width as usize;
-        if msg.role == ChatRole::System {
+        if msg.role() == ChatRole::System {
             return Vec::new();
         }
 
-        let content = normalize_terminal_text(&msg.content);
+        let display_text = msg.display_text();
+        let content = normalize_terminal_text(&display_text);
         let content_width = width.saturating_sub(MESSAGE_GUTTER_WIDTH);
-        match msg.role {
+        match msg.role() {
             ChatRole::User => {
                 let user_style = Style::default()
                     .fg(Color::Rgb(255, 255, 255))
@@ -560,14 +560,33 @@ impl<'a> Widget for ChatHistory<'a> {
 )]
 mod tests {
     use super::*;
-    use kraai_types::{MessageId, MessageStatus};
+    use kraai_types::{
+        AssistantItem, AssistantPhase, ConversationItem, MessageId, MessageStatus, ToolCallId,
+    };
 
     fn message(id: &str, role: ChatRole, content: &str) -> Message {
+        let content = match role {
+            ChatRole::System => ConversationItem::System {
+                text: content.to_string(),
+            },
+            ChatRole::User => ConversationItem::User {
+                text: content.to_string(),
+            },
+            ChatRole::Assistant => ConversationItem::Assistant {
+                items: vec![AssistantItem::Text {
+                    phase: AssistantPhase::FinalAnswer,
+                    text: content.to_string(),
+                }],
+            },
+            ChatRole::ToolCallResult => ConversationItem::ScriptResult {
+                call_id: ToolCallId::new("test-call"),
+                output: content.to_string(),
+            },
+        };
         Message {
             id: MessageId::new(id),
             parent_id: None,
-            role,
-            content: content.to_string(),
+            content,
             status: MessageStatus::Complete,
             agent_profile_id: None,
             generation: None,
@@ -668,7 +687,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call timeout=\"10sec\" permissions=\"workspace-read\">\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
+            "<tool_call>\n# kraai timeout=10sec permissions=workspace-read\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -689,7 +708,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "before\n<tool_call timeout=\"1sec\">\nls\n</tool_call>\nafter",
+            "before\n<tool_call>\n# kraai timeout=1sec\nls\n</tool_call>\nafter",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -706,7 +725,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call timeout=\"1sec\">\nthis is not parsed here\n</tool_call>",
+            "<tool_call>\n# kraai timeout=1sec\nthis is not parsed here\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -801,7 +820,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call timeout=\"5sec\">\nkraai-open-files /tmp/a.txt\n</tool_call>",
+            "<tool_call>\n# kraai timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -816,7 +835,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call timeout=\"5sec\">\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
+            "<tool_call>\n# kraai timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -825,7 +844,11 @@ mod tests {
 
         assert_eq!(
             rendered,
-            vec![" • Nushell", "     kraai-open-files /tmp/a.txt"]
+            vec![
+                " • Nushell",
+                "     # kraai timeout=5sec",
+                "     kraai-open-files /tmp/a.txt"
+            ]
         );
     }
 }

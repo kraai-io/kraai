@@ -1,8 +1,7 @@
 use super::super::*;
 use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
-use kraai_provider_core::Provider;
-use kraai_types::ChatMessage as ProviderChatMessage;
+use kraai_provider_core::{Provider, ProviderRequest};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,26 +32,18 @@ impl Provider for MockProvider {
         Ok(())
     }
 
-    async fn generate_reply(
-        &self,
-        _model_id: &ModelId,
-        _messages: Vec<ProviderChatMessage>,
-        _request_context: &kraai_provider_core::ProviderRequestContext,
-    ) -> Result<ProviderChatMessage> {
-        Ok(ProviderChatMessage {
-            role: ChatRole::Assistant,
-            content: String::from("reply"),
-        })
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
-        _messages: Vec<ProviderChatMessage>,
+        _request: ProviderRequest,
         _request_context: &kraai_provider_core::ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
         Ok(Box::pin(futures::stream::iter(vec![Ok(
-            kraai_provider_core::ProviderStreamEvent::TextDelta(String::from("reply")),
+            kraai_provider_core::ProviderStreamEvent::TextDelta {
+                item_id: String::from("mock-message"),
+                phase: AssistantPhase::FinalAnswer,
+                delta: String::from("reply"),
+            },
         )])))
     }
 }
@@ -81,6 +72,12 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         ProviderId::new("mock"),
         Box::new(MockProvider {
             id: ProviderId::new("mock"),
+        }),
+    );
+    providers.register_provider(
+        ProviderId::new("mock-alternate"),
+        Box::new(MockProvider {
+            id: ProviderId::new("mock-alternate"),
         }),
     );
 

@@ -59,6 +59,7 @@ impl RuntimeCore {
                     &session_id,
                     result_message_id.clone(),
                     completed.record.profile.id.clone(),
+                    completed.record.call_id.clone(),
                     result,
                 )
                 .await?;
@@ -227,19 +228,44 @@ impl RuntimeCore {
         &self,
         completed_session: String,
         source_message_id: kraai_types::MessageId,
-        _content: String,
+        call_id: Option<kraai_types::ToolCallId>,
         script: Option<ScriptBlock>,
         invalid_script: Option<InvalidScriptBlock>,
         protocol_error: Option<ProtocolError>,
     ) {
+        let call_id = match call_id {
+            Some(call_id) => call_id,
+            None if script.is_none() && protocol_error.is_none() => {
+                let mut agent = self.agent_manager.lock().await;
+                agent.clear_active_turn(&completed_session);
+                drop(agent);
+                self.schedule_queue_drain(&completed_session).await;
+                return;
+            }
+            None => {
+                self.fail_script_turn(
+                    &completed_session,
+                    eyre!("completed script response did not contain a call id"),
+                )
+                .await;
+                return;
+            }
+        };
         if let Some(error) = protocol_error {
             let invalid = invalid_script.unwrap_or(InvalidScriptBlock {
+                input: String::new(),
                 source: Vec::new(),
                 timeout: None,
                 requested_capabilities: SandboxCapabilities::default(),
             });
             if let Err(failure) = self
-                .finish_invalid_script(&completed_session, source_message_id, invalid, error)
+                .finish_invalid_script(
+                    &completed_session,
+                    source_message_id,
+                    call_id,
+                    invalid,
+                    error,
+                )
                 .await
             {
                 self.fail_script_turn(&completed_session, failure).await;
@@ -247,16 +273,15 @@ impl RuntimeCore {
             return;
         }
 
-        let Some(script) = script else {
-            let mut agent = self.agent_manager.lock().await;
-            agent.clear_active_turn(&completed_session);
-            drop(agent);
-            self.schedule_queue_drain(&completed_session).await;
-            return;
-        };
+        let Some(script) = script else { return };
 
         if let Err(error) = self
-            .prepare_or_execute_script(completed_session.clone(), source_message_id, script)
+            .prepare_or_execute_script(
+                completed_session.clone(),
+                source_message_id,
+                call_id,
+                script,
+            )
             .await
         {
             self.fail_script_turn(&completed_session, error).await;
@@ -292,6 +317,7 @@ impl RuntimeCore {
         &self,
         session_id: String,
         source_message_id: kraai_types::MessageId,
+        call_id: kraai_types::ToolCallId,
         script: ScriptBlock,
     ) -> Result<()> {
         let turn = self
@@ -330,6 +356,7 @@ impl RuntimeCore {
             id: ScriptExecutionId::new(Ulid::generate()),
             session_id: session_id.clone(),
             source_message_id,
+            call_id,
             profile: turn.profile.clone(),
             source: script.source,
             workspace_root: turn.workspace_dir,
@@ -387,6 +414,7 @@ impl RuntimeCore {
         &self,
         session_id: &str,
         source_message_id: kraai_types::MessageId,
+        call_id: kraai_types::ToolCallId,
         invalid: InvalidScriptBlock,
         error: ProtocolError,
     ) -> Result<()> {
@@ -401,6 +429,7 @@ impl RuntimeCore {
                 id: id.clone(),
                 session_id: session_id.to_string(),
                 source_message_id,
+                call_id,
                 profile: turn.profile.clone(),
                 source: invalid.source,
                 requested_capabilities: invalid.requested_capabilities,
@@ -460,6 +489,7 @@ impl RuntimeCore {
                 session_id,
                 completed.record.result_message_id.clone(),
                 completed.record.profile.id.clone(),
+                completed.record.call_id.clone(),
                 result,
             )
             .await

@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_types::{
     MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot,
+    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -26,6 +26,7 @@ pub struct NewScriptExecution {
     pub id: ScriptExecutionId,
     pub session_id: String,
     pub source_message_id: MessageId,
+    pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
     pub source: Vec<u8>,
     pub requested_capabilities: SandboxCapabilities,
@@ -39,6 +40,7 @@ pub struct ScriptExecutionRecord {
     pub result_message_id: MessageId,
     pub session_id: String,
     pub source_message_id: MessageId,
+    pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
     pub requested_capabilities: SandboxCapabilities,
     pub effective_capabilities: SandboxCapabilities,
@@ -201,6 +203,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
             result_message_id: MessageId::new(Ulid::generate()),
             session_id: execution.session_id,
             source_message_id: execution.source_message_id,
+            call_id: execution.call_id,
             profile: execution.profile,
             requested_capabilities: execution.requested_capabilities,
             effective_capabilities: execution.effective_capabilities,
@@ -439,7 +442,7 @@ fn now_millis() -> u64 {
 )]
 mod tests {
     use super::*;
-    use kraai_types::SandboxCapability;
+    use kraai_types::{SandboxCapability, ToolCallId};
     use ulid::Ulid;
 
     fn test_dir(name: &str) -> PathBuf {
@@ -451,6 +454,7 @@ mod tests {
             id: id.clone(),
             session_id: String::from("session"),
             source_message_id: MessageId::new("message"),
+            call_id: ToolCallId::new("call-1"),
             profile: ScriptProfileSnapshot {
                 id: String::from("coding"),
                 commands: Vec::new(),

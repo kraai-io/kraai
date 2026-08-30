@@ -26,7 +26,7 @@ pub use http_retry::{
     ProviderRetryObserver, send_with_retry,
 };
 pub use manager::ProviderManager;
-pub use provider::{Model, Provider};
+pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition, ScriptToolTransport};
 pub use registry::{ProviderFactory, ProviderRegistry};
 pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};
 pub use stream::ProviderStreamEvent;

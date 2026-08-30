@@ -1,15 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
-    ModelConfig, Provider, ProviderDefinition, ProviderRequestContext, ProviderStreamEvent,
-    SseEvent, ValidationError, build_streaming_http_client, finite_request,
-    send_with_retry as send_http_with_retry, stream_sse_data,
+    ModelConfig, Provider, ProviderDefinition, ProviderRequest, ProviderRequestContext,
+    ProviderStreamEvent, ScriptToolTransport, SseEvent, ValidationError,
+    build_streaming_http_client, finite_request, send_with_retry as send_http_with_retry,
+    stream_sse_data,
 };
-use kraai_types::{ChatMessage, ChatMessage as ProviderChatMessage, ModelId, ProviderId};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, ToolCallId};
 use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Client, RequestBuilder, Response, StatusCode, Url};
 use tokio::sync::RwLock;
@@ -17,9 +18,9 @@ use tracing::{error, warn};
 
 use crate::auth::{OpenAiCodexAuthController, OpenAiCodexRequestAuth};
 use crate::catalog::{CatalogModel, all_catalog_models, visible_catalog_models};
-use crate::messages::normalize_chat_messages;
+use crate::messages::normalize_conversation;
 use crate::wire::{
-    ListModelEntry, ListModelsResponse, ResponsesOutput, ResponsesReasoning, ResponsesRequest,
+    ListModelEntry, ListModelsResponse, ResponsesCustomTool, ResponsesReasoning, ResponsesRequest,
     ResponsesStreamEvent, ResponsesUsage,
 };
 
@@ -309,33 +310,24 @@ impl Provider for OpenAiCodexProvider {
         Ok(())
     }
 
-    async fn generate_reply(
-        &self,
-        model_id: &ModelId,
-        messages: Vec<ProviderChatMessage>,
-        request_context: &ProviderRequestContext,
-    ) -> Result<ProviderChatMessage> {
-        let response = self
-            .send_responses_request(model_id, messages, false, request_context)
-            .await?
-            .json::<ResponsesOutput>()
-            .await?;
-        let content = extract_response_text(response);
-
-        Ok(ChatMessage {
-            role: kraai_types::ChatRole::Assistant,
-            content,
-        })
+    fn script_tool_transport(&self, model_id: &ModelId) -> ScriptToolTransport {
+        resolve_catalog_model(model_id.as_str())
+            .ok()
+            .flatten()
+            .filter(|resolved| resolved.catalog_model.slug.starts_with("gpt-5"))
+            .map_or(ScriptToolTransport::TextEnvelope, |_| {
+                ScriptToolTransport::NativeCustom
+            })
     }
 
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
-        messages: Vec<ProviderChatMessage>,
+        request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let response = self
-            .send_responses_request(model_id, messages, true, request_context)
+            .send_responses_request(model_id, request, request_context)
             .await?;
         Ok(adapt_responses_stream(stream_sse_data(response)))
     }
@@ -344,57 +336,152 @@ impl Provider for OpenAiCodexProvider {
 fn adapt_responses_stream(
     source: BoxStream<'static, Result<SseEvent>>,
 ) -> BoxStream<'static, Result<ProviderStreamEvent>> {
-    stream::unfold((source, false), |(mut source, finished)| async move {
-        if finished {
-            return None;
-        }
-
-        loop {
-            let event = match source.next().await {
-                Some(Ok(SseEvent::Data(payload))) => {
-                    match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
-                        Ok(event) => event,
-                        Err(error) => return Some((Err(eyre!(error)), (source, true))),
-                    }
-                }
-                Some(Ok(SseEvent::Done)) | None => {
-                    return Some((
-                        Err(eyre!(
-                            "OpenAI response stream ended before response.completed"
-                        )),
-                        (source, true),
-                    ));
-                }
-                Some(Err(error)) => return Some((Err(error), (source, true))),
-            };
-
-            match event.kind.as_str() {
-                "response.output_text.delta" => {
-                    if let Some(delta) = event.delta {
-                        return Some((Ok(ProviderStreamEvent::TextDelta(delta)), (source, false)));
-                    }
-                }
-                "response.completed" => {
-                    let usage = event
-                        .response
-                        .and_then(|response| response.usage)
-                        .and_then(normalize_usage);
-                    return Some((
-                        usage.map_or_else(
-                            || Err(eyre!("OpenAI response.completed event omitted usage")),
-                            |usage| Ok(ProviderStreamEvent::Usage(usage)),
-                        ),
-                        (source, true),
-                    ));
-                }
-                "response.failed" | "response.incomplete" => {
-                    return Some((Err(eyre!("OpenAI response stream failed")), (source, true)));
-                }
-                _ => {}
+    stream::unfold(
+        (source, false, HashMap::<String, AssistantPhase>::new()),
+        |(mut source, finished, mut phases)| async move {
+            if finished {
+                return None;
             }
-        }
-    })
+
+            loop {
+                let event = match source.next().await {
+                    Some(Ok(SseEvent::Data(payload))) => {
+                        match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
+                            Ok(event) => event,
+                            Err(error) => {
+                                return Some((Err(eyre!(error)), (source, true, phases)));
+                            }
+                        }
+                    }
+                    Some(Ok(SseEvent::Done)) | None => {
+                        return Some((
+                            Err(eyre!(
+                                "OpenAI response stream ended before response.completed"
+                            )),
+                            (source, true, phases),
+                        ));
+                    }
+                    Some(Err(error)) => return Some((Err(error), (source, true, phases))),
+                };
+
+                match event.kind.as_str() {
+                    "response.output_item.added" => {
+                        if let Some(item) = event.item
+                            && item.kind == "message"
+                            && let Some(item_id) = item.id
+                        {
+                            phases.insert(item_id, parse_phase(item.phase.as_deref()));
+                        }
+                    }
+                    "response.output_text.delta" => {
+                        if let Some(delta) = event.delta {
+                            let Some(item_id) = event.item_id else {
+                                return Some((
+                                    Err(eyre!("OpenAI output text delta omitted item_id")),
+                                    (source, true, phases),
+                                ));
+                            };
+                            let phase = phases
+                                .get(&item_id)
+                                .copied()
+                                .unwrap_or(AssistantPhase::FinalAnswer);
+                            return Some((
+                                Ok(ProviderStreamEvent::TextDelta {
+                                    item_id,
+                                    phase,
+                                    delta,
+                                }),
+                                (source, false, phases),
+                            ));
+                        }
+                    }
+                    "response.output_item.done" => {
+                        if let Some(item) = event.item
+                            && item.kind == "custom_tool_call"
+                        {
+                            let Some(call_id) = item.call_id else {
+                                return Some((
+                                    Err(eyre!("OpenAI custom tool call omitted call_id")),
+                                    (source, true, phases),
+                                ));
+                            };
+                            let Some(name) = item.name else {
+                                return Some((
+                                    Err(eyre!("OpenAI custom tool call omitted name")),
+                                    (source, true, phases),
+                                ));
+                            };
+                            let Some(input) = item.input else {
+                                return Some((
+                                    Err(eyre!("OpenAI custom tool call omitted input")),
+                                    (source, true, phases),
+                                ));
+                            };
+                            let call_id = match ToolCallId::try_new(call_id) {
+                                Ok(call_id) => call_id,
+                                Err(error) => {
+                                    return Some((Err(eyre!(error)), (source, true, phases)));
+                                }
+                            };
+                            return Some((
+                                Ok(ProviderStreamEvent::ScriptCall {
+                                    call_id,
+                                    name,
+                                    input,
+                                }),
+                                (source, false, phases),
+                            ));
+                        }
+                    }
+                    "response.completed" => {
+                        let usage = event
+                            .response
+                            .and_then(|response| response.usage)
+                            .and_then(normalize_usage);
+                        return Some((
+                            usage.map_or_else(
+                                || Err(eyre!("OpenAI response.completed event omitted usage")),
+                                |usage| Ok(ProviderStreamEvent::Usage(usage)),
+                            ),
+                            (source, true, phases),
+                        ));
+                    }
+                    "response.failed" | "response.incomplete" => {
+                        let detail = event
+                            .response
+                            .map(format_response_failure)
+                            .unwrap_or_else(|| String::from("no failure details were provided"));
+                        return Some((
+                            Err(eyre!("OpenAI response stream failed: {detail}")),
+                            (source, true, phases),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        },
+    )
     .boxed()
+}
+
+fn parse_phase(phase: Option<&str>) -> AssistantPhase {
+    match phase {
+        Some("commentary") => AssistantPhase::Commentary,
+        _ => AssistantPhase::FinalAnswer,
+    }
+}
+
+fn format_response_failure(response: crate::wire::ResponsesCompletedResponse) -> String {
+    if let Some(error) = response.error {
+        return match error.code {
+            Some(code) => format!("{code}: {}", error.message),
+            None => error.message,
+        };
+    }
+    response.incomplete_details.map_or_else(
+        || String::from("no failure details were provided"),
+        |details| details.to_string(),
+    )
 }
 
 fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
@@ -552,18 +639,44 @@ impl OpenAiCodexProvider {
     async fn send_responses_request(
         &self,
         model_id: &ModelId,
-        messages: Vec<ProviderChatMessage>,
-        stream: bool,
+        provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
-        let normalized = normalize_chat_messages(messages)?;
+        let expected_transport = self.script_tool_transport(model_id);
+        match (expected_transport, provider_request.script_tool.as_ref()) {
+            (ScriptToolTransport::NativeCustom, None) => {
+                return Err(eyre!(
+                    "OpenAI native-custom model request omitted the Kraai script tool"
+                ));
+            }
+            (ScriptToolTransport::TextEnvelope, Some(_)) => {
+                return Err(eyre!(
+                    "OpenAI text-envelope model request unexpectedly registered a native tool"
+                ));
+            }
+            _ => {}
+        }
+        let normalized = normalize_conversation(provider_request.messages);
         let resolved_model = resolve_request_model(model_id)?;
+        let tools: Vec<ResponsesCustomTool> = provider_request
+            .script_tool
+            .into_iter()
+            .map(|tool| ResponsesCustomTool {
+                kind: "custom",
+                name: tool.name,
+                description: tool.description,
+            })
+            .collect();
+        let has_script_tool = !tools.is_empty();
         let request = ResponsesRequest {
             model: resolved_model.api_model,
             instructions: normalized.instructions,
             input: normalized.input,
             reasoning: resolved_model.reasoning,
-            stream,
+            tools,
+            tool_choice: has_script_tool.then_some("auto"),
+            parallel_tool_calls: has_script_tool.then_some(false),
+            stream: true,
             store: false,
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
@@ -571,13 +684,8 @@ impl OpenAiCodexProvider {
         self.send_authenticated_request("responses", request_context, |auth| {
             let builder = self
                 .authenticated_post(&self.endpoint("codex/responses"), auth)
-                .header(ACCEPT, responses_accept_header(stream))
+                .header(ACCEPT, responses_accept_header())
                 .json(&request);
-            let builder = if stream {
-                builder
-            } else {
-                finite_request(builder)
-            };
             apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
         .await
@@ -629,12 +737,8 @@ impl OpenAiCodexProvider {
     }
 }
 
-fn responses_accept_header(stream: bool) -> HeaderValue {
-    HeaderValue::from_static(if stream {
-        "text/event-stream"
-    } else {
-        "application/json"
-    })
+fn responses_accept_header() -> HeaderValue {
+    HeaderValue::from_static("text/event-stream")
 }
 
 fn apply_responses_session_headers(
@@ -663,6 +767,7 @@ fn resolve_request_model(model_id: &ModelId) -> Result<ResolvedRequestModel> {
         api_model: resolved.catalog_model.slug.to_string(),
         reasoning: Some(ResponsesReasoning {
             effort: resolved.reasoning_effort.to_string(),
+            context: "current_turn",
         }),
     })
 }
@@ -759,18 +864,6 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     ))
 }
 
-fn extract_response_text(output: ResponsesOutput) -> String {
-    output
-        .output
-        .into_iter()
-        .filter(|item| item.kind == "message")
-        .flat_map(|item| item.content.into_iter())
-        .filter(|item| item.kind == "output_text")
-        .filter_map(|item| item.text)
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -860,6 +953,22 @@ mod tests {
     }
 
     #[test]
+    fn catalog_models_use_native_custom_tools_but_unknown_models_fall_back() {
+        let Some(provider) = provider() else {
+            return;
+        };
+
+        assert_eq!(
+            provider.script_tool_transport(&ModelId::new("gpt-5.6-sol-high")),
+            ScriptToolTransport::NativeCustom
+        );
+        assert_eq!(
+            provider.script_tool_transport(&ModelId::new("custom-experimental-model")),
+            ScriptToolTransport::TextEnvelope
+        );
+    }
+
+    #[test]
     fn proxy_authentication_uses_only_the_short_lived_bearer_token() {
         let Some(client) = test_client_or_skip() else {
             return;
@@ -884,6 +993,7 @@ mod tests {
             resolved.reasoning,
             Some(ResponsesReasoning {
                 effort: "medium".to_string(),
+                context: "current_turn",
             })
         );
     }
@@ -897,6 +1007,7 @@ mod tests {
             resolved.reasoning,
             Some(ResponsesReasoning {
                 effort: "high".to_string(),
+                context: "current_turn",
             })
         );
     }
@@ -1039,28 +1150,29 @@ mod tests {
     }
 
     #[test]
-    fn responses_accept_header_matches_response_mode() {
+    fn responses_accept_header_is_event_stream() {
         assert_eq!(
-            responses_accept_header(true),
+            responses_accept_header(),
             HeaderValue::from_static("text/event-stream")
-        );
-        assert_eq!(
-            responses_accept_header(false),
-            HeaderValue::from_static("application/json")
         );
     }
 
     #[tokio::test]
     async fn responses_stream_rejects_eof_before_completed() {
-        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
-            r#"{"type":"response.output_text.delta","delta":"partial"}"#,
-        )))])
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(String::from(
+                r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg-1","phase":"commentary"}}"#,
+            ))),
+            Ok(SseEvent::Data(String::from(
+                r#"{"type":"response.output_text.delta","item_id":"msg-1","delta":"partial"}"#,
+            ))),
+        ])
         .boxed();
         let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
 
         assert!(matches!(
             events.first(),
-            Some(Ok(ProviderStreamEvent::TextDelta(delta))) if delta == "partial"
+            Some(Ok(ProviderStreamEvent::TextDelta { phase: AssistantPhase::Commentary, delta, .. })) if delta == "partial"
         ));
         assert!(events.get(1).is_some_and(Result::is_err));
     }
@@ -1081,5 +1193,32 @@ mod tests {
         .unwrap();
 
         assert!(event.is_some_and(|result| result.is_err()));
+    }
+
+    #[tokio::test]
+    async fn responses_stream_preserves_native_custom_call_identity_and_input() {
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(String::from(
+                r##"{"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"item-1","call_id":"call-123","name":"kraai_nushell","input":"# kraai timeout=30sec\nls"}}"##,
+            ))),
+            Ok(SseEvent::Data(String::from(
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            ))),
+        ])
+        .boxed();
+
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+
+        assert!(matches!(
+            events.first(),
+            Some(Ok(ProviderStreamEvent::ScriptCall { call_id, name, input }))
+                if call_id.as_str() == "call-123"
+                    && name == "kraai_nushell"
+                    && input == "# kraai timeout=30sec\nls"
+        ));
+        assert!(matches!(
+            events.get(1),
+            Some(Ok(ProviderStreamEvent::Usage(_)))
+        ));
     }
 }

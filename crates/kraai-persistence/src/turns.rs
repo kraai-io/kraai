@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_types::{ChatRole, Message, MessageGeneration, MessageId, MessageStatus};
+use kraai_types::{ConversationItem, Message, MessageGeneration, MessageId, MessageStatus};
 use ulid::Ulid;
 
 use crate::{MessageStore, SessionStore};
@@ -47,7 +47,6 @@ impl ConversationStore {
         let message = Message {
             id: message_id.clone(),
             parent_id: previous_tip.clone(),
-            role: request.role,
             content: request.content,
             status: request.status,
             agent_profile_id: request.agent_profile_id,
@@ -232,8 +231,7 @@ impl ConversationStore {
 
 pub struct AppendMessageRequest {
     pub session_id: String,
-    pub role: ChatRole,
-    pub content: String,
+    pub content: ConversationItem,
     pub status: MessageStatus,
     pub agent_profile_id: Option<String>,
     pub generation: Option<MessageGeneration>,
@@ -254,8 +252,7 @@ pub struct IdempotentAppendOutcome {
 }
 
 fn validate_idempotent_message(existing: &Message, request: &AppendMessageRequest) -> Result<()> {
-    if existing.role != request.role
-        || existing.content != request.content
+    if existing.content != request.content
         || existing.status != request.status
         || existing.agent_profile_id != request.agent_profile_id
         || existing.generation != request.generation
@@ -276,6 +273,7 @@ fn validate_idempotent_message(existing: &Message, request: &AppendMessageReques
 mod tests {
     use super::*;
     use crate::{FileMessageStore, FileSessionStore, SessionMeta};
+    use kraai_types::{AssistantItem, AssistantPhase, ChatRole, ToolCallId};
     use std::collections::HashSet;
     use std::future::Future;
     use std::path::PathBuf;
@@ -442,10 +440,31 @@ mod tests {
         status: MessageStatus,
         title_if_first_message: Option<&str>,
     ) -> AppendMessageRequest {
+        let content = match role {
+            ChatRole::System => ConversationItem::System {
+                text: content.to_string(),
+            },
+            ChatRole::User => ConversationItem::User {
+                text: content.to_string(),
+            },
+            ChatRole::Assistant => ConversationItem::Assistant {
+                items: if content.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![AssistantItem::Text {
+                        phase: AssistantPhase::FinalAnswer,
+                        text: content.to_string(),
+                    }]
+                },
+            },
+            ChatRole::ToolCallResult => ConversationItem::ScriptResult {
+                call_id: ToolCallId::new("test-call"),
+                output: content.to_string(),
+            },
+        };
         AppendMessageRequest {
             session_id: session_id.to_string(),
-            role,
-            content: content.to_string(),
+            content,
             status,
             agent_profile_id: None,
             generation: None,
@@ -483,8 +502,8 @@ mod tests {
                     .unwrap()
                     .unwrap();
                 assert_eq!(message.parent_id, None);
-                assert_eq!(message.role, ChatRole::User);
-                assert_eq!(message.content, "hello");
+                assert_eq!(message.role(), ChatRole::User);
+                assert_eq!(message.content.text(), Some("hello"));
 
                 let stored_session = session_store.get("session").await.unwrap().unwrap();
                 assert_eq!(stored_session.tip_id, Some(appended.message.id));
@@ -823,8 +842,10 @@ mod tests {
                     .save(&Message {
                         id: result_id.clone(),
                         parent_id: Some(root.message.id),
-                        role: ChatRole::ToolCallResult,
-                        content: String::from("result"),
+                        content: ConversationItem::ScriptResult {
+                            call_id: ToolCallId::new("test-call"),
+                            output: String::from("result"),
+                        },
                         status: MessageStatus::Complete,
                         agent_profile_id: Some(String::from("coding")),
                         generation: None,
@@ -833,8 +854,10 @@ mod tests {
                     .unwrap();
                 let request = || AppendMessageRequest {
                     session_id: String::from("session"),
-                    role: ChatRole::ToolCallResult,
-                    content: String::from("result"),
+                    content: ConversationItem::ScriptResult {
+                        call_id: ToolCallId::new("test-call"),
+                        output: String::from("result"),
+                    },
                     status: MessageStatus::Complete,
                     agent_profile_id: Some(String::from("coding")),
                     generation: None,

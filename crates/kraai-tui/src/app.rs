@@ -8,7 +8,9 @@ use kraai_runtime::{
     AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
-use kraai_types::{ChatRole, MessageId, MessageStatus};
+use kraai_types::{
+    AssistantItem, AssistantPhase, ChatRole, ConversationItem, MessageId, MessageStatus,
+};
 use ratatui::{
     crossterm::event::{
         self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -233,7 +235,10 @@ impl App {
             if let Some(current) = self.state.chat_history.get(message_id)
                 && matches!(current.status, MessageStatus::Streaming { .. })
             {
-                merge_newer_streaming_prefix(&mut incoming.content, &current.content);
+                merge_newer_streaming_prefix(
+                    &mut incoming.content,
+                    &current.content.display_text(),
+                );
             }
 
             if let Some(event_content) = self.stream_event_content.get(message_id) {
@@ -243,35 +248,47 @@ impl App {
     }
 }
 
-fn merge_newer_streaming_prefix(incoming_content: &mut String, candidate_content: &str) {
-    if candidate_content.len() > incoming_content.len()
-        && candidate_content.starts_with(incoming_content.as_str())
+fn merge_newer_streaming_prefix(incoming_content: &mut ConversationItem, candidate_content: &str) {
+    let incoming_display = incoming_content.display_text();
+    if candidate_content.len() > incoming_display.len()
+        && candidate_content.starts_with(&incoming_display)
     {
-        incoming_content.clear();
-        incoming_content.push_str(candidate_content);
+        replace_streaming_display(incoming_content, candidate_content.to_string());
     }
 }
 
 fn merge_stream_chunk_into_cached_content(
-    cached_content: &mut String,
+    cached_content: &mut ConversationItem,
     event_content: &mut String,
     chunk: &str,
 ) -> bool {
-    if cached_content.starts_with(event_content.as_str()) {
+    let cached_display = cached_content.display_text();
+    if cached_display.starts_with(event_content.as_str()) {
         return false;
     }
 
-    if event_content.starts_with(cached_content.as_str()) {
-        cached_content.clone_from(event_content);
+    if event_content.starts_with(&cached_display) {
+        replace_streaming_display(cached_content, event_content.clone());
         return true;
     }
 
-    if cached_content.ends_with(chunk) {
-        event_content.clone_from(cached_content);
+    if cached_display.ends_with(chunk) {
+        event_content.clone_from(&cached_display);
         return false;
     }
 
-    cached_content.push_str(chunk);
-    event_content.clone_from(cached_content);
+    let mut merged = cached_display;
+    merged.push_str(chunk);
+    event_content.clone_from(&merged);
+    replace_streaming_display(cached_content, merged);
     true
+}
+
+fn replace_streaming_display(content: &mut ConversationItem, text: String) {
+    *content = ConversationItem::Assistant {
+        items: vec![AssistantItem::Text {
+            phase: AssistantPhase::FinalAnswer,
+            text,
+        }],
+    };
 }

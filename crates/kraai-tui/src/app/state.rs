@@ -8,7 +8,7 @@ use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{ChatRole, Message, MessageId, MessageStatus};
+use kraai_types::{ChatRole, ConversationItem, Message, MessageId, MessageStatus};
 
 use crate::components::{ChatHistory, RenderedLine};
 
@@ -216,8 +216,7 @@ impl AppState {
             rendered_messages.push(Message {
                 id: MessageId::new(optimistic.local_id.clone()),
                 parent_id: None,
-                role: ChatRole::User,
-                content,
+                content: ConversationItem::User { text: content },
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
                 generation: None,
@@ -405,7 +404,7 @@ fn message_fingerprint(msg: &Message) -> u64 {
         .as_ref()
         .map(|id| id.as_str())
         .hash(&mut hasher);
-    match msg.role {
+    match msg.role() {
         ChatRole::System => 0u8,
         ChatRole::User => 1u8,
         ChatRole::Assistant => 2u8,
@@ -420,6 +419,6 @@ fn message_fingerprint(msg: &Message) -> u64 {
         }
         MessageStatus::Cancelled => 2u8.hash(&mut hasher),
     }
-    msg.content.hash(&mut hasher);
+    msg.display_text().hash(&mut hasher);
     hasher.finish()
 }

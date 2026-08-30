@@ -1,14 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-use crate::messages::ResponsesRequestMessage;
+use crate::messages::ResponsesRequestItem;
 
 #[derive(Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
     pub instructions: String,
-    pub input: Vec<ResponsesRequestMessage>,
+    pub input: Vec<ResponsesRequestItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ResponsesReasoning>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ResponsesCustomTool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     pub stream: bool,
     pub store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -18,6 +24,15 @@ pub struct ResponsesRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ResponsesReasoning {
     pub effort: String,
+    pub context: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ResponsesCustomTool {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +70,10 @@ pub struct ResponsesStreamEvent {
     #[serde(default)]
     pub delta: Option<String>,
     #[serde(default)]
+    pub item_id: Option<String>,
+    #[serde(default)]
+    pub item: Option<ResponseOutputItem>,
+    #[serde(default)]
     pub response: Option<ResponsesCompletedResponse>,
 }
 
@@ -62,6 +81,16 @@ pub struct ResponsesStreamEvent {
 pub struct ResponsesCompletedResponse {
     #[serde(default)]
     pub usage: Option<ResponsesUsage>,
+    #[serde(default)]
+    pub error: Option<ResponsesError>,
+    #[serde(default)]
+    pub incomplete_details: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+pub struct ResponsesError {
+    pub code: Option<String>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -88,26 +117,20 @@ pub struct ResponsesOutputTokenDetails {
     pub reasoning_tokens: Option<usize>,
 }
 
-#[derive(Deserialize)]
-pub struct ResponsesOutput {
-    #[serde(default)]
-    pub output: Vec<ResponseOutputItem>,
-}
-
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct ResponseOutputItem {
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
-    pub content: Vec<ResponseContentItem>,
-}
-
-#[derive(Deserialize)]
-pub struct ResponseContentItem {
-    #[serde(rename = "type")]
-    pub kind: String,
+    pub id: Option<String>,
     #[serde(default)]
-    pub text: Option<String>,
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub input: Option<String>,
 }
 
 #[cfg(test)]
@@ -118,7 +141,7 @@ pub struct ResponseContentItem {
 )]
 mod tests {
     use super::*;
-    use crate::messages::ResponsesRequestMessage;
+    use crate::messages::ResponsesRequestItem;
     use serde_json::json;
 
     #[test]
@@ -126,8 +149,11 @@ mod tests {
         let request = ResponsesRequest {
             model: "gpt-5.2-codex".to_string(),
             instructions: "instructions".to_string(),
-            input: Vec::<ResponsesRequestMessage>::new(),
+            input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
+            tools: Vec::new(),
+            tool_choice: None,
+            parallel_tool_calls: None,
             stream: true,
             store: false,
             prompt_cache_key: Some("session-123".to_string()),
@@ -143,8 +169,11 @@ mod tests {
         let request = ResponsesRequest {
             model: "gpt-5.2-codex".to_string(),
             instructions: "instructions".to_string(),
-            input: Vec::<ResponsesRequestMessage>::new(),
+            input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
+            tools: Vec::new(),
+            tool_choice: None,
+            parallel_tool_calls: None,
             stream: true,
             store: false,
             prompt_cache_key: None,
@@ -153,5 +182,46 @@ mod tests {
         let serialized = serde_json::to_value(request).expect("serialized request");
 
         assert!(serialized.get("prompt_cache_key").is_none());
+        assert!(serialized.get("tools").is_none());
+        assert!(serialized.get("tool_choice").is_none());
+        assert!(serialized.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn responses_request_registers_exactly_one_raw_custom_tool() {
+        let request = ResponsesRequest {
+            model: "gpt-5.6-sol".to_string(),
+            instructions: "instructions".to_string(),
+            input: Vec::<ResponsesRequestItem>::new(),
+            reasoning: Some(ResponsesReasoning {
+                effort: "high".to_string(),
+                context: "current_turn",
+            }),
+            tools: vec![ResponsesCustomTool {
+                kind: "custom",
+                name: "kraai_nushell".to_string(),
+                description: "Execute Nushell".to_string(),
+            }],
+            tool_choice: Some("auto"),
+            parallel_tool_calls: Some(false),
+            stream: true,
+            store: false,
+            prompt_cache_key: None,
+        };
+
+        let serialized = serde_json::to_value(request).expect("serialized request");
+
+        assert_eq!(serialized["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            serialized["tools"][0],
+            json!({
+                "type": "custom",
+                "name": "kraai_nushell",
+                "description": "Execute Nushell"
+            })
+        );
+        assert_eq!(serialized["tool_choice"], json!("auto"));
+        assert_eq!(serialized["parallel_tool_calls"], json!(false));
+        assert_eq!(serialized["reasoning"]["context"], json!("current_turn"));
     }
 }

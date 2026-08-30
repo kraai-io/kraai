@@ -22,24 +22,6 @@ pub struct RequestMessage {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub choices: Vec<ChatCompletionChoice>,
-    #[serde(default)]
-    pub usage: Option<ChatCompletionUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChatCompletionChoice {
-    pub message: ResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponseMessage {
-    pub role: String,
-    pub content: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ChatCompletionChunk {
     #[serde(default)]
     pub choices: Vec<ChatCompletionChunkChoice>,

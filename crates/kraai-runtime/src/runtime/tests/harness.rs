@@ -8,8 +8,8 @@ use color_eyre::eyre::{Result, eyre};
 use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
 use kraai_persistence::{FileMessageStore, FileScriptExecutionStore, FileSessionStore};
-use kraai_provider_core::{ModelConfig, ProviderManager};
-use kraai_types::{ChatMessage, ChatRole, ModelId, ProviderId, TokenUsage};
+use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
@@ -35,7 +35,8 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 
 #[derive(Clone, Debug)]
 enum ScriptedChunkKind {
-    Text(String),
+    Text { phase: AssistantPhase, text: String },
+    NativeCall { call_id: String, input: String },
     Usage(TokenUsage),
     Error(String),
 }
@@ -48,13 +49,34 @@ pub(super) struct ScriptedChunk {
 impl ScriptedChunk {
     pub(super) fn plain(text: impl Into<String>) -> Self {
         Self {
-            kind: ScriptedChunkKind::Text(text.into()),
+            kind: ScriptedChunkKind::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: text.into(),
+            },
+        }
+    }
+
+    pub(super) fn commentary(text: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptedChunkKind::Text {
+                phase: AssistantPhase::Commentary,
+                text: text.into(),
+            },
         }
     }
 
     pub(super) fn usage(usage: TokenUsage) -> Self {
         Self {
             kind: ScriptedChunkKind::Usage(usage),
+        }
+    }
+
+    pub(super) fn native_call(call_id: &str, input: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptedChunkKind::NativeCall {
+                call_id: call_id.to_string(),
+                input: input.into(),
+            },
         }
     }
 
@@ -68,6 +90,7 @@ impl ScriptedChunk {
 struct ScriptedProvider {
     id: ProviderId,
     scripts: StdMutex<VecDeque<Vec<ScriptedChunk>>>,
+    native_custom_tool: bool,
 }
 
 #[async_trait]
@@ -88,24 +111,35 @@ impl kraai_provider_core::Provider for ScriptedProvider {
         Ok(())
     }
 
-    async fn generate_reply(
+    fn script_tool_transport(
         &self,
         _model_id: &ModelId,
-        _messages: Vec<ChatMessage>,
-        _request_context: &kraai_provider_core::ProviderRequestContext,
-    ) -> Result<ChatMessage> {
-        Ok(ChatMessage {
-            role: ChatRole::Assistant,
-            content: String::from("unused non-streaming reply"),
-        })
+    ) -> kraai_provider_core::ScriptToolTransport {
+        if self.native_custom_tool {
+            kraai_provider_core::ScriptToolTransport::NativeCustom
+        } else {
+            kraai_provider_core::ScriptToolTransport::TextEnvelope
+        }
     }
 
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
-        _messages: Vec<ChatMessage>,
+        request: ProviderRequest,
         _request_context: &kraai_provider_core::ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
+        if self.native_custom_tool {
+            let tool = request
+                .script_tool
+                .as_ref()
+                .ok_or_else(|| eyre!("native scripted provider did not receive a tool"))?;
+            if tool.name != "kraai_nushell" {
+                return Err(eyre!("unexpected native tool name: {}", tool.name));
+            }
+        } else if request.script_tool.is_some() {
+            return Err(eyre!("text scripted provider received a native tool"));
+        }
+
         let script = self
             .scripts
             .lock()
@@ -115,8 +149,19 @@ impl kraai_provider_core::Provider for ScriptedProvider {
 
         Ok(Box::pin(stream::iter(script.into_iter().map(
             |chunk| match chunk.kind {
-                ScriptedChunkKind::Text(text) => {
-                    Ok(kraai_provider_core::ProviderStreamEvent::TextDelta(text))
+                ScriptedChunkKind::Text { phase, text } => {
+                    Ok(kraai_provider_core::ProviderStreamEvent::TextDelta {
+                        item_id: String::from("scripted-message"),
+                        phase,
+                        delta: text,
+                    })
+                }
+                ScriptedChunkKind::NativeCall { call_id, input } => {
+                    Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
+                        call_id: kraai_types::ToolCallId::new(call_id),
+                        name: String::from("kraai_nushell"),
+                        input,
+                    })
                 }
                 ScriptedChunkKind::Usage(usage) => {
                     Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
@@ -149,30 +194,19 @@ impl kraai_provider_core::Provider for RetryNotifyingProvider {
         Ok(())
     }
 
-    async fn generate_reply(
-        &self,
-        _model_id: &ModelId,
-        _messages: Vec<ChatMessage>,
-        request_context: &kraai_provider_core::ProviderRequestContext,
-    ) -> Result<ChatMessage> {
-        notify_retry(request_context);
-        Ok(ChatMessage {
-            role: ChatRole::Assistant,
-            content: String::from("unused non-streaming reply"),
-        })
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
-        _messages: Vec<ChatMessage>,
+        _request: ProviderRequest,
         request_context: &kraai_provider_core::ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
         notify_retry(request_context);
         Ok(Box::pin(stream::once(async {
-            Ok(kraai_provider_core::ProviderStreamEvent::TextDelta(
-                String::from("provider started"),
-            ))
+            Ok(kraai_provider_core::ProviderStreamEvent::TextDelta {
+                item_id: String::from("retry-message"),
+                phase: AssistantPhase::FinalAnswer,
+                delta: String::from("provider started"),
+            })
         })))
     }
 }
@@ -254,6 +288,20 @@ impl RuntimeTestHarness {
             Box::new(ScriptedProvider {
                 id: ProviderId::new("mock"),
                 scripts: StdMutex::new(scripts.into()),
+                native_custom_tool: false,
+            }),
+        );
+        Self::new_with_parts(providers).await
+    }
+
+    pub(super) async fn new_native(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("mock-native"),
+            Box::new(ScriptedProvider {
+                id: ProviderId::new("mock-native"),
+                scripts: StdMutex::new(scripts.into()),
+                native_custom_tool: true,
             }),
         );
         Self::new_with_parts(providers).await

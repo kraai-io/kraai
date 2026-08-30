@@ -1,42 +1,65 @@
-use color_eyre::eyre::Result;
-use kraai_types::{ChatMessage, ChatRole};
+use kraai_types::{AssistantItem, ConversationItem};
 
 use crate::wire::RequestMessage;
 
-pub fn normalize_chat_messages(messages: Vec<ChatMessage>) -> Result<Vec<RequestMessage>> {
+pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMessage> {
     messages
         .into_iter()
         .map(|message| {
-            if message.role == ChatRole::ToolCallResult {
-                Ok(RequestMessage {
-                    role: String::from("user"),
-                    content: message.content,
-                })
-            } else {
-                Ok(RequestMessage {
-                    role: role_to_wire(message.role).to_string(),
-                    content: message.content,
-                })
+            let (role, content) = match message {
+                ConversationItem::System { text } => ("system", text),
+                ConversationItem::User { text } => ("user", text),
+                ConversationItem::Assistant { items } => {
+                    ("assistant", render_assistant_items(&items))
+                }
+                ConversationItem::ScriptResult { output, .. } => ("user", output),
+            };
+            RequestMessage {
+                role: role.to_string(),
+                content,
             }
         })
         .collect()
 }
 
-pub fn role_to_wire(role: ChatRole) -> &'static str {
-    match role {
-        ChatRole::System => "system",
-        ChatRole::User => "user",
-        ChatRole::Assistant => "assistant",
-        ChatRole::ToolCallResult => "user",
-    }
+fn render_assistant_items(items: &[AssistantItem]) -> String {
+    items
+        .iter()
+        .map(|item| match item {
+            AssistantItem::Text { text, .. } => text.clone(),
+            AssistantItem::ScriptCall { input, .. } => {
+                format!("<tool_call>\n{input}\n</tool_call>")
+            }
+        })
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
-pub fn role_from_wire(role: &str) -> ChatRole {
-    match role {
-        "system" => ChatRole::System,
-        "assistant" => ChatRole::Assistant,
-        "tool_call_result" => ChatRole::ToolCallResult,
-        "user" => ChatRole::User,
-        _ => ChatRole::User,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kraai_types::{AssistantPhase, ToolCallId};
+
+    #[test]
+    fn native_history_is_rendered_as_text_envelope() {
+        let normalized = normalize_chat_messages(vec![ConversationItem::Assistant {
+            items: vec![
+                AssistantItem::Text {
+                    phase: AssistantPhase::Commentary,
+                    text: "I will inspect it.".to_string(),
+                },
+                AssistantItem::ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: "kraai_nushell".to_string(),
+                    input: "# kraai timeout=10sec\nls".to_string(),
+                },
+            ],
+        }]);
+
+        assert_eq!(
+            normalized.first().map(|message| message.content.as_str()),
+            Some("I will inspect it.\n\n<tool_call>\n# kraai timeout=10sec\nls\n</tool_call>")
+        );
     }
 }

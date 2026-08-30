@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use futures::stream::BoxStream;
-use kraai_types::{ChatMessage, ModelId, ProviderId};
+use kraai_types::{ConversationItem, ModelId, ProviderId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ModelConfig;
@@ -17,19 +17,34 @@ pub trait Provider: Send + Sync {
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
-    async fn generate_reply(
-        &self,
-        model_id: &ModelId,
-        messages: Vec<ChatMessage>,
-        request_context: &ProviderRequestContext,
-    ) -> Result<ChatMessage>;
+    fn script_tool_transport(&self, _model_id: &ModelId) -> ScriptToolTransport {
+        ScriptToolTransport::TextEnvelope
+    }
 
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
-        messages: Vec<ChatMessage>,
+        request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptToolTransport {
+    TextEnvelope,
+    NativeCustom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptToolDefinition {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderRequest {
+    pub messages: Vec<ConversationItem>,
+    pub script_tool: Option<ScriptToolDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

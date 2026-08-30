@@ -184,7 +184,7 @@ pub struct CommandMetadata {
 pub struct CommandExample {
     pub description: &'static str,
     pub script: &'static str,
-    pub tool_call: &'static str,
+    pub script_input: &'static str,
 }
 
 #[macro_export]
@@ -225,12 +225,11 @@ macro_rules! declare_kraai_command {
                         $crate::CommandExample {
                             description: $example_description,
                             script: $script,
-                            tool_call: concat!(
-                                "<tool_call timeout=\"",
+                            script_input: concat!(
+                                "# kraai timeout=",
                                 $timeout,
-                                "\">\n",
+                                "\n",
                                 $script,
-                                "\n</tool_call>"
                             ),
                         }
                     ),*

@@ -244,7 +244,7 @@ impl App {
             .state
             .chat_history
             .values()
-            .filter(|message| message.role == kraai_types::ChatRole::ToolCallResult)
+            .filter(|message| message.role() == kraai_types::ChatRole::ToolCallResult)
             .count();
         let usage = (usage.total_tokens != 0
             || usage.input_tokens != 0

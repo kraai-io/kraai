@@ -7,10 +7,14 @@ use kraai_persistence::{
     AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, MessageStore,
     SessionMeta, SessionStore,
 };
-use kraai_provider_core::{Model, ProviderManager, ProviderManagerConfig, ProviderRegistry};
+use kraai_provider_core::{
+    Model, ProviderManager, ProviderManagerConfig, ProviderRegistry, ProviderRequest,
+    ScriptToolDefinition, ScriptToolTransport,
+};
 use kraai_types::{
-    AgentProfilesState, ChatMessage, ChatRole, Message, MessageGeneration, MessageId,
-    MessageStatus, ModelId, ProviderId, ScriptProfileSnapshot, StreamId, TokenUsage,
+    AgentProfilesState, AssistantItem, AssistantPhase, ChatRole, ConversationItem, Message,
+    MessageGeneration, MessageId, MessageStatus, ModelId, ProviderId, ScriptProfileSnapshot,
+    StreamId, TokenUsage, ToolCallId,
 };
 use tokio::sync::RwLock;
 use ulid::Ulid;
@@ -53,7 +57,8 @@ pub struct PendingStreamRequest {
     pub message_id: MessageId,
     pub provider_id: ProviderId,
     pub model_id: ModelId,
-    pub provider_messages: Vec<ChatMessage>,
+    pub provider_request: ProviderRequest,
+    pub script_tool_transport: ScriptToolTransport,
     pub context_notifications: Vec<String>,
 }
 
@@ -118,6 +123,7 @@ struct StreamingMessageState {
     previous_tip: Option<MessageId>,
     previous_title: Option<String>,
     message: Message,
+    text_item_ids: HashMap<String, usize>,
 }
 
 pub struct AgentManager {

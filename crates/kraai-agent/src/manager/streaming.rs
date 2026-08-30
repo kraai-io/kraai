@@ -1,5 +1,8 @@
 use super::*;
 
+const SCRIPT_TOOL_NAME: &str = "kraai_nushell";
+const SCRIPT_TOOL_DESCRIPTION: &str = "Execute one complete Nushell script in Kraai's local, policy-controlled scripting environment. Input must be plaintext Nushell beginning with a # kraai metadata comment.";
+
 impl AgentManager {
     pub async fn prepare_start_stream(
         &mut self,
@@ -8,6 +11,10 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
+        let script_tool_transport = self
+            .providers
+            .script_tool_transport(&provider_id, &model_id)
+            .unwrap_or(ScriptToolTransport::TextEnvelope);
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
@@ -61,7 +68,7 @@ impl AgentManager {
             }
         };
         let system_prompt = match self
-            .build_turn_system_prompt(session_id, &profile, &workspace_dir)
+            .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await
         {
             Ok(system_prompt) => system_prompt,
@@ -80,18 +87,12 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let mut provider_messages: Vec<ChatMessage> = context
-            .into_iter()
-            .map(|m| ChatMessage {
-                role: m.role,
-                content: m.content,
-            })
-            .collect();
+        let mut provider_messages: Vec<ConversationItem> =
+            context.into_iter().map(|message| message.content).collect();
 
         if !system_prompt.content.is_empty() {
-            provider_messages.push(ChatMessage {
-                role: ChatRole::System,
-                content: system_prompt.content,
+            provider_messages.push(ConversationItem::System {
+                text: system_prompt.content,
             });
         }
 
@@ -135,7 +136,16 @@ impl AgentManager {
             message_id: assistant_msg_id,
             provider_id,
             model_id,
-            provider_messages,
+            provider_request: ProviderRequest {
+                messages: provider_messages,
+                script_tool: (script_tool_transport == ScriptToolTransport::NativeCustom).then(
+                    || ScriptToolDefinition {
+                        name: SCRIPT_TOOL_NAME.to_string(),
+                        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
+                    },
+                ),
+            },
+            script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         })
     }
@@ -180,22 +190,19 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
+        let script_tool_transport = self
+            .providers
+            .script_tool_transport(&provider_id, &model_id)?;
         let system_prompt = self
-            .build_turn_system_prompt(session_id, &profile, &workspace_dir)
+            .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await?;
 
-        let mut provider_messages: Vec<ChatMessage> = context
-            .into_iter()
-            .map(|m| ChatMessage {
-                role: m.role,
-                content: m.content,
-            })
-            .collect();
+        let mut provider_messages: Vec<ConversationItem> =
+            context.into_iter().map(|message| message.content).collect();
 
         if !system_prompt.content.is_empty() {
-            provider_messages.push(ChatMessage {
-                role: ChatRole::System,
-                content: system_prompt.content,
+            provider_messages.push(ConversationItem::System {
+                text: system_prompt.content,
             });
         }
 
@@ -222,7 +229,16 @@ impl AgentManager {
             message_id: assistant_msg_id,
             provider_id,
             model_id,
-            provider_messages,
+            provider_request: ProviderRequest {
+                messages: provider_messages,
+                script_tool: (script_tool_transport == ScriptToolTransport::NativeCustom).then(
+                    || ScriptToolDefinition {
+                        name: SCRIPT_TOOL_NAME.to_string(),
+                        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
+                    },
+                ),
+            },
+            script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         }))
     }
@@ -247,6 +263,7 @@ impl AgentManager {
         session_id: &str,
         message_id: MessageId,
         profile_id: String,
+        call_id: ToolCallId,
         content: String,
     ) -> Result<bool> {
         self.require_session(session_id).await?;
@@ -256,8 +273,10 @@ impl AgentManager {
                 message_id,
                 AppendMessageRequest {
                     session_id: session_id.to_string(),
-                    role: ChatRole::ToolCallResult,
-                    content,
+                    content: ConversationItem::ScriptResult {
+                        call_id,
+                        output: content,
+                    },
                     status: MessageStatus::Complete,
                     agent_profile_id: Some(profile_id),
                     generation: None,
@@ -280,12 +299,26 @@ impl AgentManager {
         } else {
             None
         };
+        let content = match role {
+            ChatRole::System => ConversationItem::System { text: content },
+            ChatRole::User => ConversationItem::User { text: content },
+            ChatRole::Assistant => ConversationItem::Assistant {
+                items: vec![AssistantItem::Text {
+                    phase: AssistantPhase::FinalAnswer,
+                    text: content,
+                }],
+            },
+            ChatRole::ToolCallResult => {
+                return Err(eyre!(
+                    "script results require add_script_result_to_history and a call id"
+                ));
+            }
+        };
 
         let appended = self
             .conversation_store
             .append_message(AppendMessageRequest {
                 session_id: session_id.to_string(),
-                role,
                 content,
                 status: MessageStatus::Complete,
                 agent_profile_id,
@@ -298,7 +331,7 @@ impl AgentManager {
             "Added message: session={}, id={}, role={:?}, parent={:?}",
             session_id,
             appended.message.id,
-            appended.message.role,
+            appended.message.role(),
             appended.previous_tip
         );
 
@@ -315,6 +348,10 @@ impl AgentManager {
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
 
+        if role != ChatRole::Assistant {
+            return Err(eyre!("only assistant messages can stream"));
+        }
+
         if self.session_has_active_stream(session_id).await {
             return Err(eyre!("Session already has an active stream: {session_id}"));
         }
@@ -323,8 +360,7 @@ impl AgentManager {
             .conversation_store
             .append_message(AppendMessageRequest {
                 session_id: session_id.to_string(),
-                role,
-                content: String::new(),
+                content: ConversationItem::Assistant { items: Vec::new() },
                 status: MessageStatus::Streaming { stream_id },
                 agent_profile_id,
                 generation,
@@ -340,6 +376,7 @@ impl AgentManager {
                 previous_tip: appended.previous_tip,
                 previous_title: appended.previous_title,
                 message: appended.message,
+                text_item_ids: HashMap::new(),
             },
         );
         Ok(message_id)
@@ -352,14 +389,77 @@ impl AgentManager {
             .any(|state| state.session_id == session_id)
     }
 
-    pub async fn append_chunk(&self, message_id: &MessageId, chunk: &str) -> bool {
+    pub async fn append_text_chunk(
+        &self,
+        message_id: &MessageId,
+        item_id: &str,
+        phase: AssistantPhase,
+        chunk: &str,
+    ) -> Option<String> {
         let mut streaming = self.streaming_messages.write().await;
-        if let Some(state) = streaming.get_mut(message_id) {
-            state.message.content.push_str(chunk);
-            true
+        let state = streaming.get_mut(message_id)?;
+        let ConversationItem::Assistant { items } = &mut state.message.content else {
+            return None;
+        };
+
+        let mut visible = String::new();
+        let item_index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
+            index
         } else {
-            false
+            if !items.is_empty() && !chunk.is_empty() {
+                visible.push_str("\n\n");
+            }
+            items.push(AssistantItem::Text {
+                phase,
+                text: String::new(),
+            });
+            let index = items.len().saturating_sub(1);
+            state.text_item_ids.insert(item_id.to_string(), index);
+            index
+        };
+        let Some(AssistantItem::Text {
+            phase: stored_phase,
+            text,
+        }) = items.get_mut(item_index)
+        else {
+            return None;
+        };
+        if *stored_phase != phase {
+            return None;
         }
+        text.push_str(chunk);
+        visible.push_str(chunk);
+        drop(streaming);
+        Some(visible)
+    }
+
+    pub async fn append_script_call(
+        &self,
+        message_id: &MessageId,
+        call_id: ToolCallId,
+        name: String,
+        input: String,
+    ) -> Option<String> {
+        let mut streaming = self.streaming_messages.write().await;
+        let state = streaming.get_mut(message_id)?;
+        let ConversationItem::Assistant { items } = &mut state.message.content else {
+            return None;
+        };
+        if items
+            .iter()
+            .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+        {
+            return None;
+        }
+        let separator = if items.is_empty() { "" } else { "\n\n" };
+        let visible = format!("{separator}<tool_call>\n{input}\n</tool_call>");
+        items.push(AssistantItem::ScriptCall {
+            call_id,
+            name,
+            input,
+        });
+        drop(streaming);
+        Some(visible)
     }
 
     pub async fn set_streaming_message_usage(
@@ -433,7 +533,11 @@ impl AgentManager {
         };
         let original_state = state.clone();
 
-        let persisted = !state.message.content.is_empty();
+        let persisted = state
+            .message
+            .content
+            .assistant_items()
+            .is_some_and(|items| !items.is_empty());
         let persist_result = if persisted {
             state.message.status = MessageStatus::Complete;
             self.message_store.save(&state.message).await
@@ -544,7 +648,7 @@ impl AgentManager {
 
         let context = self.get_history_context(&tip_id).await?;
         Ok(context.into_iter().rev().find_map(|message| {
-            (message.role == ChatRole::Assistant && message.status == MessageStatus::Complete)
+            (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
                 .then_some(message.generation)
                 .flatten()
                 .and_then(|generation| {
@@ -569,9 +673,9 @@ impl AgentManager {
 
         let history = self.get_chat_history(session_id).await?;
         while let Some(message) = history.get(&cursor) {
-            if message.role == ChatRole::User {
+            if message.role() == ChatRole::User {
                 self.set_tip(session_id, message.parent_id.clone()).await?;
-                return Ok(Some(message.content.clone()));
+                return Ok(message.content.text().map(ToString::to_string));
             }
 
             let Some(parent_id) = message.parent_id.clone() else {

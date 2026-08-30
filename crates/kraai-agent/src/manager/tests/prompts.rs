@@ -5,6 +5,19 @@ use kraai_persistence::{ContextStateMutation, PinnedFileScope};
 use kraai_types::{CommandInvocationId, ScriptExecutionId};
 use ulid::Ulid;
 
+fn request_system_prompt(request: &PendingStreamRequest) -> &str {
+    request
+        .provider_request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            ConversationItem::System { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .expect("system prompt should be present")
+}
+
 async fn persist_open_effect(
     manager: &mut AgentManager,
     session_id: &str,
@@ -59,16 +72,11 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
         )
         .await?;
 
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(system_prompt.content.contains("Opened Files"));
-    assert!(system_prompt.content.contains(file_path_str.as_str()));
-    assert!(system_prompt.content.contains("1|new contents"));
-    assert!(system_prompt.content.contains("2|second line"));
+    let system_prompt = request_system_prompt(&request);
+    assert!(system_prompt.contains("Opened Files"));
+    assert!(system_prompt.contains(file_path_str.as_str()));
+    assert!(system_prompt.contains("1|new contents"));
+    assert!(system_prompt.contains("2|second line"));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -103,15 +111,10 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
         .await?;
     assert_eq!(request.context_notifications.len(), 1);
     assert!(request.context_notifications[0].contains("automatically unpinned"));
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(system_prompt.content.contains("Pinned File Updates"));
-    assert!(system_prompt.content.contains("removed.txt"));
-    assert!(!system_prompt.content.contains("[temporarily unavailable:"));
+    let system_prompt = request_system_prompt(&request);
+    assert!(system_prompt.contains("Pinned File Updates"));
+    assert!(system_prompt.contains("removed.txt"));
+    assert!(!system_prompt.contains("[temporarily unavailable:"));
 
     let next_refresh = crate::context_state::refresh_context_state(
         manager.context_state_store.as_ref(),
@@ -149,33 +152,18 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         )
         .await?;
 
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(!system_prompt.content.contains("Workspace Instructions"));
-    assert!(!system_prompt.content.contains(AGENTS_MD_FILE_NAME));
+    let system_prompt = request_system_prompt(&request);
+    assert!(!system_prompt.contains("Workspace Instructions"));
+    assert!(!system_prompt.contains(AGENTS_MD_FILE_NAME));
     let protocol_offset = system_prompt
-        .content
-        .find("# Script Execution Protocol")
+        .find("# Script Execution")
         .expect("script execution protocol");
     let first_tool_offset = system_prompt
-        .content
         .find("# Kraai Commands")
         .expect("command definitions");
     assert!(protocol_offset < first_tool_offset);
-    assert!(
-        system_prompt
-            .content
-            .contains("one `<tool_call>` block containing a complete Nushell script")
-    );
-    assert!(
-        system_prompt
-            .content
-            .contains("end the response immediately after it")
-    );
+    assert!(system_prompt.contains("one `<tool_call>` block containing the complete script input"));
+    assert!(system_prompt.contains("end the response immediately after it"));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -200,29 +188,12 @@ async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<(
         )
         .await?;
 
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
+    let system_prompt = request_system_prompt(&request);
 
-    assert!(system_prompt.content.contains("Final answers"));
-    assert!(
-        system_prompt
-            .content
-            .contains("Lead with the result, not a recap of every step.")
-    );
-    assert!(
-        system_prompt
-            .content
-            .contains("Do not include a mandatory \"think-ahead suggestion\"")
-    );
-    assert!(
-        !system_prompt
-            .content
-            .contains("Offer at least one suggestion")
-    );
+    assert!(system_prompt.contains("Final answers"));
+    assert!(system_prompt.contains("Lead with the result, not a recap of every step."));
+    assert!(system_prompt.contains("Do not include a mandatory \"think-ahead suggestion\""));
+    assert!(!system_prompt.contains("Offer at least one suggestion"));
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -256,19 +227,10 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
         )
         .await?;
 
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(system_prompt.content.contains("Workspace Instructions"));
-    assert!(system_prompt.content.contains("# Workspace rules"));
-    assert!(
-        system_prompt
-            .content
-            .contains("Always prefer deterministic behavior.")
-    );
+    let system_prompt = request_system_prompt(&request);
+    assert!(system_prompt.contains("Workspace Instructions"));
+    assert!(system_prompt.contains("# Workspace rules"));
+    assert!(system_prompt.contains("Always prefer deterministic behavior."));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -297,13 +259,8 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
             ProviderId::new("mock"),
         )
         .await?;
-    let first_system_prompt = first_request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(!first_system_prompt.content.contains("First instructions"));
+    let first_system_prompt = request_system_prompt(&first_request);
+    assert!(!first_system_prompt.contains("First instructions"));
     manager.complete_message(&first_request.message_id).await?;
 
     tokio::fs::write(
@@ -316,13 +273,8 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let second_system_prompt = second_request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(second_system_prompt.content.contains("First instructions"));
+    let second_system_prompt = request_system_prompt(&second_request);
+    assert!(second_system_prompt.contains("First instructions"));
     manager.complete_message(&second_request.message_id).await?;
 
     tokio::fs::write(
@@ -335,14 +287,9 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let third_system_prompt = third_request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(third_system_prompt.content.contains("Updated instructions"));
-    assert!(!third_system_prompt.content.contains("First instructions"));
+    let third_system_prompt = request_system_prompt(&third_request);
+    assert!(third_system_prompt.contains("Updated instructions"));
+    assert!(!third_system_prompt.contains("First instructions"));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -386,14 +333,9 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let system_prompt = continuation
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(system_prompt.content.contains("Workspace A"));
-    assert!(!system_prompt.content.contains("Workspace B"));
+    let system_prompt = request_system_prompt(&continuation);
+    assert!(system_prompt.contains("Workspace A"));
+    assert!(!system_prompt.contains("Workspace B"));
 
     let workspace_state = manager.get_workspace_dir_state(&session_id).await?.unwrap();
     assert_eq!(workspace_state.0, workspace_b);
@@ -437,13 +379,8 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
         .await?
         .expect("continuation request should exist");
 
-    let system_prompt = request
-        .provider_messages
-        .iter()
-        .rev()
-        .find(|message| message.role == ChatRole::System)
-        .expect("system prompt should be present");
-    assert!(system_prompt.content.contains("1|current"));
+    let system_prompt = request_system_prompt(&request);
+    assert!(system_prompt.contains("1|current"));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;

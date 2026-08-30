@@ -15,7 +15,7 @@ use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
 use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
 use kraai_types::{
     MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, StateEffectRequest,
+    ScriptOutputStream, ScriptProfileSnapshot, StateEffectRequest, ToolCallId,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
@@ -27,6 +27,7 @@ pub(crate) struct EffectiveScriptRequest {
     pub(crate) id: ScriptExecutionId,
     pub(crate) session_id: String,
     pub(crate) source_message_id: MessageId,
+    pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,
     pub(crate) source: Vec<u8>,
     pub(crate) workspace_root: PathBuf,
@@ -77,6 +78,7 @@ impl RuntimeCore {
                 id: request.id.clone(),
                 session_id: request.session_id.clone(),
                 source_message_id: request.source_message_id.clone(),
+                call_id: request.call_id.clone(),
                 profile: request.profile.clone(),
                 source: request.source.clone(),
                 requested_capabilities: request.requested_capabilities.clone(),
