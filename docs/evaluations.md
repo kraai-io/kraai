@@ -239,8 +239,9 @@ user's original config is read-only and is not modified.
 
 The task's public fixture defines `eval-coding` by extending the built-in
 `coding` profile. Its inherited environment preserves the evaluator's offline
-Cargo configuration, and its capability policy relies on the evaluator's outer
-bubblewrap sandbox as the containment boundary.
+Cargo configuration. The profile uses the exclusive `no-sandbox` capability so
+scripts run directly inside the evaluator's outer bubblewrap sandbox, which
+remains the containment boundary.
 
 Use a different explicit attempt number for each stochastic repetition. An
 existing identity is never overwritten:
@@ -272,11 +273,8 @@ against the materialized public source using a fresh evaluator-owned Cargo home.
 Completed dependency bundles are cached by task and lockfile identity, then their
 registry and Git dependency directories are mounted read-only into both the
 harness and grader sandboxes. Cargo remains forced offline inside both sandboxes,
-and build artifacts remain in the disposable task workspace. For Kraai harnesses,
-the prepared registry and Git directories are also passed through read-only to
-the nested script sandbox, allowing model-run Cargo checks to resolve the same
-dependency set as the graders. The host's Cargo cache, credentials, and Git
-checkouts are never mounted. Dependency fetches also
+and build artifacts remain in the disposable task workspace. The host's Cargo
+cache, credentials, and Git checkouts are never mounted. Dependency fetches also
 run with a cleared environment, an isolated home, system and global Git
 configuration disabled, interactive authentication disabled, and a `PATH`
 constructed only from the resolved Rust environment. Fetches run outside the

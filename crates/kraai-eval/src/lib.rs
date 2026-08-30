@@ -29,9 +29,7 @@ use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{CommandOutcome, run_trusted};
-use crate::sandbox::{
-    ResourceLimits, SANDBOX_CARGO_RUNTIME_ROOTS, SandboxRequest, run_sandboxed, rust_environment,
-};
+use crate::sandbox::{ResourceLimits, SandboxRequest, run_sandboxed, rust_environment};
 use crate::workspace::{capture_submission, commit_fixture, materialize_base, replay_submission};
 
 #[derive(Debug, Clone)]
@@ -533,27 +531,16 @@ fn execute(
     } else {
         task.runner.network.clone()
     };
-    let mut runner_environment = proxy.as_ref().map_or_else(
-        std::collections::BTreeMap::new,
-        proxy::ModelProxy::environment,
-    );
-    if cargo_dependencies.is_some() {
-        runner_environment.insert(
-            String::from("KRAAI_SCRIPT_RUNTIME_ROOTS"),
-            std::env::join_paths(SANDBOX_CARGO_RUNTIME_ROOTS)?
-                .into_string()
-                .map_err(|value| {
-                    color_eyre::eyre::eyre!("Cargo sandbox paths contain non-UTF-8 data: {value:?}")
-                })?,
-        );
-    }
     set_progress(request, "running harness");
     let runner_outcome = run_sandboxed(SandboxRequest {
         command: runner_command.clone(),
         workspace: agent_workspace.clone(),
         timeout: Duration::from_secs(task.runner.timeout_seconds),
         network: runner_network.clone(),
-        environment: runner_environment,
+        environment: proxy.as_ref().map_or_else(
+            std::collections::BTreeMap::new,
+            proxy::ModelProxy::environment,
+        ),
         extra_programs: rust_environment
             .map(|environment| environment.programs.clone())
             .unwrap_or_default(),
