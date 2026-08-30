@@ -349,9 +349,11 @@ Suite summaries use the same useful coordinates:
 The exact relative directory is also returned as `artifact_path` in the result.
 Each completed attempt contains the manifest, structured result, append-only
 event stream, runner and grader stdout/stderr, harness metrics, credential-proxy
-events when enabled, and the submitted patch. Controller failures contain the
-same artifacts produced before the error and retain their disposable work tree
-for diagnosis.
+events when enabled, the submitted patch, and `script-executions/`. Kraai writes
+each executed script's `record.json`, `source.nu`, `stdout.bin`, and `stderr.bin`
+directly into that directory, so partial output survives runner termination.
+Controller failures contain the same artifacts produced before the error and
+retain their disposable work tree for diagnosis.
 
 The sandbox environment is cleared, but harness output can still contain data
 returned by a model or printed by the harness. Do not inject long-lived secrets
