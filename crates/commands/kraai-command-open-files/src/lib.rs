@@ -18,7 +18,7 @@ declare_kraai_command! {
     pub struct OpenFilesCommand;
     id: "kraai-open-files";
     name: "kraai-open-files";
-    description: "Pin one or more text files for fresh context injection on future turns.";
+    description: "Prefer this command when reading files for inspection or continued work. The file contents will be provided and 100% up to date every turn until you close the file. Use other methods for opening files only when file contents must be consumed immediately by a pipeline or transformed as data.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [
         {
