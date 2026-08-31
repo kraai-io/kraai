@@ -165,6 +165,12 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(system_prompt.contains("one `<tool_call>` block containing the complete script input"));
     assert!(system_prompt.contains("end the response immediately after it"));
     assert!(system_prompt.contains(
+        "convert their output to text with `lines` before applying row-oriented filters"
+    ));
+    assert!(system_prompt.contains(
+        "Do not leave a byte stream as the final pipeline value because Nushell renders it as an unhelpful hex dump"
+    ));
+    assert!(system_prompt.contains(
         "prefer it over Nushell built-ins, external programs, or ad hoc file manipulation"
     ));
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
