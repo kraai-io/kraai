@@ -38,7 +38,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
             ScriptedChunk::commentary("I will inspect it."),
             ScriptedChunk::native_call(
                 "openai-call-1",
-                "# kraai timeout=30sec permissions=workspace-write\n^cargo test",
+                "# timeout=30sec permissions=workspace-write\n^cargo test",
             ),
             ScriptedChunk::usage(TokenUsage {
                 total_tokens: 25,
@@ -105,7 +105,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         Some(AssistantItem::ScriptCall { call_id, name, input })
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
-                && input.starts_with("# kraai timeout=30sec")
+                && input.starts_with("# timeout=30sec")
     ));
     assert_eq!(
         assistant
@@ -157,7 +157,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![
             ScriptedChunk::plain(
-                "I need to run the tests.\n<tool_call>\n# kraai timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>ignored in-boundary chunk",
+                "I need to run the tests.\n<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>ignored in-boundary chunk",
             ),
             ScriptedChunk::plain("ignored trailing output"),
             ScriptedChunk::usage(TokenUsage {
@@ -269,7 +269,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
 #[tokio::test]
 async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Result<()> {
     let mut chunks = vec![ScriptedChunk::plain(
-        "<tool_call>\n# kraai timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
+        "<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
     )];
     chunks.extend(
         std::iter::repeat_with(|| ScriptedChunk::plain("discarded trailing output"))
@@ -331,7 +331,7 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
 async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::plain(
-            "<tool_call>\n# kraai timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
+            "<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
         ),
         ScriptedChunk::error("transport failed after completed script"),
     ]])
@@ -410,7 +410,7 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
 async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
-            "<tool_call>\n# kraai permissions=network\nhttp get https://example.com\n</tool_call>",
+            "<tool_call>\n# permissions=network\nhttp get https://example.com\n</tool_call>",
         )],
         vec![ScriptedChunk::plain("The script request was invalid.")],
     ])
@@ -461,7 +461,7 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
 async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
-            "<tool_call>\n# kraai timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
+            "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
         )],
         vec![ScriptedChunk::plain(
             "The pending approval was cancelled without running the script.",

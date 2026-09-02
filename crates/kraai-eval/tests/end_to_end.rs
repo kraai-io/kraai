@@ -152,6 +152,10 @@ timeout_seconds = 10
             "missing artifact {artifact}"
         );
     }
+    ensure!(
+        object.join("script-executions").is_dir(),
+        "missing script execution artifact directory"
+    );
 
     let reused = kraai_eval::run(&RunRequest {
         reuse_result: true,

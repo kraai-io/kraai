@@ -239,8 +239,9 @@ user's original config is read-only and is not modified.
 
 The task's public fixture defines `eval-coding` by extending the built-in
 `coding` profile. Its inherited environment preserves the evaluator's offline
-Cargo configuration, and its capability policy relies on the evaluator's outer
-bubblewrap sandbox as the containment boundary.
+Cargo configuration. The profile uses the exclusive `no-sandbox` capability so
+scripts run directly inside the evaluator's outer bubblewrap sandbox, which
+remains the containment boundary.
 
 Use a different explicit attempt number for each stochastic repetition. An
 existing identity is never overwritten:
@@ -349,9 +350,11 @@ Suite summaries use the same useful coordinates:
 The exact relative directory is also returned as `artifact_path` in the result.
 Each completed attempt contains the manifest, structured result, append-only
 event stream, runner and grader stdout/stderr, harness metrics, credential-proxy
-events when enabled, and the submitted patch. Controller failures contain the
-same artifacts produced before the error and retain their disposable work tree
-for diagnosis.
+events when enabled, the submitted patch, and `script-executions/`. Kraai writes
+each executed script's `record.json`, `source.nu`, `stdout.bin`, and `stderr.bin`
+directly into that directory, so partial output survives runner termination.
+Controller failures contain the same artifacts produced before the error and
+retain their disposable work tree for diagnosis.
 
 The sandbox environment is cleared, but harness output can still contain data
 returned by a model or printed by the harness. Do not inject long-lived secrets

@@ -18,6 +18,7 @@ pub(crate) struct SandboxRequest {
     pub extra_programs: Vec<PathBuf>,
     pub cargo_home: Option<PathBuf>,
     pub metrics_output: Option<PathBuf>,
+    pub script_executions_dir: Option<PathBuf>,
     pub resource_limits: Option<ResourceLimits>,
 }
 
@@ -155,6 +156,10 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
         "--dir",
         "/home/eval/.cargo",
         "--dir",
+        "/home/eval/.kraai",
+        "--dir",
+        "/home/eval/.kraai/data",
+        "--dir",
         "/runner",
         "--dir",
         "/run",
@@ -233,6 +238,14 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
             String::from("--setenv"),
             String::from("KRAAI_EVAL_METRICS_PATH"),
             String::from(sandbox_metrics_path),
+        ]);
+    }
+    if let Some(script_executions_dir) = &request.script_executions_dir {
+        let script_executions_dir = script_executions_dir.canonicalize()?;
+        args.extend([
+            String::from("--bind"),
+            script_executions_dir.to_string_lossy().into_owned(),
+            String::from("/home/eval/.kraai/data/executions"),
         ]);
     }
     for root in ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl/certs"] {
@@ -401,6 +414,7 @@ mod tests {
             extra_programs: Vec::new(),
             cargo_home: None,
             metrics_output: None,
+            script_executions_dir: None,
             resource_limits: None,
         })?;
         ensure!(outcome.success(), "sandbox did not isolate environment");
@@ -438,10 +452,65 @@ mod tests {
             extra_programs: Vec::new(),
             cargo_home: None,
             metrics_output: None,
+            script_executions_dir: None,
             resource_limits: None,
         })?;
         ensure!(outcome.success(), "sandbox CA bundle was not readable");
         fs::remove_dir_all(workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_persists_script_execution_artifacts() -> Result<()> {
+        let Some(shell) = find_program("sh") else {
+            return Ok(());
+        };
+        if find_program("bwrap").is_none() {
+            return Ok(());
+        }
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-script-output-{}",
+            ulid::Ulid::generate()
+        ));
+        let workspace = root.join("workspace");
+        let executions = root.join("script-executions");
+        fs::create_dir_all(workspace.join(".git"))?;
+        fs::create_dir_all(&executions)?;
+        let outcome = run_sandboxed(SandboxRequest {
+            command: vec![
+                shell.to_string_lossy().into_owned(),
+                String::from("-c"),
+                String::from(
+                    "printf stdout > \"$HOME/.kraai/data/executions/stdout.bin\" && printf stderr > \"$HOME/.kraai/data/executions/stderr.bin\"",
+                ),
+            ],
+            workspace: workspace.clone(),
+            timeout: Duration::from_secs(5),
+            network: NetworkPolicy::Disabled,
+            environment: BTreeMap::new(),
+            extra_programs: Vec::new(),
+            cargo_home: None,
+            metrics_output: None,
+            script_executions_dir: Some(executions.clone()),
+            resource_limits: None,
+        })?;
+        ensure!(
+            outcome.success(),
+            "sandbox command failed: exit_code={:?}, timed_out={}, stdout={}, stderr={}",
+            outcome.exit_code,
+            outcome.timed_out,
+            String::from_utf8_lossy(&outcome.stdout),
+            String::from_utf8_lossy(&outcome.stderr)
+        );
+        ensure!(
+            fs::read(executions.join("stdout.bin"))? == b"stdout",
+            "sandbox stdout artifact was not persisted"
+        );
+        ensure!(
+            fs::read(executions.join("stderr.bin"))? == b"stderr",
+            "sandbox stderr artifact was not persisted"
+        );
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }

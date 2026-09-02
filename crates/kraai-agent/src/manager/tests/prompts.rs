@@ -164,7 +164,15 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(protocol_offset < first_tool_offset);
     assert!(system_prompt.contains("one `<tool_call>` block containing the complete script input"));
     assert!(system_prompt.contains("end the response immediately after it"));
-
+    assert!(system_prompt.contains(
+        "convert their output to text with `lines` before applying row-oriented filters"
+    ));
+    assert!(system_prompt.contains(
+        "Do not leave a byte stream as the final pipeline value because Nushell renders it as an unhelpful hex dump"
+    ));
+    assert!(system_prompt.contains(
+        "prefer it over Nushell built-ins, external programs, or ad hoc file manipulation"
+    ));
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
     Ok(())
@@ -194,6 +202,12 @@ async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<(
     assert!(system_prompt.contains("Lead with the result, not a recap of every step."));
     assert!(system_prompt.contains("Do not include a mandatory \"think-ahead suggestion\""));
     assert!(!system_prompt.contains("Offer at least one suggestion"));
+    assert!(system_prompt.contains(
+        "make the smallest targeted edits that express the change instead of replacing the whole file"
+    ));
+    assert!(system_prompt.contains(
+        "Each range is inclusive, must exist in the current file, and its old_text must exactly match"
+    ));
 
     cleanup_dir(data_dir).await;
     Ok(())

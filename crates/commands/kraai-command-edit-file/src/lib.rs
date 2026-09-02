@@ -15,7 +15,7 @@ declare_kraai_command! {
     pub struct EditFileCommand;
     id: "kraai-edit-file";
     name: "kraai-edit-file";
-    description: "Create a text file or atomically apply exact line-ranged replacements.";
+    description: "Create a text file or atomically apply exact line-ranged replacements. Prefer this command over ad hoc file rewriting. For an existing file, make the smallest targeted edits that express the change instead of replacing the whole file. Each range is inclusive, must exist in the current file, and its old_text must exactly match that range; include multiple edit records in one call when useful.";
     signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
     examples: [
         {

@@ -520,6 +520,8 @@ fn execute(
     )?;
     let harness_metrics_path = artifact_dir.join("harness-metrics.json");
     File::create(&harness_metrics_path)?;
+    let script_executions_dir = artifact_dir.join("script-executions");
+    fs::create_dir(&script_executions_dir)?;
     events.write(
         "runner_started",
         serde_json::json!({"command": runner_command}),
@@ -546,6 +548,7 @@ fn execute(
             .as_ref()
             .map(|dependencies| dependencies.home.clone()),
         metrics_output: Some(harness_metrics_path.clone()),
+        script_executions_dir: Some(script_executions_dir),
         resource_limits: Some(resource_limits(task)),
     })?;
     let proxy_record = proxy.as_ref().map(proxy::ModelProxy::record);
@@ -615,6 +618,7 @@ fn execute(
                     .as_ref()
                     .map(|dependencies| dependencies.home.clone()),
                 metrics_output: None,
+                script_executions_dir: None,
                 resource_limits: Some(resource_limits(task)),
             })?;
             write_process_logs(artifact_dir, &format!("grader-{index}"), &outcome)?;

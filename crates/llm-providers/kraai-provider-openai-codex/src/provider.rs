@@ -1199,7 +1199,7 @@ mod tests {
     async fn responses_stream_preserves_native_custom_call_identity_and_input() {
         let source = stream::iter(vec![
             Ok(SseEvent::Data(String::from(
-                r##"{"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"item-1","call_id":"call-123","name":"kraai_nushell","input":"# kraai timeout=30sec\nls"}}"##,
+                r##"{"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"item-1","call_id":"call-123","name":"kraai_nushell","input":"# timeout=30sec\nls"}}"##,
             ))),
             Ok(SseEvent::Data(String::from(
                 r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
@@ -1214,7 +1214,7 @@ mod tests {
             Some(Ok(ProviderStreamEvent::ScriptCall { call_id, name, input }))
                 if call_id.as_str() == "call-123"
                     && name == "kraai_nushell"
-                    && input == "# kraai timeout=30sec\nls"
+                    && input == "# timeout=30sec\nls"
         ));
         assert!(matches!(
             events.get(1),

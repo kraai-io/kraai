@@ -7,6 +7,6 @@ index 0000000..01c634a
 +[[profiles]]
 +id = "eval-coding"
 +extends = "coding"
-+capabilities = ["workspace-read", "workspace-write"]
++capabilities = ["no-sandbox"]
 +escalation_policy = "allow"
 +environment = "inherit"

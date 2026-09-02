@@ -5,7 +5,7 @@ use kraai_types::{SandboxCapabilities, SandboxCapability};
 use crate::duration::parse_duration;
 use crate::{ProtocolError, ScriptBlock};
 
-pub const SCRIPT_METADATA_PREFIX: &str = "# kraai";
+pub const SCRIPT_METADATA_PREFIX: &str = "#";
 
 pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     let header_start = input
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn parses_universal_nushell_metadata_header() {
         let script = parse_script_input(
-            "# kraai timeout=1.5sec permissions=workspace-write,network\nls | get name",
+            "# timeout=1.5sec permissions=workspace-write,network\nls | get name",
         )
         .expect("valid script input");
 
@@ -136,8 +136,9 @@ mod tests {
 
     #[test]
     fn rejects_missing_duplicate_and_unknown_metadata() {
-        assert!(parse_script_input("# kraai\necho hi").is_err());
-        assert!(parse_script_input("# kraai timeout=1sec timeout=2sec\necho hi").is_err());
-        assert!(parse_script_input("# kraai timeout=1sec mystery=x\necho hi").is_err());
+        assert!(parse_script_input("#\necho hi").is_err());
+        assert!(parse_script_input("# kraai timeout=1sec\necho hi").is_err());
+        assert!(parse_script_input("# timeout=1sec timeout=2sec\necho hi").is_err());
+        assert!(parse_script_input("# timeout=1sec mystery=x\necho hi").is_err());
     }
 }

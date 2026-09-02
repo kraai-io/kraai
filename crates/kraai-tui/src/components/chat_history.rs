@@ -687,7 +687,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\n# kraai timeout=10sec permissions=workspace-read\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
+            "<tool_call>\n# timeout=10sec permissions=workspace-read\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -708,7 +708,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "before\n<tool_call>\n# kraai timeout=1sec\nls\n</tool_call>\nafter",
+            "before\n<tool_call>\n# timeout=1sec\nls\n</tool_call>\nafter",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -725,7 +725,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\n# kraai timeout=1sec\nthis is not parsed here\n</tool_call>",
+            "<tool_call>\n# timeout=1sec\nthis is not parsed here\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -820,7 +820,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\n# kraai timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>",
+            "<tool_call>\n# timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -835,7 +835,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\n# kraai timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
+            "<tool_call>\n# timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -846,7 +846,7 @@ mod tests {
             rendered,
             vec![
                 " • Nushell",
-                "     # kraai timeout=5sec",
+                "     # timeout=5sec",
                 "     kraai-open-files /tmp/a.txt"
             ]
         );

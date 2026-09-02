@@ -52,14 +52,14 @@ mod tests {
                 AssistantItem::ScriptCall {
                     call_id: ToolCallId::new("call-1"),
                     name: "kraai_nushell".to_string(),
-                    input: "# kraai timeout=10sec\nls".to_string(),
+                    input: "# timeout=10sec\nls".to_string(),
                 },
             ],
         }]);
 
         assert_eq!(
             normalized.first().map(|message| message.content.as_str()),
-            Some("I will inspect it.\n\n<tool_call>\n# kraai timeout=10sec\nls\n</tool_call>")
+            Some("I will inspect it.\n\n<tool_call>\n# timeout=10sec\nls\n</tool_call>")
         );
     }
 }
