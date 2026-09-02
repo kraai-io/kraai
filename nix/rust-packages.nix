@@ -48,21 +48,6 @@
           pkgs.buildRustCrate.override {
             cargo = rustToolchain;
             rustc = rustToolchain;
-            defaultCrateOverrides =
-              pkgs.defaultCrateOverrides
-              // {
-                aws-lc-sys = prev: let
-                  defaults = pkgs.defaultCrateOverrides.aws-lc-sys prev;
-                in
-                  defaults
-                  // {
-                    env =
-                      (defaults.env or {})
-                      // {
-                        CFLAGS = "-fdebug-types-section";
-                      };
-                  };
-              };
           };
       };
 

@@ -20,30 +20,30 @@ hidden_patch = "hidden.patch"
 
 [[grader.commands]]
 command = [
-    "cargo",
-    "test",
-    "-p",
-    "kraai-tool-open-file",
-    "--test",
-    "eval_plural_paths",
+  "cargo",
+  "test",
+  "-p",
+  "kraai-tool-open-file",
+  "--test",
+  "eval_plural_paths",
 ]
 timeout_seconds = 600
 
 [[grader.commands]]
 command = [
-    "cargo",
-    "test",
-    "-p",
-    "kraai-tool-close-file",
-    "--test",
-    "eval_plural_paths",
+  "cargo",
+  "test",
+  "-p",
+  "kraai-tool-close-file",
+  "--test",
+  "eval_plural_paths",
 ]
 timeout_seconds = 600
 
 [[grader.commands]]
 command = [
-    "sh",
-    "-c",
-    "! git grep -n -E 'ToolId::new\\(\"(open_file|close_file)\"\\)|name: \"(open_file|close_file)\"' -- crates/kraai-agent crates/tools/kraai-tool-open-file crates/tools/kraai-tool-close-file",
+  "sh",
+  "-c",
+  "! git grep -n -E 'ToolId::new\\(\"(open_file|close_file)\"\\)|name: \"(open_file|close_file)\"' -- crates/kraai-agent crates/tools/kraai-tool-open-file crates/tools/kraai-tool-close-file",
 ]
 timeout_seconds = 30
