@@ -148,7 +148,7 @@ fn render_command_prompt(command_ids: &[String]) -> Result<String> {
         return Ok(String::new());
     }
     let mut sections = vec![String::from(
-        "# Kraai Commands\nThese native commands are available only in this profile. They execute inline and produce ordinary structured Nushell pipeline values. When a listed Kraai command supports an operation, prefer it over Nushell built-ins, external programs, or ad hoc file manipulation. Use another mechanism only when no listed Kraai command fits the operation.",
+        "# Kraai Commands\nThey execute inline and produce ordinary structured Nushell pipeline values. When a listed Kraai command supports an operation, prefer it over Nushell built-ins, external programs, or ad hoc file manipulation. Use another mechanism only when no listed Kraai command fits the operation.",
     )];
     for command_id in command_ids {
         let metadata = command_metadata(command_id)
