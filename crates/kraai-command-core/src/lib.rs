@@ -226,7 +226,7 @@ macro_rules! declare_kraai_command {
                             description: $example_description,
                             script: $script,
                             script_input: concat!(
-                                "# kraai timeout=",
+                                "# timeout=",
                                 $timeout,
                                 "\n",
                                 $script,

@@ -183,7 +183,7 @@ fn parse_open_tag(tag: &str) -> Result<(), ProtocolError> {
         Ok(())
     } else {
         Err(ProtocolError::MalformedStartTag(String::from(
-            "attributes are not allowed; put timeout and permissions in the # kraai header",
+            "attributes are not allowed; put timeout and permissions in the script metadata comment",
         )))
     }
 }
@@ -224,7 +224,7 @@ mod tests {
     fn streams_preamble_and_discards_same_chunk_trailing_output() {
         let mut parser = ScriptProtocolParser::new();
         let result = parser.ingest(
-            "I will inspect it.\n<tool_call>\n# kraai timeout=30sec\nls | where size > 0\n</tool_call>\nwaiting",
+            "I will inspect it.\n<tool_call>\n# timeout=30sec\nls | where size > 0\n</tool_call>\nwaiting",
         );
         assert!(result.should_stop);
         assert_eq!(result.accepted, "I will inspect it.\n");
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn delimiter_and_attribute_splits_are_equivalent_at_every_boundary() {
-        let input = "Préamble 🦀\n<tool_call>\n# kraai timeout=1.5sec permissions=workspace-write,network\n[1 2] | math sum\n</tool_call>ignored";
+        let input = "Préamble 🦀\n<tool_call>\n# timeout=1.5sec permissions=workspace-write,network\n[1 2] | math sum\n</tool_call>ignored";
         let boundaries = input
             .char_indices()
             .map(|(index, _)| index)
@@ -269,13 +269,12 @@ mod tests {
     #[test]
     fn malformed_and_incomplete_scripts_fail_closed() {
         let mut parser = ScriptProtocolParser::new();
-        let result =
-            parser.ingest("<tool_call>\n# kraai permissions=network\necho hi\n</tool_call>");
+        let result = parser.ingest("<tool_call>\n# permissions=network\necho hi\n</tool_call>");
         assert_eq!(result.error, Some(ProtocolError::MissingTimeout));
         assert!(result.should_stop);
 
         let mut parser = ScriptProtocolParser::new();
-        let first = parser.ingest("<tool_call>\n# kraai timeout=1sec\necho hi");
+        let first = parser.ingest("<tool_call>\n# timeout=1sec\necho hi");
         assert!(first.error.is_none());
         let end = parser.finish();
         assert_eq!(end.error, Some(ProtocolError::IncompleteScript));
@@ -295,7 +294,7 @@ mod tests {
 
     #[test]
     fn tool_calls_inside_think_blocks_are_inert_across_every_split() {
-        let input = "<think>\n<tool_call timeout=\"1sec\">bad\n</tool_call>\n</think>\n<tool_call>\n# kraai timeout=2sec\ngood\n</tool_call>ignored";
+        let input = "<think>\n<tool_call timeout=\"1sec\">bad\n</tool_call>\n</think>\n<tool_call>\n# timeout=2sec\ngood\n</tool_call>ignored";
         for split in input
             .char_indices()
             .map(|(index, _)| index)

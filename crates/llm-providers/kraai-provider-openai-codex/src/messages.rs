@@ -167,7 +167,7 @@ mod tests {
                     AssistantItem::ScriptCall {
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".to_string(),
-                        input: "# kraai timeout=10sec\nls".to_string(),
+                        input: "# timeout=10sec\nls".to_string(),
                     },
                 ],
             },
@@ -191,7 +191,7 @@ mod tests {
                     "type": "custom_tool_call",
                     "call_id": "call-1",
                     "name": "kraai_nushell",
-                    "input": "# kraai timeout=10sec\nls"
+                    "input": "# timeout=10sec\nls"
                 },
                 {
                     "type": "custom_tool_call_output",

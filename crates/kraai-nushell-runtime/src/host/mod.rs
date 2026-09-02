@@ -63,8 +63,9 @@ fn build_engine(
     request: &HostRequest,
     commands: Vec<Box<dyn nu_protocol::engine::Command>>,
 ) -> Result<EngineState, HostError> {
-    let mut engine_state =
-        nu_command::add_shell_command_context(nu_cmd_lang::create_default_context());
+    let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
+        nu_cmd_lang::create_default_context(),
+    ));
     if let Ok((config_dirs, _warnings)) =
         nu_config::resolve_paths(&nu_config::SystemEnv, &nu_config::CliOverrides::default())
     {

@@ -2,10 +2,10 @@ use super::*;
 use kraai_provider_core::ScriptToolTransport;
 
 const SCRIPT_EXECUTION_PROMPT: &str = r#"# Script Execution
-You have a clean Nushell environment for inspecting and changing the workspace. Each invocation contains one complete Nushell script and must start with a `# kraai` metadata comment. The comment requires a positive Nushell duration in its `timeout` field. Request capability additions only when this script needs them, using an optional comma-separated `permissions` field. Available capability names are `workspace-read`, `host-read`, `workspace-write`, `metadata-write`, `host-write`, `network`, and `no-sandbox`.
+You have a clean Nushell environment for inspecting and changing the workspace. Each invocation contains one complete Nushell script and must start with a metadata comment such as `# timeout=30sec`. The comment requires a positive Nushell duration in its `timeout` field. Request capability additions only when this script needs them, using an optional comma-separated `permissions` field. Available capability names are `workspace-read`, `host-read`, `workspace-write`, `metadata-write`, `host-write`, `network`, and `no-sandbox`.
 
 ```nu
-# kraai timeout=30sec permissions=workspace-write,network
+# timeout=30sec permissions=workspace-write,network
 let packages = cargo metadata --no-deps --format-version 1 | from json
 $packages.packages | select name version
 ```
@@ -16,7 +16,7 @@ const TEXT_ENVELOPE_PROMPT: &str = r#"Invoke Nushell by emitting one `<tool_call
 
 ```xml
 <tool_call>
-# kraai timeout=30sec
+# timeout=30sec
 ls
 </tool_call>
 ```"#;

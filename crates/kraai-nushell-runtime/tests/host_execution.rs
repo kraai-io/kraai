@@ -110,6 +110,36 @@ async fn executes_structured_nushell_through_the_private_transport() {
 }
 
 #[tokio::test]
+async fn exposes_print_from_the_nushell_cli_context() {
+    let workspace = TestWorkspace::new();
+    let result = execute(
+        plan(
+            b"print 'stdout-value'; print --stderr 'stderr-value'".to_vec(),
+            &workspace,
+        ),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("host execution failed: {error}"));
+
+    assert_eq!(
+        result.output.termination,
+        Termination::Exited { code: Some(0) },
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.output.stdout),
+        String::from_utf8_lossy(&result.output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.output.stdout),
+        "stdout-value\n"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.output.stderr),
+        "stderr-value\n"
+    );
+}
+
+#[tokio::test]
 async fn invalid_source_is_reported_by_nushell_without_partial_evaluation() {
     let workspace = TestWorkspace::new();
     let result = execute(
