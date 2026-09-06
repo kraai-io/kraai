@@ -112,6 +112,7 @@ impl App {
             state,
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
+            last_runtime_event_sequence: 0,
             event_lag_session_resync_pending: false,
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
@@ -300,7 +301,13 @@ impl App {
         message: RuntimeEventBridgeMessage,
     ) {
         match message {
-            RuntimeEventBridgeMessage::Event(event) => self.handle_runtime_event(event),
+            RuntimeEventBridgeMessage::Event(event) => {
+                if event.sequence <= self.last_runtime_event_sequence {
+                    return;
+                }
+                self.last_runtime_event_sequence = event.sequence;
+                self.handle_runtime_event(event.event);
+            }
             RuntimeEventBridgeMessage::Lagged(skipped) => {
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;

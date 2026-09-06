@@ -38,7 +38,7 @@ pub fn run_host_process() -> i32 {
         transport,
     ));
     let context = kraai_command_core::CommandContext::new(effect_client);
-    let registry = match production_command_registry(context) {
+    let registry = match kraai_command_catalog::command_registry(context) {
         Ok(registry) => registry,
         Err(error) => {
             report_host_error(format!("invalid built-in command registry: {error}"));
@@ -79,13 +79,4 @@ fn host_transport_path() -> Result<std::path::PathBuf, String> {
         return Err(String::from("unexpected host arguments"));
     }
     Ok(path.into())
-}
-
-fn production_command_registry(
-    context: kraai_command_core::CommandContext,
-) -> Result<kraai_command_core::CommandRegistry, kraai_command_core::CommandRegistryError> {
-    let open_files = kraai_command_open_files::OpenFilesCommand::registration(context.clone())?;
-    let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
-    let edit_file = kraai_command_edit_file::EditFileCommand::registration(context)?;
-    kraai_command_core::CommandRegistry::new([open_files, close_files, edit_file])
 }

@@ -14,9 +14,9 @@ use crate::components::{ChatHistory, RenderedLine};
 
 use super::auth::ProviderAuthStatus;
 use super::types::{
-    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, ExitUsageTotals, OptimisticMessage,
-    PendingSubmit, ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase,
-    SettingsFocus, UiMode, default_agent_profiles,
+    ActiveSettingsEditor, ExitUsageTotals, OptimisticMessage, PendingSubmit,
+    ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase, SettingsFocus,
+    UiMode,
 };
 
 pub(super) struct AppState {
@@ -112,10 +112,10 @@ impl Default for AppState {
             turn_timer: TurnTimer::default(),
             statusline_animation_frame: 0,
             models_by_provider: HashMap::new(),
-            agent_profiles: default_agent_profiles(),
+            agent_profiles: Vec::new(),
             agent_profile_warnings: Vec::new(),
             provider_definitions: Vec::new(),
-            selected_profile_id: Some(String::from(DEFAULT_AGENT_PROFILE_ID)),
+            selected_profile_id: None,
             profile_locked: false,
             profile_lock_stale_after_terminal_event: false,
             selected_provider_id: None,
@@ -170,8 +170,7 @@ impl AppState {
             selected_model_id: startup_options.model_id.or(workspace_preferences.model_id),
             selected_profile_id: startup_options
                 .agent_profile_id
-                .or(workspace_preferences.agent_profile_id)
-                .or_else(|| Some(String::from(DEFAULT_AGENT_PROFILE_ID))),
+                .or(workspace_preferences.agent_profile_id),
             ..Self::default()
         }
     }

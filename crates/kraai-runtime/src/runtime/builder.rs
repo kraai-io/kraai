@@ -7,17 +7,52 @@ use kraai_persistence::agent_state_root;
 use kraai_provider_core::{ProviderManager, ProviderRegistry};
 use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
 use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexFactory};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
-use crate::handle::{Command, RuntimeHandle, RuntimeLifecycle};
+use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle};
 use crate::settings::resolve_provider_config_path;
 
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     provider_config_path: Option<PathBuf>,
+}
+
+struct RuntimeParts {
+    handle: RuntimeHandle,
+    lifecycle: Arc<RuntimeLifecycle>,
+    event_tx: RuntimeEventSender,
+    command_tx: mpsc::Sender<Command>,
+    command_rx: mpsc::Receiver<Command>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+}
+
+impl RuntimeParts {
+    fn new() -> Self {
+        let (command_tx, command_rx) = mpsc::channel(100);
+        let event_tx = RuntimeEventSender::new(1024);
+        let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let lifecycle = Arc::new(RuntimeLifecycle::new(shutdown_tx));
+        let handle = RuntimeHandle {
+            command_tx: command_tx.clone(),
+            event_tx: event_tx.clone(),
+            lifecycle: Some(lifecycle.clone()),
+            startup_rx,
+        };
+        Self {
+            handle,
+            lifecycle,
+            event_tx,
+            command_tx,
+            command_rx,
+            shutdown_rx,
+            startup_tx,
+        }
+    }
 }
 
 impl RuntimeBuilder {
@@ -38,20 +73,16 @@ impl RuntimeBuilder {
     /// This spawns the runtime in a background thread and returns a handle
     /// to send commands.
     pub fn build(self) -> RuntimeHandle {
-        let (command_tx, command_rx) = mpsc::channel(100);
-        let (event_tx, _) = broadcast::channel(1024);
-        let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let lifecycle = Arc::new(RuntimeLifecycle::new(shutdown_tx));
-        let handle = RuntimeHandle {
+        let RuntimeParts {
+            handle,
+            lifecycle,
+            event_tx,
             command_tx,
-            event_tx: event_tx.clone(),
-            lifecycle: Some(lifecycle.clone()),
-            startup_rx,
-        };
-        let command_tx_for_runtime = handle.command_tx.clone();
-
-        let provider_config_path = self.provider_config_path.clone();
+            command_rx,
+            shutdown_rx,
+            startup_tx,
+        } = RuntimeParts::new();
+        let provider_config_path = self.provider_config_path;
         let thread_startup_tx = startup_tx.clone();
 
         let thread = std::thread::spawn(move || {
@@ -63,39 +94,107 @@ impl RuntimeBuilder {
                     )));
                     emit_event(
                         &event_tx,
-                        Event::Error(format!("Failed to create tokio runtime: {error}")),
+                        Event::ServiceError {
+                            error: crate::RuntimeError::internal(format!(
+                                "Failed to create tokio runtime: {error}"
+                            )),
+                        },
                     );
                     return;
                 }
             };
 
-            if let Err(error) = rt.block_on(Self::run_background(
-                event_tx.clone(),
-                command_tx_for_runtime,
+            rt.block_on(Self::run_hosted(
+                event_tx,
+                command_tx,
                 command_rx,
                 shutdown_rx,
                 provider_config_path,
-                thread_startup_tx.clone(),
-            )) {
-                let error = format!("{error:#}");
-                thread_startup_tx.send_replace(RuntimeStartupState::Failed(error.clone()));
-                emit_event(&event_tx, Event::Error(error));
-            }
+                thread_startup_tx,
+                true,
+            ));
         });
         lifecycle.set_thread(thread);
 
         handle
     }
 
-    async fn run_background(
-        event_tx: broadcast::Sender<Event>,
+    /// Build the runtime as a task on an existing Tokio runtime.
+    ///
+    /// This is the hosting mode for servers and other applications that already
+    /// own their executor and tracing subscriber.
+    pub fn build_on(self, runtime: &tokio::runtime::Handle) -> RuntimeHandle {
+        let RuntimeParts {
+            handle,
+            lifecycle,
+            event_tx,
+            command_tx,
+            command_rx,
+            shutdown_rx,
+            startup_tx,
+        } = RuntimeParts::new();
+        let provider_config_path = self.provider_config_path;
+        let task_startup_tx = startup_tx.clone();
+        let task = runtime.spawn(async move {
+            Self::run_hosted(
+                event_tx,
+                command_tx,
+                command_rx,
+                shutdown_rx,
+                provider_config_path,
+                task_startup_tx,
+                false,
+            )
+            .await;
+        });
+        lifecycle.set_task(task);
+
+        handle
+    }
+
+    async fn run_hosted(
+        event_tx: RuntimeEventSender,
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
         provider_config_path_override: Option<PathBuf>,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+        initialize_tracing: bool,
+    ) {
+        if let Err(error) = Self::run_background(
+            event_tx.clone(),
+            command_tx,
+            command_rx,
+            shutdown_rx,
+            provider_config_path_override,
+            startup_tx.clone(),
+            initialize_tracing,
+        )
+        .await
+        {
+            let error = format!("{error:#}");
+            startup_tx.send_replace(RuntimeStartupState::Failed(error.clone()));
+            emit_event(
+                &event_tx,
+                Event::ServiceError {
+                    error: crate::RuntimeError::internal(error),
+                },
+            );
+        }
+    }
+
+    async fn run_background(
+        event_tx: RuntimeEventSender,
+        command_tx: mpsc::Sender<Command>,
+        command_rx: mpsc::Receiver<Command>,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        provider_config_path_override: Option<PathBuf>,
+        startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+        initialize_tracing: bool,
     ) -> Result<()> {
-        Self::init_tracing()?;
+        if initialize_tracing {
+            Self::init_tracing()?;
+        }
 
         let (message_store, session_store, execution_store, context_state_store) =
             kraai_persistence::init()
@@ -113,7 +212,7 @@ impl RuntimeBuilder {
         let registry = build_provider_registry(openai_codex_auth.clone())?;
         let provider_config_path = resolve_provider_config_path(provider_config_path_override)?;
 
-        let agent_manager = Arc::new(Mutex::new(AgentManager::new(
+        let agent_manager = Arc::new(RwLock::new(AgentManager::new(
             providers,
             default_workspace_dir,
             message_store,

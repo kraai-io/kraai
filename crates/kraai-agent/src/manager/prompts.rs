@@ -151,7 +151,7 @@ fn render_command_prompt(command_ids: &[String]) -> Result<String> {
         "# Kraai Commands\nThey execute inline and produce ordinary structured Nushell pipeline values. When a listed Kraai command supports an operation, prefer it over Nushell built-ins, external programs, or ad hoc file manipulation. Use another mechanism only when no listed Kraai command fits the operation.",
     )];
     for command_id in command_ids {
-        let metadata = command_metadata(command_id)
+        let metadata = kraai_command_catalog::command_metadata(command_id)
             .ok_or_else(|| eyre!("Profile references unavailable command: {command_id}"))?;
         let mut section = format!(
             "## {}\n{}\n\nSignature: `{}`",
@@ -170,13 +170,4 @@ fn render_command_prompt(command_ids: &[String]) -> Result<String> {
         sections.push(section);
     }
     Ok(sections.join("\n\n"))
-}
-
-fn command_metadata(command_id: &str) -> Option<&'static kraai_command_core::CommandMetadata> {
-    match command_id {
-        "kraai-open-files" => Some(&kraai_command_open_files::OpenFilesCommand::METADATA),
-        "kraai-close-files" => Some(&kraai_command_close_files::CloseFilesCommand::METADATA),
-        "kraai-edit-file" => Some(&kraai_command_edit_file::EditFileCommand::METADATA),
-        _ => None,
-    }
 }

@@ -4,6 +4,7 @@ members = [
   "crates/commands/kraai-command-open-files",
   "crates/commands/kraai-command-close-files",
   "crates/commands/kraai-command-edit-file",
+  "crates/kraai-command-catalog",
   "crates/kraai-command-core",
   "crates/kraai-nushell-runtime",
   "crates/kraai-sandbox",
@@ -33,6 +34,7 @@ strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
 kraai-agent = { path = "crates/kraai-agent" }
+kraai-command-catalog = { path = "crates/kraai-command-catalog" }
 kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
 kraai-command-core = { path = "crates/kraai-command-core" }
 kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }

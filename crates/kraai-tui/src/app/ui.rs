@@ -20,7 +20,6 @@ mod script_approval;
 mod status;
 use command_popup::render_command_popup;
 use menus::{render_agent_menu, render_help_menu, render_model_menu, render_sessions_menu};
-pub(super) use providers::parse_settings_errors;
 use providers::render_providers_menu;
 use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;

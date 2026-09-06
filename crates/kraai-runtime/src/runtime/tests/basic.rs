@@ -8,8 +8,8 @@ use tokio::sync::broadcast;
 use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
-use crate::handle::{Command, RuntimeLifecycle};
-use crate::{Event, RuntimeHandle, RuntimeStartupState};
+use crate::handle::{Command, RuntimeEventSender, RuntimeLifecycle};
+use crate::{Event, RuntimeEvent, RuntimeHandle, RuntimeStartupState};
 
 #[test]
 fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
@@ -47,7 +47,7 @@ async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> 
 #[tokio::test]
 async fn startup_state_remains_observable_after_initial_result() -> Result<()> {
     let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
-    let (event_tx, _) = tokio::sync::broadcast::channel(1);
+    let event_tx = RuntimeEventSender::new(1);
     let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
     startup_tx.send_replace(RuntimeStartupState::Failed(String::from("initial failure")));
     let handle = RuntimeHandle {
@@ -73,7 +73,7 @@ async fn startup_state_remains_observable_after_initial_result() -> Result<()> {
 #[tokio::test]
 async fn dropping_last_handle_signals_shutdown_when_command_queue_is_full() {
     let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
-    let (event_tx, _) = tokio::sync::broadcast::channel(1);
+    let event_tx = RuntimeEventSender::new(1);
     let (_startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     command_tx
@@ -183,15 +183,15 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         .await?;
 
     async fn collect_events(
-        receiver: &mut broadcast::Receiver<Event>,
+        receiver: &mut broadcast::Receiver<RuntimeEvent>,
         session_id: &str,
-    ) -> Result<Vec<Event>> {
+    ) -> Result<Vec<RuntimeEvent>> {
         let mut events = Vec::new();
         loop {
             match receiver.recv().await {
                 Ok(event) => {
                     let is_complete = matches!(
-                        &event,
+                        &event.event,
                         Event::StreamComplete {
                             session_id: completed_session,
                             ..
@@ -224,9 +224,14 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
     .map_err(|_| eyre!("timed out waiting for second subscriber events"))??;
 
     for events in [&first_events, &second_events] {
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
         assert!(events.iter().any(|event| {
             matches!(
-                event,
+                &event.event,
                 Event::StreamStart {
                     session_id: started_session,
                     ..
@@ -235,7 +240,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }));
         assert!(events.iter().any(|event| {
             matches!(
-                event,
+                &event.event,
                 Event::StreamChunk {
                     session_id: chunk_session,
                     chunk,
@@ -245,7 +250,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }));
         assert!(events.iter().any(|event| {
             matches!(
-                event,
+                &event.event,
                 Event::StreamComplete {
                     session_id: completed_session,
                     ..

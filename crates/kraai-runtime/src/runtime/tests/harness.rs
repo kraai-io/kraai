@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
 use super::super::core::RuntimeCore;
-use crate::handle::Command;
+use crate::handle::{Command, RuntimeEventSender};
 use crate::{Event, EventCallback, RuntimeHandle};
 
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
@@ -339,7 +339,7 @@ path = \"inherit\"\n",
         let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
         let context_state_store =
             Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
-        let agent_manager = Arc::new(Mutex::new(AgentManager::new(
+        let agent_manager = Arc::new(tokio::sync::RwLock::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
             message_store,
@@ -355,7 +355,7 @@ path = \"inherit\"\n",
         };
         let events = EventCollector::default();
         let (command_tx, mut command_rx) = mpsc::channel(32);
-        let (event_tx, _) = broadcast::channel(1024);
+        let event_tx = RuntimeEventSender::new(1024);
         let (startup_tx, startup_rx) =
             tokio::sync::watch::channel(crate::RuntimeStartupState::Ready);
         let handle = RuntimeHandle {
@@ -386,7 +386,7 @@ path = \"inherit\"\n",
         let event_task = tokio::spawn(async move {
             loop {
                 match event_rx.recv().await {
-                    Ok(event) => events_for_task.on_event(event),
+                    Ok(event) => events_for_task.on_event(event.event),
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -398,12 +398,12 @@ path = \"inherit\"\n",
                 if let Command::Shutdown { response } = command {
                     runtime_for_task.stop_active_work().await;
                     if let Some(response) = response {
-                        let _ = response.send(());
+                        let _ = response.send(Ok(()));
                     }
                     break;
                 }
                 if let Err(error) = runtime_for_task.handle_command(command).await {
-                    runtime_for_task.send_error(error.to_string());
+                    runtime_for_task.send_service_error(error);
                 }
             }
         });

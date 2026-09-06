@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use kraai_runtime::{FieldDefinition, ModelSettings, ProviderSettings};
 use ratatui::{
     buffer::Buffer,
@@ -120,20 +118,6 @@ fn settings_model_field_value(model: &ModelSettings, field: &SettingsModelField)
         SettingsModelField::Id => model.id.clone(),
         SettingsModelField::Value(key) => field_value_display(&model.values, key),
     }
-}
-
-pub(in crate::app) fn parse_settings_errors(message: &str) -> HashMap<String, String> {
-    let mut errors = HashMap::new();
-    for line in message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        if let Some((field, error)) = line.split_once(": ") {
-            errors.insert(field.to_string(), error.to_string());
-        }
-    }
-    errors
 }
 
 pub(super) fn render_providers_menu(state: &AppState, area: Rect, buf: &mut Buffer) {

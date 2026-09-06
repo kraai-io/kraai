@@ -70,8 +70,10 @@ impl App {
 
         let creation_id = self.state.next_session_creation_id;
         self.state.next_session_creation_id = creation_id.wrapping_add(1);
-        if self.request(RuntimeRequest::CreateSession { creation_id })
-            == RuntimeRequestDelivery::Disconnected
+        if self.request(RuntimeRequest::CreateSession {
+            creation_id,
+            profile_id: self.state.selected_profile_id.clone(),
+        }) == RuntimeRequestDelivery::Disconnected
         {
             self.set_input_text(raw_input);
             return;
@@ -109,21 +111,9 @@ impl App {
                 }
                 self.state.mode = UiMode::AgentMenu;
                 if let Some(session_id) = self.state.current_session_id.clone() {
-                    self.request(RuntimeRequest::ListAgentProfiles { session_id });
+                    self.request(RuntimeRequest::GetSessionSnapshot { session_id });
                 } else {
-                    self.state.agent_profiles = default_agent_profiles();
-                    self.state.agent_profile_warnings.clear();
-                    if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
-                        && let Some(index) = self
-                            .state
-                            .agent_profiles
-                            .iter()
-                            .position(|profile| &profile.id == selected_profile_id)
-                    {
-                        self.state.agent_menu_index = index;
-                    } else {
-                        self.state.agent_menu_index = 0;
-                    }
+                    self.request(RuntimeRequest::GetAgentProfileCatalog);
                 }
             }
             "settings" => {
@@ -428,9 +418,6 @@ impl App {
 
     pub(super) fn sync_current_session_profile_from_sessions(&mut self) {
         let Some(session_id) = self.state.current_session_id.as_ref() else {
-            self.state
-                .selected_profile_id
-                .get_or_insert_with(|| String::from(DEFAULT_AGENT_PROFILE_ID));
             self.state.profile_locked = false;
             return;
         };

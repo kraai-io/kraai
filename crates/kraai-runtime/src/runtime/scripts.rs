@@ -18,6 +18,7 @@ use super::script_execution::{
 use super::streaming::StreamJobKind;
 use crate::api::{Event, PendingScriptInfo};
 use crate::handle::Command;
+use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
 impl RuntimeCore {
     pub(crate) async fn recover_script_executions(&self) -> Result<()> {
@@ -53,7 +54,7 @@ impl RuntimeCore {
             let result_message_id = completed.record.result_message_id.clone();
             let session_id = completed.record.session_id.clone();
             self.agent_manager
-                .lock()
+                .write()
                 .await
                 .add_script_result_to_history(
                     &session_id,
@@ -64,10 +65,10 @@ impl RuntimeCore {
                 )
                 .await?;
 
-            let tip = self.agent_manager.lock().await.get_tip(&session_id).await?;
+            let tip = self.agent_manager.read().await.get_tip(&session_id).await?;
             if tip.as_ref() == Some(&result_message_id) {
                 self.agent_manager
-                    .lock()
+                    .write()
                     .await
                     .prepare_script_recovery(&session_id, &completed.record.source_message_id)
                     .await?;
@@ -88,7 +89,7 @@ impl RuntimeCore {
         message: String,
         model_id: ModelId,
         provider_id: ProviderId,
-    ) {
+    ) -> RuntimeResult<SubmitMessageOutcome> {
         let has_queued_messages = {
             let queued = self.queued_messages.lock().await;
             queued
@@ -96,59 +97,56 @@ impl RuntimeCore {
                 .is_some_and(|queue| !queue.is_empty())
         };
         let is_turn_active = {
-            let agent = self.agent_manager.lock().await;
+            let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
         };
         if is_turn_active || has_queued_messages {
-            self.enqueue_message(
-                &session_id,
-                QueuedMessage {
-                    message,
-                    model_id,
-                    provider_id,
-                },
-            )
-            .await;
+            let position = self
+                .enqueue_message(
+                    &session_id,
+                    QueuedMessage {
+                        message,
+                        model_id,
+                        provider_id,
+                    },
+                )
+                .await;
             self.schedule_queue_drain(&session_id).await;
-            return;
+            return Ok(SubmitMessageOutcome::Queued { position });
         }
 
         let stream_request = {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             let result = agent
                 .prepare_start_stream(&session_id, message, model_id, provider_id)
                 .await;
             let providers = agent.cloned_provider_manager();
             drop(agent);
-            match result {
-                Ok(result) => Some((providers, result)),
-                Err(error) => {
-                    self.send_event(Event::Error(error.to_string()));
-                    None
-                }
-            }
+            result
+                .map(|result| (providers, result))
+                .map_err(RuntimeError::internal)?
         };
 
-        let Some((providers, request)) = stream_request else {
-            self.schedule_queue_drain(&session_id).await;
-            return;
-        };
+        let (providers, request) = stream_request;
+        let message_id = request.message_id.to_string();
 
         self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
             .await;
+        Ok(SubmitMessageOutcome::Started { message_id })
     }
 
-    async fn enqueue_message(&self, session_id: &str, queued_message: QueuedMessage) {
+    async fn enqueue_message(&self, session_id: &str, queued_message: QueuedMessage) -> usize {
         let mut queued = self.queued_messages.lock().await;
-        queued
-            .entry(session_id.to_string())
-            .or_default()
-            .push_back(queued_message);
+        let queue = queued.entry(session_id.to_string()).or_default();
+        queue.push_back(queued_message);
+        let position = queue.len();
+        drop(queued);
+        position
     }
 
     pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
         let is_turn_active = {
-            let agent = self.agent_manager.lock().await;
+            let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
         };
         if is_turn_active {
@@ -173,7 +171,7 @@ impl RuntimeCore {
             };
 
             let stream_request = {
-                let mut agent = self.agent_manager.lock().await;
+                let mut agent = self.agent_manager.write().await;
                 let result = agent
                     .prepare_start_stream(
                         &session_id,
@@ -187,7 +185,7 @@ impl RuntimeCore {
                 match result {
                     Ok(result) => Some((providers, result)),
                     Err(error) => {
-                        self.send_event(Event::Error(error.to_string()));
+                        self.send_session_error(&session_id, error);
                         None
                     }
                 }
@@ -236,7 +234,7 @@ impl RuntimeCore {
         let call_id = match call_id {
             Some(call_id) => call_id,
             None if script.is_none() && protocol_error.is_none() => {
-                let mut agent = self.agent_manager.lock().await;
+                let mut agent = self.agent_manager.write().await;
                 agent.clear_active_turn(&completed_session);
                 drop(agent);
                 self.schedule_queue_drain(&completed_session).await;
@@ -322,7 +320,7 @@ impl RuntimeCore {
     ) -> Result<()> {
         let turn = self
             .agent_manager
-            .lock()
+            .read()
             .await
             .script_turn_context(&session_id)?;
         let resolution = turn
@@ -420,7 +418,7 @@ impl RuntimeCore {
     ) -> Result<()> {
         let turn = self
             .agent_manager
-            .lock()
+            .read()
             .await
             .script_turn_context(session_id)?;
         let id = ScriptExecutionId::new(Ulid::generate());
@@ -483,7 +481,7 @@ impl RuntimeCore {
         let execution_id = completed.record.id.to_string();
         let result = completed.render_result()?;
         self.agent_manager
-            .lock()
+            .write()
             .await
             .add_script_result_to_history(
                 session_id,
@@ -511,7 +509,7 @@ impl RuntimeCore {
             },
         );
         if status == ScriptExecutionStatus::Cancelled {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
             drop(agent);
             self.schedule_queue_drain(session_id).await;
@@ -523,11 +521,10 @@ impl RuntimeCore {
 
     async fn fail_script_turn(&self, session_id: &str, error: color_eyre::Report) {
         {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
         }
         self.schedule_queue_drain(session_id).await;
-        emit_event(&self.event_tx, Event::Error(error.to_string()));
         emit_event(
             &self.event_tx,
             Event::ContinuationFailed {

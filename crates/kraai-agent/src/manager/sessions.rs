@@ -49,29 +49,79 @@ impl AgentManager {
     }
 
     pub async fn create_session(&mut self) -> Result<String> {
+        self.create_session_with(None, None).await
+    }
+
+    pub async fn create_session_with(
+        &mut self,
+        workspace_dir: Option<PathBuf>,
+        profile_id: Option<String>,
+    ) -> Result<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
             .as_secs();
 
         let session_id = Ulid::generate().to_string();
+        let workspace_dir = workspace_dir.unwrap_or_else(|| self.default_workspace_dir.clone());
+        let selected_profile_id = profile_id
+            .or_else(|| self.last_used_profile_id.clone())
+            .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string());
+        let resolved = self.resolve_profiles_for_workspace(&workspace_dir);
+        if !resolved
+            .profiles
+            .iter()
+            .any(|profile| profile.id == selected_profile_id)
+        {
+            return Err(eyre!("Unknown profile: {selected_profile_id}"));
+        }
         let session = SessionMeta {
             id: session_id.clone(),
             tip_id: None,
-            workspace_dir: self.default_workspace_dir.clone(),
+            workspace_dir: workspace_dir.clone(),
             created_at: now,
             updated_at: now,
             title: None,
-            selected_profile_id: Some(
-                self.last_used_profile_id
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string()),
-            ),
+            selected_profile_id: Some(selected_profile_id.clone()),
         };
 
         self.session_store.save(&session).await?;
         self.ensure_runtime_state(&session_id, &session.workspace_dir);
+        self.last_used_profile_id = Some(selected_profile_id);
         Ok(session_id)
+    }
+
+    pub fn list_agent_profiles_for_workspace(
+        &self,
+        workspace_dir: Option<&Path>,
+    ) -> (PathBuf, AgentProfilesState) {
+        let workspace_dir = workspace_dir
+            .unwrap_or(&self.default_workspace_dir)
+            .to_path_buf();
+        let resolved = self.resolve_profiles_for_workspace(&workspace_dir);
+        let selected_profile_id = self
+            .last_used_profile_id
+            .clone()
+            .filter(|selected| {
+                resolved
+                    .profiles
+                    .iter()
+                    .any(|profile| &profile.id == selected)
+            })
+            .or_else(|| Some(DEFAULT_AGENT_PROFILE_ID.to_string()));
+        (
+            workspace_dir,
+            AgentProfilesState {
+                profiles: resolved
+                    .profiles
+                    .iter()
+                    .map(AgentProfile::summary)
+                    .collect(),
+                warnings: resolved.warnings,
+                selected_profile_id,
+                profile_locked: false,
+            },
+        )
     }
 
     pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {

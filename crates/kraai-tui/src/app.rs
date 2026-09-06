@@ -46,17 +46,15 @@ use self::settings::{
 };
 use self::state::{AppState, build_tip_chain};
 pub use self::types::StartupOptions;
-use self::types::default_agent_profiles;
 use self::types::{
-    ActiveSettingsEditor, DEFAULT_AGENT_PROFILE_ID, OptimisticMessage, PendingSubmit,
-    ProviderDetailAction, ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse,
-    ScriptApprovalAction, ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField,
-    UiMode, UsageModelKey,
+    ActiveSettingsEditor, OptimisticMessage, PendingSubmit, ProviderDetailAction,
+    ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, ScriptApprovalAction,
+    ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, UsageModelKey,
 };
 use self::ui::{
     STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
     copy_via_osc52, format_token_count, is_known_slash_command, model_menu_next_index,
-    model_menu_previous_index, parse_settings_errors, slash_command_matches,
+    model_menu_previous_index, slash_command_matches,
 };
 use self::workspace_preferences::WorkspacePreferences;
 
@@ -95,6 +93,7 @@ pub struct App {
     state: AppState,
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
+    last_runtime_event_sequence: u64,
     event_lag_session_resync_pending: bool,
     event_lag_script_resync_pending: bool,
     runtime_bridge_connected: bool,
@@ -107,7 +106,6 @@ const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[cfg(test)]
 #[expect(
-    clippy::expect_used,
     clippy::indexing_slicing,
     reason = "TUI tests use direct assertions for buffered output and request ordering"
 )]
