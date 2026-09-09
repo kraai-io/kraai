@@ -9,8 +9,24 @@ use crate::{SandboxError, Termination, run};
 
 #[tokio::test]
 async fn network_sandbox_exposes_read_only_resolver_configuration() {
-    let resolver = Path::new("/etc/resolv.conf");
-    if !resolver.exists() {
+    assert_read_only_network_file(Path::new("/etc/resolv.conf")).await;
+}
+
+#[tokio::test]
+async fn network_sandbox_exposes_read_only_ca_bundles() {
+    for path in [
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/cert.pem",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/pki/tls/cert.pem",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    ] {
+        assert_read_only_network_file(Path::new(path)).await;
+    }
+}
+
+async fn assert_read_only_network_file(path: &Path) {
+    if !path.exists() {
         return;
     }
     let workspace = temp_dir("dns");
@@ -21,10 +37,11 @@ async fn network_sandbox_exposes_read_only_resolver_configuration() {
     }
     let mut plan = shell_plan(
         &workspace,
-        "while IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < /etc/resolv.conf; if ( : >> /etc/resolv.conf ) 2>/dev/null; then exit 1; fi",
+        "while IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < \"$1\"; if ( : >> \"$1\" ) 2>/dev/null; then exit 1; fi",
         capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
         Duration::from_secs(5),
     );
+    plan.arg("network-file-test").arg(path);
     plan.executable = plan.executable.canonicalize().expect("resolve shell");
     plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
         .into_iter()
@@ -32,7 +49,7 @@ async fn network_sandbox_exposes_read_only_resolver_configuration() {
         .filter(|path| path.exists())
         .map(Path::to_path_buf)
         .collect();
-    let expected = std::fs::read_to_string(resolver).expect("read host resolver");
+    let expected = std::fs::read_to_string(path).expect("read host network configuration");
     let result = run(plan, CancellationToken::new()).await;
     std::fs::remove_dir_all(workspace).expect("remove workspace");
     let output = match result {

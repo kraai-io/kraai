@@ -26,6 +26,10 @@ mod policy;
 #[path = "tests/dns.rs"]
 mod dns;
 
+#[cfg(target_os = "linux")]
+#[path = "tests/runtime_mounts.rs"]
+mod runtime_mounts;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",

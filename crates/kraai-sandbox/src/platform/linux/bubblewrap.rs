@@ -161,6 +161,25 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
         ]);
     }
 
+    let resolved_workspace = plan.workspace_root.canonicalize().ok();
+    for root in deduplicated_roots(&plan.runtime_roots) {
+        // The workspace mount already exposes these paths. A separate recursive
+        // read-only bind would override workspace-write even after rebinding its parent.
+        // Keep mounts for symlinks that resolve outside the workspace.
+        if root.starts_with(&plan.workspace_root)
+            && resolved_workspace.as_ref().is_some_and(|workspace| {
+                root.canonicalize()
+                    .is_ok_and(|resolved| resolved.starts_with(workspace))
+            })
+        {
+            continue;
+        }
+        push_parent_dirs(&mut args, &root);
+        push_bind(&mut args, "--ro-bind", &root);
+    }
+
+    // Workspace permissions take precedence over overlapping runtime roots, such as
+    // target/debug when running a development binary from the active workspace.
     let workspace_flag = if capabilities.contains(SandboxCapability::WorkspaceWrite) {
         "--bind"
     } else {
@@ -169,18 +188,23 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
     push_parent_dirs(&mut args, &plan.workspace_root);
     push_bind(&mut args, workspace_flag, &plan.workspace_root);
 
-    for root in deduplicated_roots(&plan.runtime_roots) {
-        push_parent_dirs(&mut args, &root);
-        push_bind(&mut args, "--ro-bind", &root);
-    }
-
     if network_enabled
         && !capabilities.contains(SandboxCapability::HostRead)
         && !capabilities.contains(SandboxCapability::HostWrite)
     {
-        // Sharing the network namespace does not expose the host's DNS configuration.
-        // Bubblewrap follows source symlinks, including systemd-resolved's /run target.
-        push_bind(&mut args, "--ro-bind-try", Path::new("/etc/resolv.conf"));
+        // Network clients also need DNS configuration and the host's public CA bundles.
+        // Bind files individually so source symlinks work without exposing their parent
+        // directories or private keys. Missing distribution-specific paths are optional.
+        for path in [
+            "/etc/resolv.conf",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/cert.pem",
+            "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/pki/tls/cert.pem",
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        ] {
+            push_bind(&mut args, "--ro-bind-try", Path::new(path));
+        }
     }
 
     if capabilities.contains(SandboxCapability::WorkspaceWrite)
