@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use kraai_persistence::SessionMeta;
-use kraai_types::{AgentProfileSummary, AgentProfileWarning, Message, MessageId, TokenUsage};
+use kraai_types::{
+    AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
+    TokenUsage,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +45,10 @@ impl RuntimeError {
         Self::new(RuntimeErrorKind::InvalidArgument, message)
     }
 
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(RuntimeErrorKind::NotFound, message)
+    }
+
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(RuntimeErrorKind::Conflict, message)
     }
@@ -63,7 +70,15 @@ impl RuntimeError {
     }
 
     pub(crate) fn from_report(error: color_eyre::Report) -> Self {
-        Self::internal(error)
+        let Some(domain_error) = error.downcast_ref::<DomainError>() else {
+            return Self::internal(error);
+        };
+        let kind = match domain_error.kind() {
+            DomainErrorKind::InvalidArgument => RuntimeErrorKind::InvalidArgument,
+            DomainErrorKind::NotFound => RuntimeErrorKind::NotFound,
+            DomainErrorKind::Conflict => RuntimeErrorKind::Conflict,
+        };
+        Self::new(kind, domain_error.message())
     }
 }
 
@@ -222,7 +237,9 @@ pub enum SessionActivity {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
-    /// Runtime event sequence captured before this snapshot was read.
+    /// The snapshot contains this session's state represented by events through this global
+    /// sequence. After installing it, discard covered events for this session only; unrelated
+    /// session and service events still need to be handled.
     pub event_sequence: u64,
     pub session: Session,
     pub history: BTreeMap<MessageId, Message>,
@@ -316,6 +333,29 @@ pub enum Event {
     OpenAiCodexAuthUpdated {
         status: OpenAiCodexAuthStatus,
     },
+}
+
+impl Event {
+    /// Returns the session this event concerns, if any.
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::SessionError { session_id, .. }
+            | Self::StreamStart { session_id, .. }
+            | Self::StreamChunk { session_id, .. }
+            | Self::StreamComplete { session_id, .. }
+            | Self::StreamError { session_id, .. }
+            | Self::StreamCancelled { session_id, .. }
+            | Self::ProviderRetryScheduled { session_id, .. }
+            | Self::ScriptApprovalRequested { session_id, .. }
+            | Self::ScriptResultReady { session_id, .. }
+            | Self::ContextStateChanged { session_id, .. }
+            | Self::ContinuationFailed { session_id, .. }
+            | Self::HistoryUpdated { session_id } => Some(session_id),
+            Self::ConfigLoaded
+            | Self::ServiceError { .. }
+            | Self::OpenAiCodexAuthUpdated { .. } => None,
+        }
+    }
 }
 
 /// Optional callback adapter for receiving runtime events.

@@ -22,9 +22,9 @@ impl AgentManager {
         let workspace_dir = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             if state.active_turn_profile.is_some() {
-                return Err(eyre!(
+                return Err(eyre!(kraai_types::DomainError::conflict(
                     "Cannot send a new message while the current turn is active"
-                ));
+                )));
             }
             state.promote_pending_workspace_dir();
             state.last_model = Some(model_id.clone());
@@ -353,7 +353,9 @@ impl AgentManager {
         }
 
         if self.session_has_active_stream(session_id).await {
-            return Err(eyre!("Session already has an active stream: {session_id}"));
+            return Err(eyre!(kraai_types::DomainError::conflict(format!(
+                "Session already has an active stream: {session_id}"
+            ))));
         }
 
         let appended = self
@@ -664,7 +666,9 @@ impl AgentManager {
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!("Cannot undo while the current turn is active"));
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "Cannot undo while the current turn is active"
+            )));
         }
 
         let Some(mut cursor) = self.get_tip(session_id).await? else {

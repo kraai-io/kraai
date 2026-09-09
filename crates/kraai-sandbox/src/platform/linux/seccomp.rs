@@ -137,6 +137,8 @@ pub(crate) fn restricted_network_seccomp_program(
     append_af_unix_only_socket_rule(&mut program, libc::SYS_socket as u32);
     append_af_unix_only_socket_rule(&mut program, libc::SYS_socketpair as u32);
     append_private_ipc_connect_rule(&mut program, private_ipc_connect_descriptors)?;
+    append_connected_socket_io_rule(&mut program, libc::SYS_sendto as u32);
+    append_connected_socket_io_rule(&mut program, libc::SYS_recvfrom as u32);
 
     for syscall in [
         libc::SYS_ptrace,
@@ -152,11 +154,7 @@ pub(crate) fn restricted_network_seccomp_program(
         libc::SYS_getpeername,
         libc::SYS_getsockname,
         libc::SYS_shutdown,
-        libc::SYS_sendto,
-        libc::SYS_sendmsg,
         libc::SYS_sendmmsg,
-        libc::SYS_recvfrom,
-        libc::SYS_recvmsg,
         libc::SYS_recvmmsg,
         libc::SYS_getsockopt,
         libc::SYS_setsockopt,
@@ -166,6 +164,30 @@ pub(crate) fn restricted_network_seccomp_program(
 
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
     Ok(program)
+}
+
+#[cfg(target_os = "linux")]
+fn append_connected_socket_io_rule(program: &mut Vec<SeccompInstruction>, syscall: u32) {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+    const SECCOMP_DATA_ARG4_LOW_OFFSET: u32 = 16 + 4 * 8;
+    const SECCOMP_DATA_ARG4_HIGH_OFFSET: u32 = SECCOMP_DATA_ARG4_LOW_OFFSET + 4;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const DENY: u32 = SECCOMP_RET_ERRNO | libc::EPERM as u32;
+
+    // Rust uses a SOCK_SEQPACKET socket pair as the close-on-exec error channel when spawning a
+    // process. Its send/recv operations reach sendto/recvfrom with a null address. Permit that
+    // connected-socket form while still rejecting addressed Unix datagrams to mounted host paths.
+    program.push(jump(BPF_JMP_JEQ_K, syscall, 0, 7));
+    program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARG4_LOW_OFFSET));
+    program.push(jump(BPF_JMP_JEQ_K, 0, 1, 0));
+    program.push(stmt(BPF_RET_K, DENY));
+    program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARG4_HIGH_OFFSET));
+    program.push(jump(BPF_JMP_JEQ_K, 0, 1, 0));
+    program.push(stmt(BPF_RET_K, DENY));
+    program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
 }
 
 #[cfg(target_os = "linux")]

@@ -124,7 +124,7 @@ impl RuntimeCore {
             drop(agent);
             result
                 .map(|result| (providers, result))
-                .map_err(RuntimeError::internal)?
+                .map_err(RuntimeError::from_report)?
         };
 
         let (providers, request) = stream_request;
@@ -558,7 +558,9 @@ impl RuntimeCore {
         request: EffectiveScriptRequest,
     ) -> Result<()> {
         if self.has_active_script_tasks(&session_id).await {
-            return Err(eyre!("Session {session_id} already has an active script"));
+            return Err(eyre!(kraai_types::DomainError::conflict(format!(
+                "Session {session_id} already has an active script"
+            ))));
         }
 
         let runtime = self.clone();
@@ -575,6 +577,7 @@ impl RuntimeCore {
                 .await
             {
                 Ok(completed) => {
+                    let _state_guard = runtime.session_state_barrier.read().await;
                     runtime
                         .active_script_tasks
                         .lock()
@@ -588,6 +591,7 @@ impl RuntimeCore {
                     }
                 }
                 Err(error) => {
+                    let _state_guard = runtime.session_state_barrier.read().await;
                     runtime
                         .active_script_tasks
                         .lock()
@@ -620,11 +624,18 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_active_script(&self, session_id: &str) -> bool {
-        let Some(task) = self.active_script_tasks.lock().await.remove(session_id) else {
+        let cancellation = self
+            .active_script_tasks
+            .lock()
+            .await
+            .get(session_id)
+            .map(|task| task.cancellation.clone());
+        let Some(cancellation) = cancellation else {
             return false;
         };
-        task.cancellation.cancel();
-        let _ = task.join_handle.await;
+        // The task owns removal and terminal state publication. Leaving it registered until then
+        // prevents snapshots from briefly reporting an idle session while cancellation settles.
+        cancellation.cancel();
         true
     }
 
@@ -651,13 +662,15 @@ impl RuntimeCore {
     ) -> Result<PendingScriptApproval> {
         let mut pending = self.pending_script_approvals.lock().await;
         let Some(existing) = pending.get(session_id) else {
-            return Err(eyre!("Session {session_id} has no pending script approval"));
+            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+                "Session {session_id} has no pending script approval"
+            ))));
         };
         if &existing.request.id != execution_id {
-            return Err(eyre!(
+            return Err(eyre!(kraai_types::DomainError::conflict(format!(
                 "Pending execution for session {session_id} is {}, not {execution_id}",
                 existing.request.id
-            ));
+            ))));
         }
         pending
             .remove(session_id)
@@ -696,9 +709,17 @@ fn capability_names(capabilities: &[SandboxCapability]) -> Vec<String> {
 }
 
 fn configured_runtime_roots() -> Vec<PathBuf> {
-    std::env::var_os("KRAAI_SCRIPT_RUNTIME_ROOTS")
+    let mut roots: Vec<PathBuf> = std::env::var_os("KRAAI_SCRIPT_RUNTIME_ROOTS")
         .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Packaged Kraai sets this explicitly. Development binaries still use an ELF interpreter and
+    // shared libraries from the Nix store, so the sandbox must expose the store for the host to
+    // start at all.
+    let nix_store = PathBuf::from("/nix/store");
+    if nix_store.is_dir() && !roots.iter().any(|root| root == &nix_store) {
+        roots.push(nix_store);
+    }
+    roots
 }
 
 fn script_environment(profile: &ScriptProfileSnapshot) -> Result<BTreeMap<String, String>> {

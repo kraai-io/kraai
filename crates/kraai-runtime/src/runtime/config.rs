@@ -159,16 +159,16 @@ impl RuntimeCore {
 pub(crate) fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     let raw = PathBuf::from(path);
     if !raw.exists() {
-        return Err(eyre!(
+        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
             "Workspace directory does not exist: {}",
             raw.display()
-        ));
+        ))));
     }
     if !raw.is_dir() {
-        return Err(eyre!(
+        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
             "Workspace path is not a directory: {}",
             raw.display()
-        ));
+        ))));
     }
 
     Ok(raw.canonicalize().unwrap_or(raw))

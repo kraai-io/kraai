@@ -113,6 +113,8 @@ impl App {
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
+            last_session_event_sequences: HashMap::new(),
+            session_snapshot_sequences: HashMap::new(),
             event_lag_session_resync_pending: false,
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
@@ -306,6 +308,17 @@ impl App {
                     return;
                 }
                 self.last_runtime_event_sequence = event.sequence;
+                if let Some(session_id) = event.event.session_id() {
+                    self.last_session_event_sequences
+                        .insert(session_id.to_string(), event.sequence);
+                    if self
+                        .session_snapshot_sequences
+                        .get(session_id)
+                        .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)
+                    {
+                        return;
+                    }
+                }
                 self.handle_runtime_event(event.event);
             }
             RuntimeEventBridgeMessage::Lagged(skipped) => {

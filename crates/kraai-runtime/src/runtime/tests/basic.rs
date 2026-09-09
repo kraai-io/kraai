@@ -9,7 +9,7 @@ use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
 use crate::handle::{Command, RuntimeEventSender, RuntimeLifecycle};
-use crate::{Event, RuntimeEvent, RuntimeHandle, RuntimeStartupState};
+use crate::{Event, RuntimeErrorKind, RuntimeEvent, RuntimeHandle, RuntimeStartupState};
 
 #[test]
 fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
@@ -379,6 +379,77 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
     assert!(deny_error.to_string().contains("execution_id"));
 
     tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+        return Ok(());
+    };
+
+    let missing_session = harness
+        .handle
+        .get_session_snapshot(String::from("missing-session"))
+        .await
+        .unwrap_err();
+    assert_eq!(missing_session.kind, RuntimeErrorKind::NotFound);
+
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let invalid_workspace = harness
+        .handle
+        .set_workspace_dir(
+            session_id.clone(),
+            harness
+                .data_dir
+                .join("does-not-exist")
+                .display()
+                .to_string(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(invalid_workspace.kind, RuntimeErrorKind::InvalidArgument);
+
+    let missing_approval = harness
+        .handle
+        .approve_script(session_id, ulid::Ulid::generate().to_string())
+        .await
+        .unwrap_err();
+    assert_eq!(missing_approval.kind, RuntimeErrorKind::NotFound);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let mutation_guard = harness.runtime.session_state_barrier.read().await;
+    let mut snapshot_task = tokio::spawn({
+        let handle = harness.handle.clone();
+        let session_id = session_id.clone();
+        async move { handle.get_session_snapshot(session_id).await }
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut snapshot_task)
+            .await
+            .is_err(),
+        "snapshot crossed an in-flight state mutation"
+    );
+    harness
+        .runtime
+        .send_event(Event::HistoryUpdated { session_id });
+    let mutation_sequence = harness.runtime.event_tx.latest_sequence();
+    drop(mutation_guard);
+
+    let snapshot = snapshot_task.await??;
+    assert!(snapshot.event_sequence >= mutation_sequence);
+
     harness.shutdown().await;
     Ok(())
 }

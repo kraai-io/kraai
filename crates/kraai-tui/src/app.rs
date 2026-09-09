@@ -94,6 +94,8 @@ pub struct App {
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
+    last_session_event_sequences: HashMap<String, u64>,
+    session_snapshot_sequences: HashMap<String, u64>,
     event_lag_session_resync_pending: bool,
     event_lag_script_resync_pending: bool,
     runtime_bridge_connected: bool,

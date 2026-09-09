@@ -3,10 +3,12 @@ use std::io;
 
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
-    AgentProfilesState, Event, PendingScriptInfo, Session, SessionActivity, SessionSnapshot,
+    AgentProfilesState, Event, PendingScriptInfo, RuntimeEvent, Session, SessionActivity,
+    SessionSnapshot,
 };
 use kraai_types::{Message, MessageId, MessageStatus};
 
+use super::runtime_bridge::RuntimeEventBridgeMessage;
 use super::{
     App, AppState, RuntimeRequest, RuntimeResponse, ScriptApprovalAction, ScriptPhase,
     StartupOptions,
@@ -40,6 +42,8 @@ fn test_harness() -> TestHarness {
             last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
+            last_session_event_sequences: HashMap::new(),
+            session_snapshot_sequences: HashMap::new(),
             event_lag_session_resync_pending: false,
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
@@ -70,13 +74,20 @@ fn pending_script(execution_id: &str) -> PendingScriptInfo {
 }
 
 fn session_snapshot(pending_script: Option<PendingScriptInfo>) -> SessionSnapshot {
+    session_snapshot_at(0, pending_script)
+}
+
+fn session_snapshot_at(
+    event_sequence: u64,
+    pending_script: Option<PendingScriptInfo>,
+) -> SessionSnapshot {
     let activity = if pending_script.is_some() {
         SessionActivity::AwaitingApproval
     } else {
         SessionActivity::Idle
     };
     SessionSnapshot {
-        event_sequence: 0,
+        event_sequence,
         session: Session {
             id: String::from("session"),
             tip_id: None,
@@ -101,6 +112,73 @@ fn session_snapshot(pending_script: Option<PendingScriptInfo>) -> SessionSnapsho
         activity,
         queued_messages: 0,
     }
+}
+
+#[test]
+fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("other-session"));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            session_id: String::from("session"),
+            result: Box::new(Ok(session_snapshot_at(10, None))),
+        });
+
+    harness
+        .app
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
+            sequence: 9,
+            event: Event::ContextStateChanged {
+                session_id: String::from("other-session"),
+                notifications: vec![String::from("other session event was delivered")],
+            },
+        }));
+    assert_eq!(
+        harness.app.state.status,
+        "other session event was delivered"
+    );
+
+    harness.app.state.current_session_id = Some(String::from("session"));
+    harness
+        .app
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
+            sequence: 10,
+            event: Event::ContextStateChanged {
+                session_id: String::from("session"),
+                notifications: vec![String::from("covered event should be ignored")],
+            },
+        }));
+    assert_ne!(harness.app.state.status, "covered event should be ignored");
+}
+
+#[test]
+fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("session"));
+    harness
+        .app
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
+            sequence: 11,
+            event: Event::ContextStateChanged {
+                session_id: String::from("session"),
+                notifications: vec![String::from("newer session state")],
+            },
+        }));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            session_id: String::from("session"),
+            result: Box::new(Ok(session_snapshot_at(10, None))),
+        });
+
+    assert_eq!(harness.app.state.status, "newer session state");
+    assert!(
+        !harness
+            .app
+            .session_snapshot_sequences
+            .contains_key("session")
+    );
 }
 
 #[test]

@@ -18,6 +18,7 @@ use crate::settings::resolve_provider_config_path;
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     provider_config_path: Option<PathBuf>,
+    use_current_executable_as_nushell_host: bool,
 }
 
 struct RuntimeParts {
@@ -28,6 +29,12 @@ struct RuntimeParts {
     command_rx: mpsc::Receiver<Command>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+}
+
+struct RuntimeHostOptions {
+    provider_config_path_override: Option<PathBuf>,
+    use_current_executable_as_nushell_host: bool,
+    initialize_tracing: bool,
 }
 
 impl RuntimeParts {
@@ -60,11 +67,20 @@ impl RuntimeBuilder {
     pub fn new() -> Self {
         Self {
             provider_config_path: None,
+            use_current_executable_as_nushell_host: false,
         }
     }
 
     pub fn provider_config_path(mut self, path: PathBuf) -> Self {
         self.provider_config_path = Some(path);
+        self
+    }
+
+    /// Allows this frontend executable to serve as the sandboxed Nushell host when a packaged
+    /// sibling host binary is unavailable. The executable must call
+    /// [`crate::run_internal_process`] before parsing its own arguments.
+    pub fn use_current_executable_as_nushell_host(mut self) -> Self {
+        self.use_current_executable_as_nushell_host = true;
         self
     }
 
@@ -82,7 +98,11 @@ impl RuntimeBuilder {
             shutdown_rx,
             startup_tx,
         } = RuntimeParts::new();
-        let provider_config_path = self.provider_config_path;
+        let host_options = RuntimeHostOptions {
+            provider_config_path_override: self.provider_config_path,
+            use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
+            initialize_tracing: true,
+        };
         let thread_startup_tx = startup_tx.clone();
 
         let thread = std::thread::spawn(move || {
@@ -109,9 +129,8 @@ impl RuntimeBuilder {
                 command_tx,
                 command_rx,
                 shutdown_rx,
-                provider_config_path,
                 thread_startup_tx,
-                true,
+                host_options,
             ));
         });
         lifecycle.set_thread(thread);
@@ -133,7 +152,11 @@ impl RuntimeBuilder {
             shutdown_rx,
             startup_tx,
         } = RuntimeParts::new();
-        let provider_config_path = self.provider_config_path;
+        let host_options = RuntimeHostOptions {
+            provider_config_path_override: self.provider_config_path,
+            use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
+            initialize_tracing: false,
+        };
         let task_startup_tx = startup_tx.clone();
         let task = runtime.spawn(async move {
             Self::run_hosted(
@@ -141,9 +164,8 @@ impl RuntimeBuilder {
                 command_tx,
                 command_rx,
                 shutdown_rx,
-                provider_config_path,
                 task_startup_tx,
-                false,
+                host_options,
             )
             .await;
         });
@@ -157,18 +179,16 @@ impl RuntimeBuilder {
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
-        provider_config_path_override: Option<PathBuf>,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
-        initialize_tracing: bool,
+        host_options: RuntimeHostOptions,
     ) {
         if let Err(error) = Self::run_background(
             event_tx.clone(),
             command_tx,
             command_rx,
             shutdown_rx,
-            provider_config_path_override,
             startup_tx.clone(),
-            initialize_tracing,
+            host_options,
         )
         .await
         {
@@ -188,11 +208,10 @@ impl RuntimeBuilder {
         command_tx: mpsc::Sender<Command>,
         command_rx: mpsc::Receiver<Command>,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
-        provider_config_path_override: Option<PathBuf>,
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
-        initialize_tracing: bool,
+        host_options: RuntimeHostOptions,
     ) -> Result<()> {
-        if initialize_tracing {
+        if host_options.initialize_tracing {
             Self::init_tracing()?;
         }
 
@@ -210,7 +229,8 @@ impl RuntimeBuilder {
             OpenAiCodexAuthController::new().wrap_err("Failed to initialize OpenAI auth")?,
         );
         let registry = build_provider_registry(openai_codex_auth.clone())?;
-        let provider_config_path = resolve_provider_config_path(provider_config_path_override)?;
+        let provider_config_path =
+            resolve_provider_config_path(host_options.provider_config_path_override)?;
 
         let agent_manager = Arc::new(RwLock::new(AgentManager::new(
             providers,
@@ -231,8 +251,11 @@ impl RuntimeBuilder {
             active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
             queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            session_state_barrier: Arc::new(RwLock::new(())),
             openai_codex_auth,
             provider_config_path,
+            use_current_executable_as_nushell_host: host_options
+                .use_current_executable_as_nushell_host,
             startup_tx,
         };
 

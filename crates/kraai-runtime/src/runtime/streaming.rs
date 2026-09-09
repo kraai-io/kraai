@@ -125,7 +125,7 @@ impl RuntimeCore {
                         session_id: session_id.clone(),
                     },
                 );
-                Err(RuntimeError::internal(error))
+                Err(RuntimeError::from_report(error))
             }
         }
     }
@@ -133,6 +133,7 @@ impl RuntimeCore {
     pub(crate) fn spawn_continuation(&self, session_id: String) {
         let runtime = self.clone();
         tokio::spawn(async move {
+            let _state_guard = runtime.session_state_barrier.read().await;
             if let Err(error) = runtime.start_continuation(session_id.clone()).await {
                 emit_event(
                     &runtime.event_tx,
@@ -170,6 +171,7 @@ impl RuntimeCore {
                     providers,
                     task_runtime.agent_manager.clone(),
                     task_runtime.event_tx.clone(),
+                    task_runtime.session_state_barrier.clone(),
                 ))
                 .catch_unwind()
                 .await
@@ -177,6 +179,7 @@ impl RuntimeCore {
                     error: String::from("provider stream task panicked"),
                 });
 
+                let _state_guard = task_runtime.session_state_barrier.read().await;
                 let stream_was_active = task_runtime
                     .clear_active_stream(&request_session_id, &active_message_id)
                     .await;
@@ -470,6 +473,7 @@ impl RuntimeCore {
         providers: ProviderManager,
         agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
         event_tx: RuntimeEventSender,
+        session_state_barrier: Arc<tokio::sync::RwLock<()>>,
     ) -> StreamDriveResult {
         let PendingStreamRequest {
             message_id,
@@ -562,6 +566,7 @@ impl RuntimeCore {
                         continue;
                     }
                     if script_tool_transport == ScriptToolTransport::NativeCustom {
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
                             let agent = agent_manager.read().await;
                             agent
@@ -588,6 +593,7 @@ impl RuntimeCore {
 
                     let parsed = parser.ingest(&delta);
                     if !parsed.accepted.is_empty() {
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
                             let agent = agent_manager.read().await;
                             agent
@@ -617,6 +623,7 @@ impl RuntimeCore {
                             })
                             .unwrap_or_default();
                         let call_id = ToolCallId::new(format!("kraai-{}", Ulid::generate()));
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
                             let agent = agent_manager.read().await;
                             agent
@@ -691,6 +698,7 @@ impl RuntimeCore {
                             Some(error),
                         ),
                     };
+                    let _state_guard = session_state_barrier.read().await;
                     let visible = {
                         let agent = agent_manager.read().await;
                         agent
@@ -718,6 +726,7 @@ impl RuntimeCore {
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
+                    let _state_guard = session_state_barrier.read().await;
                     let agent = agent_manager.read().await;
                     if !agent.set_streaming_message_usage(&message_id, usage).await {
                         return StreamDriveResult::Stopped;
@@ -772,6 +781,7 @@ impl RuntimeCore {
                     kraai_types::AssistantPhase::FinalAnswer,
                 )
             });
+            let _state_guard = session_state_barrier.read().await;
             let visible = {
                 let agent = agent_manager.read().await;
                 agent

@@ -32,8 +32,11 @@ pub(crate) struct RuntimeCore {
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
     pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    /// Separates coherent snapshot reads from state mutations and their corresponding events.
+    pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
+    pub(crate) use_current_executable_as_nushell_host: bool,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
 

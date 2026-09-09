@@ -18,7 +18,7 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 
 impl RuntimeCore {
     async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
-        let event_sequence = self.event_tx.latest_sequence();
+        let _snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;
         let queued_messages = self
@@ -35,7 +35,11 @@ impl RuntimeCore {
             .await?
             .into_iter()
             .find(|session| session.id == session_id)
-            .ok_or_else(|| eyre!("Session not found: {session_id}"))?;
+            .ok_or_else(|| {
+                eyre!(kraai_types::DomainError::not_found(format!(
+                    "Session not found: {session_id}"
+                )))
+            })?;
         let history = agent.get_chat_history(session_id).await?;
         let context_usage = agent
             .get_session_context_usage(session_id)
@@ -66,6 +70,9 @@ impl RuntimeCore {
             is_streaming: streaming,
             ..Session::from_session_meta(session_meta)
         };
+        // State mutations hold a shared barrier guard until their events are published. Reading
+        // the sequence last therefore gives clients a stable incremental recovery boundary.
+        let event_sequence = self.event_tx.latest_sequence();
 
         Ok(SessionSnapshot {
             event_sequence,
@@ -80,6 +87,11 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
+        let _state_guard = if matches!(&command, Command::GetSessionSnapshot { .. }) {
+            None
+        } else {
+            Some(self.session_state_barrier.read().await)
+        };
         match command {
             Command::ListModels { response } => {
                 let models_map = self.agent_manager.read().await.list_models().await;

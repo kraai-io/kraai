@@ -10,6 +10,9 @@ pub use effects::{RejectStateEffects, StateEffectHandler};
 pub use execution::{RuntimeError, ScriptExecutionPlan, ScriptExecutionResult, execute};
 
 #[doc(hidden)]
+pub const INTERNAL_HOST_ARGUMENT: &str = "--kraai-internal-nushell-host";
+
+#[doc(hidden)]
 pub fn run_host_process() -> i32 {
     let transport_path = match host_transport_path() {
         Ok(path) => path,
@@ -64,11 +67,20 @@ fn report_host_error(message: impl std::fmt::Display) {
 }
 
 fn host_transport_path() -> Result<std::path::PathBuf, String> {
-    let mut args = std::env::args_os();
-    let _executable = args.next();
-    let flag = args
+    host_transport_path_from(std::env::args_os().skip(1))
+}
+
+fn host_transport_path_from(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<std::path::PathBuf, String> {
+    let mut flag = args
         .next()
         .ok_or_else(|| String::from("missing --transport argument"))?;
+    if flag == INTERNAL_HOST_ARGUMENT {
+        flag = args
+            .next()
+            .ok_or_else(|| String::from("missing --transport argument"))?;
+    }
     if flag != "--transport" {
         return Err(String::from("expected --transport argument"));
     }
@@ -79,4 +91,32 @@ fn host_transport_path() -> Result<std::path::PathBuf, String> {
         return Err(String::from("unexpected host arguments"));
     }
     Ok(path.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_transport_accepts_standalone_and_internal_invocations() {
+        let standalone = ["--transport", "/tmp/host.sock"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
+        assert_eq!(
+            host_transport_path_from(standalone),
+            Ok(std::path::PathBuf::from("/tmp/host.sock"))
+        );
+
+        let internal = [
+            INTERNAL_HOST_ARGUMENT,
+            "--transport",
+            "/tmp/internal-host.sock",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from);
+        assert_eq!(
+            host_transport_path_from(internal),
+            Ok(std::path::PathBuf::from("/tmp/internal-host.sock"))
+        );
+    }
 }

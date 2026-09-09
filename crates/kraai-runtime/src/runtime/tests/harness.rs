@@ -10,7 +10,7 @@ use kraai_agent::AgentManager;
 use kraai_persistence::{FileMessageStore, FileScriptExecutionStore, FileSessionStore};
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
 use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
 use super::super::core::RuntimeCore;
@@ -376,8 +376,10 @@ path = \"inherit\"\n",
             active_script_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(HashMap::new())),
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
+            session_state_barrier: Arc::new(RwLock::new(())),
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),
+            use_current_executable_as_nushell_host: false,
             startup_tx,
         };
 

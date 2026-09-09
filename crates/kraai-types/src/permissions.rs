@@ -34,13 +34,17 @@ pub struct SandboxCapabilities(BTreeSet<SandboxCapability>);
 
 impl SandboxCapabilities {
     pub fn workspace_read() -> Self {
-        Self(BTreeSet::from([SandboxCapability::WorkspaceRead]))
+        Self(BTreeSet::from([
+            SandboxCapability::WorkspaceRead,
+            SandboxCapability::Network,
+        ]))
     }
 
     pub fn workspace_write() -> Self {
         Self(BTreeSet::from([
             SandboxCapability::WorkspaceRead,
             SandboxCapability::WorkspaceWrite,
+            SandboxCapability::Network,
         ]))
     }
 

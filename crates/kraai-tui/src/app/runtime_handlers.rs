@@ -480,7 +480,11 @@ impl App {
             RuntimeResponse::SessionSnapshot { session_id, result } => {
                 match *result {
                     Ok(mut snapshot) => {
-                        if snapshot.event_sequence < self.last_runtime_event_sequence {
+                        if self
+                            .last_session_event_sequences
+                            .get(&session_id)
+                            .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
+                        {
                             if self.state.current_session_id.as_deref() == Some(session_id.as_str())
                             {
                                 self.ci_metrics_history_pending = false;
@@ -489,7 +493,8 @@ impl App {
                             }
                             return;
                         }
-                        self.last_runtime_event_sequence = snapshot.event_sequence;
+                        self.session_snapshot_sequences
+                            .insert(session_id.clone(), snapshot.event_sequence);
                         self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {

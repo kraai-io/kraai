@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
+mod error;
 mod permissions;
 mod policy;
 mod profile;
 mod script;
 
+pub use error::{DomainError, DomainErrorKind};
 pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
 pub use policy::{
     CapabilityPermissionRules, EscalationPolicy, PermissionResolution, ResolvedPermissions,

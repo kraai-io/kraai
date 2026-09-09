@@ -32,6 +32,73 @@ fn title_from_user_prompt_truncates_to_sixty_characters() {
     assert_eq!(title.chars().count(), 60);
 }
 
+#[tokio::test]
+async fn session_defaults_follow_profiles_available_in_the_target_workspace() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_a = data_dir.join("workspace-a");
+    let workspace_b = data_dir.join("workspace-b");
+    tokio::fs::create_dir_all(workspace_a.join(".kraai")).await?;
+    tokio::fs::create_dir_all(&workspace_b).await?;
+    tokio::fs::write(
+        workspace_a.join(".kraai/agents.toml"),
+        r#"[[profiles]]
+id = "workspace-only"
+extends = "plan"
+display_name = "Workspace only"
+description = "Local profile"
+system_prompt = "Local instructions"
+commands = []
+capabilities = []
+"#,
+    )
+    .await?;
+    manager
+        .create_session_with(Some(workspace_a.clone()), Some("workspace-only".into()))
+        .await?;
+
+    let (_, catalog_a) = manager.list_agent_profiles_for_workspace(Some(&workspace_a));
+    assert_eq!(
+        catalog_a.selected_profile_id.as_deref(),
+        Some("workspace-only")
+    );
+    let session_a = manager.create_session_with(Some(workspace_a), None).await?;
+    assert_eq!(
+        manager
+            .require_session(&session_a)
+            .await?
+            .selected_profile_id
+            .as_deref(),
+        Some("workspace-only")
+    );
+
+    let (_, catalog_b) = manager.list_agent_profiles_for_workspace(Some(&workspace_b));
+    assert_eq!(catalog_b.selected_profile_id.as_deref(), Some("plan"));
+    let session_b = manager
+        .create_session_with(Some(workspace_b.clone()), None)
+        .await?;
+    assert_eq!(
+        manager
+            .require_session(&session_b)
+            .await?
+            .selected_profile_id,
+        catalog_b.selected_profile_id
+    );
+
+    let count = manager.list_sessions().await?.len();
+    let error = manager
+        .create_session_with(Some(workspace_b), Some("workspace-only".into()))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Unknown profile: workspace-only")
+    );
+    assert_eq!(manager.list_sessions().await?.len(), count);
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
 #[test]
 fn title_from_user_prompt_flattens_newlines() {
     let title =

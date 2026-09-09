@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_provider_core::ProviderDefinition;
 use kraai_types::{MessageId, ModelId, ProviderId, ScriptExecutionId};
@@ -8,39 +8,13 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
 use crate::{
-    AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Event,
-    Model, OpenAiCodexAuthStatus, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session,
+    AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Model,
+    OpenAiCodexAuthStatus, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session,
     SessionContextUsage, SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
-#[derive(Clone)]
-pub(crate) struct RuntimeEventSender {
-    tx: broadcast::Sender<RuntimeEvent>,
-    sequence: Arc<AtomicU64>,
-}
-
-impl RuntimeEventSender {
-    pub(crate) fn new(capacity: usize) -> Self {
-        let (tx, _) = broadcast::channel(capacity);
-        Self {
-            tx,
-            sequence: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    pub(crate) fn send(&self, event: Event) {
-        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.tx.send(RuntimeEvent { sequence, event });
-    }
-
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
-        self.tx.subscribe()
-    }
-
-    pub(crate) fn latest_sequence(&self) -> u64 {
-        self.sequence.load(Ordering::SeqCst)
-    }
-}
+mod events;
+pub(crate) use events::RuntimeEventSender;
 
 /// Internal commands sent to the runtime
 pub(crate) enum Command {
