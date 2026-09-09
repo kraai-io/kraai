@@ -80,6 +80,17 @@ impl RuntimeCore {
         });
     }
 
+    pub(crate) fn send_session_report_error(
+        &self,
+        session_id: impl Into<String>,
+        error: color_eyre::Report,
+    ) {
+        self.send_event(Event::SessionError {
+            session_id: session_id.into(),
+            error: crate::RuntimeError::from_report(error),
+        });
+    }
+
     pub(crate) async fn run(
         self,
         mut command_rx: mpsc::Receiver<Command>,

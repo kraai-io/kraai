@@ -366,8 +366,11 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                let result = self.build_session_snapshot(&session_id).await;
-                respond(response, result);
+                let runtime = self.clone();
+                tokio::spawn(async move {
+                    let result = runtime.build_session_snapshot(&session_id).await;
+                    respond(response, result);
+                });
             }
             Command::GetSessionContextUsage {
                 session_id,

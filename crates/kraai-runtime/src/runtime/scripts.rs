@@ -185,7 +185,7 @@ impl RuntimeCore {
                 match result {
                     Ok(result) => Some((providers, result)),
                     Err(error) => {
-                        self.send_session_error(&session_id, error);
+                        self.send_session_report_error(&session_id, error);
                         None
                     }
                 }
@@ -624,18 +624,11 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_active_script(&self, session_id: &str) -> bool {
-        let cancellation = self
-            .active_script_tasks
-            .lock()
-            .await
-            .get(session_id)
-            .map(|task| task.cancellation.clone());
-        let Some(cancellation) = cancellation else {
+        let Some(task) = self.active_script_tasks.lock().await.remove(session_id) else {
             return false;
         };
-        // The task owns removal and terminal state publication. Leaving it registered until then
-        // prevents snapshots from briefly reporting an idle session while cancellation settles.
-        cancellation.cancel();
+        task.cancellation.cancel();
+        let _ = task.join_handle.await;
         true
     }
 
@@ -712,12 +705,14 @@ fn configured_runtime_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = std::env::var_os("KRAAI_SCRIPT_RUNTIME_ROOTS")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
-    // Packaged Kraai sets this explicitly. Development binaries still use an ELF interpreter and
-    // shared libraries from the Nix store, so the sandbox must expose the store for the host to
-    // start at all.
-    let nix_store = PathBuf::from("/nix/store");
-    if nix_store.is_dir() && !roots.iter().any(|root| root == &nix_store) {
-        roots.push(nix_store);
+    // Debug binaries use an ELF interpreter and shared libraries from the Nix store. Packaged
+    // builds opt in through KRAAI_SCRIPT_RUNTIME_ROOTS instead of exposing the whole store by
+    // default.
+    if cfg!(debug_assertions) {
+        let nix_store = PathBuf::from("/nix/store");
+        if nix_store.is_dir() && !roots.iter().any(|root| root == &nix_store) {
+            roots.push(nix_store);
+        }
     }
     roots
 }
