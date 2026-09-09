@@ -371,23 +371,13 @@ fn restricted_network_seccomp_program_allows_connect_only_on_private_ipc_descrip
 #[cfg(target_os = "linux")]
 fn restricted_network_seccomp_program_limits_socket_message_io() {
     let program = restricted_network_seccomp_program(&[]).expect("build seccomp program");
-    for syscall in [libc::SYS_sendmmsg, libc::SYS_recvmmsg] {
+    for syscall in [libc::SYS_sendto, libc::SYS_sendmmsg, libc::SYS_recvmmsg] {
         assert!(program_denies_syscall(&program, syscall as u32));
     }
-    // Rust's process launcher passes a pidfd over its private AF_UNIX socket pair.
+    // Keep local socket-pair I/O available for subprocess management.
     assert!(!program_denies_syscall(&program, libc::SYS_sendmsg as u32));
     assert!(!program_denies_syscall(&program, libc::SYS_recvmsg as u32));
-    for syscall in [libc::SYS_sendto, libc::SYS_recvfrom] {
-        assert!(program.windows(8).any(|window| {
-            window[0].k == syscall as u32
-                && window[1].k == 16 + 4 * 8
-                && is_seccomp_errno(&window[3])
-                && window[4].k == 16 + 4 * 8 + 4
-                && is_seccomp_errno(&window[6])
-                && !is_seccomp_errno(&window[7])
-        }));
-        assert!(!program_denies_syscall(&program, syscall as u32));
-    }
+    assert!(!program_denies_syscall(&program, libc::SYS_recvfrom as u32));
 }
 
 #[test]
