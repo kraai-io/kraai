@@ -237,23 +237,13 @@ impl App {
         });
         if let Some(session_id) = self.state.current_session_id.clone() {
             self.request_sync_for_session(&session_id);
+        } else {
+            self.request(RuntimeRequest::GetAgentProfileCatalog);
         }
     }
 
     pub(super) fn request_sync_for_session(&mut self, session_id: &str) {
-        self.request(RuntimeRequest::GetCurrentTip {
-            session_id: session_id.to_string(),
-        });
-        self.request(RuntimeRequest::GetChatHistory {
-            session_id: session_id.to_string(),
-        });
-        self.request(RuntimeRequest::GetSessionContextUsage {
-            session_id: session_id.to_string(),
-        });
-        self.request(RuntimeRequest::GetPendingScript {
-            session_id: session_id.to_string(),
-        });
-        self.request(RuntimeRequest::ListAgentProfiles {
+        self.request(RuntimeRequest::GetSessionSnapshot {
             session_id: session_id.to_string(),
         });
     }
@@ -268,18 +258,12 @@ impl App {
         self.state.optimistic_messages.clear();
         self.stream_event_content.clear();
         self.state.pending_script = None;
-        self.state.agent_profiles = if has_session {
-            Vec::new()
-        } else {
-            default_agent_profiles()
-        };
+        if has_session {
+            self.state.agent_profiles.clear();
+        }
         self.state.agent_profile_warnings.clear();
         if has_session {
             self.state.selected_profile_id = None;
-        } else {
-            self.state
-                .selected_profile_id
-                .get_or_insert_with(|| String::from(DEFAULT_AGENT_PROFILE_ID));
         }
         self.state.profile_locked = false;
         self.state.profile_lock_stale_after_terminal_event = false;
@@ -301,6 +285,7 @@ impl App {
     pub(super) fn start_new_chat(&mut self) {
         self.state.pending_submit = None;
         self.reset_chat_session(None, "Started new chat");
+        self.request(RuntimeRequest::GetAgentProfileCatalog);
     }
 
     pub(super) fn dispatch_send_message(

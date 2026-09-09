@@ -12,6 +12,9 @@ pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 pub use process::run;
 
+#[cfg(target_os = "linux")]
+pub use platform::linux::restrict_network_after_startup;
+
 #[cfg(test)]
 use platform::linux::{
     BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,

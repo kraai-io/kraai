@@ -18,6 +18,8 @@ use ulid::Ulid;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
 use crate::api::Event;
+use crate::handle::RuntimeEventSender;
+use crate::{ContinueSessionOutcome, RuntimeError, RuntimeResult};
 
 const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
@@ -26,7 +28,7 @@ struct RuntimeRetryObserver {
     session_id: String,
     provider_id: ProviderId,
     model_id: ModelId,
-    event_tx: tokio::sync::broadcast::Sender<Event>,
+    event_tx: RuntimeEventSender,
 }
 
 struct CompletedProtocolBoundary {
@@ -83,7 +85,10 @@ impl StreamJobKind {
 }
 
 impl RuntimeCore {
-    pub(crate) async fn start_continuation(&self, session_id: String) {
+    pub(crate) async fn start_continuation(
+        &self,
+        session_id: String,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
         if self
             .pending_script_approvals
             .lock()
@@ -91,10 +96,10 @@ impl RuntimeCore {
             .contains_key(&session_id)
             || self.has_active_script_tasks(&session_id).await
         {
-            return;
+            return Ok(ContinueSessionOutcome::NothingToContinue);
         }
         let continuation = {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             match agent.prepare_continuation_stream(&session_id).await {
                 Ok(result) => Ok(result.map(|request| (agent.cloned_provider_manager(), request))),
                 Err(error) => Err(error),
@@ -105,27 +110,22 @@ impl RuntimeCore {
             Ok(Some((providers, request))) => {
                 self.start_stream_job(StreamJobKind::Continuation, session_id, providers, request)
                     .await;
+                Ok(ContinueSessionOutcome::Started)
             }
-            Ok(None) => {}
+            Ok(None) => Ok(ContinueSessionOutcome::NothingToContinue),
             Err(error) => {
                 {
-                    let mut agent = self.agent_manager.lock().await;
+                    let mut agent = self.agent_manager.write().await;
                     agent.clear_active_turn(&session_id);
                 }
-                self.schedule_queue_drain(&session_id).await;
+                self.schedule_queue_drain(&session_id);
                 emit_event(
                     &self.event_tx,
                     Event::HistoryUpdated {
                         session_id: session_id.clone(),
                     },
                 );
-                emit_event(
-                    &self.event_tx,
-                    Event::ContinuationFailed {
-                        session_id,
-                        error: error.to_string(),
-                    },
-                );
+                Err(RuntimeError::from_report(error))
             }
         }
     }
@@ -133,17 +133,28 @@ impl RuntimeCore {
     pub(crate) fn spawn_continuation(&self, session_id: String) {
         let runtime = self.clone();
         tokio::spawn(async move {
-            runtime.start_continuation(session_id).await;
+            let _state_guard = runtime.session_state_barrier.read().await;
+            if let Err(error) = runtime.start_continuation(session_id.clone()).await {
+                emit_event(
+                    &runtime.event_tx,
+                    Event::ContinuationFailed {
+                        session_id,
+                        error: error.to_string(),
+                    },
+                );
+            }
         });
     }
 
+    // Callers hold session_state_barrier from request preparation through this method.
     pub(crate) async fn start_stream_job(
         &self,
         kind: StreamJobKind,
         session_id: String,
         providers: ProviderManager,
-        request: PendingStreamRequest,
+        mut request: PendingStreamRequest,
     ) {
+        let context_notifications = std::mem::take(&mut request.context_notifications);
         let runtime = self.clone();
         let start_gate = Arc::new(Notify::new());
         let request_session_id = session_id.clone();
@@ -162,6 +173,7 @@ impl RuntimeCore {
                     providers,
                     task_runtime.agent_manager.clone(),
                     task_runtime.event_tx.clone(),
+                    task_runtime.session_state_barrier.clone(),
                 ))
                 .catch_unwind()
                 .await
@@ -169,6 +181,7 @@ impl RuntimeCore {
                     error: String::from("provider stream task panicked"),
                 });
 
+                let _state_guard = task_runtime.session_state_barrier.read().await;
                 let stream_was_active = task_runtime
                     .clear_active_stream(&request_session_id, &active_message_id)
                     .await;
@@ -188,15 +201,31 @@ impl RuntimeCore {
         });
 
         let previous = self.active_streams.lock().await.insert(
-            session_id,
+            session_id.clone(),
             ActiveStream {
-                message_id: request_message_id,
+                message_id: request_message_id.clone(),
                 abort_handle: task.abort_handle(),
             },
         );
         if let Some(previous) = previous {
             previous.abort_handle.abort();
         }
+        if !context_notifications.is_empty() {
+            emit_event(
+                &self.event_tx,
+                Event::ContextStateChanged {
+                    session_id: session_id.clone(),
+                    notifications: context_notifications,
+                },
+            );
+        }
+        emit_event(
+            &self.event_tx,
+            Event::StreamStart {
+                session_id,
+                message_id: request_message_id.to_string(),
+            },
+        );
         start_gate.notify_one();
     }
 
@@ -217,7 +246,7 @@ impl RuntimeCore {
                     protocol_error,
                 } = *completed;
                 let completed_session = {
-                    let agent = self.agent_manager.lock().await;
+                    let agent = self.agent_manager.read().await;
                     agent.complete_message(&message_id).await
                 };
                 let completed_session = match completed_session {
@@ -264,7 +293,7 @@ impl RuntimeCore {
                     .await
                 {
                     Ok(true) => {
-                        self.schedule_queue_drain(&session_id).await;
+                        self.schedule_queue_drain(&session_id);
                         if kind.is_continuation() {
                             emit_event(
                                 &self.event_tx,
@@ -280,12 +309,12 @@ impl RuntimeCore {
                         } else {
                             "stream"
                         };
-                        emit_event(
-                            &self.event_tx,
-                            Event::Error(format!(
+                        self.send_session_error(
+                            &session_id,
+                            format!(
                                 "Failed to recover {recovery_target} {} after start failure",
                                 message_id
-                            )),
+                            ),
                         );
                     }
                     Err(rollback_error) => {
@@ -294,12 +323,12 @@ impl RuntimeCore {
                         } else {
                             "stream"
                         };
-                        emit_event(
-                            &self.event_tx,
-                            Event::Error(format!(
+                        self.send_session_error(
+                            &session_id,
+                            format!(
                                 "Failed to roll back {recovery_target} {} after start failure: {rollback_error}",
                                 message_id
-                            )),
+                            ),
                         );
                     }
                 }
@@ -310,7 +339,14 @@ impl RuntimeCore {
                         Event::ContinuationFailed { session_id, error },
                     );
                 } else {
-                    emit_event(&self.event_tx, Event::Error(error));
+                    emit_event(
+                        &self.event_tx,
+                        Event::StreamError {
+                            session_id,
+                            message_id: message_id.to_string(),
+                            error,
+                        },
+                    );
                 }
             }
             StreamDriveResult::FailedDuringStream { error } => {
@@ -319,7 +355,7 @@ impl RuntimeCore {
                     .await
                 {
                     Ok(true) => {
-                        self.schedule_queue_drain(&session_id).await;
+                        self.schedule_queue_drain(&session_id);
                     }
                     Ok(false) => {
                         let recovery_target = if kind.is_continuation() {
@@ -327,12 +363,12 @@ impl RuntimeCore {
                         } else {
                             "stream"
                         };
-                        emit_event(
-                            &self.event_tx,
-                            Event::Error(format!(
+                        self.send_session_error(
+                            &session_id,
+                            format!(
                                 "Failed to recover {recovery_target} {} after runtime error",
                                 message_id
-                            )),
+                            ),
                         );
                     }
                     Err(rollback_error) => {
@@ -341,12 +377,12 @@ impl RuntimeCore {
                         } else {
                             "stream"
                         };
-                        emit_event(
-                            &self.event_tx,
-                            Event::Error(format!(
+                        self.send_session_error(
+                            &session_id,
+                            format!(
                                 "Failed to roll back {recovery_target} {} after runtime error: {rollback_error}",
                                 message_id
-                            )),
+                            ),
                         );
                     }
                 }
@@ -374,7 +410,7 @@ impl RuntimeCore {
         continuation_error: bool,
     ) {
         let rollback_result = {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             let rollback_result = agent.abort_streaming_message(&message_id).await;
             if rollback_result.is_ok() {
                 agent.clear_active_turn(&session_id);
@@ -384,7 +420,7 @@ impl RuntimeCore {
 
         match rollback_result {
             Ok(Some(_)) => {
-                self.schedule_queue_drain(&session_id).await;
+                self.schedule_queue_drain(&session_id);
                 emit_event(
                     &self.event_tx,
                     Event::HistoryUpdated {
@@ -393,21 +429,21 @@ impl RuntimeCore {
                 );
             }
             Ok(None) => {
-                emit_event(
-                    &self.event_tx,
-                    Event::Error(format!(
+                self.send_session_error(
+                    &session_id,
+                    format!(
                         "Failed to recover stream state for message {} after completion error",
                         message_id
-                    )),
+                    ),
                 );
             }
             Err(rollback_error) => {
-                emit_event(
-                    &self.event_tx,
-                    Event::Error(format!(
+                self.send_session_error(
+                    &session_id,
+                    format!(
                         "Failed to roll back stream {} after completion error: {rollback_error}",
                         message_id
-                    )),
+                    ),
                 );
             }
         }
@@ -437,7 +473,7 @@ impl RuntimeCore {
         session_id: &str,
         message_id: &MessageId,
     ) -> Result<bool> {
-        let mut agent = self.agent_manager.lock().await;
+        let mut agent = self.agent_manager.write().await;
         let rollback_result = agent.abort_streaming_message(message_id).await?;
         if rollback_result.is_some() {
             agent.clear_active_turn(session_id);
@@ -453,8 +489,9 @@ impl RuntimeCore {
         session_id: String,
         request: PendingStreamRequest,
         providers: ProviderManager,
-        agent_manager: Arc<tokio::sync::Mutex<kraai_agent::AgentManager>>,
-        event_tx: tokio::sync::broadcast::Sender<Event>,
+        agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
+        event_tx: RuntimeEventSender,
+        session_state_barrier: Arc<tokio::sync::RwLock<()>>,
     ) -> StreamDriveResult {
         let PendingStreamRequest {
             message_id,
@@ -462,17 +499,8 @@ impl RuntimeCore {
             model_id,
             provider_request,
             script_tool_transport,
-            context_notifications,
+            context_notifications: _,
         } = request;
-        if !context_notifications.is_empty() {
-            emit_event(
-                &event_tx,
-                Event::ContextStateChanged {
-                    session_id: session_id.clone(),
-                    notifications: context_notifications,
-                },
-            );
-        }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),
@@ -493,14 +521,6 @@ impl RuntimeCore {
                 };
             }
         };
-
-        emit_event(
-            &event_tx,
-            Event::StreamStart {
-                session_id: session_id.clone(),
-                message_id: message_id.to_string(),
-            },
-        );
 
         let mut parser = ScriptProtocolParser::new();
         let mut completed_boundary = None;
@@ -547,8 +567,9 @@ impl RuntimeCore {
                         continue;
                     }
                     if script_tool_transport == ScriptToolTransport::NativeCustom {
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
-                            let agent = agent_manager.lock().await;
+                            let agent = agent_manager.read().await;
                             agent
                                 .append_text_chunk(&message_id, &item_id, phase, &delta)
                                 .await
@@ -573,8 +594,9 @@ impl RuntimeCore {
 
                     let parsed = parser.ingest(&delta);
                     if !parsed.accepted.is_empty() {
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
-                            let agent = agent_manager.lock().await;
+                            let agent = agent_manager.read().await;
                             agent
                                 .append_text_chunk(&message_id, &item_id, phase, &parsed.accepted)
                                 .await
@@ -602,8 +624,9 @@ impl RuntimeCore {
                             })
                             .unwrap_or_default();
                         let call_id = ToolCallId::new(format!("kraai-{}", Ulid::generate()));
+                        let _state_guard = session_state_barrier.read().await;
                         let visible = {
-                            let agent = agent_manager.lock().await;
+                            let agent = agent_manager.read().await;
                             agent
                                 .append_script_call(
                                     &message_id,
@@ -676,8 +699,9 @@ impl RuntimeCore {
                             Some(error),
                         ),
                     };
+                    let _state_guard = session_state_barrier.read().await;
                     let visible = {
-                        let agent = agent_manager.lock().await;
+                        let agent = agent_manager.read().await;
                         agent
                             .append_script_call(&message_id, call_id.clone(), name, input)
                             .await
@@ -703,7 +727,8 @@ impl RuntimeCore {
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
-                    let agent = agent_manager.lock().await;
+                    let _state_guard = session_state_barrier.read().await;
+                    let agent = agent_manager.read().await;
                     if !agent.set_streaming_message_usage(&message_id, usage).await {
                         return StreamDriveResult::Stopped;
                     }
@@ -757,8 +782,9 @@ impl RuntimeCore {
                     kraai_types::AssistantPhase::FinalAnswer,
                 )
             });
+            let _state_guard = session_state_barrier.read().await;
             let visible = {
-                let agent = agent_manager.lock().await;
+                let agent = agent_manager.read().await;
                 agent
                     .append_text_chunk(&message_id, &item_id, phase, &tail.accepted)
                     .await
@@ -806,14 +832,16 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+        let state_guard = self.session_state_barrier.read().await;
         let Some(active_stream) = self.take_active_stream(&session_id).await else {
+            drop(state_guard);
             return Ok(self.cancel_active_script(&session_id).await);
         };
 
         active_stream.abort_handle.abort();
 
         let cancelled_stream = {
-            let mut agent = self.agent_manager.lock().await;
+            let mut agent = self.agent_manager.write().await;
             let cancelled = match agent
                 .cancel_streaming_message(&active_stream.message_id)
                 .await
@@ -843,7 +871,7 @@ impl RuntimeCore {
         self.send_event(Event::HistoryUpdated {
             session_id: cancelled_stream.session_id,
         });
-        self.schedule_queue_drain(&session_id).await;
+        self.schedule_queue_drain(&session_id);
         Ok(true)
     }
 }

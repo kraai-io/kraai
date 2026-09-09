@@ -1,0 +1,13 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-command-catalog"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+kraai-command-close-files = { workspace = true }
+kraai-command-core = { workspace = true }
+kraai-command-edit-file = { workspace = true }
+kraai-command-open-files = { workspace = true }

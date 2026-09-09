@@ -7,11 +7,12 @@ use kraai_provider_core::{
     DynamicConfig, ModelConfig, ProviderConfig, ProviderManagerConfig, ProviderRegistry,
 };
 use kraai_types::{ModelId, ProviderId};
+use serde::{Deserialize, Serialize};
 
-use crate::SettingsValue;
+use crate::{FieldViolation, SettingsValue};
 
 /// Editable provider settings shared across clients.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
     pub id: String,
     pub type_id: String,
@@ -19,7 +20,7 @@ pub struct ProviderSettings {
 }
 
 /// Editable model settings shared across clients.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelSettings {
     pub id: String,
     pub provider_id: String,
@@ -27,22 +28,16 @@ pub struct ModelSettings {
 }
 
 /// Full editable settings document persisted to providers.toml.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsDocument {
     pub providers: Vec<ProviderSettings>,
     pub models: Vec<ModelSettings>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldValueEntry {
     pub key: String,
     pub value: SettingsValue,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SettingsValidationError {
-    field: String,
-    message: String,
 }
 
 pub(crate) fn default_provider_config_path() -> Result<PathBuf> {
@@ -75,18 +70,7 @@ pub(crate) fn read_settings_document(
 pub(crate) async fn write_settings_document(
     path: &Path,
     settings: &SettingsDocument,
-    registry: &ProviderRegistry,
 ) -> Result<()> {
-    let errors = validate_settings(settings, registry);
-    if !errors.is_empty() {
-        let message = errors
-            .into_iter()
-            .map(|error| format!("{}: {}", error.field, error.message))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(eyre!(message));
-    }
-
     let config = provider_config_from_settings(settings)?;
     let toml_string = toml::to_string_pretty(&config)?;
 
@@ -181,10 +165,10 @@ fn model_config_entry_from_settings(settings: &ModelSettings) -> Result<ModelCon
     })
 }
 
-fn validate_settings(
+pub(crate) fn validate_settings(
     settings: &SettingsDocument,
     registry: &ProviderRegistry,
-) -> Vec<SettingsValidationError> {
+) -> Vec<FieldViolation> {
     let mut errors = Vec::new();
     let mut provider_ids = std::collections::BTreeSet::new();
     let mut provider_types = BTreeMap::new();
@@ -193,26 +177,26 @@ fn validate_settings(
         let field_prefix = format!("providers[{index}]");
         let id = provider.id.trim();
         if id.is_empty() {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.id"),
                 message: String::from("Provider ID is required"),
             });
         } else if !provider_ids.insert(id.to_string()) {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.id"),
                 message: String::from("Provider ID must be unique"),
             });
         }
         let type_id = provider.type_id.trim();
         if type_id.is_empty() {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.type_id"),
                 message: String::from("Provider type is required"),
             });
             continue;
         }
         if !registry.has_factory(type_id) {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.type_id"),
                 message: format!("Unsupported provider type: {type_id}"),
             });
@@ -223,7 +207,7 @@ fn validate_settings(
             .validate_provider_config(type_id, &values_to_dynamic_config(&provider.values))
             .unwrap_or_default()
         {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.{}", error.field),
                 message: error.message,
             });
@@ -233,20 +217,20 @@ fn validate_settings(
     for (index, model) in settings.models.iter().enumerate() {
         let field_prefix = format!("models[{index}]");
         if model.id.trim().is_empty() {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.id"),
                 message: String::from("Model ID is required"),
             });
         }
         if model.provider_id.trim().is_empty() {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.provider_id"),
                 message: String::from("Provider ID is required"),
             });
             continue;
         }
         let Some(provider_type) = provider_types.get(model.provider_id.trim()) else {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.provider_id"),
                 message: String::from("Model must reference an existing provider"),
             });
@@ -256,7 +240,7 @@ fn validate_settings(
             .validate_model_config(provider_type, &values_to_dynamic_config(&model.values))
             .unwrap_or_default()
         {
-            errors.push(SettingsValidationError {
+            errors.push(FieldViolation {
                 field: format!("{field_prefix}.{}", error.field),
                 message: error.message,
             });
@@ -273,7 +257,7 @@ fn values_to_dynamic_config(values: &[FieldValueEntry]) -> DynamicConfig {
         .collect()
 }
 
-fn format_settings_errors(errors: Vec<SettingsValidationError>) -> String {
+fn format_settings_errors(errors: Vec<FieldViolation>) -> String {
     errors
         .into_iter()
         .map(|error| format!("{}: {}", error.field, error.message))

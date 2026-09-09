@@ -14,6 +14,14 @@ use crate::{
     is_likely_sandbox_denied, restricted_network_seccomp_program, run, run_bwrap_sandbox_probe,
 };
 
+#[cfg(target_os = "linux")]
+#[path = "tests/seccomp.rs"]
+mod seccomp;
+
+#[cfg(target_os = "linux")]
+#[path = "tests/policy.rs"]
+mod policy;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",
@@ -364,23 +372,29 @@ fn restricted_network_seccomp_program_allows_connect_only_on_private_ipc_descrip
             && is_seccomp_errno(&window[3])
             && !is_seccomp_errno(&window[4])
     }));
-    assert!(!program_denies_syscall(&program, libc::SYS_connect as u32));
+    assert!(!policy::denies_call(
+        &program,
+        libc::SYS_connect as u32,
+        [PRIVATE_DESCRIPTOR as u64, 0, 0, 0, 0, 0]
+    ));
+    assert!(policy::denies_call(
+        &program,
+        libc::SYS_connect as u32,
+        [PRIVATE_DESCRIPTOR as u64 + 1, 0, 0, 0, 0, 0]
+    ));
 }
 
 #[test]
 #[cfg(target_os = "linux")]
-fn restricted_network_seccomp_program_denies_socket_message_io() {
+fn restricted_network_seccomp_program_limits_socket_message_io() {
     let program = restricted_network_seccomp_program(&[]).expect("build seccomp program");
-    for syscall in [
-        libc::SYS_sendto,
-        libc::SYS_sendmsg,
-        libc::SYS_sendmmsg,
-        libc::SYS_recvfrom,
-        libc::SYS_recvmsg,
-        libc::SYS_recvmmsg,
-    ] {
+    for syscall in [libc::SYS_sendmmsg, libc::SYS_recvmmsg] {
         assert!(program_denies_syscall(&program, syscall as u32));
     }
+    // Keep local socket-pair I/O available for subprocess management.
+    assert!(!program_denies_syscall(&program, libc::SYS_sendmsg as u32));
+    assert!(!program_denies_syscall(&program, libc::SYS_recvmsg as u32));
+    assert!(!program_denies_syscall(&program, libc::SYS_recvfrom as u32));
 }
 
 #[test]
@@ -398,9 +412,7 @@ fn restricted_network_seccomp_program_denies_x32_syscalls() {
 
 #[cfg(target_os = "linux")]
 fn program_denies_syscall(program: &[SeccompInstruction], syscall: u32) -> bool {
-    program
-        .windows(2)
-        .any(|window| window[0].k == syscall && is_seccomp_errno(&window[1]))
+    policy::denies_call(program, syscall, [0; 6])
 }
 
 #[cfg(target_os = "linux")]

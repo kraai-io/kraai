@@ -17,6 +17,7 @@ use crate::wire::{TRANSPORT_DESCRIPTOR, write_request};
 pub struct ScriptExecutionPlan {
     pub execution_id: ScriptExecutionId,
     pub host_executable: PathBuf,
+    pub host_arguments: Vec<OsString>,
     pub source: Vec<u8>,
     pub workspace_root: PathBuf,
     pub environment: BTreeMap<String, String>,
@@ -42,6 +43,7 @@ impl ScriptExecutionPlan {
         Self {
             execution_id,
             host_executable,
+            host_arguments: Vec::new(),
             source,
             workspace_root,
             environment: BTreeMap::new(),
@@ -78,6 +80,10 @@ pub async fn execute(
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
         event_secret: secret,
+        restrict_network: !plan.capabilities.is_unsandboxed()
+            && !plan
+                .capabilities
+                .contains(kraai_types::SandboxCapability::Network),
     };
 
     let private_temp = plan.private_temp.reserve().map_err(RuntimeError::Sandbox)?;
@@ -107,6 +113,7 @@ pub async fn execute(
     launch.runtime_roots = plan.runtime_roots;
     launch.output_events = plan.output_events;
     launch.private_temp = private_temp;
+    launch.args(plan.host_arguments);
     launch.arg("--transport").arg(&transport_path);
     launch
         .private_ipc_connect_descriptors

@@ -37,6 +37,7 @@ crates/
   kraai-script-protocol/ - Streaming XML envelope and result rendering
   kraai-sandbox/         - Capability-based process sandbox and output capture
   kraai-nushell-runtime/ - Embedded Nushell host and authenticated effect transport
+  kraai-command-catalog/ - Production native command metadata and registry
   kraai-command-core/    - Native command declarations and registration contracts
   kraai-workspace-fs/    - Shared workspace filesystem operations
   commands/

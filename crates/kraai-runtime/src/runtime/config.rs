@@ -12,10 +12,12 @@ use tokio::task::JoinHandle;
 use super::core::{RuntimeCore, emit_event};
 use crate::api::{
     Event, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin,
+    PendingDeviceCodeLogin, RuntimeError, RuntimeResult,
 };
 use crate::handle::Command;
-use crate::settings::{SettingsDocument, read_settings_document, write_settings_document};
+use crate::settings::{
+    SettingsDocument, read_settings_document, validate_settings, write_settings_document,
+};
 
 impl RuntimeCore {
     pub(crate) fn spawn_openai_auth_forwarder(&self) -> JoinHandle<()> {
@@ -41,7 +43,9 @@ impl RuntimeCore {
                 None => {
                     emit_event(
                         &event_tx,
-                        Event::Error(String::from("Config path has no parent")),
+                        Event::ServiceError {
+                            error: RuntimeError::internal("Config path has no parent"),
+                        },
                     );
                     return;
                 }
@@ -49,10 +53,12 @@ impl RuntimeCore {
             if let Err(error) = std::fs::create_dir_all(&config_dir) {
                 emit_event(
                     &event_tx,
-                    Event::Error(format!(
-                        "Failed to create config directory {}: {error}",
-                        config_dir.display()
-                    )),
+                    Event::ServiceError {
+                        error: RuntimeError::internal(format!(
+                            "Failed to create config directory {}: {error}",
+                            config_dir.display()
+                        )),
+                    },
                 );
                 return;
             }
@@ -65,7 +71,11 @@ impl RuntimeCore {
                 Err(error) => {
                     emit_event(
                         &event_tx,
-                        Event::Error(format!("Failed to create config watcher: {error}")),
+                        Event::ServiceError {
+                            error: RuntimeError::internal(format!(
+                                "Failed to create config watcher: {error}"
+                            )),
+                        },
                     );
                     return;
                 }
@@ -74,10 +84,12 @@ impl RuntimeCore {
             if let Err(error) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
                 emit_event(
                     &event_tx,
-                    Event::Error(format!(
-                        "Failed to watch config directory {}: {error}",
-                        config_dir.display()
-                    )),
+                    Event::ServiceError {
+                        error: RuntimeError::internal(format!(
+                            "Failed to watch config directory {}: {error}",
+                            config_dir.display()
+                        )),
+                    },
                 );
                 return;
             }
@@ -98,7 +110,11 @@ impl RuntimeCore {
                     Err(error) => {
                         emit_event(
                             &event_tx,
-                            Event::Error(format!("Config watch error: {error:?}")),
+                            Event::ServiceError {
+                                error: RuntimeError::internal(format!(
+                                    "Config watch error: {error:?}"
+                                )),
+                            },
                         );
                     }
                 }
@@ -122,14 +138,20 @@ impl RuntimeCore {
             .wrap_err_with(|| format!("Failed to parse provider config {}", config_loc.display()))
     }
 
-    pub(crate) async fn save_settings_document(&self, settings: SettingsDocument) -> Result<()> {
-        write_settings_document(
-            &self.provider_config_path,
-            &settings,
-            &self.provider_registry,
-        )
-        .await?;
-        self.load_providers_config_and_emit().await?;
+    pub(crate) async fn save_settings_document(
+        &self,
+        settings: SettingsDocument,
+    ) -> RuntimeResult<()> {
+        let violations = validate_settings(&settings, &self.provider_registry);
+        if !violations.is_empty() {
+            return Err(RuntimeError::validation(violations));
+        }
+        write_settings_document(&self.provider_config_path, &settings)
+            .await
+            .map_err(RuntimeError::internal)?;
+        self.load_providers_config_and_emit()
+            .await
+            .map_err(RuntimeError::internal)?;
         Ok(())
     }
 }
@@ -137,16 +159,16 @@ impl RuntimeCore {
 pub(crate) fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     let raw = PathBuf::from(path);
     if !raw.exists() {
-        return Err(eyre!(
+        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
             "Workspace directory does not exist: {}",
             raw.display()
-        ));
+        ))));
     }
     if !raw.is_dir() {
-        return Err(eyre!(
+        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
             "Workspace path is not a directory: {}",
             raw.display()
-        ));
+        ))));
     }
 
     Ok(raw.canonicalize().unwrap_or(raw))

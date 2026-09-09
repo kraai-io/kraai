@@ -7,24 +7,25 @@ use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::{MessageId, ModelId, ProviderId};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use super::script_execution::PendingScriptApproval;
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
-use crate::handle::Command;
+use crate::handle::{Command, RuntimeEventSender};
 
-pub(crate) fn emit_event(event_tx: &broadcast::Sender<Event>, event: Event) {
-    let _ = event_tx.send(event);
+pub(crate) fn emit_event(event_tx: &RuntimeEventSender, event: Event) {
+    event_tx.send(event);
 }
 
 #[derive(Clone)]
 pub(crate) struct RuntimeCore {
-    pub(crate) event_tx: broadcast::Sender<Event>,
+    pub(crate) event_tx: RuntimeEventSender,
     pub(crate) command_tx: mpsc::Sender<Command>,
-    pub(crate) agent_manager: Arc<Mutex<AgentManager>>,
+    pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
+    pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
@@ -32,8 +33,11 @@ pub(crate) struct RuntimeCore {
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
     pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    /// Separates coherent snapshot reads from state mutations and their corresponding events.
+    pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
+    pub(crate) use_current_executable_as_nushell_host: bool,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
 
@@ -45,6 +49,7 @@ pub(crate) struct ActiveStream {
 
 pub(crate) struct ActiveScriptTask {
     pub(crate) cancellation: CancellationToken,
+    pub(crate) completion: CancellationToken,
     pub(crate) join_handle: JoinHandle<()>,
 }
 
@@ -60,8 +65,32 @@ impl RuntimeCore {
         emit_event(&self.event_tx, event);
     }
 
-    pub(crate) fn send_error(&self, error: impl Into<String>) {
-        self.send_event(Event::Error(error.into()));
+    pub(crate) fn send_service_error(&self, error: impl std::fmt::Display) {
+        self.send_event(Event::ServiceError {
+            error: crate::RuntimeError::internal(error),
+        });
+    }
+
+    pub(crate) fn send_session_error(
+        &self,
+        session_id: impl Into<String>,
+        error: impl std::fmt::Display,
+    ) {
+        self.send_event(Event::SessionError {
+            session_id: session_id.into(),
+            error: crate::RuntimeError::internal(error),
+        });
+    }
+
+    pub(crate) fn send_session_report_error(
+        &self,
+        session_id: impl Into<String>,
+        error: color_eyre::Report,
+    ) {
+        self.send_event(Event::SessionError {
+            session_id: session_id.into(),
+            error: crate::RuntimeError::from_report(error),
+        });
     }
 
     pub(crate) async fn run(
@@ -84,21 +113,21 @@ impl RuntimeCore {
                     let error = format!("Failed to recover script executions: {error:#}");
                     self.startup_tx
                         .send_replace(RuntimeStartupState::Failed(error.clone()));
-                    self.send_error(error);
+                    self.send_service_error(error);
                 }
             },
             Err(error) => {
                 let error = format!("Failed to load config: {error}");
                 self.startup_tx
                     .send_replace(RuntimeStartupState::Failed(error.clone()));
-                self.send_error(error);
+                self.send_service_error(error);
             }
         }
 
         let mut shutdown_response = None;
         loop {
             let command = tokio::select! {
-                command = command_rx.recv() => command,
+                command = self.next_command(&mut command_rx) => command,
                 changed = shutdown_rx.changed() => {
                     if changed.is_err() || *shutdown_rx.borrow() {
                         None
@@ -115,7 +144,7 @@ impl RuntimeCore {
                 break;
             }
             if let Err(error) = self.handle_command(command).await {
-                self.send_error(error.to_string());
+                self.send_service_error(error);
             }
         }
 
@@ -126,7 +155,7 @@ impl RuntimeCore {
             let _ = task.await;
         }
         if let Some(response) = shutdown_response {
-            let _ = response.send(());
+            let _ = response.send(Ok(()));
         }
 
         tracing::info!("Event loop terminated");
@@ -163,7 +192,7 @@ impl RuntimeCore {
             .read_and_validate_provider_config(&self.provider_config_path)
             .await?;
         self.agent_manager
-            .lock()
+            .write()
             .await
             .set_providers(config, self.provider_registry.clone())
             .await?;

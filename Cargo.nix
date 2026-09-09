@@ -53,6 +53,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-command-catalog" = rec {
+      packageId = "kraai-command-catalog";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-command-catalog";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-command-close-files" = rec {
       packageId = "kraai-command-close-files";
       build = internal.buildRustCrateWithFeatures {
@@ -8775,20 +8785,8 @@ rec {
             packageId = "futures";
           }
           {
-            name = "kraai-command-close-files";
-            packageId = "kraai-command-close-files";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-command-edit-file";
-            packageId = "kraai-command-edit-file";
-          }
-          {
-            name = "kraai-command-open-files";
-            packageId = "kraai-command-open-files";
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
           }
           {
             name = "kraai-persistence";
@@ -8831,6 +8829,32 @@ rec {
           {
             name = "ulid";
             packageId = "ulid";
+          }
+        ];
+
+      };
+      "kraai-command-catalog" = rec {
+        crateName = "kraai-command-catalog";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-command-catalog; };
+        libName = "kraai_command_catalog";
+        dependencies = [
+          {
+            name = "kraai-command-close-files";
+            packageId = "kraai-command-close-files";
+          }
+          {
+            name = "kraai-command-core";
+            packageId = "kraai-command-core";
+          }
+          {
+            name = "kraai-command-edit-file";
+            packageId = "kraai-command-edit-file";
+          }
+          {
+            name = "kraai-command-open-files";
+            packageId = "kraai-command-open-files";
           }
         ];
 
@@ -9051,20 +9075,12 @@ rec {
             packageId = "hmac";
           }
           {
-            name = "kraai-command-close-files";
-            packageId = "kraai-command-close-files";
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
           }
           {
             name = "kraai-command-core";
             packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-command-edit-file";
-            packageId = "kraai-command-edit-file";
-          }
-          {
-            name = "kraai-command-open-files";
-            packageId = "kraai-command-open-files";
           }
           {
             name = "kraai-sandbox";
@@ -9458,6 +9474,11 @@ rec {
           {
             name = "notify";
             packageId = "notify 8.2.0";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
           }
           {
             name = "serde_json";

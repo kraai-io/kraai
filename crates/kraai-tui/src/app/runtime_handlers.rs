@@ -8,12 +8,18 @@ impl App {
                 self.state.status = String::from("Config loaded");
                 self.request_sync();
             }
-            Event::Error(msg) => {
-                self.state.is_streaming = false;
-                self.state.retry_waiting = false;
-                self.finish_terminal_turn_timer(Instant::now());
-                self.state.status = format!("Runtime error: {msg}");
-                self.fail_ci(format!("Runtime error: {msg}"));
+            Event::ServiceError { error } => {
+                self.state.status = format!("Runtime error: {error}");
+                self.fail_ci(format!("Runtime error: {error}"));
+            }
+            Event::SessionError { session_id, error } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.status = format!("Session error: {error}");
+                    self.request_sync_for_session(&session_id);
+                    self.fail_ci(format!("Session error: {error}"));
+                } else {
+                    self.request(RuntimeRequest::ListSessions);
+                }
             }
             Event::StreamStart {
                 session_id,
@@ -65,9 +71,6 @@ impl App {
                 self.mark_exit_usage_message_completed(message_id.clone());
                 self.request(RuntimeRequest::ListUserInputHistory {
                     limit: INPUT_HISTORY_LIMIT,
-                });
-                self.request(RuntimeRequest::GetChatHistory {
-                    session_id: session_id.clone(),
                 });
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.is_streaming = false;
@@ -168,7 +171,7 @@ impl App {
                     self.clamp_chat_scroll();
                     self.request_sync_for_session(&session_id);
                 } else {
-                    self.request(RuntimeRequest::GetChatHistory {
+                    self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
                     self.request(RuntimeRequest::ListSessions);
@@ -234,22 +237,44 @@ impl App {
                 self.state.status = format!("Failed loading models: {err}");
                 self.fail_ci(format!("Failed loading models: {err}"));
             }
-            RuntimeResponse::AgentProfiles {
-                session_id,
-                result: Ok(state),
-            } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    return;
+            RuntimeResponse::AgentProfileCatalog(result) => match result {
+                Ok(catalog) => {
+                    self.state.agent_profiles = catalog.profiles;
+                    self.state.agent_profile_warnings = catalog.warnings;
+                    let selected_is_available = self
+                        .state
+                        .selected_profile_id
+                        .as_ref()
+                        .is_some_and(|selected| {
+                            self.state
+                                .agent_profiles
+                                .iter()
+                                .any(|profile| &profile.id == selected)
+                        });
+                    if !selected_is_available {
+                        self.state.selected_profile_id = Some(catalog.default_profile_id);
+                    }
+                    self.state.agent_menu_index = self
+                        .state
+                        .selected_profile_id
+                        .as_ref()
+                        .and_then(|selected| {
+                            self.state
+                                .agent_profiles
+                                .iter()
+                                .position(|profile| &profile.id == selected)
+                        })
+                        .unwrap_or(0);
+                    if let Some(warning) = self.state.agent_profile_warnings.first() {
+                        self.state.status = format!("Agent profile warning: {}", warning.message);
+                    }
+                    self.maybe_send_startup_message();
                 }
-                self.apply_agent_profiles_state(state);
-                self.sync_turn_timer_with_activity(Instant::now());
-                self.maybe_finish_ci_run();
-            }
-            RuntimeResponse::AgentProfiles {
-                result: Err(err), ..
-            } => {
-                self.state.status = format!("Failed loading agent profiles: {err}");
-            }
+                Err(error) => {
+                    self.state.status = format!("Failed loading agent profiles: {error}");
+                    self.fail_ci(format!("Failed loading agent profiles: {error}"));
+                }
+            },
             RuntimeResponse::ProviderDefinitions(Ok(definitions)) => {
                 self.state.provider_definitions = definitions;
             }
@@ -311,16 +336,6 @@ impl App {
                 self.state.selected_profile_id = draft_profile_id.clone();
                 self.request_sync_for_session(&session_id);
 
-                if draft_profile_id.as_deref() != Some(DEFAULT_AGENT_PROFILE_ID)
-                    && let Some(profile_id) = draft_profile_id
-                {
-                    self.request(RuntimeRequest::SetSessionProfile {
-                        session_id,
-                        profile_id,
-                    });
-                    return;
-                }
-
                 if let Some(pending_submit) = self.state.pending_submit.take() {
                     self.dispatch_send_message(
                         session_id,
@@ -359,7 +374,7 @@ impl App {
                     self.state.selected_profile_id = Some(profile_id.clone());
                     self.state.status = format!("Selected agent: {profile_id}");
                     self.save_workspace_preferences();
-                    self.request(RuntimeRequest::ListAgentProfiles {
+                    self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
                     self.state.mode = UiMode::Chat;
@@ -411,7 +426,7 @@ impl App {
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
-            RuntimeResponse::SendMessage(Ok(())) => {}
+            RuntimeResponse::SendMessage(Ok(_outcome)) => {}
             RuntimeResponse::SendMessage(Err(err)) => {
                 if !self.state.optimistic_messages.is_empty() {
                     self.state.optimistic_messages.remove(0);
@@ -432,7 +447,11 @@ impl App {
                 self.request(RuntimeRequest::ListModels);
             }
             RuntimeResponse::SaveSettings(Err(err)) => {
-                self.state.settings_errors = parse_settings_errors(&err);
+                self.state.settings_errors = err
+                    .violations
+                    .iter()
+                    .map(|violation| (violation.field.clone(), violation.message.clone()))
+                    .collect();
                 self.state.status = format!("Failed saving settings: {err}");
             }
             RuntimeResponse::ChatHistory { session_id, result } => {
@@ -458,21 +477,72 @@ impl App {
                     self.maybe_finish_ci_run();
                 }
             }
-            RuntimeResponse::SessionContextUsage { session_id, result } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    return;
-                }
-
-                match result {
-                    Ok(usage) => {
-                        self.state.context_usage = usage;
+            RuntimeResponse::SessionSnapshot { session_id, result } => {
+                match *result {
+                    Ok(mut snapshot) => {
+                        if self
+                            .last_session_event_sequences
+                            .get(&session_id)
+                            .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
+                        {
+                            if self.state.current_session_id.as_deref() == Some(session_id.as_str())
+                            {
+                                self.ci_metrics_history_pending = false;
+                                self.ci_metrics_context_pending = false;
+                                self.maybe_finish_ci_run();
+                            }
+                            return;
+                        }
+                        self.session_snapshot_sequences
+                            .insert(session_id.clone(), snapshot.event_sequence);
+                        self.merge_local_streaming_content(&mut snapshot.history);
+                        self.accumulate_exit_usage_from_history(&snapshot.history);
+                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                            self.state.current_tip_id = snapshot.session.tip_id.clone();
+                            self.state.chat_history = snapshot.history;
+                            self.state.context_usage = snapshot.context_usage;
+                            self.state.pending_script = snapshot.pending_script;
+                            self.apply_agent_profiles_state(snapshot.profiles);
+                            self.state.is_streaming = matches!(
+                                snapshot.activity,
+                                kraai_runtime::SessionActivity::Streaming
+                            );
+                            self.state.script_phase = match snapshot.activity {
+                                kraai_runtime::SessionActivity::AwaitingApproval => {
+                                    ScriptPhase::AwaitingApproval
+                                }
+                                kraai_runtime::SessionActivity::ExecutingScript => {
+                                    ScriptPhase::Executing
+                                }
+                                kraai_runtime::SessionActivity::Idle
+                                | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
+                            };
+                            self.state.profile_locked = snapshot.session.profile_locked;
+                            if let Some(existing) = self
+                                .state
+                                .sessions
+                                .iter_mut()
+                                .find(|session| session.id == snapshot.session.id)
+                            {
+                                *existing = snapshot.session;
+                            }
+                            self.invalidate_chat_cache();
+                            self.reconcile_optimistic_messages();
+                            self.clamp_chat_scroll();
+                            self.sync_turn_timer_with_activity(Instant::now());
+                        }
                     }
-                    Err(err) => {
-                        self.state.status = format!("Failed loading context usage: {err}");
+                    Err(error) => {
+                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                            self.state.status = format!("Failed loading session: {error}");
+                        }
                     }
                 }
-                self.ci_metrics_context_pending = false;
-                self.maybe_finish_ci_run();
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.ci_metrics_history_pending = false;
+                    self.ci_metrics_context_pending = false;
+                    self.maybe_finish_ci_run();
+                }
             }
             RuntimeResponse::CurrentTip { session_id, result } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
@@ -509,26 +579,6 @@ impl App {
                     }
                     Err(err) => {
                         self.state.status = format!("Failed to undo: {err}");
-                    }
-                }
-            }
-            RuntimeResponse::PendingScript { session_id, result } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
-                    return;
-                }
-                match result {
-                    Ok(Some(script)) => {
-                        self.state.pending_script = Some(script);
-                        self.enter_script_decision_phase();
-                    }
-                    Ok(None) => {
-                        self.state.pending_script = None;
-                        if self.state.script_phase == ScriptPhase::AwaitingApproval {
-                            self.state.script_phase = ScriptPhase::Idle;
-                        }
-                    }
-                    Err(error) => {
-                        self.state.status = format!("Failed loading pending script: {error}");
                     }
                 }
             }
@@ -651,11 +701,16 @@ impl App {
             RuntimeResponse::CancelStream(Err(err)) => {
                 self.state.status = format!("Failed cancelling stream: {err}");
             }
-            RuntimeResponse::ContinueSession(Ok(())) => {
-                self.state.script_phase = ScriptPhase::Idle;
-                self.start_or_resume_turn_timer(Instant::now());
-                self.state.status = String::from("Continuing session");
-            }
+            RuntimeResponse::ContinueSession(Ok(outcome)) => match outcome {
+                kraai_runtime::ContinueSessionOutcome::Started => {
+                    self.state.script_phase = ScriptPhase::Idle;
+                    self.start_or_resume_turn_timer(Instant::now());
+                    self.state.status = String::from("Continuing session");
+                }
+                kraai_runtime::ContinueSessionOutcome::NothingToContinue => {
+                    self.state.status = String::from("Nothing to continue");
+                }
+            },
             RuntimeResponse::ContinueSession(Err(err)) => {
                 self.state.status = format!("Failed continuing session: {err}");
             }

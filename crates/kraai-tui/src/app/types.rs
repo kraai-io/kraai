@@ -1,17 +1,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kraai_runtime::{
-    AgentProfileSummary, AgentProfilesState, Model, ProviderDefinition, Session,
-    SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
+    AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{
-    EnvironmentPolicy, EscalationPolicy, Message, MessageId, NushellStartup, PathPolicy,
-    SandboxCapabilities, TokenUsage,
-};
+use kraai_types::{Message, MessageId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
-pub(super) const DEFAULT_AGENT_PROFILE_ID: &str = "plan";
+type RuntimeResult<T> = Result<T, kraai_runtime::RuntimeError>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
@@ -20,42 +16,6 @@ pub struct StartupOptions {
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub message: Option<String>,
-}
-
-pub(super) fn default_agent_profiles() -> Vec<AgentProfileSummary> {
-    vec![
-        AgentProfileSummary {
-            id: String::from("plan"),
-            display_name: String::from("Plan"),
-            description: String::from("Read-only planning agent"),
-            commands: vec![
-                String::from("kraai-open-files"),
-                String::from("kraai-close-files"),
-            ],
-            capabilities: SandboxCapabilities::workspace_read(),
-            escalation_policy: EscalationPolicy::Prompt,
-            environment: EnvironmentPolicy::AllowList,
-            nushell_startup: NushellStartup::Clean,
-            path: PathPolicy::Packaged,
-            source: kraai_runtime::AgentProfileSource::BuiltIn,
-        },
-        AgentProfileSummary {
-            id: String::from("coding"),
-            display_name: String::from("Coding"),
-            description: String::from("Implementation agent"),
-            commands: vec![
-                String::from("kraai-open-files"),
-                String::from("kraai-close-files"),
-                String::from("kraai-edit-file"),
-            ],
-            capabilities: SandboxCapabilities::workspace_write(),
-            escalation_policy: EscalationPolicy::Prompt,
-            environment: EnvironmentPolicy::AllowList,
-            nushell_startup: NushellStartup::Clean,
-            path: PathPolicy::Packaged,
-            source: kraai_runtime::AgentProfileSource::BuiltIn,
-        },
-    ]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,9 +126,7 @@ pub(super) struct UsageModelKey {
 
 pub(super) enum RuntimeRequest {
     ListModels,
-    ListAgentProfiles {
-        session_id: String,
-    },
+    GetAgentProfileCatalog,
     ListProviderDefinitions,
     GetSettings,
     GetOpenAiCodexAuthStatus,
@@ -178,6 +136,7 @@ pub(super) enum RuntimeRequest {
     LogoutOpenAiCodexAuth,
     CreateSession {
         creation_id: u64,
+        profile_id: Option<String>,
     },
     SetSessionProfile {
         session_id: String,
@@ -195,16 +154,13 @@ pub(super) enum RuntimeRequest {
     GetChatHistory {
         session_id: String,
     },
-    GetSessionContextUsage {
+    GetSessionSnapshot {
         session_id: String,
     },
     GetCurrentTip {
         session_id: String,
     },
     UndoLastUserMessage {
-        session_id: String,
-    },
-    GetPendingScript {
         session_id: String,
     },
     LoadSession {
@@ -234,69 +190,62 @@ pub(super) enum RuntimeRequest {
 }
 
 pub(super) enum RuntimeResponse {
-    Models(Result<HashMap<String, Vec<Model>>, String>),
-    AgentProfiles {
-        session_id: String,
-        result: Result<AgentProfilesState, String>,
-    },
-    ProviderDefinitions(Result<Vec<ProviderDefinition>, String>),
-    Settings(Result<SettingsDocument, String>),
-    OpenAiCodexAuthStatus(Result<ProviderAuthStatus, String>),
-    StartOpenAiCodexBrowserLogin(Result<ProviderAuthStatus, String>),
-    StartOpenAiCodexDeviceCodeLogin(Result<ProviderAuthStatus, String>),
-    CancelOpenAiCodexLogin(Result<ProviderAuthStatus, String>),
-    LogoutOpenAiCodexAuth(Result<ProviderAuthStatus, String>),
+    Models(RuntimeResult<HashMap<String, Vec<Model>>>),
+    AgentProfileCatalog(RuntimeResult<AgentProfileCatalog>),
+    ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),
+    Settings(RuntimeResult<SettingsDocument>),
+    OpenAiCodexAuthStatus(RuntimeResult<ProviderAuthStatus>),
+    StartOpenAiCodexBrowserLogin(RuntimeResult<ProviderAuthStatus>),
+    StartOpenAiCodexDeviceCodeLogin(RuntimeResult<ProviderAuthStatus>),
+    CancelOpenAiCodexLogin(RuntimeResult<ProviderAuthStatus>),
+    LogoutOpenAiCodexAuth(RuntimeResult<ProviderAuthStatus>),
     CreateSession {
         creation_id: u64,
-        result: Result<String, String>,
+        result: RuntimeResult<String>,
     },
     SetSessionProfile {
         session_id: String,
         profile_id: String,
-        result: Result<(), String>,
+        result: RuntimeResult<()>,
     },
-    SendMessage(Result<(), String>),
-    SaveSettings(Result<(), String>),
+    SendMessage(RuntimeResult<kraai_runtime::SubmitMessageOutcome>),
+    SaveSettings(RuntimeResult<()>),
     ChatHistory {
         session_id: String,
-        result: Result<BTreeMap<MessageId, Message>, String>,
+        result: RuntimeResult<BTreeMap<MessageId, Message>>,
     },
-    SessionContextUsage {
+    SessionSnapshot {
         session_id: String,
-        result: Result<Option<RuntimeSessionContextUsage>, String>,
+        result: Box<RuntimeResult<SessionSnapshot>>,
     },
     CurrentTip {
         session_id: String,
-        result: Result<Option<String>, String>,
+        result: RuntimeResult<Option<String>>,
     },
     UndoLastUserMessage {
         session_id: String,
-        result: Result<Option<String>, String>,
-    },
-    PendingScript {
-        session_id: String,
-        result: Result<Option<kraai_runtime::PendingScriptInfo>, String>,
+        result: RuntimeResult<Option<String>>,
     },
     LoadSession {
         session_id: String,
-        result: Result<bool, String>,
+        result: RuntimeResult<bool>,
     },
-    Sessions(Result<Vec<Session>, String>),
-    UserInputHistory(Result<Vec<String>, String>),
+    Sessions(RuntimeResult<Vec<Session>>),
+    UserInputHistory(RuntimeResult<Vec<String>>),
     DeleteSession {
         session_id: String,
-        result: Result<(), String>,
+        result: RuntimeResult<()>,
     },
     ApproveScript {
         session_id: String,
         execution_id: String,
-        result: Result<(), String>,
+        result: RuntimeResult<()>,
     },
     DenyScript {
         session_id: String,
         execution_id: String,
-        result: Result<(), String>,
+        result: RuntimeResult<()>,
     },
-    CancelStream(Result<bool, String>),
-    ContinueSession(Result<(), String>),
+    CancelStream(RuntimeResult<bool>),
+    ContinueSession(RuntimeResult<kraai_runtime::ContinueSessionOutcome>),
 }

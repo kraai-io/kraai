@@ -50,6 +50,11 @@ pub(crate) struct PendingScriptApproval {
     pub(crate) additions: Vec<SandboxCapability>,
 }
 
+struct NushellHost {
+    executable: PathBuf,
+    arguments: Vec<std::ffi::OsString>,
+}
+
 impl CompletedScriptExecution {
     pub(crate) fn render_result(&self) -> Result<String> {
         let status = self.record.status.ok_or_else(|| {
@@ -95,7 +100,7 @@ impl RuntimeCore {
         cancellation: CancellationToken,
     ) -> Result<CompletedScriptExecution> {
         let execution_id = request.id.clone();
-        let host_executable = match resolve_nushell_host() {
+        let host = match resolve_nushell_host(self.use_current_executable_as_nushell_host) {
             Ok(host) => host,
             Err(error) => {
                 let record = self
@@ -131,12 +136,13 @@ impl RuntimeCore {
 
         let mut plan = ScriptExecutionPlan::new(
             execution_id.clone(),
-            host_executable,
+            host.executable,
             request.source,
             request.workspace_root.clone(),
             request.effective_capabilities.clone(),
             request.timeout,
         );
+        plan.host_arguments = host.arguments;
         plan.environment = request.environment;
         plan.runtime_roots = request.runtime_roots;
         if let Some(host_directory) = plan.host_executable.parent()
@@ -358,11 +364,18 @@ fn completion_from_runtime_error(
     }
 }
 
-fn resolve_nushell_host() -> Result<PathBuf> {
+fn resolve_nushell_host(use_current_executable: bool) -> Result<NushellHost> {
     let current_executable = std::env::current_exe()
         .context("Failed to locate the running Kraai executable")?
         .canonicalize()
         .context("Failed to canonicalize the running Kraai executable")?;
+    resolve_nushell_host_from(current_executable, use_current_executable)
+}
+
+fn resolve_nushell_host_from(
+    current_executable: PathBuf,
+    use_current_executable: bool,
+) -> Result<NushellHost> {
     let directory = current_executable.parent().ok_or_else(|| {
         eyre!(
             "Kraai executable has no parent directory: {}",
@@ -370,12 +383,29 @@ fn resolve_nushell_host() -> Result<PathBuf> {
         )
     })?;
     let host = directory.join("kraai-nushell-host");
-    canonical_executable(&host).with_context(|| {
-        format!(
-            "Unable to locate the packaged Nushell host beside Kraai at {}",
-            host.display()
-        )
-    })
+    if let Ok(executable) = canonical_executable(&host) {
+        return Ok(NushellHost {
+            executable,
+            arguments: Vec::new(),
+        });
+    }
+    if use_current_executable {
+        return Ok(NushellHost {
+            executable: current_executable,
+            arguments: vec![kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT.into()],
+        });
+    }
+    canonical_executable(&host)
+        .map(|executable| NushellHost {
+            executable,
+            arguments: Vec::new(),
+        })
+        .with_context(|| {
+            format!(
+                "Unable to locate the packaged Nushell host beside Kraai at {}",
+                host.display()
+            )
+        })
 }
 
 fn canonical_executable(path: &Path) -> Result<PathBuf> {
@@ -407,6 +437,44 @@ mod tests {
                 payload: serde_json::json!({ "path": path }),
             }],
         }
+    }
+
+    #[test]
+    fn nushell_host_prefers_packaged_sibling_and_can_fall_back_to_frontend() -> Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("kraai-host-resolution-{}", ulid::Ulid::generate()));
+        std::fs::create_dir_all(&directory)?;
+        let frontend = directory.join("kraai");
+        std::fs::write(&frontend, [])?;
+        let frontend = frontend.canonicalize()?;
+
+        let fallback = resolve_nushell_host_from(frontend.clone(), true)?;
+        if fallback.executable != frontend {
+            return Err(eyre!("frontend fallback selected the wrong executable"));
+        }
+        if fallback.arguments
+            != [std::ffi::OsString::from(
+                kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT,
+            )]
+        {
+            return Err(eyre!(
+                "frontend fallback omitted the internal host argument"
+            ));
+        }
+        if resolve_nushell_host_from(frontend.clone(), false).is_ok() {
+            return Err(eyre!("frontend fallback was enabled without opt-in"));
+        }
+
+        let packaged = directory.join("kraai-nushell-host");
+        std::fs::write(&packaged, [])?;
+        let packaged = packaged.canonicalize()?;
+        let resolved = resolve_nushell_host_from(frontend, true)?;
+        if resolved.executable != packaged || !resolved.arguments.is_empty() {
+            return Err(eyre!("packaged host was not preferred over the fallback"));
+        }
+
+        std::fs::remove_dir_all(directory)?;
+        Ok(())
     }
 
     #[test]

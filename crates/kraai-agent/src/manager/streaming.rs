@@ -22,9 +22,9 @@ impl AgentManager {
         let workspace_dir = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
             if state.active_turn_profile.is_some() {
-                return Err(eyre!(
+                return Err(eyre!(kraai_types::DomainError::conflict(
                     "Cannot send a new message while the current turn is active"
-                ));
+                )));
             }
             state.promote_pending_workspace_dir();
             state.last_model = Some(model_id.clone());
@@ -353,7 +353,9 @@ impl AgentManager {
         }
 
         if self.session_has_active_stream(session_id).await {
-            return Err(eyre!("Session already has an active stream: {session_id}"));
+            return Err(eyre!(kraai_types::DomainError::conflict(format!(
+                "Session already has an active stream: {session_id}"
+            ))));
         }
 
         let appended = self
@@ -588,29 +590,14 @@ impl AgentManager {
     }
 
     pub(super) async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
-        let mut context = Vec::new();
-        let mut current = Some(from.clone());
-
-        while let Some(id) = current {
-            {
-                let streaming = self.streaming_messages.read().await;
-                if let Some(state) = streaming.get(&id) {
-                    context.push(state.message.clone());
-                    current = state.message.parent_id.clone();
-                    continue;
-                }
-            }
-
-            if let Some(msg) = self.message_store.get(&id).await? {
-                context.push(msg.clone());
-                current = msg.parent_id.clone();
-            } else {
-                break;
-            }
-        }
-
-        context.reverse();
-        Ok(context)
+        let streaming = self.streaming_messages.read().await;
+        let in_flight = streaming
+            .iter()
+            .map(|(id, state)| (id.clone(), state.message.clone()))
+            .collect();
+        drop(streaming);
+        super::snapshot::load_history(self.message_store.as_ref(), Some(from.clone()), &in_flight)
+            .await
     }
 
     pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
@@ -647,24 +634,14 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
-        Ok(context.into_iter().rev().find_map(|message| {
-            (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
-                .then_some(message.generation)
-                .flatten()
-                .and_then(|generation| {
-                    generation.usage.map(|usage| SessionContextUsage {
-                        provider_id: generation.provider_id,
-                        model_id: generation.model_id,
-                        max_context: generation.max_context,
-                        usage,
-                    })
-                })
-        }))
+        Ok(context_usage(&context))
     }
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!("Cannot undo while the current turn is active"));
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "Cannot undo while the current turn is active"
+            )));
         }
 
         let Some(mut cursor) = self.get_tip(session_id).await? else {
@@ -686,4 +663,20 @@ impl AgentManager {
 
         Ok(None)
     }
+}
+
+pub(super) fn context_usage(context: &[Message]) -> Option<SessionContextUsage> {
+    context.iter().rev().find_map(|message| {
+        (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
+            .then_some(message.generation.as_ref())
+            .flatten()
+            .and_then(|generation| {
+                generation.usage.as_ref().map(|usage| SessionContextUsage {
+                    provider_id: generation.provider_id.clone(),
+                    model_id: generation.model_id.clone(),
+                    max_context: generation.max_context,
+                    usage: usage.clone(),
+                })
+            })
+    })
 }

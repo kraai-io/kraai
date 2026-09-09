@@ -10,6 +10,9 @@ pub use effects::{RejectStateEffects, StateEffectHandler};
 pub use execution::{RuntimeError, ScriptExecutionPlan, ScriptExecutionResult, execute};
 
 #[doc(hidden)]
+pub const INTERNAL_HOST_ARGUMENT: &str = "--kraai-internal-nushell-host";
+
+#[doc(hidden)]
 pub fn run_host_process() -> i32 {
     let transport_path = match host_transport_path() {
         Ok(path) => path,
@@ -32,13 +35,20 @@ pub fn run_host_process() -> i32 {
             return 70;
         }
     };
+    #[cfg(target_os = "linux")]
+    if request.restrict_network
+        && let Err(error) = kraai_sandbox::restrict_network_after_startup()
+    {
+        report_host_error(error);
+        return 70;
+    }
     let effect_client = std::sync::Arc::new(effects::DescriptorEffectClient::from_transport(
         request.execution_id.clone(),
         request.event_secret,
         transport,
     ));
     let context = kraai_command_core::CommandContext::new(effect_client);
-    let registry = match production_command_registry(context) {
+    let registry = match kraai_command_catalog::command_registry(context) {
         Ok(registry) => registry,
         Err(error) => {
             report_host_error(format!("invalid built-in command registry: {error}"));
@@ -64,11 +74,20 @@ fn report_host_error(message: impl std::fmt::Display) {
 }
 
 fn host_transport_path() -> Result<std::path::PathBuf, String> {
-    let mut args = std::env::args_os();
-    let _executable = args.next();
-    let flag = args
+    host_transport_path_from(std::env::args_os().skip(1))
+}
+
+fn host_transport_path_from(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<std::path::PathBuf, String> {
+    let mut flag = args
         .next()
         .ok_or_else(|| String::from("missing --transport argument"))?;
+    if flag == INTERNAL_HOST_ARGUMENT {
+        flag = args
+            .next()
+            .ok_or_else(|| String::from("missing --transport argument"))?;
+    }
     if flag != "--transport" {
         return Err(String::from("expected --transport argument"));
     }
@@ -81,11 +100,30 @@ fn host_transport_path() -> Result<std::path::PathBuf, String> {
     Ok(path.into())
 }
 
-fn production_command_registry(
-    context: kraai_command_core::CommandContext,
-) -> Result<kraai_command_core::CommandRegistry, kraai_command_core::CommandRegistryError> {
-    let open_files = kraai_command_open_files::OpenFilesCommand::registration(context.clone())?;
-    let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
-    let edit_file = kraai_command_edit_file::EditFileCommand::registration(context)?;
-    kraai_command_core::CommandRegistry::new([open_files, close_files, edit_file])
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_transport_accepts_standalone_and_internal_invocations() {
+        let standalone = ["--transport", "/tmp/host.sock"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
+        assert_eq!(
+            host_transport_path_from(standalone),
+            Ok(std::path::PathBuf::from("/tmp/host.sock"))
+        );
+
+        let internal = [
+            INTERNAL_HOST_ARGUMENT,
+            "--transport",
+            "/tmp/internal-host.sock",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from);
+        assert_eq!(
+            host_transport_path_from(internal),
+            Ok(std::path::PathBuf::from("/tmp/internal-host.sock"))
+        );
+    }
 }

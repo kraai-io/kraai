@@ -49,29 +49,79 @@ impl AgentManager {
     }
 
     pub async fn create_session(&mut self) -> Result<String> {
+        self.create_session_with(None, None).await
+    }
+
+    pub async fn create_session_with(
+        &mut self,
+        workspace_dir: Option<PathBuf>,
+        profile_id: Option<String>,
+    ) -> Result<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
             .as_secs();
 
         let session_id = Ulid::generate().to_string();
+        let workspace_dir = workspace_dir.unwrap_or_else(|| self.default_workspace_dir.clone());
+        let resolved = self.resolve_profiles_for_workspace(&workspace_dir);
+        let selected_profile_id =
+            profile_id.unwrap_or_else(|| self.default_profile_for_profiles(&resolved.profiles));
+        if !resolved
+            .profiles
+            .iter()
+            .any(|profile| profile.id == selected_profile_id)
+        {
+            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+                "Unknown profile: {selected_profile_id}"
+            ))));
+        }
         let session = SessionMeta {
             id: session_id.clone(),
             tip_id: None,
-            workspace_dir: self.default_workspace_dir.clone(),
+            workspace_dir: workspace_dir.clone(),
             created_at: now,
             updated_at: now,
             title: None,
-            selected_profile_id: Some(
-                self.last_used_profile_id
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string()),
-            ),
+            selected_profile_id: Some(selected_profile_id.clone()),
         };
 
         self.session_store.save(&session).await?;
         self.ensure_runtime_state(&session_id, &session.workspace_dir);
+        self.last_used_profile_id = Some(selected_profile_id);
         Ok(session_id)
+    }
+
+    pub fn list_agent_profiles_for_workspace(
+        &self,
+        workspace_dir: Option<&Path>,
+    ) -> (PathBuf, AgentProfilesState) {
+        let workspace_dir = workspace_dir
+            .unwrap_or(&self.default_workspace_dir)
+            .to_path_buf();
+        let resolved = self.resolve_profiles_for_workspace(&workspace_dir);
+        let selected_profile_id = Some(self.default_profile_for_profiles(&resolved.profiles));
+        (
+            workspace_dir,
+            AgentProfilesState {
+                profiles: resolved
+                    .profiles
+                    .iter()
+                    .map(AgentProfile::summary)
+                    .collect(),
+                warnings: resolved.warnings,
+                selected_profile_id,
+                profile_locked: false,
+            },
+        )
+    }
+
+    fn default_profile_for_profiles(&self, profiles: &[AgentProfile]) -> String {
+        self.last_used_profile_id
+            .as_ref()
+            .filter(|selected| profiles.iter().any(|profile| &profile.id == *selected))
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string())
     }
 
     pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {
@@ -92,7 +142,9 @@ impl AgentManager {
         source_message_id: &MessageId,
     ) -> Result<()> {
         if !self.prepare_session(session_id).await? {
-            return Err(eyre!("Session not found: {session_id}"));
+            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+                "Session not found: {session_id}"
+            ))));
         }
         let source = self
             .message_store
@@ -253,9 +305,9 @@ impl AgentManager {
         profile_id: String,
     ) -> Result<()> {
         if self.is_profile_locked(session_id) {
-            return Err(eyre!(
+            return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot change profile while the current turn is active"
-            ));
+            )));
         }
 
         let mut session = self.require_session(session_id).await?;
@@ -265,7 +317,9 @@ impl AgentManager {
             .iter()
             .any(|profile| profile.id == profile_id);
         if !exists {
-            return Err(eyre!("Unknown profile: {profile_id}"));
+            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+                "Unknown profile: {profile_id}"
+            ))));
         }
 
         session.selected_profile_id = Some(profile_id);
@@ -341,32 +395,41 @@ impl AgentManager {
 
     pub(super) fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {
         let Some(profile_id) = session.selected_profile_id.as_ref() else {
-            return Err(eyre!("No profile selected for this session"));
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "No profile selected for this session"
+            )));
         };
 
         self.resolve_profiles_for_workspace(&session.workspace_dir)
             .profiles
             .into_iter()
             .find(|profile| &profile.id == profile_id)
-            .ok_or_else(|| eyre!("Selected profile is unavailable: {profile_id}"))
+            .ok_or_else(|| {
+                eyre!(kraai_types::DomainError::not_found(format!(
+                    "Selected profile is unavailable: {profile_id}"
+                )))
+            })
     }
 
     pub(super) async fn require_session(&self, session_id: &str) -> Result<SessionMeta> {
-        self.session_store
-            .get(session_id)
-            .await?
-            .ok_or_else(|| eyre!("Session not found: {session_id}"))
+        self.session_store.get(session_id).await?.ok_or_else(|| {
+            eyre!(kraai_types::DomainError::not_found(format!(
+                "Session not found: {session_id}"
+            )))
+        })
     }
 
     pub fn script_turn_context(&self, session_id: &str) -> Result<ScriptTurnContext> {
-        let state = self
-            .session_states
-            .get(session_id)
-            .ok_or_else(|| eyre!("Session runtime state is unavailable: {session_id}"))?;
-        let profile = state
-            .active_turn_profile
-            .as_ref()
-            .ok_or_else(|| eyre!("Session has no active turn: {session_id}"))?;
+        let state = self.session_states.get(session_id).ok_or_else(|| {
+            eyre!(kraai_types::DomainError::not_found(format!(
+                "Session runtime state is unavailable: {session_id}"
+            )))
+        })?;
+        let profile = state.active_turn_profile.as_ref().ok_or_else(|| {
+            eyre!(kraai_types::DomainError::conflict(format!(
+                "Session has no active turn: {session_id}"
+            )))
+        })?;
         Ok(ScriptTurnContext {
             workspace_dir: state.active_workspace_dir.clone(),
             profile: profile.snapshot(),

@@ -119,10 +119,7 @@ pub fn resolve_profiles(
 }
 
 pub fn available_command_ids() -> HashSet<String> {
-    ["kraai-open-files", "kraai-close-files", "kraai-edit-file"]
-        .into_iter()
-        .map(String::from)
-        .collect()
+    kraai_command_catalog::command_id_set()
 }
 
 fn built_in_profiles() -> Vec<AgentProfile> {

@@ -1,6 +1,8 @@
 mod bubblewrap;
 mod seccomp;
 
+pub use seccomp::restrict_network_after_startup;
+
 use crate::config::{LaunchPlan, PreparedCommand};
 use crate::error::SandboxError;
 use crate::temp_dir::PrivateTempDir;
@@ -11,7 +13,9 @@ pub(crate) use bubblewrap::{
     find_bwrap, run_bwrap_sandbox_probe,
 };
 #[cfg(test)]
-pub(crate) use seccomp::{SeccompInstruction, restricted_network_seccomp_program};
+pub(crate) use seccomp::{
+    SeccompInstruction, install_restricted_network_filter, restricted_network_seccomp_program,
+};
 
 pub(crate) async fn prepare(
     plan: LaunchPlan,

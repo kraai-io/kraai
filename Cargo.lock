@@ -2882,10 +2882,7 @@ dependencies = [
  "color-eyre",
  "directories",
  "futures",
- "kraai-command-close-files",
- "kraai-command-core",
- "kraai-command-edit-file",
- "kraai-command-open-files",
+ "kraai-command-catalog",
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-types",
@@ -2896,6 +2893,16 @@ dependencies = [
  "toml",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "kraai-command-catalog"
+version = "0.1.0"
+dependencies = [
+ "kraai-command-close-files",
+ "kraai-command-core",
+ "kraai-command-edit-file",
+ "kraai-command-open-files",
 ]
 
 [[package]]
@@ -2967,10 +2974,8 @@ name = "kraai-nushell-runtime"
 version = "0.1.0"
 dependencies = [
  "hmac",
- "kraai-command-close-files",
+ "kraai-command-catalog",
  "kraai-command-core",
- "kraai-command-edit-file",
- "kraai-command-open-files",
  "kraai-sandbox",
  "kraai-types",
  "nix 0.31.3",

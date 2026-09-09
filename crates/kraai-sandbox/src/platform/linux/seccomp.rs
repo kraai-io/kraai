@@ -3,6 +3,61 @@ use std::io::{Seek, SeekFrom, Write};
 
 use crate::error::SandboxError;
 
+/// Tightens the host after its trusted IPC connection, before evaluating user code.
+/// Existing connections and private socketpairs remain usable by child processes.
+pub fn restrict_network_after_startup() -> Result<(), SandboxError> {
+    install_restricted_network_filter(&[])
+}
+
+#[expect(
+    unsafe_code,
+    reason = "seccomp installation requires passing a live BPF array to the kernel"
+)]
+pub(crate) fn install_restricted_network_filter(
+    private_ipc_connect_descriptors: &[std::os::fd::RawFd],
+) -> Result<(), SandboxError> {
+    let instructions = restricted_network_seccomp_program(private_ipc_connect_descriptors)?;
+    let filters: Vec<libc::sock_filter> = instructions
+        .into_iter()
+        .map(|i| libc::sock_filter {
+            code: i.code,
+            jt: i.jt,
+            jf: i.jf,
+            k: i.k,
+        })
+        .collect();
+    let program = libc::sock_fprog {
+        len: u16::try_from(filters.len()).map_err(|error| {
+            SandboxError::SandboxUnavailable(format!("network filter too large: {error}"))
+        })?,
+        filter: filters.as_ptr().cast_mut(),
+    };
+    // SAFETY: prctl uses scalar arguments here. The filter and its instruction array
+    // remain alive and unchanged until seccomp has copied them. TSYNC also restricts
+    // any threads created before this call; failure prevents host execution.
+    let no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if no_new_privs != 0 {
+        return Err(seccomp_file_error("set no_new_privs")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            libc::SECCOMP_SET_MODE_FILTER,
+            libc::SECCOMP_FILTER_FLAG_TSYNC,
+            &program,
+        )
+    };
+    if result != 0 {
+        return Err(SandboxError::SandboxUnavailable(format!(
+            "unable to install network filter: result {result}, {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn restricted_network_seccomp_filter(
     network_enabled: bool,
     private_ipc_connect_descriptors: &[std::os::fd::RawFd],
@@ -134,9 +189,10 @@ pub(crate) fn restricted_network_seccomp_program(
     ];
     append_arch_syscall_rejections(&mut program);
 
-    append_af_unix_only_socket_rule(&mut program, libc::SYS_socket as u32);
-    append_af_unix_only_socket_rule(&mut program, libc::SYS_socketpair as u32);
+    append_local_connection_socket_rule(&mut program, libc::SYS_socket as u32);
+    append_local_connection_socket_rule(&mut program, libc::SYS_socketpair as u32);
     append_private_ipc_connect_rule(&mut program, private_ipc_connect_descriptors)?;
+    append_connected_sendto_rule(&mut program);
 
     for syscall in [
         libc::SYS_ptrace,
@@ -152,11 +208,7 @@ pub(crate) fn restricted_network_seccomp_program(
         libc::SYS_getpeername,
         libc::SYS_getsockname,
         libc::SYS_shutdown,
-        libc::SYS_sendto,
-        libc::SYS_sendmsg,
         libc::SYS_sendmmsg,
-        libc::SYS_recvfrom,
-        libc::SYS_recvmsg,
         libc::SYS_recvmmsg,
         libc::SYS_getsockopt,
         libc::SYS_setsockopt,
@@ -166,6 +218,24 @@ pub(crate) fn restricted_network_seccomp_program(
 
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
     Ok(program)
+}
+
+#[cfg(target_os = "linux")]
+fn append_connected_sendto_rule(program: &mut Vec<SeccompInstruction>) {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+    const ALLOW: u32 = 0x7fff_0000;
+    const DENY: u32 = 0x0005_0000 | libc::EPERM as u32;
+    // Rust's UnixStream writes use sendto with a null destination. Check both
+    // halves of the pointer and the socklen_t; addressed traffic stays denied.
+    program.push(jump(BPF_JMP_JEQ_K, libc::SYS_sendto as u32, 0, 10));
+    for offset in [48, 52, 56] {
+        program.push(stmt(BPF_LD_W_ABS, offset));
+        program.push(jump(BPF_JMP_JEQ_K, 0, 1, 0));
+        program.push(stmt(BPF_RET_K, DENY));
+    }
+    program.push(stmt(BPF_RET_K, ALLOW));
 }
 
 #[cfg(target_os = "linux")]
@@ -246,18 +316,31 @@ fn audit_arch() -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-fn append_af_unix_only_socket_rule(program: &mut Vec<SeccompInstruction>, syscall: u32) {
+fn append_local_connection_socket_rule(program: &mut Vec<SeccompInstruction>, syscall: u32) {
     const BPF_LD_W_ABS: u16 = 0x20;
     const BPF_JMP_JEQ_K: u16 = 0x15;
     const BPF_RET_K: u16 = 0x06;
+    const BPF_ALU_AND_K: u16 = 0x54;
     const SECCOMP_DATA_ARG0_OFFSET: u32 = 16;
+    const SECCOMP_DATA_ARG1_OFFSET: u32 = 24;
     const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
     const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
     const DENY: u32 = SECCOMP_RET_ERRNO | libc::EPERM as u32;
 
-    program.push(jump(BPF_JMP_JEQ_K, syscall, 0, 4));
+    // sendmsg's destination lives behind a pointer, which classic seccomp cannot inspect.
+    // Even a datagram socketpair can send to a named endpoint. Only connection-oriented
+    // UNIX sockets are safe here; Rust's subprocess launcher uses SOCK_SEQPACKET pairs.
+    program.push(jump(BPF_JMP_JEQ_K, syscall, 0, 9));
     program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARG0_OFFSET));
     program.push(jump(BPF_JMP_JEQ_K, libc::AF_UNIX as u32, 1, 0));
+    program.push(stmt(BPF_RET_K, DENY));
+    program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARG1_OFFSET));
+    program.push(stmt(
+        BPF_ALU_AND_K,
+        !(libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK) as u32,
+    ));
+    program.push(jump(BPF_JMP_JEQ_K, libc::SOCK_STREAM as u32, 2, 0));
+    program.push(jump(BPF_JMP_JEQ_K, libc::SOCK_SEQPACKET as u32, 1, 0));
     program.push(stmt(BPF_RET_K, DENY));
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
 }

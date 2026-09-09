@@ -90,11 +90,14 @@ impl Cli {
 }
 
 fn main() -> Result<()> {
+    if let Some(exit_code) = kraai_runtime::run_internal_process() {
+        std::process::exit(exit_code);
+    }
     color_eyre::install()?;
 
     let cli = Cli::parse().validate().unwrap_or_else(|error| error.exit());
 
-    let runtime_builder = RuntimeBuilder::new();
+    let runtime_builder = RuntimeBuilder::new().use_current_executable_as_nushell_host();
     let runtime_builder = if let Some(path) = cli.provider_config.clone() {
         runtime_builder.provider_config_path(path)
     } else {
