@@ -22,6 +22,10 @@ mod seccomp;
 #[path = "tests/policy.rs"]
 mod policy;
 
+#[cfg(target_os = "linux")]
+#[path = "tests/dns.rs"]
+mod dns;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",

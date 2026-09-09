@@ -174,6 +174,15 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
         push_bind(&mut args, "--ro-bind", &root);
     }
 
+    if network_enabled
+        && !capabilities.contains(SandboxCapability::HostRead)
+        && !capabilities.contains(SandboxCapability::HostWrite)
+    {
+        // Sharing the network namespace does not expose the host's DNS configuration.
+        // Bubblewrap follows source symlinks, including systemd-resolved's /run target.
+        push_bind(&mut args, "--ro-bind-try", Path::new("/etc/resolv.conf"));
+    }
+
     if capabilities.contains(SandboxCapability::WorkspaceWrite)
         && !capabilities.contains(SandboxCapability::MetadataWrite)
     {
