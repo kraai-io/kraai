@@ -146,13 +146,15 @@ impl RuntimeCore {
         });
     }
 
+    // Callers hold session_state_barrier from request preparation through this method.
     pub(crate) async fn start_stream_job(
         &self,
         kind: StreamJobKind,
         session_id: String,
         providers: ProviderManager,
-        request: PendingStreamRequest,
+        mut request: PendingStreamRequest,
     ) {
+        let context_notifications = std::mem::take(&mut request.context_notifications);
         let runtime = self.clone();
         let start_gate = Arc::new(Notify::new());
         let request_session_id = session_id.clone();
@@ -199,15 +201,31 @@ impl RuntimeCore {
         });
 
         let previous = self.active_streams.lock().await.insert(
-            session_id,
+            session_id.clone(),
             ActiveStream {
-                message_id: request_message_id,
+                message_id: request_message_id.clone(),
                 abort_handle: task.abort_handle(),
             },
         );
         if let Some(previous) = previous {
             previous.abort_handle.abort();
         }
+        if !context_notifications.is_empty() {
+            emit_event(
+                &self.event_tx,
+                Event::ContextStateChanged {
+                    session_id: session_id.clone(),
+                    notifications: context_notifications,
+                },
+            );
+        }
+        emit_event(
+            &self.event_tx,
+            Event::StreamStart {
+                session_id,
+                message_id: request_message_id.to_string(),
+            },
+        );
         start_gate.notify_one();
     }
 
@@ -481,17 +499,8 @@ impl RuntimeCore {
             model_id,
             provider_request,
             script_tool_transport,
-            context_notifications,
+            context_notifications: _,
         } = request;
-        if !context_notifications.is_empty() {
-            emit_event(
-                &event_tx,
-                Event::ContextStateChanged {
-                    session_id: session_id.clone(),
-                    notifications: context_notifications,
-                },
-            );
-        }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),
@@ -512,14 +521,6 @@ impl RuntimeCore {
                 };
             }
         };
-
-        emit_event(
-            &event_tx,
-            Event::StreamStart {
-                session_id: session_id.clone(),
-                message_id: message_id.to_string(),
-            },
-        );
 
         let mut parser = ScriptProtocolParser::new();
         let mut completed_boundary = None;

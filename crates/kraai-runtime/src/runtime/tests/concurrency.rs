@@ -16,6 +16,60 @@ use crate::runtime::core::ActiveScriptTask;
 use crate::{Event, SessionActivity};
 
 #[tokio::test]
+async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let mutation = harness.runtime.session_state_barrier.read().await;
+    let mut agent = harness.runtime.agent_manager.write().await;
+    let mut request = agent
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
+        .await?;
+    let providers = agent.cloned_provider_manager();
+    drop(agent);
+    request.context_notifications = vec!["missing file automatically unpinned".into()];
+    let message_id = request.message_id.to_string();
+    let mut events = harness.runtime.event_tx.subscribe();
+    let runtime = harness.runtime.clone();
+    let snapshot = runtime.build_session_snapshot(&session_id);
+    tokio::pin!(snapshot);
+    assert!(poll!(&mut snapshot).is_pending());
+
+    harness
+        .runtime
+        .start_stream_job(
+            super::super::streaming::StreamJobKind::Initial,
+            session_id.clone(),
+            providers,
+            request,
+        )
+        .await;
+    // Neither the spawned provider task nor a snapshot may separate registration
+    // from its initial events, even when preparation produced notifications.
+    let context = events.try_recv()?;
+    assert!(
+        matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
+    );
+    let start = events.try_recv()?;
+    assert!(
+        matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
+    );
+    assert!(context.sequence < start.sequence);
+    drop(mutation);
+    let snapshot = tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
+    assert!(snapshot.event_sequence >= start.sequence);
+    assert_eq!(snapshot.activity, SessionActivity::Streaming);
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancellation_finishes_with_a_queued_snapshot_and_stays_active_until_finalized()
 -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())

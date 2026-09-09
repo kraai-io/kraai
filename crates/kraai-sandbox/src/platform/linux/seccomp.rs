@@ -5,12 +5,18 @@ use crate::error::SandboxError;
 
 /// Tightens the host after its trusted IPC connection, before evaluating user code.
 /// Existing connections and private socketpairs remain usable by child processes.
+pub fn restrict_network_after_startup() -> Result<(), SandboxError> {
+    install_restricted_network_filter(&[])
+}
+
 #[expect(
     unsafe_code,
     reason = "seccomp installation requires passing a live BPF array to the kernel"
 )]
-pub fn restrict_network_after_startup() -> Result<(), SandboxError> {
-    let instructions = restricted_network_seccomp_program(&[])?;
+pub(crate) fn install_restricted_network_filter(
+    private_ipc_connect_descriptors: &[std::os::fd::RawFd],
+) -> Result<(), SandboxError> {
+    let instructions = restricted_network_seccomp_program(private_ipc_connect_descriptors)?;
     let filters: Vec<libc::sock_filter> = instructions
         .into_iter()
         .map(|i| libc::sock_filter {

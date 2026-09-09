@@ -40,6 +40,25 @@ fn restricted_network_child() {
         .expect("reserve descriptor for reuse after startup");
     let startup_descriptor = reused.as_raw_fd();
 
+    crate::platform::linux::install_restricted_network_filter(&[startup_descriptor])
+        .expect("install bootstrap filter");
+    let bootstrap_socket = rustix::net::socket_with(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::STREAM,
+        rustix::net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .expect("bootstrap stream socket");
+    rustix::io::dup3(
+        &bootstrap_socket,
+        &mut reused,
+        rustix::io::DupFlags::CLOEXEC,
+    )
+    .expect("replace bootstrap descriptor");
+    let bootstrap_address = rustix::net::SocketAddrUnix::new(&path).expect("host address");
+    rustix::net::connect(&reused, &bootstrap_address)
+        .expect("trusted bootstrap permits the reserved descriptor");
+
     crate::restrict_network_after_startup().expect("install real seccomp filter");
 
     existing
