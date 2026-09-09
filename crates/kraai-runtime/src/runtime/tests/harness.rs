@@ -308,6 +308,13 @@ impl RuntimeTestHarness {
     }
 
     pub(super) async fn new_with_parts(providers: ProviderManager) -> Option<Self> {
+        Self::new_with_message_store(providers, None).await
+    }
+
+    pub(super) async fn new_with_message_store(
+        providers: ProviderManager,
+        message_store: Option<Arc<dyn kraai_persistence::MessageStore>>,
+    ) -> Option<Self> {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -334,7 +341,8 @@ path = \"inherit\"\n",
         .await
         .expect("write test profile");
 
-        let message_store = Arc::new(FileMessageStore::new(&data_dir));
+        let message_store =
+            message_store.unwrap_or_else(|| Arc::new(FileMessageStore::new(&data_dir)));
         let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
         let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
         let context_state_store =

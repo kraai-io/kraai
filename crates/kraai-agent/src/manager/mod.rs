@@ -23,7 +23,10 @@ use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
 mod prompts;
 mod sessions;
+mod snapshot;
 mod streaming;
+
+pub use snapshot::{SessionSnapshotData, SessionSnapshotReader};
 
 #[cfg(test)]
 #[expect(

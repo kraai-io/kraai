@@ -590,29 +590,14 @@ impl AgentManager {
     }
 
     pub(super) async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
-        let mut context = Vec::new();
-        let mut current = Some(from.clone());
-
-        while let Some(id) = current {
-            {
-                let streaming = self.streaming_messages.read().await;
-                if let Some(state) = streaming.get(&id) {
-                    context.push(state.message.clone());
-                    current = state.message.parent_id.clone();
-                    continue;
-                }
-            }
-
-            if let Some(msg) = self.message_store.get(&id).await? {
-                context.push(msg.clone());
-                current = msg.parent_id.clone();
-            } else {
-                break;
-            }
-        }
-
-        context.reverse();
-        Ok(context)
+        let streaming = self.streaming_messages.read().await;
+        let in_flight = streaming
+            .iter()
+            .map(|(id, state)| (id.clone(), state.message.clone()))
+            .collect();
+        drop(streaming);
+        super::snapshot::load_history(self.message_store.as_ref(), Some(from.clone()), &in_flight)
+            .await
     }
 
     pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
@@ -649,19 +634,7 @@ impl AgentManager {
         };
 
         let context = self.get_history_context(&tip_id).await?;
-        Ok(context.into_iter().rev().find_map(|message| {
-            (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
-                .then_some(message.generation)
-                .flatten()
-                .and_then(|generation| {
-                    generation.usage.map(|usage| SessionContextUsage {
-                        provider_id: generation.provider_id,
-                        model_id: generation.model_id,
-                        max_context: generation.max_context,
-                        usage,
-                    })
-                })
-        }))
+        Ok(context_usage(&context))
     }
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
@@ -690,4 +663,20 @@ impl AgentManager {
 
         Ok(None)
     }
+}
+
+pub(super) fn context_usage(context: &[Message]) -> Option<SessionContextUsage> {
+    context.iter().rev().find_map(|message| {
+        (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
+            .then_some(message.generation.as_ref())
+            .flatten()
+            .and_then(|generation| {
+                generation.usage.as_ref().map(|usage| SessionContextUsage {
+                    provider_id: generation.provider_id.clone(),
+                    model_id: generation.model_id.clone(),
+                    max_context: generation.max_context,
+                    usage: usage.clone(),
+                })
+            })
+    })
 }

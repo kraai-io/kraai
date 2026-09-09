@@ -35,6 +35,13 @@ pub fn run_host_process() -> i32 {
             return 70;
         }
     };
+    #[cfg(target_os = "linux")]
+    if request.restrict_network
+        && let Err(error) = kraai_sandbox::restrict_network_after_startup()
+    {
+        report_host_error(error);
+        return 70;
+    }
     let effect_client = std::sync::Arc::new(effects::DescriptorEffectClient::from_transport(
         request.execution_id.clone(),
         request.event_secret,

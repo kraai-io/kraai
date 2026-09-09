@@ -48,6 +48,7 @@ pub(crate) struct ActiveStream {
 
 pub(crate) struct ActiveScriptTask {
     pub(crate) cancellation: CancellationToken,
+    pub(crate) completion: CancellationToken,
     pub(crate) join_handle: JoinHandle<()>,
 }
 

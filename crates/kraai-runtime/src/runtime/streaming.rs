@@ -831,7 +831,9 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+        let state_guard = self.session_state_barrier.read().await;
         let Some(active_stream) = self.take_active_stream(&session_id).await else {
+            drop(state_guard);
             return Ok(self.cancel_active_script(&session_id).await);
         };
 

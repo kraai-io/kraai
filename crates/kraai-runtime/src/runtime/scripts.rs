@@ -567,8 +567,11 @@ impl RuntimeCore {
         let task_session_id = session_id.clone();
         let cancellation = CancellationToken::new();
         let execution_cancellation = cancellation.clone();
+        let completion = CancellationToken::new();
+        let completion_guard = completion.clone().drop_guard();
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
+            let _completion_guard = completion_guard;
             if start_rx.await.is_err() {
                 return;
             }
@@ -606,6 +609,7 @@ impl RuntimeCore {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(ActiveScriptTask {
                     cancellation,
+                    completion,
                     join_handle: task,
                 });
             }
@@ -624,11 +628,20 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_active_script(&self, session_id: &str) -> bool {
-        let Some(task) = self.active_script_tasks.lock().await.remove(session_id) else {
-            return false;
+        let completion = {
+            let _state_guard = self.session_state_barrier.read().await;
+            let tasks = self.active_script_tasks.lock().await;
+            let Some(task) = tasks.get(session_id) else {
+                return false;
+            };
+            task.cancellation.cancel();
+            let completion = task.completion.clone();
+            drop(tasks);
+            completion
         };
-        task.cancellation.cancel();
-        let _ = task.join_handle.await;
+        // Finalization owns removal and publishes terminal events under its own guard.
+        // Await it without retaining a reader that could deadlock a queued snapshot writer.
+        completion.cancelled().await;
         true
     }
 

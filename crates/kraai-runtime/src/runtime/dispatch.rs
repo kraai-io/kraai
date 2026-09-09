@@ -17,8 +17,8 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 }
 
 impl RuntimeCore {
-    async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
-        let _snapshot_guard = self.session_state_barrier.write().await;
+    pub(super) async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
+        let snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;
         let queued_messages = self
@@ -29,31 +29,22 @@ impl RuntimeCore {
             .map_or(0, std::collections::VecDeque::len);
         let active_stream = self.active_streams.lock().await.contains_key(session_id);
 
-        let mut agent = self.agent_manager.write().await;
-        let session_meta = agent
-            .list_sessions()
-            .await?
-            .into_iter()
-            .find(|session| session.id == session_id)
-            .ok_or_else(|| {
-                eyre!(kraai_types::DomainError::not_found(format!(
-                    "Session not found: {session_id}"
-                )))
-            })?;
-        let history = agent.get_chat_history(session_id).await?;
-        let context_usage = agent
-            .get_session_context_usage(session_id)
-            .await?
-            .map(|usage| SessionContextUsage {
-                provider_id: usage.provider_id.to_string(),
-                model_id: usage.model_id.to_string(),
-                max_context: usage.max_context,
-                usage: usage.usage,
-            });
-        let profiles = agent.list_agent_profiles(session_id).await?;
-        let profile_locked = agent.is_profile_locked(session_id);
-        let streaming = active_stream || agent.streaming_session_ids().await.contains(session_id);
+        let agent = self.agent_manager.read().await;
+        let reader = agent.capture_session_snapshot(session_id).await?;
         drop(agent);
+        // Capture the sequence alongside mutable state. History loading below follows the
+        // captured tip and uses copied in-flight messages, never later stream contents.
+        let event_sequence = self.event_tx.latest_sequence();
+        drop(snapshot_guard);
+
+        let data = reader.load().await?;
+        let context_usage = data.context_usage.map(|usage| SessionContextUsage {
+            provider_id: usage.provider_id.to_string(),
+            model_id: usage.model_id.to_string(),
+            max_context: usage.max_context,
+            usage: usage.usage,
+        });
+        let streaming = active_stream || reader.streaming;
 
         let activity = if pending_script.is_some() {
             SessionActivity::AwaitingApproval
@@ -65,29 +56,29 @@ impl RuntimeCore {
             SessionActivity::Idle
         };
         let session = Session {
-            profile_locked,
+            profile_locked: reader.profile_locked,
             waiting_for_approval: pending_script.is_some(),
             is_streaming: streaming,
-            ..Session::from_session_meta(session_meta)
+            ..Session::from_session_meta(reader.session)
         };
-        // State mutations hold a shared barrier guard until their events are published. Reading
-        // the sequence last therefore gives clients a stable incremental recovery boundary.
-        let event_sequence = self.event_tx.latest_sequence();
 
         Ok(SessionSnapshot {
             event_sequence,
             session,
-            history,
+            history: data.history,
             context_usage,
             pending_script,
-            profiles,
+            profiles: data.profiles,
             activity,
             queued_messages,
         })
     }
 
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
-        let _state_guard = if matches!(&command, Command::GetSessionSnapshot { .. }) {
+        let _state_guard = if matches!(
+            &command,
+            Command::GetSessionSnapshot { .. } | Command::CancelStream { .. }
+        ) {
             None
         } else {
             Some(self.session_state_barrier.read().await)

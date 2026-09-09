@@ -1,6 +1,8 @@
 mod bubblewrap;
 mod seccomp;
 
+pub use seccomp::restrict_network_after_startup;
+
 use crate::config::{LaunchPlan, PreparedCommand};
 use crate::error::SandboxError;
 use crate::temp_dir::PrivateTempDir;

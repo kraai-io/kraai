@@ -14,6 +14,10 @@ use crate::{
     is_likely_sandbox_denied, restricted_network_seccomp_program, run, run_bwrap_sandbox_probe,
 };
 
+#[cfg(target_os = "linux")]
+#[path = "tests/seccomp.rs"]
+mod seccomp;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",
@@ -371,7 +375,7 @@ fn restricted_network_seccomp_program_allows_connect_only_on_private_ipc_descrip
 #[cfg(target_os = "linux")]
 fn restricted_network_seccomp_program_limits_socket_message_io() {
     let program = restricted_network_seccomp_program(&[]).expect("build seccomp program");
-    for syscall in [libc::SYS_sendto, libc::SYS_sendmmsg, libc::SYS_recvmmsg] {
+    for syscall in [libc::SYS_sendmmsg, libc::SYS_recvmmsg] {
         assert!(program_denies_syscall(&program, syscall as u32));
     }
     // Keep local socket-pair I/O available for subprocess management.

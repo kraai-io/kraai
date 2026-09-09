@@ -80,6 +80,10 @@ pub async fn execute(
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
         event_secret: secret,
+        restrict_network: !plan.capabilities.is_unsandboxed()
+            && !plan
+                .capabilities
+                .contains(kraai_types::SandboxCapability::Network),
     };
 
     let private_temp = plan.private_temp.reserve().map_err(RuntimeError::Sandbox)?;

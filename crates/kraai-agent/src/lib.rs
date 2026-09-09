@@ -6,5 +6,5 @@ mod profiles;
 
 pub use manager::{
     AgentManager, CancelledStreamResult, PendingStreamRequest, ScriptTurnContext,
-    SessionContextUsage,
+    SessionContextUsage, SessionSnapshotData, SessionSnapshotReader,
 };
