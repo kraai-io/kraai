@@ -118,7 +118,7 @@ impl RuntimeCore {
                     let mut agent = self.agent_manager.write().await;
                     agent.clear_active_turn(&session_id);
                 }
-                self.schedule_queue_drain(&session_id).await;
+                self.schedule_queue_drain(&session_id);
                 emit_event(
                     &self.event_tx,
                     Event::HistoryUpdated {
@@ -275,7 +275,7 @@ impl RuntimeCore {
                     .await
                 {
                     Ok(true) => {
-                        self.schedule_queue_drain(&session_id).await;
+                        self.schedule_queue_drain(&session_id);
                         if kind.is_continuation() {
                             emit_event(
                                 &self.event_tx,
@@ -337,7 +337,7 @@ impl RuntimeCore {
                     .await
                 {
                     Ok(true) => {
-                        self.schedule_queue_drain(&session_id).await;
+                        self.schedule_queue_drain(&session_id);
                     }
                     Ok(false) => {
                         let recovery_target = if kind.is_continuation() {
@@ -402,7 +402,7 @@ impl RuntimeCore {
 
         match rollback_result {
             Ok(Some(_)) => {
-                self.schedule_queue_drain(&session_id).await;
+                self.schedule_queue_drain(&session_id);
                 emit_event(
                     &self.event_tx,
                     Event::HistoryUpdated {
@@ -870,7 +870,7 @@ impl RuntimeCore {
         self.send_event(Event::HistoryUpdated {
             session_id: cancelled_stream.session_id,
         });
-        self.schedule_queue_drain(&session_id).await;
+        self.schedule_queue_drain(&session_id);
         Ok(true)
     }
 }

@@ -17,7 +17,6 @@ use super::script_execution::{
 };
 use super::streaming::StreamJobKind;
 use crate::api::{Event, PendingScriptInfo};
-use crate::handle::Command;
 use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
 impl RuntimeCore {
@@ -111,7 +110,7 @@ impl RuntimeCore {
                     },
                 )
                 .await;
-            self.schedule_queue_drain(&session_id).await;
+            self.schedule_queue_drain(&session_id);
             return Ok(SubmitMessageOutcome::Queued { position });
         }
 
@@ -201,15 +200,6 @@ impl RuntimeCore {
         }
     }
 
-    pub(crate) async fn schedule_queue_drain(&self, session_id: &str) {
-        let _ = self
-            .command_tx
-            .send(Command::StartQueuedMessages {
-                session_id: session_id.to_string(),
-            })
-            .await;
-    }
-
     pub(crate) async fn has_active_script_tasks(&self, session_id: &str) -> bool {
         let mut active_tasks = self.active_script_tasks.lock().await;
         let Some(task) = active_tasks.get(session_id) else {
@@ -237,7 +227,7 @@ impl RuntimeCore {
                 let mut agent = self.agent_manager.write().await;
                 agent.clear_active_turn(&completed_session);
                 drop(agent);
-                self.schedule_queue_drain(&completed_session).await;
+                self.schedule_queue_drain(&completed_session);
                 return;
             }
             None => {
@@ -512,7 +502,7 @@ impl RuntimeCore {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
             drop(agent);
-            self.schedule_queue_drain(session_id).await;
+            self.schedule_queue_drain(session_id);
         } else {
             self.spawn_continuation(session_id.to_string());
         }
@@ -524,7 +514,7 @@ impl RuntimeCore {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
         }
-        self.schedule_queue_drain(session_id).await;
+        self.schedule_queue_drain(session_id);
         emit_event(
             &self.event_tx,
             Event::ContinuationFailed {

@@ -36,6 +36,9 @@ fn restricted_network_child() {
     let listener = UnixListener::bind(&path).expect("host socket");
     let mut existing = UnixStream::connect(&path).expect("trusted startup connection");
     let (mut peer, _) = listener.accept().expect("accept trusted connection");
+    let mut reused = rustix::io::fcntl_dupfd_cloexec(&existing, 20)
+        .expect("reserve descriptor for reuse after startup");
+    let startup_descriptor = reused.as_raw_fd();
 
     crate::restrict_network_after_startup().expect("install real seccomp filter");
 
@@ -85,8 +88,9 @@ fn restricted_network_child() {
         None,
     )
     .expect("standalone stream socket");
-    let reused = rustix::io::fcntl_dupfd_cloexec(&socket, 20).expect("reuse startup descriptor");
-    assert_eq!(reused.as_raw_fd(), 20);
+    rustix::io::dup3(&socket, &mut reused, rustix::io::DupFlags::CLOEXEC)
+        .expect("replace the reserved startup descriptor");
+    assert_eq!(reused.as_raw_fd(), startup_descriptor);
     let address = rustix::net::SocketAddrUnix::new(&path).expect("host socket address");
     assert_eq!(
         rustix::net::connect(&reused, &address),

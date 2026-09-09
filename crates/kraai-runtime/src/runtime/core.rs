@@ -24,6 +24,7 @@ pub(crate) fn emit_event(event_tx: &RuntimeEventSender, event: Event) {
 pub(crate) struct RuntimeCore {
     pub(crate) event_tx: RuntimeEventSender,
     pub(crate) command_tx: mpsc::Sender<Command>,
+    pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
     pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
@@ -126,7 +127,7 @@ impl RuntimeCore {
         let mut shutdown_response = None;
         loop {
             let command = tokio::select! {
-                command = command_rx.recv() => command,
+                command = self.next_command(&mut command_rx) => command,
                 changed = shutdown_rx.changed() => {
                     if changed.is_err() || *shutdown_rx.borrow() {
                         None

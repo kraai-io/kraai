@@ -373,6 +373,7 @@ path = \"inherit\"\n",
             startup_rx,
         };
         let runtime = RuntimeCore {
+            queue_drains: Arc::default(),
             event_tx: event_tx.clone(),
             command_tx,
             agent_manager,
@@ -404,7 +405,7 @@ path = \"inherit\"\n",
         });
         let runtime_for_task = runtime.clone();
         let runtime_task = tokio::spawn(async move {
-            while let Some(command) = command_rx.recv().await {
+            while let Some(command) = runtime_for_task.next_command(&mut command_rx).await {
                 if let Command::Shutdown { response } = command {
                     runtime_for_task.stop_active_work().await;
                     if let Some(response) = response {

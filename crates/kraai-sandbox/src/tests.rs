@@ -18,6 +18,10 @@ use crate::{
 #[path = "tests/seccomp.rs"]
 mod seccomp;
 
+#[cfg(target_os = "linux")]
+#[path = "tests/policy.rs"]
+mod policy;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",
@@ -368,7 +372,16 @@ fn restricted_network_seccomp_program_allows_connect_only_on_private_ipc_descrip
             && is_seccomp_errno(&window[3])
             && !is_seccomp_errno(&window[4])
     }));
-    assert!(!program_denies_syscall(&program, libc::SYS_connect as u32));
+    assert!(!policy::denies_call(
+        &program,
+        libc::SYS_connect as u32,
+        [PRIVATE_DESCRIPTOR as u64, 0, 0, 0, 0, 0]
+    ));
+    assert!(policy::denies_call(
+        &program,
+        libc::SYS_connect as u32,
+        [PRIVATE_DESCRIPTOR as u64 + 1, 0, 0, 0, 0, 0]
+    ));
 }
 
 #[test]
@@ -399,9 +412,7 @@ fn restricted_network_seccomp_program_denies_x32_syscalls() {
 
 #[cfg(target_os = "linux")]
 fn program_denies_syscall(program: &[SeccompInstruction], syscall: u32) -> bool {
-    program
-        .windows(2)
-        .any(|window| window[0].k == syscall && is_seccomp_errno(&window[1]))
+    policy::denies_call(program, syscall, [0; 6])
 }
 
 #[cfg(target_os = "linux")]
