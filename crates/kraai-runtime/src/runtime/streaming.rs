@@ -89,6 +89,9 @@ impl RuntimeCore {
         &self,
         session_id: String,
     ) -> RuntimeResult<ContinueSessionOutcome> {
+        let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
+            return Ok(ContinueSessionOutcome::NothingToContinue);
+        };
         if self
             .pending_script_approvals
             .lock()
@@ -124,6 +127,7 @@ impl RuntimeCore {
 
         match continuation {
             Ok(Some((providers, request))) => {
+                drop(preparation);
                 self.start_stream_job(StreamJobKind::Continuation, session_id, providers, request)
                     .await;
                 Ok(ContinueSessionOutcome::Started)

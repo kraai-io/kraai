@@ -242,6 +242,7 @@ impl RuntimeBuilder {
 
         let runtime = RuntimeCore {
             queue_drains: Arc::default(),
+            session_preparations: Arc::default(),
             event_tx,
             command_tx,
             agent_manager,

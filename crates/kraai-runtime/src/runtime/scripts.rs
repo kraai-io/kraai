@@ -89,17 +89,18 @@ impl RuntimeCore {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> RuntimeResult<SubmitMessageOutcome> {
-        let has_queued_messages = {
+        let has_pending_messages = {
             let queued = self.queued_messages.lock().await;
             queued
                 .get(&session_id)
                 .is_some_and(|queue| !queue.is_empty())
+                || self.session_preparations.is_active(&session_id)
         };
         let is_turn_active = {
             let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
         };
-        if is_turn_active || has_queued_messages {
+        if is_turn_active || has_pending_messages {
             let position = self
                 .enqueue_message(
                     &session_id,
@@ -144,6 +145,9 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
+        let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
+            return;
+        };
         let is_turn_active = {
             let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
@@ -191,6 +195,7 @@ impl RuntimeCore {
             return;
         };
 
+        drop(preparation);
         self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
             .await;
     }

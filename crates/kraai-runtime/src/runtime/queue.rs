@@ -1,10 +1,52 @@
 use std::collections::{HashSet, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, mpsc};
 
 use super::core::RuntimeCore;
 use crate::handle::Command;
+
+/// Coalesce overlapping preparations without blocking the command loop.
+#[derive(Default)]
+pub(crate) struct SessionPreparations {
+    active: Mutex<HashSet<String>>,
+}
+
+pub(crate) struct SessionPreparation {
+    preparations: Arc<SessionPreparations>,
+    session_id: String,
+}
+
+impl SessionPreparations {
+    pub(crate) fn try_begin(self: &Arc<Self>, session_id: &str) -> Option<SessionPreparation> {
+        let inserted = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(session_id.to_string());
+        inserted.then(|| SessionPreparation {
+            preparations: self.clone(),
+            session_id: session_id.to_string(),
+        })
+    }
+
+    pub(crate) fn is_active(&self, session_id: &str) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains(session_id)
+    }
+}
+
+impl Drop for SessionPreparation {
+    fn drop(&mut self) {
+        self.preparations
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.session_id);
+    }
+}
 
 #[derive(Default)]
 struct PendingDrains {
