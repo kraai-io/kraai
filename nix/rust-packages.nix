@@ -112,7 +112,6 @@
           wrapProgram "$out/bin/kraai" \
             --prefix PATH : ${lib.makeBinPath [
             pkgs.bubblewrap
-            pkgs.nushell
             pkgs.ripgrep
           ]} \
             --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store

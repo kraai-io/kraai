@@ -44,6 +44,7 @@ impl SandboxCapabilities {
         Self(BTreeSet::from([
             SandboxCapability::WorkspaceRead,
             SandboxCapability::WorkspaceWrite,
+            SandboxCapability::MetadataWrite,
             SandboxCapability::Network,
         ]))
     }
