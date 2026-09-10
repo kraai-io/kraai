@@ -80,7 +80,9 @@ impl App {
                 return;
             }
             if self.state.mode == UiMode::Chat
-                && (self.state.is_streaming || self.state.retry_waiting)
+                && (self.state.is_streaming
+                    || self.state.retry_waiting
+                    || self.state.script_phase == ScriptPhase::Executing)
             {
                 if let Some(session_id) = &self.state.current_session_id {
                     self.request(RuntimeRequest::CancelStream {

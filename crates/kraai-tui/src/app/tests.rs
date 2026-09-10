@@ -67,6 +67,24 @@ struct TestHarness {
     requests_rx: Receiver<RuntimeRequest>,
 }
 
+#[test]
+fn escape_cancels_an_executing_script() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.script_phase = ScriptPhase::Executing;
+
+    harness.app.handle_key_event(super::KeyEvent::new(
+        super::KeyCode::Esc,
+        super::KeyModifiers::NONE,
+    ));
+
+    assert!(matches!(
+        harness.requests_rx.try_recv(),
+        Ok(RuntimeRequest::CancelStream { session_id }) if session_id == "session"
+    ));
+    assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
+}
+
 fn test_harness() -> TestHarness {
     let (_event_tx, event_rx) = unbounded();
     let (runtime_tx, requests_rx) = unbounded();
