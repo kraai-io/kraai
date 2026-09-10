@@ -63,3 +63,72 @@ async fn check_runtime_mounts(writable: bool) {
         );
     }
 }
+
+#[tokio::test]
+async fn path_finds_programs_through_unmounted_profile_symlinks() {
+    let base = temp_dir("profile-path");
+    let workspace = base.join("workspace");
+    let runtime = base.join("store");
+    let bin = runtime.join("profile/bin");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::create_dir_all(&bin).expect("create runtime bin");
+    let profile = base.join("profile");
+    std::os::unix::fs::symlink(runtime.join("profile"), &profile).expect("link profile");
+    let shell = super::executable("sh")
+        .canonicalize()
+        .expect("resolve shell");
+    std::os::unix::fs::symlink(&shell, bin.join("profile-command")).expect("link command");
+    let mut plan = shell_plan(
+        &workspace,
+        "profile-command -c 'printf found'",
+        capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
+        Duration::from_secs(5),
+    );
+    plan.executable = shell;
+    plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    plan.runtime_roots.push(runtime);
+    plan.environment
+        .insert("PATH".into(), profile.join("bin").into_os_string());
+    let result = run(plan, CancellationToken::new()).await;
+    std::fs::remove_dir_all(base).expect("remove fixture");
+    let output = match result {
+        Err(SandboxError::SandboxUnavailable(_)) => return,
+        result => result.expect("run sandbox"),
+    };
+    assert_eq!(
+        output.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"found");
+}
+
+#[test]
+fn path_resolution_preserves_search_order_and_unresolved_entries() {
+    let base = temp_dir("path-resolution");
+    let bin = base.join("store/bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let profile = base.join("profile");
+    std::os::unix::fs::symlink(&bin, &profile).expect("link profile");
+    let entries = vec![
+        profile,
+        std::path::PathBuf::new(),
+        std::path::PathBuf::from("relative/bin"),
+        base.join("missing"),
+        bin.clone(),
+    ];
+    let path = std::env::join_paths(&entries).expect("join path");
+    let resolved = crate::platform::linux::resolve_search_path(&path);
+    let mut expected = entries;
+    expected.insert(1, bin.canonicalize().expect("resolve bin"));
+    assert_eq!(
+        std::env::split_paths(&resolved).collect::<Vec<_>>(),
+        expected
+    );
+    std::fs::remove_dir_all(base).expect("remove fixture");
+}

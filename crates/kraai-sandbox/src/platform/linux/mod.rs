@@ -37,6 +37,9 @@ pub(crate) async fn prepare(
     )?;
     let args = bubblewrap::build_bwrap_args(&plan, private_temp.path());
     let mut environment = plan.environment;
+    if let Some(path) = environment.get_mut(std::ffi::OsStr::new("PATH")) {
+        *path = resolve_search_path(path);
+    }
     private_temp.apply_environment(&mut environment);
 
     Ok(PreparedCommand {
@@ -49,4 +52,17 @@ pub(crate) async fn prepare(
         private_temp,
         seccomp_filter,
     })
+}
+
+pub(crate) fn resolve_search_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
+    let entries = std::env::split_paths(path).flat_map(|entry| {
+        let resolved = entry
+            .is_absolute()
+            .then(|| entry.canonicalize().ok())
+            .flatten()
+            .filter(|resolved| resolved != &entry)
+            .filter(|resolved| std::env::join_paths([resolved]).is_ok());
+        std::iter::once(entry).chain(resolved)
+    });
+    std::env::join_paths(entries).unwrap_or_else(|_| path.to_os_string())
 }
