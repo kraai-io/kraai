@@ -108,34 +108,58 @@ const GPT_5_2_REASONING_EFFORTS: [CatalogReasoningEffort; 4] = [
     },
 ];
 
-const CATALOG_MODELS: [CatalogModel; 8] = [
+const CATALOG_MODELS: [CatalogModel; 11] = [
+    CatalogModel {
+        slug: "gpt-6-astra",
+        display_name: "gpt-6-astra",
+        visibility: CatalogVisibility::List,
+        max_context: Some(872_000),
+        default_reasoning_effort: "low",
+        supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
+    },
     CatalogModel {
         slug: "gpt-5.6-sol",
-        display_name: "GPT-5.6-Sol",
+        display_name: "gpt-5.6-sol",
         visibility: CatalogVisibility::List,
-        max_context: Some(372_000),
+        max_context: Some(872_000),
         default_reasoning_effort: "low",
         supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
     },
     CatalogModel {
         slug: "gpt-5.6-terra",
-        display_name: "GPT-5.6-Terra",
+        display_name: "gpt-5.6-terra",
         visibility: CatalogVisibility::List,
-        max_context: Some(372_000),
+        max_context: Some(872_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
     },
     CatalogModel {
         slug: "gpt-5.6-luna",
-        display_name: "GPT-5.6-Luna",
+        display_name: "gpt-5.6-luna",
         visibility: CatalogVisibility::List,
-        max_context: Some(372_000),
+        max_context: Some(872_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GPT_5_6_LUNA_REASONING_EFFORTS,
     },
     CatalogModel {
+        slug: "gpt-daybreak-blue-latest",
+        display_name: "gpt-daybreak-blue-latest",
+        visibility: CatalogVisibility::Hide,
+        max_context: Some(872_000),
+        default_reasoning_effort: "low",
+        supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
+    },
+    CatalogModel {
+        slug: "gpt-daybreak-red-latest",
+        display_name: "gpt-daybreak-red-latest",
+        visibility: CatalogVisibility::Hide,
+        max_context: Some(372_000),
+        default_reasoning_effort: "medium",
+        supported_reasoning_efforts: &GPT_5_6_REASONING_EFFORTS,
+    },
+    CatalogModel {
         slug: "gpt-5.5",
-        display_name: "GPT-5.5",
+        display_name: "gpt-5.5",
         visibility: CatalogVisibility::List,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
@@ -143,23 +167,23 @@ const CATALOG_MODELS: [CatalogModel; 8] = [
     },
     CatalogModel {
         slug: "gpt-5.4",
-        display_name: "GPT-5.4",
-        visibility: CatalogVisibility::List,
+        display_name: "gpt-5.4",
+        visibility: CatalogVisibility::Hide,
         max_context: Some(1_000_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
     },
     CatalogModel {
         slug: "gpt-5.4-mini",
-        display_name: "GPT-5.4-Mini",
-        visibility: CatalogVisibility::List,
+        display_name: "gpt-5.4-mini",
+        visibility: CatalogVisibility::Hide,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
     },
     CatalogModel {
         slug: "gpt-5.2",
-        display_name: "GPT-5.2",
+        display_name: "gpt-5.2",
         visibility: CatalogVisibility::List,
         max_context: Some(272_000),
         default_reasoning_effort: "medium",
@@ -167,9 +191,9 @@ const CATALOG_MODELS: [CatalogModel; 8] = [
     },
     CatalogModel {
         slug: "codex-auto-review",
-        display_name: "Codex Auto Review",
+        display_name: "codex-auto-review",
         visibility: CatalogVisibility::Hide,
-        max_context: Some(1_000_000),
+        max_context: Some(872_000),
         default_reasoning_effort: "medium",
         supported_reasoning_efforts: &GENERAL_REASONING_EFFORTS,
     },
@@ -199,11 +223,16 @@ mod tests {
             .map(|model| model.slug)
             .collect::<Vec<_>>();
 
+        assert!(visible.contains(&"gpt-6-astra"));
         assert!(visible.contains(&"gpt-5.6-sol"));
         assert!(visible.contains(&"gpt-5.6-terra"));
         assert!(visible.contains(&"gpt-5.6-luna"));
         assert!(visible.contains(&"gpt-5.5"));
-        assert!(visible.contains(&"gpt-5.4-mini"));
+        assert!(visible.contains(&"gpt-5.2"));
+        assert!(!visible.contains(&"gpt-daybreak-blue-latest"));
+        assert!(!visible.contains(&"gpt-daybreak-red-latest"));
+        assert!(!visible.contains(&"gpt-5.4"));
+        assert!(!visible.contains(&"gpt-5.4-mini"));
         assert!(!visible.contains(&"codex-auto-review"));
     }
 
@@ -213,7 +242,7 @@ mod tests {
             .iter()
             .find(|model| model.slug == "codex-auto-review")
             .expect("hidden model");
-        assert_eq!(model.display_name, "Codex Auto Review");
+        assert_eq!(model.display_name, model.slug);
         assert_eq!(model.default_reasoning_effort, "medium");
     }
 }

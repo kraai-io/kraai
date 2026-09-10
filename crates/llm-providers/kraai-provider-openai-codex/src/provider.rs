@@ -314,7 +314,6 @@ impl Provider for OpenAiCodexProvider {
         resolve_catalog_model(model_id.as_str())
             .ok()
             .flatten()
-            .filter(|resolved| resolved.catalog_model.slug.starts_with("gpt-5"))
             .map_or(ScriptToolTransport::TextEnvelope, |_| {
                 ScriptToolTransport::NativeCustom
             })
@@ -963,6 +962,10 @@ mod tests {
             ScriptToolTransport::NativeCustom
         );
         assert_eq!(
+            provider.script_tool_transport(&ModelId::new("gpt-6-astra-ultra")),
+            ScriptToolTransport::NativeCustom
+        );
+        assert_eq!(
             provider.script_tool_transport(&ModelId::new("custom-experimental-model")),
             ScriptToolTransport::TextEnvelope
         );
@@ -1044,13 +1047,15 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
 
         assert!(models.contains_key("gpt-5.5-low"));
+        assert!(models.contains_key("gpt-6-astra-ultra"));
         assert!(models.contains_key("gpt-5.5-medium"));
         assert!(models.contains_key("gpt-5.5-high"));
         assert_eq!(
             models.get("gpt-5.5-xhigh").map(String::as_str),
-            Some("GPT-5.5 xhigh")
+            Some("gpt-5.5 xhigh")
         );
-        assert!(models.contains_key("gpt-5.4-mini-medium"));
+        assert!(models.contains_key("gpt-5.2-medium"));
+        assert!(!models.contains_key("gpt-5.4-mini-medium"));
         assert!(!models.contains_key("codex-auto-review-medium"));
     }
 
