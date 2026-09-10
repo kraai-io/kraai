@@ -11,6 +11,7 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
+        self.finish_pending_message_rollback(session_id).await?;
         let script_tool_transport = self
             .providers
             .script_tool_transport(&provider_id, &model_id)
@@ -154,6 +155,7 @@ impl AgentManager {
         &mut self,
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
+        self.finish_pending_message_rollback(session_id).await?;
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
@@ -638,6 +640,11 @@ impl AgentManager {
     }
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
+        if self.pending_message_rollbacks.contains_key(session_id) {
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "Cannot undo while queued message rollback is incomplete"
+            )));
+        }
         if self.is_turn_active(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot undo while the current turn is active"

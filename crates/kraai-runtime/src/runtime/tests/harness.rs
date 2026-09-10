@@ -374,6 +374,7 @@ path = \"inherit\"\n",
         };
         let runtime = RuntimeCore {
             queue_drains: Arc::default(),
+            session_preparations: Arc::default(),
             event_tx: event_tx.clone(),
             command_tx,
             agent_manager,

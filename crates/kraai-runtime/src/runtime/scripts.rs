@@ -6,7 +6,7 @@ use kraai_types::{
     SandboxCapability, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
     ScriptProfileSnapshot,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
@@ -89,17 +89,19 @@ impl RuntimeCore {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> RuntimeResult<SubmitMessageOutcome> {
-        let has_queued_messages = {
+        let has_pending_messages = {
             let queued = self.queued_messages.lock().await;
             queued
                 .get(&session_id)
                 .is_some_and(|queue| !queue.is_empty())
+                || self.session_preparations.is_active(&session_id)
         };
-        let is_turn_active = {
-            let agent = self.agent_manager.read().await;
-            agent.is_turn_active(&session_id)
-        };
-        if is_turn_active || has_queued_messages {
+        let mut agent = self.agent_manager.write().await;
+        if agent.is_turn_active(&session_id)
+            || has_pending_messages
+            || self.session_preparations.is_active(&session_id)
+        {
+            drop(agent);
             let position = self
                 .enqueue_message(
                     &session_id,
@@ -115,7 +117,6 @@ impl RuntimeCore {
         }
 
         let stream_request = {
-            let mut agent = self.agent_manager.write().await;
             let result = agent
                 .prepare_start_stream(&session_id, message, model_id, provider_id)
                 .await;
@@ -144,6 +145,9 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
+        let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
+            return;
+        };
         let is_turn_active = {
             let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
@@ -152,52 +156,71 @@ impl RuntimeCore {
             return;
         }
 
-        loop {
-            let next_message = {
-                let mut queued = self.queued_messages.lock().await;
-                let Some(queue) = queued.get_mut(&session_id) else {
-                    return;
-                };
-                let next = queue.pop_front();
-                if queue.is_empty() {
-                    queued.remove(&session_id);
-                }
-                next
-            };
-
-            let Some(next_message) = next_message else {
-                return;
-            };
-
-            let stream_request = {
-                let mut agent = self.agent_manager.write().await;
-                let result = agent
-                    .prepare_start_stream(
-                        &session_id,
-                        next_message.message,
-                        next_message.model_id,
-                        next_message.provider_id,
-                    )
-                    .await;
-                let providers = agent.cloned_provider_manager();
-                drop(agent);
-                match result {
-                    Ok(result) => Some((providers, result)),
-                    Err(error) => {
-                        self.send_session_report_error(&session_id, error);
-                        None
-                    }
-                }
-            };
-
-            let Some((providers, request)) = stream_request else {
-                continue;
-            };
-
-            self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
-                .await;
+        let messages = self.take_queued_messages(&session_id).await;
+        let Some(last_message) = messages.last() else {
             return;
+        };
+        let model_id = last_message.model_id.clone();
+        let provider_id = last_message.provider_id.clone();
+        let contents = messages
+            .iter()
+            .map(|message| message.message.clone())
+            .collect();
+
+        let stream_request = {
+            let mut agent = self.agent_manager.write().await;
+            let result = agent
+                .prepare_intercepted_stream(&session_id, contents, model_id, provider_id)
+                .await;
+            if result.is_err() {
+                agent.clear_active_turn(&session_id);
+            }
+            let providers = agent.cloned_provider_manager();
+            drop(agent);
+            match result {
+                Ok(Some(result)) => Some((providers, result)),
+                Ok(None) => {
+                    self.restore_queued_messages(&session_id, messages).await;
+                    return;
+                }
+                Err(error) => {
+                    self.restore_queued_messages(&session_id, messages).await;
+                    self.send_session_report_error(&session_id, error);
+                    None
+                }
+            }
+        };
+
+        let Some((providers, request)) = stream_request else {
+            return;
+        };
+
+        drop(preparation);
+        self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
+            .await;
+    }
+
+    pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {
+        self.queued_messages
+            .lock()
+            .await
+            .remove(session_id)
+            .map(VecDeque::into_iter)
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn restore_queued_messages(
+        &self,
+        session_id: &str,
+        messages: Vec<QueuedMessage>,
+    ) {
+        let mut queued = self.queued_messages.lock().await;
+        let queue = queued.entry(session_id.to_string()).or_default();
+        for message in messages.into_iter().rev() {
+            queue.push_front(message);
         }
+        drop(queued);
     }
 
     pub(crate) async fn has_active_script_tasks(&self, session_id: &str) -> bool {

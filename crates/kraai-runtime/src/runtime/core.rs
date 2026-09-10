@@ -25,6 +25,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) event_tx: RuntimeEventSender,
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
+    pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
     pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,

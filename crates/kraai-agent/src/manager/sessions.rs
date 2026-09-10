@@ -43,6 +43,7 @@ impl AgentManager {
             session_store,
             context_state_store,
             session_states: HashMap::new(),
+            pending_message_rollbacks: HashMap::new(),
             last_used_profile_id: None,
             streaming_messages: RwLock::new(HashMap::new()),
         }
@@ -265,6 +266,7 @@ impl AgentManager {
             .await?;
         self.session_states.remove(session_id);
         self.session_store.delete(session_id).await?;
+        self.pending_message_rollbacks.remove(session_id);
         self.context_state_store.delete(session_id).await
     }
 

@@ -21,6 +21,7 @@ use ulid::Ulid;
 
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
+mod intercepted;
 mod prompts;
 mod sessions;
 mod snapshot;
@@ -137,6 +138,7 @@ pub struct AgentManager {
     session_store: Arc<dyn SessionStore>,
     context_state_store: Arc<dyn ContextStateStore>,
     session_states: HashMap<String, SessionRuntimeState>,
+    pending_message_rollbacks: HashMap<String, Vec<AppendedMessage>>,
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<HashMap<MessageId, StreamingMessageState>>,
