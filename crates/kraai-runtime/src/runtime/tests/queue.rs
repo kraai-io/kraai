@@ -9,6 +9,69 @@ use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::handle::Command;
 
 #[tokio::test]
+async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let runtime = &harness.runtime;
+    runtime
+        .restore_queued_messages(
+            &session_id,
+            ["one", "two"]
+                .into_iter()
+                .map(|message| crate::runtime::core::QueuedMessage {
+                    message: message.into(),
+                    model_id: kraai_types::ModelId::new("mock-model"),
+                    provider_id: kraai_types::ProviderId::new("missing-provider"),
+                })
+                .collect(),
+        )
+        .await;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        runtime.handle_start_queued_messages(session_id.clone()),
+    )
+    .await?;
+    assert!(
+        !runtime
+            .agent_manager
+            .read()
+            .await
+            .is_turn_active(&session_id)
+    );
+    let mut messages = runtime.take_queued_messages(&session_id).await;
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["one", "two"]
+    );
+    assert!(
+        runtime
+            .agent_manager
+            .read()
+            .await
+            .get_tip(&session_id)
+            .await?
+            .is_none()
+    );
+    for message in &mut messages {
+        message.provider_id = kraai_types::ProviderId::new("mock");
+    }
+    runtime.restore_queued_messages(&session_id, messages).await;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        runtime.handle_start_queued_messages(session_id.clone()),
+    )
+    .await?;
+    assert!(runtime.take_queued_messages(&session_id).await.is_empty());
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
         .await

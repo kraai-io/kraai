@@ -3,6 +3,56 @@ use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::Result;
 
 #[tokio::test]
+async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let first = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("first"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    let messages = vec![String::from("queued one"), String::from("queued two")];
+    let result = manager
+        .prepare_intercepted_stream(
+            &session_id,
+            messages.clone(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert!(result.is_none());
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(first.message_id.clone())
+    );
+    manager.complete_message(&first.message_id).await?;
+    let retry = manager
+        .prepare_intercepted_stream(
+            &session_id,
+            messages,
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?
+        .expect("retry should start a stream");
+    let users: Vec<_> = retry
+        .provider_request
+        .messages
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::User { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users, vec!["first", "queued one", "queued two"]);
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 

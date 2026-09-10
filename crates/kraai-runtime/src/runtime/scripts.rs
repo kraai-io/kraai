@@ -152,47 +152,47 @@ impl RuntimeCore {
             return;
         }
 
-        loop {
-            let messages = self.take_queued_messages(&session_id).await;
-            let Some(last_message) = messages.last() else {
-                return;
-            };
-            let model_id = last_message.model_id.clone();
-            let provider_id = last_message.provider_id.clone();
-            let contents = messages
-                .iter()
-                .map(|message| message.message.clone())
-                .collect();
-
-            let stream_request = {
-                let mut agent = self.agent_manager.write().await;
-                let result = agent
-                    .prepare_intercepted_stream(&session_id, contents, model_id, provider_id)
-                    .await;
-                let providers = agent.cloned_provider_manager();
-                drop(agent);
-                match result {
-                    Ok(Some(result)) => Some((providers, result)),
-                    Ok(None) => {
-                        self.restore_queued_messages(&session_id, messages).await;
-                        return;
-                    }
-                    Err(error) => {
-                        self.restore_queued_messages(&session_id, messages).await;
-                        self.send_session_report_error(&session_id, error);
-                        None
-                    }
-                }
-            };
-
-            let Some((providers, request)) = stream_request else {
-                continue;
-            };
-
-            self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
-                .await;
+        let messages = self.take_queued_messages(&session_id).await;
+        let Some(last_message) = messages.last() else {
             return;
-        }
+        };
+        let model_id = last_message.model_id.clone();
+        let provider_id = last_message.provider_id.clone();
+        let contents = messages
+            .iter()
+            .map(|message| message.message.clone())
+            .collect();
+
+        let stream_request = {
+            let mut agent = self.agent_manager.write().await;
+            let result = agent
+                .prepare_intercepted_stream(&session_id, contents, model_id, provider_id)
+                .await;
+            if result.is_err() {
+                agent.clear_active_turn(&session_id);
+            }
+            let providers = agent.cloned_provider_manager();
+            drop(agent);
+            match result {
+                Ok(Some(result)) => Some((providers, result)),
+                Ok(None) => {
+                    self.restore_queued_messages(&session_id, messages).await;
+                    return;
+                }
+                Err(error) => {
+                    self.restore_queued_messages(&session_id, messages).await;
+                    self.send_session_report_error(&session_id, error);
+                    None
+                }
+            }
+        };
+
+        let Some((providers, request)) = stream_request else {
+            return;
+        };
+
+        self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
+            .await;
     }
 
     pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {
