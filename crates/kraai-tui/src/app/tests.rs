@@ -1,4 +1,52 @@
 use std::collections::HashMap;
+
+#[test]
+fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
+    use super::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    let mut harness = test_harness();
+    harness.app.state.chat_render_cache.borrow_mut().total_lines = 100;
+    harness.app.state.chat_viewport_height = 20;
+    let wheel = |kind| MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
+    assert_eq!(harness.app.state.scroll, 77);
+    assert!(!harness.app.state.auto_scroll);
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
+    assert_eq!(harness.app.state.scroll, 74);
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
+    assert_eq!(harness.app.state.scroll, 77);
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
+    assert_eq!(harness.app.state.scroll, 80);
+    assert!(harness.app.state.auto_scroll);
+
+    harness.app.scroll_chat_to_top();
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
+    assert_eq!(harness.app.state.scroll, 0);
+    assert!(!harness.app.state.auto_scroll);
+
+    harness.app.state.mode = super::UiMode::Help;
+    harness
+        .app
+        .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
+    assert_eq!(harness.app.state.scroll, 0);
+}
+
 use std::io;
 
 use crossbeam_channel::{Receiver, unbounded};

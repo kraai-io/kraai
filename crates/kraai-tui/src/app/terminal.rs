@@ -1,18 +1,25 @@
 use super::*;
 
+// Keep wheel movement responsive without adding inertia or delaying direction changes.
+const WHEEL_SCROLL_LINES: i16 = 3;
+const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(8);
+
 impl App {
     pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
         if !event::poll(timeout)? {
             return Ok(false);
         }
 
+        let batch_started = Instant::now();
         let mut changed = false;
         loop {
             if self.handle_terminal_event(event::read()?) {
                 changed = true;
             }
 
-            if !event::poll(std::time::Duration::from_millis(0))? {
+            if batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
+                || !event::poll(Duration::ZERO)?
+            {
                 break;
             }
         }
@@ -46,10 +53,10 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_chat_by(-1);
+                self.scroll_chat_by(-WHEEL_SCROLL_LINES);
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_chat_by(1);
+                self.scroll_chat_by(WHEEL_SCROLL_LINES);
             }
             _ => {}
         }
