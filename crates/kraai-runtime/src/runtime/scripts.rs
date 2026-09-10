@@ -96,11 +96,12 @@ impl RuntimeCore {
                 .is_some_and(|queue| !queue.is_empty())
                 || self.session_preparations.is_active(&session_id)
         };
-        let is_turn_active = {
-            let agent = self.agent_manager.read().await;
-            agent.is_turn_active(&session_id)
-        };
-        if is_turn_active || has_pending_messages {
+        let mut agent = self.agent_manager.write().await;
+        if agent.is_turn_active(&session_id)
+            || has_pending_messages
+            || self.session_preparations.is_active(&session_id)
+        {
+            drop(agent);
             let position = self
                 .enqueue_message(
                     &session_id,
@@ -116,7 +117,6 @@ impl RuntimeCore {
         }
 
         let stream_request = {
-            let mut agent = self.agent_manager.write().await;
             let result = agent
                 .prepare_start_stream(&session_id, message, model_id, provider_id)
                 .await;
