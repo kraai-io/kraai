@@ -98,9 +98,25 @@ impl RuntimeCore {
         {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         }
+        let queued_messages = self.take_queued_messages(&session_id).await;
         let continuation = {
             let mut agent = self.agent_manager.write().await;
-            match agent.prepare_continuation_stream(&session_id).await {
+            let result = if let Some(last_message) = queued_messages.last() {
+                agent
+                    .prepare_intercepted_stream(
+                        &session_id,
+                        queued_messages
+                            .iter()
+                            .map(|message| message.message.clone())
+                            .collect(),
+                        last_message.model_id.clone(),
+                        last_message.provider_id.clone(),
+                    )
+                    .await
+            } else {
+                agent.prepare_continuation_stream(&session_id).await
+            };
+            match result {
                 Ok(result) => Ok(result.map(|request| (agent.cloned_provider_manager(), request))),
                 Err(error) => Err(error),
             }
@@ -112,8 +128,14 @@ impl RuntimeCore {
                     .await;
                 Ok(ContinueSessionOutcome::Started)
             }
-            Ok(None) => Ok(ContinueSessionOutcome::NothingToContinue),
+            Ok(None) => {
+                self.restore_queued_messages(&session_id, queued_messages)
+                    .await;
+                Ok(ContinueSessionOutcome::NothingToContinue)
+            }
             Err(error) => {
+                self.restore_queued_messages(&session_id, queued_messages)
+                    .await;
                 {
                     let mut agent = self.agent_manager.write().await;
                     agent.clear_active_turn(&session_id);

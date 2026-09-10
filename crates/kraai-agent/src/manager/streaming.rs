@@ -4,6 +4,81 @@ const SCRIPT_TOOL_NAME: &str = "kraai_nushell";
 const SCRIPT_TOOL_DESCRIPTION: &str = "Execute one complete Nushell script in Kraai's local, policy-controlled scripting environment. Input must be plaintext Nushell beginning with a metadata comment containing timeout.";
 
 impl AgentManager {
+    /// Append messages that arrived during a turn and prepare the next provider call.
+    ///
+    /// The messages are appended before history is collected, so script results already
+    /// persisted for the turn remain immediately before these user messages.
+    pub async fn prepare_intercepted_stream(
+        &mut self,
+        session_id: &str,
+        messages: Vec<String>,
+        model_id: ModelId,
+        provider_id: ProviderId,
+    ) -> Result<Option<PendingStreamRequest>> {
+        if messages.is_empty() {
+            return self.prepare_continuation_stream(session_id).await;
+        }
+
+        let session = self
+            .recover_interrupted_stream(self.require_session(session_id).await?)
+            .await?;
+        let selected_profile = self.resolve_selected_profile(&session)?;
+        let profile = {
+            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
+            if state.active_turn_profile.is_none() {
+                state.promote_pending_workspace_dir();
+                state.active_turn_profile = Some(selected_profile);
+            }
+            state.last_model = Some(model_id);
+            state.last_provider = Some(provider_id);
+            state
+                .active_turn_profile
+                .clone()
+                .ok_or_else(|| eyre!("intercepted stream has no active profile"))?
+        };
+
+        let mut appended = Vec::with_capacity(messages.len());
+        for message in messages {
+            match self
+                .append_message(
+                    session_id,
+                    ChatRole::User,
+                    message,
+                    Some(profile.id.clone()),
+                )
+                .await
+            {
+                Ok(message) => appended.push(message),
+                Err(error) => {
+                    self.rollback_appended_messages(session_id, &appended).await;
+                    return Err(error);
+                }
+            }
+        }
+
+        let result = self.prepare_continuation_stream(session_id).await;
+        if result.is_err() {
+            self.rollback_appended_messages(session_id, &appended).await;
+        }
+        result
+    }
+
+    async fn rollback_appended_messages(&self, session_id: &str, messages: &[AppendedMessage]) {
+        for message in messages.iter().rev() {
+            if let Err(error) = self
+                .conversation_store
+                .restore_appended_message(session_id, message)
+                .await
+            {
+                tracing::error!(
+                    "Failed to roll back intercepted message {}: {error}",
+                    message.message.id
+                );
+                break;
+            }
+        }
+    }
+
     pub async fn prepare_start_stream(
         &mut self,
         session_id: &str,
