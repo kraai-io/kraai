@@ -51,26 +51,6 @@ impl AgentManager {
         }
     }
 
-    pub(super) fn load_workspace_agents_md_prompt(
-        &self,
-        workspace_dir: &Path,
-    ) -> Result<Option<String>> {
-        let agents_path = workspace_dir.join(AGENTS_MD_FILE_NAME);
-        let contents = match std::fs::read_to_string(&agents_path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(eyre!("Failed reading {}: {error}", agents_path.display())),
-        };
-
-        if contents.trim().is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(format!(
-            "Workspace Instructions\nThe following instructions come from {AGENTS_MD_FILE_NAME} in the active workspace. Follow them in addition to the rest of this system prompt.\n\n```markdown\n{contents}\n```"
-        )))
-    }
-
     pub(super) async fn build_turn_system_prompt(
         &self,
         session_id: &str,
@@ -85,10 +65,15 @@ impl AgentManager {
             sections.push(base_system_prompt);
         }
 
-        if let Some(workspace_agents_prompt) =
-            self.load_workspace_agents_md_prompt(workspace_dir)?
+        if let Some(path) = &self.user_agents_path
+            && let Some(prompt) = load_agents_md_prompt(path, "User").await?
         {
-            sections.push(workspace_agents_prompt);
+            sections.push(prompt);
+        }
+        if let Some(prompt) =
+            load_agents_md_prompt(&workspace_dir.join(AGENTS_MD_FILE_NAME), "Workspace").await?
+        {
+            sections.push(prompt);
         }
 
         let skills_workspace = workspace_dir.to_path_buf();
@@ -152,6 +137,21 @@ impl AgentManager {
             .find(|model| model.id == *model_id)
             .and_then(|model| model.max_context)
     }
+}
+
+async fn load_agents_md_prompt(path: &Path, scope: &str) -> Result<Option<String>> {
+    let contents = match tokio::fs::read_to_string(path).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(eyre!("Failed reading {}: {error}", path.display())),
+    };
+    if contents.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{scope} Instructions\nThe following instructions come from {}. Follow them in addition to the rest of this system prompt. Workspace instructions take precedence over user-level instructions when they conflict.\n\n```markdown\n{contents}\n```",
+        path.display()
+    )))
 }
 
 fn render_command_prompt(command_ids: &[String]) -> Result<String> {

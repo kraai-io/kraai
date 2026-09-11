@@ -81,13 +81,14 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         }),
     );
 
-    let manager = AgentManager::new(
+    let mut manager = AgentManager::new(
         providers,
         PathBuf::from("/tmp/default-workspace"),
         message_store,
         session_store,
         context_state_store,
     );
+    manager.user_agents_path = Some(data_dir.join(AGENTS_MD_FILE_NAME));
     (manager, data_dir)
 }
 

@@ -453,3 +453,104 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
     cleanup_dir(data_dir).await;
     Ok(())
 }
+
+#[tokio::test]
+async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_dir = data_dir.join("workspace");
+    tokio::fs::create_dir_all(&workspace_dir).await?;
+    let user_path = data_dir.join(AGENTS_MD_FILE_NAME);
+    tokio::fs::write(&user_path, "Global working agreements").await?;
+    tokio::fs::write(
+        workspace_dir.join(AGENTS_MD_FILE_NAME),
+        "Project agreements",
+    )
+    .await?;
+    let session_id = manager
+        .create_session_with(Some(workspace_dir), None)
+        .await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("first"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    let prompt = request_system_prompt(&request);
+    assert!(prompt.contains(user_path.to_string_lossy().as_ref()));
+    assert!(
+        prompt.find("Global working agreements").unwrap()
+            < prompt.find("Project agreements").unwrap()
+    );
+    assert!(prompt.contains("Workspace instructions take precedence over user-level instructions"));
+    manager.complete_message(&request.message_id).await?;
+
+    for contents in [
+        "Updated global agreements",
+        " \n\t",
+        "Restored global agreements",
+    ] {
+        tokio::fs::write(&user_path, contents).await?;
+        let request = manager
+            .prepare_continuation_stream(&session_id)
+            .await?
+            .unwrap();
+        let prompt = request_system_prompt(&request);
+        assert!(!prompt.contains("Global working agreements"));
+        assert!(prompt.contains("Project agreements"));
+        assert_eq!(
+            prompt.contains("User Instructions"),
+            !contents.trim().is_empty()
+        );
+        if !contents.trim().is_empty() {
+            assert!(prompt.contains(contents));
+        }
+        manager.complete_message(&request.message_id).await?;
+    }
+    tokio::fs::remove_file(&user_path).await?;
+    let request = manager
+        .prepare_continuation_stream(&session_id)
+        .await?
+        .unwrap();
+    assert!(!request_system_prompt(&request).contains("User Instructions"));
+    assert!(!request_system_prompt(&request).contains("Restored global agreements"));
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_errors() -> Result<()>
+{
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_dir = data_dir.join("workspace");
+    tokio::fs::create_dir_all(&workspace_dir).await?;
+    let user_path = data_dir.join(AGENTS_MD_FILE_NAME);
+    tokio::fs::write(&user_path, "Global instructions only").await?;
+    let session_id = manager
+        .create_session_with(Some(workspace_dir), None)
+        .await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("first"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert!(request_system_prompt(&request).contains("Global instructions only"));
+    assert!(!request_system_prompt(&request).contains("Workspace Instructions"));
+    manager.complete_message(&request.message_id).await?;
+    tokio::fs::write(&user_path, [0xff]).await?;
+    let error = manager
+        .prepare_continuation_stream(&session_id)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains(user_path.to_string_lossy().as_ref())
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}

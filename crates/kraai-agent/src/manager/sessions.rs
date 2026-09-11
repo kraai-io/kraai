@@ -38,6 +38,9 @@ impl AgentManager {
         Self {
             providers,
             default_workspace_dir,
+            user_agents_path: kraai_persistence::agent_state_root()
+                .ok()
+                .map(|root| root.join(AGENTS_MD_FILE_NAME)),
             conversation_store,
             message_store,
             session_store,
