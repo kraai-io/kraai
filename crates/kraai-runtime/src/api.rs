@@ -148,6 +148,7 @@ pub struct Session {
     pub profile_locked: bool,
     pub waiting_for_approval: bool,
     pub is_streaming: bool,
+    pub is_running: bool,
 }
 
 impl Session {
@@ -163,6 +164,7 @@ impl Session {
             profile_locked: false,
             waiting_for_approval: false,
             is_streaming: false,
+            is_running: false,
         }
     }
 }

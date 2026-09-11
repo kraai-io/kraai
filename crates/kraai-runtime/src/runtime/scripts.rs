@@ -251,6 +251,12 @@ impl RuntimeCore {
                 agent.clear_active_turn(&completed_session);
                 drop(agent);
                 self.schedule_queue_drain(&completed_session);
+                emit_event(
+                    &self.event_tx,
+                    Event::HistoryUpdated {
+                        session_id: completed_session,
+                    },
+                );
                 return;
             }
             None => {
@@ -521,12 +527,6 @@ impl RuntimeCore {
                 status: status.as_str().to_string(),
             },
         );
-        emit_event(
-            &self.event_tx,
-            Event::HistoryUpdated {
-                session_id: session_id.to_string(),
-            },
-        );
         if status == ScriptExecutionStatus::Cancelled {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
@@ -535,6 +535,12 @@ impl RuntimeCore {
         } else {
             self.spawn_continuation(session_id.to_string());
         }
+        emit_event(
+            &self.event_tx,
+            Event::HistoryUpdated {
+                session_id: session_id.to_string(),
+            },
+        );
         Ok(())
     }
 

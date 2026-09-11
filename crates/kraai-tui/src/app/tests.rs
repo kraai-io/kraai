@@ -165,6 +165,7 @@ fn session_snapshot_at(
             profile_locked: pending_script.is_some(),
             waiting_for_approval: pending_script.is_some(),
             is_streaming: false,
+            is_running: pending_script.is_some(),
         },
         history: std::collections::BTreeMap::new(),
         context_usage: None,

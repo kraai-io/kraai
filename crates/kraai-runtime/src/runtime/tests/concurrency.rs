@@ -16,6 +16,69 @@ use crate::runtime::core::ActiveScriptTask;
 use crate::{Event, SessionActivity};
 
 #[tokio::test]
+async fn session_stays_running_between_streams_until_turn_finishes() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let idle_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let request = harness
+        .runtime
+        .agent_manager
+        .write()
+        .await
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
+        .await?;
+
+    for is_streaming in [true, false] {
+        let sessions = harness.handle.list_sessions().await?;
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .unwrap();
+        assert!(session.is_running);
+        assert_eq!(session.is_streaming, is_streaming);
+        assert!(
+            !sessions
+                .iter()
+                .find(|session| session.id == idle_session)
+                .unwrap()
+                .is_running
+        );
+        let snapshot = harness.runtime.build_session_snapshot(&session_id).await?;
+        assert!(snapshot.session.is_running);
+        assert_eq!(snapshot.session.is_streaming, is_streaming);
+        if is_streaming {
+            harness
+                .runtime
+                .agent_manager
+                .write()
+                .await
+                .complete_message(&request.message_id)
+                .await?;
+        }
+    }
+
+    harness
+        .runtime
+        .agent_manager
+        .write()
+        .await
+        .clear_active_turn(&session_id);
+    let sessions = harness.handle.list_sessions().await?;
+    assert!(sessions.iter().all(|session| !session.is_running));
+    let snapshot = harness.runtime.build_session_snapshot(&session_id).await?;
+    assert!(!snapshot.session.is_running);
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
         .await

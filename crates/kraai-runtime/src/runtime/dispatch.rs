@@ -31,6 +31,7 @@ impl RuntimeCore {
 
         let agent = self.agent_manager.read().await;
         let reader = agent.capture_session_snapshot(session_id).await?;
+        let is_running = agent.is_turn_active(session_id);
         drop(agent);
         // Capture the sequence alongside mutable state. History loading below follows the
         // captured tip and uses copied in-flight messages, never later stream contents.
@@ -59,6 +60,7 @@ impl RuntimeCore {
             profile_locked: reader.profile_locked,
             waiting_for_approval: pending_script.is_some(),
             is_streaming: streaming,
+            is_running,
             ..Session::from_session_meta(reader.session)
         };
 
@@ -230,16 +232,17 @@ impl RuntimeCore {
                         .filter(|session| agent.is_profile_locked(&session.id))
                         .map(|session| session.id.clone())
                         .collect::<std::collections::HashSet<_>>();
-                    drop(agent);
                     let sessions = sessions
                         .into_iter()
                         .map(|session| Session {
                             profile_locked: profile_locked_sessions.contains(&session.id),
                             waiting_for_approval: pending_approvals.contains(&session.id),
                             is_streaming: streaming_sessions.contains(&session.id),
+                            is_running: agent.is_turn_active(&session.id),
                             ..Session::from_session_meta(session)
                         })
                         .collect();
+                    drop(agent);
                     Ok(sessions)
                 }
                 .await;

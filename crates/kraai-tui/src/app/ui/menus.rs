@@ -169,7 +169,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
         } else {
             ""
         };
-        let streaming_suffix = if session.is_streaming {
+        let streaming_suffix = if session.is_running {
             " [streaming]"
         } else {
             ""
