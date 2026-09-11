@@ -1,7 +1,10 @@
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use kraai_workspace_fs::read_scoped_text_file;
+use kraai_workspace_fs::open_scoped_file;
 use serde::{Deserialize, Serialize};
+
+const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct Metadata {
@@ -89,8 +92,8 @@ impl Catalog {
 }
 
 fn read_skill(root: &Path, path: &Path, source: &str) -> Result<Skill, String> {
-    let contents = read_scoped_text_file(root, path).map_err(|error| error.to_string())?;
-    let metadata = parse_metadata(&contents)?;
+    let file = open_scoped_file(root, path).map_err(|error| error.to_string())?;
+    let metadata = parse_metadata(file)?;
     if path
         .parent()
         .and_then(Path::file_name)
@@ -106,23 +109,36 @@ fn read_skill(root: &Path, path: &Path, source: &str) -> Result<Skill, String> {
     })
 }
 
-fn parse_metadata(contents: &str) -> Result<Metadata, String> {
-    let mut lines = contents.trim_start_matches('\u{feff}').lines();
-    if lines.next() != Some("---") {
-        return Err(String::from("missing YAML frontmatter"));
-    }
+fn parse_metadata(reader: impl Read) -> Result<Metadata, String> {
+    let mut reader = BufReader::new(reader.take(MAX_FRONTMATTER_BYTES as u64 + 1));
+    let mut line = String::new();
+    let mut bytes_read = 0;
     let mut yaml = String::new();
-    let mut closed = false;
-    for line in lines {
-        if line == "---" {
-            closed = true;
+    loop {
+        line.clear();
+        let count = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        bytes_read += count;
+        if bytes_read > MAX_FRONTMATTER_BYTES {
+            return Err(format!(
+                "YAML frontmatter exceeds {MAX_FRONTMATTER_BYTES} bytes"
+            ));
+        }
+        if count == 0 {
+            return Err(String::from("unterminated YAML frontmatter"));
+        }
+        let delimiter = line.trim_end_matches('\n').trim_end_matches('\r');
+        if bytes_read == count {
+            if delimiter.trim_start_matches('\u{feff}') != "---" {
+                return Err(String::from("missing YAML frontmatter"));
+            }
+            continue;
+        }
+        if delimiter == "---" {
             break;
         }
-        yaml.push_str(line);
-        yaml.push('\n');
-    }
-    if !closed {
-        return Err(String::from("unterminated YAML frontmatter"));
+        yaml.push_str(&line);
     }
     let metadata: Metadata = serde_yaml_ng::from_str(&yaml).map_err(|error| error.to_string())?;
     let name = &metadata.name;

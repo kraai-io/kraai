@@ -72,8 +72,19 @@ pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, Works
 /// This is intended for host-side refreshes of paths that were authorized in a
 /// sandbox. Linux `openat2` performs resolution and opening atomically, so a
 /// concurrent symlink replacement cannot escape the approved root.
-#[cfg(target_os = "linux")]
 pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedReadError> {
+    let mut file = open_scoped_file(root, path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|source| ScopedReadError::ReadText {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(contents)
+}
+
+#[cfg(target_os = "linux")]
+pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadError> {
     use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
 
     let relative = path
@@ -103,7 +114,7 @@ pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedR
             source: std::io::Error::from_raw_os_error(error.raw_os_error()),
         },
     })?;
-    let mut file = File::from(descriptor);
+    let file = File::from(descriptor);
     let metadata = file.metadata().map_err(|source| ScopedReadError::Inspect {
         path: path.to_path_buf(),
         source,
@@ -111,17 +122,11 @@ pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedR
     if !metadata.is_file() {
         return Err(ScopedReadError::NotFile(path.to_path_buf()));
     }
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .map_err(|source| ScopedReadError::ReadText {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    Ok(contents)
+    Ok(file)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn read_scoped_text_file(_root: &Path, path: &Path) -> Result<String, ScopedReadError> {
+pub fn open_scoped_file(_root: &Path, path: &Path) -> Result<File, ScopedReadError> {
     Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
 }
 
