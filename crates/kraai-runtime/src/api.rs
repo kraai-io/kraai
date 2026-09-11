@@ -239,6 +239,7 @@ pub enum SessionActivity {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
+    pub turn_timer: crate::TurnTimer,
     /// The snapshot contains this session's state represented by events through this global
     /// sequence. After installing it, discard covered events for this session only; unrelated
     /// session and service events still need to be handled.
@@ -260,6 +261,10 @@ pub struct RuntimeEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    TurnTimingChanged {
+        session_id: String,
+        timer: crate::TurnTimer,
+    },
     /// Configuration loaded successfully
     ConfigLoaded,
     /// Failure in runtime-wide background work or hosting.
@@ -341,7 +346,8 @@ impl Event {
     /// Returns the session this event concerns, if any.
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Self::SessionError { session_id, .. }
+            Self::TurnTimingChanged { session_id, .. }
+            | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }
             | Self::StreamChunk { session_id, .. }
             | Self::StreamComplete { session_id, .. }

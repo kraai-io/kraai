@@ -35,7 +35,7 @@ impl RuntimeCore {
         drop(agent);
         // Capture the sequence alongside mutable state. History loading below follows the
         // captured tip and uses copied in-flight messages, never later stream contents.
-        let event_sequence = self.event_tx.latest_sequence();
+        let (event_sequence, turn_timer) = self.event_tx.timer_snapshot(session_id);
         drop(snapshot_guard);
 
         let data = reader.load().await?;
@@ -65,6 +65,7 @@ impl RuntimeCore {
         };
 
         Ok(SessionSnapshot {
+            turn_timer,
             event_sequence,
             session,
             history: data.history,
@@ -283,6 +284,9 @@ impl RuntimeCore {
                     .await
                     .delete_session(&session_id)
                     .await;
+                if result.is_ok() {
+                    self.event_tx.remove_timer(&session_id);
+                }
                 respond(response, result);
             }
             Command::GetWorkspaceState {

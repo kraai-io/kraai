@@ -234,10 +234,48 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         Some(42)
     );
 
+    let (_, paused_timer) = harness.runtime.event_tx.timer_snapshot(&session_id);
+    assert!(
+        harness
+            .handle
+            .delete_session(session_id.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        harness.runtime.event_tx.timer_snapshot(&session_id).1,
+        paused_timer
+    );
+    let continuation_guard = harness.runtime.session_state_barrier.write().await;
     harness
-        .handle
-        .deny_script(session_id.clone(), script.execution_id.clone())
+        .runtime
+        .deny_pending_script(
+            session_id.clone(),
+            kraai_types::ScriptExecutionId::new(script.execution_id.clone()),
+        )
         .await?;
+    let delay_started = std::time::Instant::now();
+    let elapsed_before_delay = harness
+        .runtime
+        .event_tx
+        .timer_snapshot(&session_id)
+        .1
+        .elapsed(delay_started)
+        .expect("active timer");
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    let delay_finished = std::time::Instant::now();
+    let elapsed_after_delay = harness
+        .runtime
+        .event_tx
+        .timer_snapshot(&session_id)
+        .1
+        .elapsed(delay_finished)
+        .expect("active timer");
+    assert_eq!(
+        elapsed_after_delay - elapsed_before_delay,
+        delay_finished - delay_started
+    );
+    drop(continuation_guard);
     harness
         .events
         .wait_for("continuation completion", |events| {
@@ -250,6 +288,12 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
                 >= 2
         })
         .await;
+
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session_id.clone())
+        .await?;
+    assert!(snapshot.turn_timer.last_duration() >= Some(elapsed_after_delay));
 
     let records = FileScriptExecutionStore::new(&harness.data_dir)
         .list_for_session(&session_id)

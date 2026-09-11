@@ -169,13 +169,9 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
         } else {
             ""
         };
-        let streaming_suffix = if session.is_running {
-            " [streaming]"
-        } else {
-            ""
-        };
+        let running_suffix = if session.is_running { " [running]" } else { "" };
         lines.push(Line::styled(
-            format!("{marker} {title}{current_suffix}{approval_suffix}{streaming_suffix}"),
+            format!("{marker} {title}{current_suffix}{approval_suffix}{running_suffix}"),
             if selected {
                 Style::default().fg(Color::Cyan)
             } else {

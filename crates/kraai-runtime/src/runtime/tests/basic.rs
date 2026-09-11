@@ -259,6 +259,15 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }));
     }
 
+    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    assert!(snapshot.turn_timer.last_duration().is_some());
+    assert!(
+        snapshot
+            .turn_timer
+            .elapsed(std::time::Instant::now())
+            .is_none()
+    );
+
     harness.shutdown().await;
     Ok(())
 }
@@ -450,6 +459,29 @@ async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
     let snapshot = snapshot_task.await??;
     assert!(snapshot.event_sequence >= mutation_sequence);
 
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn deleting_session_removes_only_its_timer() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime fixture");
+    let deleted = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let retained = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness.runtime.event_tx.resume_timer(&deleted);
+    harness.runtime.event_tx.resume_timer(&retained);
+    let (_, retained_timer) = harness.runtime.event_tx.timer_snapshot(&retained);
+    harness.handle.delete_session(deleted.clone()).await?;
+    assert_eq!(
+        harness.runtime.event_tx.timer_snapshot(&deleted).1,
+        crate::TurnTimer::default()
+    );
+    assert_eq!(
+        harness.runtime.event_tx.timer_snapshot(&retained).1,
+        retained_timer
+    );
     harness.shutdown().await;
     Ok(())
 }

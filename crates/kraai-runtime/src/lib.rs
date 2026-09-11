@@ -5,6 +5,8 @@ mod api;
 mod handle;
 mod runtime;
 mod settings;
+mod timing;
+pub use timing::TurnTimer;
 
 pub use api::{
     AgentProfileCatalog, ContinueSessionOutcome, CreateSessionRequest, Event, EventCallback,

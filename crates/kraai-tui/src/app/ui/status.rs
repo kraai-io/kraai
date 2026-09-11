@@ -33,7 +33,7 @@ fn statusline_activity_label(state: &AppState) -> String {
         let frame_index = state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len();
         let frame = STATUSLINE_STREAMING_FRAMES
             .get(frame_index)
-            .unwrap_or(&"streaming")
+            .unwrap_or(&"running")
             .to_string();
         return state
             .turn_timer
