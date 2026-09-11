@@ -363,6 +363,12 @@ impl RuntimeCore {
                 ScriptDecision::Allow,
             ),
         };
+        let workspace = turn.workspace_dir.clone();
+        let skill_roots =
+            tokio::task::spawn_blocking(move || kraai_agent::discover_skill_read_roots(&workspace))
+                .await?;
+        let mut runtime_roots = configured_runtime_roots();
+        runtime_roots.extend(skill_roots);
         let request = EffectiveScriptRequest {
             id: ScriptExecutionId::new(Ulid::generate()),
             session_id: session_id.clone(),
@@ -375,7 +381,7 @@ impl RuntimeCore {
             effective_capabilities,
             timeout: script.timeout,
             environment: script_environment(&turn.profile)?,
-            runtime_roots: configured_runtime_roots(),
+            runtime_roots,
             active_commands: turn.profile.commands.clone(),
         };
         self.prepare_script_execution(&request).await?;

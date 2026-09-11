@@ -42,6 +42,9 @@ fn discovery_keeps_sources_separate_and_skips_invalid_skills()
     let catalog = discover_roots(&workspace, Some(&user));
     assert_eq!(catalog.skills.len(), 2);
     assert_eq!(catalog.warnings.len(), 1);
+    let roots = catalog.read_roots();
+    assert_eq!(roots.len(), 2);
+    assert!(!roots.contains(&workspace_skills.join("broken")));
     let prompt = catalog.prompt().ok_or("missing catalog")?;
     assert!(prompt.contains("workspace:review"));
     assert!(prompt.contains("user:review"));
@@ -75,6 +78,7 @@ fn discovery_accepts_symlinked_skill_directories() -> Result<(), Box<dyn std::er
     let catalog = discover_roots(&workspace, Some(&user));
     assert!(catalog.warnings.is_empty());
     assert_eq!(catalog.skills.len(), 2);
+    assert_eq!(catalog.read_roots(), vec![installed.canonicalize()?]);
     for skill in &catalog.skills {
         assert_eq!(skill.path, installed.canonicalize()?.join("SKILL.md"));
     }

@@ -7,6 +7,47 @@ use super::{capabilities, find_bwrap, shell_plan, temp_dir};
 use crate::{SandboxError, Termination, run};
 
 #[tokio::test]
+async fn skill_runtime_root_is_read_only_with_default_capabilities() {
+    let base = temp_dir("skill-read-root");
+    let workspace = base.join("workspace");
+    let skill = base.join("store/unslop");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::create_dir_all(&skill).expect("create skill");
+    std::fs::write(skill.join("SKILL.md"), "instructions").expect("write skill");
+    std::fs::write(skill.join("reference.txt"), "reference").expect("write reference");
+    std::fs::write(base.join("secret"), "secret\n").expect("write unrelated file");
+    let mut plan = shell_plan(
+        &workspace,
+        "read -r text < \"$SKILL/SKILL.md\"; test \"$text\" = instructions || exit 1; read -r text < \"$SKILL/reference.txt\"; test \"$text\" = reference || exit 2; if (printf bad > \"$SKILL/SKILL.md\"); then exit 3; fi; if (read -r text < \"$SECRET\"); then exit 4; fi",
+        capabilities([SandboxCapability::WorkspaceRead]),
+        Duration::from_secs(5),
+    );
+    plan.executable = plan.executable.canonicalize().expect("resolve shell");
+    plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    plan.runtime_roots.push(skill.clone());
+    plan.environment
+        .insert("SKILL".into(), skill.into_os_string());
+    plan.environment
+        .insert("SECRET".into(), base.join("secret").into_os_string());
+    let result = run(plan, CancellationToken::new()).await;
+    std::fs::remove_dir_all(base).expect("remove fixture");
+    let output = match result {
+        Err(SandboxError::SandboxUnavailable(_)) => return,
+        result => result.expect("run sandbox"),
+    };
+    assert_eq!(
+        output.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
 async fn workspace_write_survives_overlapping_runtime_roots() {
     check_runtime_mounts(true).await;
 }
