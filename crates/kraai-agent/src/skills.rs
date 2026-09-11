@@ -69,7 +69,7 @@ impl Catalog {
             if !path.exists() {
                 continue;
             }
-            match read_skill(root, &path, source) {
+            match read_skill(&path, source) {
                 Ok(skill) => self.skills.push(skill),
                 Err(error) => self
                     .warnings
@@ -91,8 +91,13 @@ impl Catalog {
     }
 }
 
-fn read_skill(root: &Path, path: &Path, source: &str) -> Result<Skill, String> {
-    let file = open_scoped_file(root, path).map_err(|error| error.to_string())?;
+fn read_skill(path: &Path, source: &str) -> Result<Skill, String> {
+    let directory = path.parent().ok_or("missing skill directory")?;
+    let root = directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let resolved_path = root.join("SKILL.md");
+    let file = open_scoped_file(&root, &resolved_path).map_err(|error| error.to_string())?;
     let metadata = parse_metadata(file)?;
     if path
         .parent()
@@ -105,7 +110,7 @@ fn read_skill(root: &Path, path: &Path, source: &str) -> Result<Skill, String> {
     Ok(Skill {
         id: format!("{source}:{}", metadata.name),
         description: metadata.description,
-        path: path.to_path_buf(),
+        path: resolved_path,
     })
 }
 

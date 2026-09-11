@@ -58,6 +58,36 @@ fn discovery_keeps_sources_separate_and_skips_invalid_skills()
 
 #[cfg(target_os = "linux")]
 #[test]
+fn discovery_accepts_symlinked_skill_directories() -> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::temp_dir().join(format!("kraai-skills-{}", ulid::Ulid::generate()));
+    let workspace = root.join("workspace");
+    let user = root.join("user");
+    let installed = root.join("store/hash-unslop");
+    std::fs::create_dir_all(&installed)?;
+    std::fs::write(
+        installed.join("SKILL.md"),
+        "---\nname: unslop\ndescription: Edit prose\n---\nSECRET INSTRUCTIONS",
+    )?;
+    for skills in [workspace.join(".agents/skills"), user.clone()] {
+        std::fs::create_dir_all(&skills)?;
+        std::os::unix::fs::symlink(&installed, skills.join("unslop"))?;
+    }
+    let catalog = discover_roots(&workspace, Some(&user));
+    assert!(catalog.warnings.is_empty());
+    assert_eq!(catalog.skills.len(), 2);
+    for skill in &catalog.skills {
+        assert_eq!(skill.path, installed.canonicalize()?.join("SKILL.md"));
+    }
+    let prompt = catalog.prompt().ok_or("missing catalog")?;
+    assert!(prompt.contains("user:unslop"));
+    assert!(prompt.contains("workspace:unslop"));
+    assert!(!prompt.contains("SECRET INSTRUCTIONS"));
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn discovery_rejects_symlinks_outside_skill_root() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::temp_dir().join(format!("kraai-skills-{}", ulid::Ulid::generate()));
     let skills = root.join(".agents/skills");
