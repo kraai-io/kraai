@@ -159,6 +159,7 @@ impl RuntimeCore {
                         let mut agent = self.agent_manager.write().await;
                         agent.clear_active_turn(&session_id);
                         drop(agent);
+                        self.event_tx.finish_timer(&session_id);
                         self.schedule_queue_drain(&session_id);
                     }
                     emit_event(
@@ -457,6 +458,8 @@ impl RuntimeCore {
             let rollback_result = agent.abort_streaming_message(&message_id).await;
             if rollback_result.is_ok() {
                 agent.clear_active_turn(&session_id);
+                drop(agent);
+                self.event_tx.finish_timer(&session_id);
             }
             rollback_result
         };
@@ -521,6 +524,7 @@ impl RuntimeCore {
         if rollback_result.is_some() {
             agent.clear_active_turn(session_id);
             drop(agent);
+            self.event_tx.finish_timer(session_id);
             Ok(true)
         } else {
             drop(agent);
@@ -901,6 +905,8 @@ impl RuntimeCore {
                 }
             };
             agent.clear_active_turn(&session_id);
+            drop(agent);
+            self.event_tx.finish_timer(&session_id);
             cancelled
         };
         let Some(cancelled_stream) = cancelled_stream else {

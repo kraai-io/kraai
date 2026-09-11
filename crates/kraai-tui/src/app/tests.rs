@@ -153,6 +153,7 @@ fn session_snapshot_at(
         SessionActivity::Idle
     };
     SessionSnapshot {
+        turn_timer: Default::default(),
         event_sequence,
         session: Session {
             id: String::from("session"),
@@ -501,4 +502,53 @@ fn session_sync_requests_atomic_snapshot() {
             RuntimeRequest::GetSessionSnapshot { session_id } if session_id == "session"
         )
     }));
+}
+
+#[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "test assertions follow fallible fixture setup"
+)]
+fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::Result<()> {
+    let mut harness = test_harness();
+    let timer: kraai_runtime::TurnTimer = serde_json::from_value(serde_json::json!({
+        "started_at": std::time::SystemTime::now() - std::time::Duration::from_secs(90),
+        "accumulated": std::time::Duration::from_secs(5),
+        "active": true,
+        "last_duration": null,
+    }))?;
+    harness
+        .app
+        .reset_chat_session(Some(String::from("other")), "Session loaded");
+    harness.app.handle_runtime_event(Event::TurnTimingChanged {
+        session_id: String::from("session"),
+        timer,
+    });
+    assert_eq!(
+        harness.app.state.turn_timer,
+        kraai_runtime::TurnTimer::default()
+    );
+    harness
+        .app
+        .reset_chat_session(Some(String::from("session")), "Session loaded");
+    let mut snapshot = session_snapshot(None);
+    snapshot.activity = SessionActivity::Streaming;
+    snapshot.session.is_streaming = true;
+    snapshot.turn_timer = timer;
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            session_id: String::from("session"),
+            result: Box::new(Ok(snapshot)),
+        });
+    assert_eq!(harness.app.state.turn_timer, timer);
+    assert!(
+        harness
+            .app
+            .state
+            .turn_timer
+            .elapsed(std::time::Instant::now())
+            >= Some(std::time::Duration::from_secs(95))
+    );
+    Ok(())
 }

@@ -1,8 +1,8 @@
+use kraai_runtime::TurnTimer;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
@@ -272,66 +272,6 @@ impl AppState {
         cache.message_cache = next_entries;
         cache.width = width;
         cache.epoch = self.chat_epoch;
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct TurnTimer {
-    started_at: Option<Instant>,
-    accumulated: Duration,
-    last_duration: Option<Duration>,
-}
-
-impl TurnTimer {
-    pub(super) fn start(&mut self, now: Instant) {
-        self.started_at = Some(now);
-        self.accumulated = Duration::ZERO;
-        self.last_duration = None;
-    }
-
-    pub(super) fn resume(&mut self, now: Instant) {
-        if self.started_at.is_some() {
-            return;
-        }
-        self.started_at = Some(now);
-    }
-
-    pub(super) fn pause(&mut self, now: Instant) {
-        if let Some(started_at) = self.started_at.take() {
-            self.accumulated = self
-                .accumulated
-                .saturating_add(now.saturating_duration_since(started_at));
-        }
-    }
-
-    pub(super) fn finish(&mut self, now: Instant) {
-        self.pause(now);
-        if self.accumulated > Duration::ZERO {
-            self.last_duration = Some(self.accumulated);
-        }
-        self.accumulated = Duration::ZERO;
-    }
-
-    pub(super) fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    pub(super) fn has_started(&self) -> bool {
-        self.started_at.is_some() || self.accumulated > Duration::ZERO
-    }
-
-    pub(super) fn elapsed(&self, now: Instant) -> Option<Duration> {
-        self.has_started().then(|| {
-            self.accumulated.saturating_add(
-                self.started_at
-                    .map(|started_at| now.saturating_duration_since(started_at))
-                    .unwrap_or_default(),
-            )
-        })
-    }
-
-    pub(super) fn last_duration(&self) -> Option<Duration> {
-        self.last_duration
     }
 }
 

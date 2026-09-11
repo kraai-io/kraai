@@ -259,6 +259,15 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }));
     }
 
+    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    assert!(snapshot.turn_timer.last_duration().is_some());
+    assert!(
+        snapshot
+            .turn_timer
+            .elapsed(std::time::Instant::now())
+            .is_none()
+    );
+
     harness.shutdown().await;
     Ok(())
 }

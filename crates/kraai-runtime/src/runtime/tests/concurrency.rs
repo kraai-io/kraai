@@ -119,6 +119,10 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
     assert!(
         matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
     );
+    let timing = events.try_recv()?;
+    let Event::TurnTimingChanged { timer, .. } = timing.event else {
+        panic!("expected runtime turn timing");
+    };
     let start = events.try_recv()?;
     assert!(
         matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
@@ -128,6 +132,8 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
     let snapshot = tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
+    assert_eq!(snapshot.turn_timer, timer);
+    assert!(timer.elapsed(std::time::Instant::now()).is_some());
     harness.shutdown().await;
     Ok(())
 }

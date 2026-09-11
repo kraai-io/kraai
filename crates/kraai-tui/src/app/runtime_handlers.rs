@@ -3,6 +3,11 @@ use super::*;
 impl App {
     pub(super) fn handle_runtime_event(&mut self, event: Event) {
         match event {
+            Event::TurnTimingChanged { session_id, timer } => {
+                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.state.turn_timer = timer;
+                }
+            }
             Event::ConfigLoaded => {
                 self.state.config_loaded = true;
                 self.state.status = String::from("Config loaded");
@@ -37,7 +42,7 @@ impl App {
                 self.state.retry_waiting = false;
                 self.state.profile_locked = true;
                 self.state.script_phase = ScriptPhase::Idle;
-                self.start_or_resume_turn_timer(Instant::now());
+                self.state.profile_lock_stale_after_terminal_event = false;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
                 self.last_stream_history_request = None;
@@ -86,7 +91,6 @@ impl App {
                         self.ci_metrics_history_pending = true;
                         self.ci_metrics_context_pending = true;
                     }
-                    self.sync_turn_timer_with_activity(Instant::now());
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -103,7 +107,7 @@ impl App {
                     self.last_stream_history_request = None;
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
-                    self.finish_terminal_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.status = format!("Stream error: {error}");
                     self.request_sync_for_session(&session_id);
                 }
@@ -122,7 +126,7 @@ impl App {
                     self.last_stream_history_request = None;
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
-                    self.finish_terminal_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
                 }
@@ -136,7 +140,7 @@ impl App {
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.retry_waiting = true;
-                    self.start_or_resume_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status =
                         format!("Provider error, retry #{retry_number} in {delay_seconds}s");
                 }
@@ -158,7 +162,7 @@ impl App {
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.last_stream_history_request = None;
-                    self.finish_terminal_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.status = format!("Continuation failed: {error}");
                     self.request_sync_for_session(&session_id);
                 } else {
@@ -209,7 +213,7 @@ impl App {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Executing;
-                    self.start_or_resume_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status = format!("Script {status}; waiting for assistant");
                 } else {
                     self.request(RuntimeRequest::ListSessions);
@@ -421,7 +425,7 @@ impl App {
                     self.state.pending_submit = None;
                 }
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.clear_turn_timer();
+                    self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status = format!("Failed changing agent: {err}");
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
@@ -434,7 +438,7 @@ impl App {
                     self.invalidate_chat_cache();
                 }
                 self.state.is_streaming = false;
-                self.clear_turn_timer();
+                self.state.profile_lock_stale_after_terminal_event = false;
                 self.state.status = format!("Send failed: {err}");
                 self.fail_ci(format!("Send failed: {err}"));
             }
@@ -498,6 +502,7 @@ impl App {
                         self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                            self.state.turn_timer = snapshot.turn_timer;
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
                             self.state.chat_history = snapshot.history;
                             self.state.context_usage = snapshot.context_usage;
@@ -529,7 +534,6 @@ impl App {
                             self.invalidate_chat_cache();
                             self.reconcile_optimistic_messages();
                             self.clamp_chat_scroll();
-                            self.sync_turn_timer_with_activity(Instant::now());
                         }
                     }
                     Err(error) => {
@@ -609,7 +613,6 @@ impl App {
                     self.sync_current_session_streaming_from_sessions();
                     self.event_lag_session_resync_pending = false;
                 }
-                self.sync_turn_timer_with_activity(Instant::now());
                 self.maybe_finish_ci_run();
             }
             RuntimeResponse::Sessions(Err(err)) => {
@@ -654,7 +657,7 @@ impl App {
                     self.state.pending_script = None;
                 }
                 self.state.script_phase = ScriptPhase::Executing;
-                self.start_or_resume_turn_timer(Instant::now());
+                self.state.profile_lock_stale_after_terminal_event = false;
                 self.state.status = String::from("Executing approved Nushell script");
             }
             RuntimeResponse::ApproveScript {
@@ -704,7 +707,7 @@ impl App {
             RuntimeResponse::ContinueSession(Ok(outcome)) => match outcome {
                 kraai_runtime::ContinueSessionOutcome::Started => {
                     self.state.script_phase = ScriptPhase::Idle;
-                    self.start_or_resume_turn_timer(Instant::now());
+                    self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status = String::from("Continuing session");
                 }
                 kraai_runtime::ContinueSessionOutcome::NothingToContinue => {

@@ -226,7 +226,6 @@ impl App {
         self.state.mode = UiMode::Chat;
         self.state.script_phase = ScriptPhase::AwaitingApproval;
         self.state.script_approval_action = ScriptApprovalAction::Allow;
-        self.pause_turn_timer(Instant::now());
     }
 
     pub(super) fn request_sync(&mut self) {
@@ -271,7 +270,8 @@ impl App {
         self.state.script_phase = ScriptPhase::Idle;
         self.state.is_streaming = false;
         self.state.retry_waiting = false;
-        self.clear_turn_timer();
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.turn_timer = kraai_runtime::TurnTimer::default();
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.last_stream_history_request = None;
@@ -329,7 +329,7 @@ impl App {
             self.update_queued_status();
         } else {
             self.state.script_phase = ScriptPhase::Idle;
-            self.start_turn_timer(Instant::now());
+            self.state.profile_lock_stale_after_terminal_event = false;
             self.state.is_streaming = true;
             self.state.statusline_animation_frame = 0;
             self.last_statusline_animation_tick = None;
@@ -373,7 +373,8 @@ impl App {
         self.last_stream_history_request = None;
         self.event_lag_session_resync_pending = false;
         self.event_lag_script_resync_pending = false;
-        self.clear_turn_timer();
+        self.state.profile_lock_stale_after_terminal_event = false;
+        self.state.turn_timer = kraai_runtime::TurnTimer::default();
         self.invalidate_chat_cache();
         self.state.status = message.clone();
         self.state.exit = true;

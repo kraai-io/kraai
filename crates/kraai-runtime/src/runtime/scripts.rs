@@ -174,6 +174,7 @@ impl RuntimeCore {
                 .await;
             if result.is_err() {
                 agent.clear_active_turn(&session_id);
+                self.event_tx.finish_timer(&session_id);
             }
             let providers = agent.cloned_provider_manager();
             drop(agent);
@@ -250,6 +251,7 @@ impl RuntimeCore {
                 let mut agent = self.agent_manager.write().await;
                 agent.clear_active_turn(&completed_session);
                 drop(agent);
+                self.event_tx.finish_timer(&completed_session);
                 self.schedule_queue_drain(&completed_session);
                 emit_event(
                     &self.event_tx,
@@ -531,6 +533,7 @@ impl RuntimeCore {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
             drop(agent);
+            self.event_tx.finish_timer(session_id);
             self.schedule_queue_drain(session_id);
         } else {
             self.spawn_continuation(session_id.to_string());
@@ -548,6 +551,8 @@ impl RuntimeCore {
         {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
+            drop(agent);
+            self.event_tx.finish_timer(session_id);
         }
         self.schedule_queue_drain(session_id);
         emit_event(
@@ -588,6 +593,7 @@ impl RuntimeCore {
             ))));
         }
 
+        self.event_tx.resume_timer(&session_id);
         let runtime = self.clone();
         let task_session_id = session_id.clone();
         let cancellation = CancellationToken::new();
