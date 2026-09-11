@@ -91,6 +91,13 @@ impl AgentManager {
             sections.push(workspace_agents_prompt);
         }
 
+        let skills_workspace = workspace_dir.to_path_buf();
+        let skills =
+            tokio::task::spawn_blocking(move || crate::skills::discover(&skills_workspace)).await?;
+        if let Some(prompt) = skills.prompt() {
+            sections.push(prompt);
+        }
+
         let context_state = crate::context_state::refresh_context_state(
             self.context_state_store.as_ref(),
             session_id,
@@ -124,7 +131,11 @@ impl AgentManager {
 
         Ok(TurnSystemPrompt {
             content: system_prompt,
-            context_notifications: context_state.notifications,
+            context_notifications: skills
+                .warnings
+                .into_iter()
+                .chain(context_state.notifications)
+                .collect(),
         })
     }
 
