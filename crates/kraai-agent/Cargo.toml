@@ -19,6 +19,7 @@ kraai-types = { workspace = true }
 kraai-workspace-fs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

@@ -413,3 +413,37 @@ async fn stateful_commands_ack_each_completed_effect_in_script_order() {
     assert_eq!(requests[1].deltas[0].operation, "close");
     drop(requests);
 }
+
+#[tokio::test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "test asserts behavior and propagates fixture errors"
+)]
+async fn skill_reads_return_text_without_context_effects() -> Result<(), Box<dyn std::error::Error>>
+{
+    let workspace = TestWorkspace::new();
+    let directory = workspace.0.join(".agents/skills/review");
+    std::fs::create_dir_all(&directory)?;
+    let instructions = "---\nname: review\ndescription: Review code\n---\nInspect the changes.\n";
+    std::fs::write(directory.join("SKILL.md"), instructions)?;
+    let effects = Arc::new(RecordingEffects::default());
+    let mut execution = plan(
+        b"open --raw .agents/skills/review/SKILL.md".to_vec(),
+        &workspace,
+    );
+    execution.state_effect_handler = effects.clone();
+    let result = execute(execution, CancellationToken::new()).await?;
+    assert_eq!(
+        result.output.termination,
+        Termination::Exited { code: Some(0) }
+    );
+    assert!(String::from_utf8_lossy(&result.output.stdout).contains(instructions));
+    assert!(
+        effects
+            .requests
+            .lock()
+            .map_err(|error| error.to_string())?
+            .is_empty()
+    );
+    Ok(())
+}

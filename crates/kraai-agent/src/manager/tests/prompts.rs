@@ -109,8 +109,17 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
             ProviderId::new("mock"),
         )
         .await?;
-    assert_eq!(request.context_notifications.len(), 1);
-    assert!(request.context_notifications[0].contains("automatically unpinned"));
+    assert_eq!(
+        request
+            .context_notifications
+            .iter()
+            .filter(|notification| {
+                notification.contains("automatically unpinned")
+                    && notification.contains("removed.txt")
+            })
+            .count(),
+        1,
+    );
     let system_prompt = request_system_prompt(&request);
     assert!(system_prompt.contains("Pinned File Updates"));
     assert!(system_prompt.contains("removed.txt"));
@@ -397,6 +406,50 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
     assert!(system_prompt.contains("1|current"));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace_dir = test_dir("skills-catalog");
+    let skill_dir = workspace_dir.join(".agents/skills/review");
+    tokio::fs::create_dir_all(&skill_dir).await?;
+    tokio::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: review\ndescription: Review changes\n---\nUNLOADED SKILL BODY",
+    )
+    .await?;
+    let session_id = manager.create_session().await?;
+    manager
+        .set_workspace_dir(&session_id, workspace_dir.clone())
+        .await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("review this"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    let prompt = request_system_prompt(&request);
+    assert!(prompt.contains("workspace:review"));
+    assert!(prompt.contains("Review changes"));
+    assert!(!prompt.contains("UNLOADED SKILL BODY"));
+    assert!(
+        manager
+            .context_state_store
+            .list(&session_id)
+            .await?
+            .is_empty()
+    );
+    manager.complete_message(&request.message_id).await?;
+    let continuation = manager.prepare_continuation_stream(&session_id).await?;
+    let continuation = continuation.ok_or_else(|| eyre!("missing continuation"))?;
+    assert!(request_system_prompt(&continuation).contains("workspace:review"));
+    assert!(!request_system_prompt(&continuation).contains("UNLOADED SKILL BODY"));
+    tokio::fs::remove_dir_all(workspace_dir).await?;
     cleanup_dir(data_dir).await;
     Ok(())
 }
