@@ -682,6 +682,7 @@ impl RuntimeCore {
         execution_id: ScriptExecutionId,
     ) -> Result<()> {
         let pending = self.take_pending_script(&session_id, &execution_id).await?;
+        self.event_tx.resume_timer(&session_id);
         let completed = self
             .finish_prepared_execution(
                 &pending.request.id,

@@ -31,11 +31,7 @@ impl RuntimeEventSender {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if matches!(
             &event,
-            Event::StreamStart { .. }
-                | Event::ScriptApprovalRequested { .. }
-                | Event::StreamError { .. }
-                | Event::StreamCancelled { .. }
-                | Event::ContinuationFailed { .. }
+            Event::StreamStart { .. } | Event::ScriptApprovalRequested { .. }
         ) && let Some(session_id) = event.session_id()
         {
             let now = std::time::Instant::now();
@@ -44,9 +40,6 @@ impl RuntimeEventSender {
             match &event {
                 Event::StreamStart { .. } => timer.resume(now),
                 Event::ScriptApprovalRequested { .. } => timer.pause(now),
-                Event::StreamError { .. }
-                | Event::StreamCancelled { .. }
-                | Event::ContinuationFailed { .. } => timer.finish(now),
                 _ => {}
             }
             if *timer != previous {
@@ -67,6 +60,14 @@ impl RuntimeEventSender {
             sequence: state.sequence,
             event,
         });
+    }
+
+    pub(crate) fn remove_timer(&self, session_id: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .timers
+            .remove(session_id);
     }
 
     pub(crate) fn finish_timer(&self, session_id: &str) {
@@ -122,6 +123,39 @@ impl RuntimeEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_events_do_not_finish_a_turn_before_cleanup() {
+        let sender = RuntimeEventSender::new(16);
+        sender.resume_timer("session");
+        let (_, timer) = sender.timer_snapshot("session");
+        for event in [
+            Event::StreamError {
+                session_id: "session".into(),
+                message_id: "message".into(),
+                error: "rollback failed".into(),
+            },
+            Event::ContinuationFailed {
+                session_id: "session".into(),
+                error: "rollback failed".into(),
+            },
+            Event::StreamCancelled {
+                session_id: "session".into(),
+                message_id: "message".into(),
+            },
+        ] {
+            sender.send(event);
+            assert_eq!(sender.timer_snapshot("session").1, timer);
+        }
+        sender.finish_timer("session");
+        assert!(
+            sender
+                .timer_snapshot("session")
+                .1
+                .elapsed(std::time::Instant::now())
+                .is_none()
+        );
+    }
 
     #[test]
     fn session_timing_survives_detaching_and_other_session_activity() {

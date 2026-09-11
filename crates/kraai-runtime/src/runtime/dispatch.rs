@@ -284,6 +284,9 @@ impl RuntimeCore {
                     .await
                     .delete_session(&session_id)
                     .await;
+                if result.is_ok() {
+                    self.event_tx.remove_timer(&session_id);
+                }
                 respond(response, result);
             }
             Command::GetWorkspaceState {
