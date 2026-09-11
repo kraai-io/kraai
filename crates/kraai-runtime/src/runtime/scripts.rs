@@ -264,7 +264,7 @@ impl RuntimeCore {
             None => {
                 self.fail_script_turn(
                     &completed_session,
-                    eyre!("completed script response did not contain a call id"),
+                    &eyre!("completed script response did not contain a call id"),
                 )
                 .await;
                 return;
@@ -287,7 +287,7 @@ impl RuntimeCore {
                 )
                 .await
             {
-                self.fail_script_turn(&completed_session, failure).await;
+                self.fail_script_turn(&completed_session, &failure).await;
             }
             return;
         }
@@ -303,7 +303,7 @@ impl RuntimeCore {
             )
             .await
         {
-            self.fail_script_turn(&completed_session, error).await;
+            self.fail_script_turn(&completed_session, &error).await;
         }
     }
 }
@@ -547,7 +547,7 @@ impl RuntimeCore {
         Ok(())
     }
 
-    async fn fail_script_turn(&self, session_id: &str, error: color_eyre::Report) {
+    async fn fail_script_turn(&self, session_id: &str, error: &color_eyre::Report) {
         {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
@@ -621,7 +621,7 @@ impl RuntimeCore {
                         .finalize_script_turn(&task_session_id, completed)
                         .await
                     {
-                        runtime.fail_script_turn(&task_session_id, error).await;
+                        runtime.fail_script_turn(&task_session_id, &error).await;
                     }
                 }
                 Err(error) => {
@@ -631,7 +631,7 @@ impl RuntimeCore {
                         .lock()
                         .await
                         .remove(&task_session_id);
-                    runtime.fail_script_turn(&task_session_id, error).await;
+                    runtime.fail_script_turn(&task_session_id, &error).await;
                 }
             }
         });
@@ -683,14 +683,21 @@ impl RuntimeCore {
     ) -> Result<()> {
         let pending = self.take_pending_script(&session_id, &execution_id).await?;
         self.event_tx.resume_timer(&session_id);
-        let completed = self
-            .finish_prepared_execution(
-                &pending.request.id,
-                ScriptExecutionStatus::Denied,
-                Some(String::from("Capability escalation denied by user")),
-            )
-            .await?;
-        self.finalize_script_turn(&session_id, completed).await
+        let result = async {
+            let completed = self
+                .finish_prepared_execution(
+                    &pending.request.id,
+                    ScriptExecutionStatus::Denied,
+                    Some(String::from("Capability escalation denied by user")),
+                )
+                .await?;
+            self.finalize_script_turn(&session_id, completed).await
+        }
+        .await;
+        if let Err(error) = &result {
+            self.fail_script_turn(&session_id, error).await;
+        }
+        result
     }
 
     async fn take_pending_script(
