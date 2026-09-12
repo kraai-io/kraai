@@ -16,6 +16,10 @@
         ../evals
         ../deny.toml
         ../justfile
+        ../packages/runtime/index.cjs
+        ../packages/runtime/package.json
+        ../packages/runtime/scripts
+        ../packages/runtime/test
       ];
     };
     workspaceMembers =
@@ -231,6 +235,13 @@
       workspaceTestChecks
       // cargoTestChecks
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        node = mkCargoCheck {
+          name = "node";
+          nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils];
+          command = ''
+            ${pkgs.just}/bin/just check-node
+          '';
+        };
         sandbox-vm = import ./sandbox-vm.nix {
           inherit pkgs;
           sandboxTests = vmTestBinaries "kraai-sandbox";

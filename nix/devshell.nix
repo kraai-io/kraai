@@ -40,6 +40,9 @@
               just
               uv
               python312
+              nodejs
+              typescript
+              binutils
 
               ripgrep
               pkg-config

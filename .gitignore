@@ -7,3 +7,5 @@ crate-sources*
 result
 .venv/
 __pycache__/
+node_modules/
+packages/runtime/dist/

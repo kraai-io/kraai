@@ -38,6 +38,8 @@ pub(crate) struct RuntimeCore {
     pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
+    pub(crate) nushell_host_path: Option<std::path::PathBuf>,
+    pub(crate) script_runtime_roots: Option<Vec<std::path::PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
