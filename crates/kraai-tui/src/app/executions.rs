@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn result_summary(output: &str) -> (String, bool) {
+pub(super) fn result_summary(output: &str) -> String {
     let header = output
         .strip_prefix("<tool_call_result ")
         .and_then(|text| text.split_once('>').map(|(header, _)| header));
@@ -15,18 +15,51 @@ pub(super) fn result_summary(output: &str) -> (String, bool) {
     };
     let status = attribute("status").unwrap_or("unknown");
     let exit = attribute("exit_code");
-    let successful = status == "completed" && exit.is_none_or(|code| code == "0");
     let mut summary = format!("Nushell · {status}");
     if let Some(exit) = exit {
         summary.push_str(&format!(" · exit {exit}"));
     }
     if let Some(elapsed) = attribute("elapsed_ms").and_then(|value| value.parse::<u64>().ok()) {
-        summary.push_str(&format!(" · {elapsed} ms total"));
+        summary.push_str(&format!(
+            " · {} total",
+            super::duration::format_duration(Duration::from_millis(elapsed))
+        ));
     }
-    (summary, successful)
+    summary
 }
 
 impl App {
+    pub(super) fn open_executions(&mut self) {
+        self.state.mode = UiMode::Executions;
+        self.state.selected_execution = None;
+        self.state.ctrl_c_exit_armed = false;
+        self.invalidate_chat_cache();
+        self.select_execution(false);
+    }
+
+    pub(super) fn close_executions(&mut self) {
+        self.state.execution_expanded.clear();
+        self.state.selected_execution = None;
+        self.state.mode = UiMode::Chat;
+        self.state.auto_scroll = true;
+        self.invalidate_chat_cache();
+    }
+
+    pub(super) fn handle_execution_key_event(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::F(6) | KeyCode::Char('q') => self.close_executions(),
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => self.close_executions(),
+            KeyCode::Up => self.select_execution(false),
+            KeyCode::Down => self.select_execution(true),
+            KeyCode::Enter => self.toggle_execution(),
+            KeyCode::PageUp => self.scroll_chat_by(-10),
+            KeyCode::PageDown => self.scroll_chat_by(10),
+            KeyCode::Home => self.scroll_chat_to_top(),
+            KeyCode::End => self.scroll_chat_to_bottom(),
+            _ => {}
+        }
+    }
+
     pub(super) fn select_execution(&mut self, forward: bool) {
         let ids: Vec<String> = self
             .state
@@ -51,7 +84,6 @@ impl App {
         let next = match index {
             Some(index) if forward => (index + 1) % ids.len(),
             Some(index) => (index + ids.len() - 1) % ids.len(),
-            None if forward => 0,
             None => ids.len() - 1,
         };
         self.state.selected_execution = ids.get(next).cloned();
@@ -71,22 +103,7 @@ impl App {
         let Some(id) = self.state.selected_execution.clone() else {
             return;
         };
-        let default_expanded = self
-            .state
-            .chat_history
-            .values()
-            .find_map(|message| match &message.content {
-                ConversationItem::ScriptResult { call_id, output } if call_id.as_str() == id => {
-                    Some(!result_summary(output).1)
-                }
-                _ => None,
-            })
-            .unwrap_or(false);
-        let expanded = self
-            .state
-            .execution_expanded
-            .entry(id)
-            .or_insert(default_expanded);
+        let expanded = self.state.execution_expanded.entry(id).or_insert(false);
         *expanded = !*expanded;
         self.invalidate_chat_cache();
         self.reveal_selected_execution();

@@ -192,7 +192,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         .chat_history
         .insert(result.id.clone(), result);
     let collapsed = screen(&harness.app.state, 100, 30);
-    assert!(collapsed.contains("125 ms total"));
+    assert!(collapsed.contains("0.1s total"));
     assert!(!collapsed.contains("secret-source"));
     assert!(!collapsed.contains("secret-output"));
     harness.app.select_execution(true);
@@ -211,7 +211,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         *output = output.replace("exit_code=\"0\"", "exit_code=\"1\"");
     }
     harness.app.invalidate_chat_cache();
-    assert!(screen(&harness.app.state, 100, 30).contains("secret-output"));
+    assert!(!screen(&harness.app.state, 100, 30).contains("secret-output"));
 }
 
 #[test]
@@ -297,4 +297,137 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(harness.app.state.selected_model_id.is_none());
     assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
+fn execution_view_navigates_from_latest_and_preserves_draft() {
+    use kraai_types::{ConversationItem, ToolCallId};
+    let mut harness = test_harness();
+    harness.app.state.input = String::from("draft-to-preserve");
+    for (id, parent_id) in [("first", None), ("second", Some("first"))] {
+        let message = Message {
+            id: MessageId::new(id),
+            parent_id: parent_id.map(MessageId::new),
+            content: ConversationItem::ScriptResult {
+                call_id: ToolCallId::new(id),
+                output: String::from(
+                    "<tool_call_result status=\"failed\">output-detail</tool_call_result>",
+                ),
+            },
+            status: MessageStatus::Complete,
+            agent_profile_id: None,
+            generation: None,
+        };
+        harness
+            .app
+            .state
+            .chat_history
+            .insert(message.id.clone(), message);
+    }
+    harness.app.state.current_tip_id = Some(String::from("second"));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    assert_eq!(harness.app.state.mode, UiMode::Executions);
+    assert_eq!(
+        harness.app.state.selected_execution.as_deref(),
+        Some("second")
+    );
+    assert_eq!(
+        crate::app::ui::bottom_panel_height(&harness.app.state, Rect::new(0, 0, 100, 30)),
+        0
+    );
+    assert!(!screen(&harness.app.state, 100, 30).contains("draft-to-preserve"));
+    harness.app.handle_paste(String::from("ignored"));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.execution_expanded.get("second"),
+        Some(&true)
+    );
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.selected_execution.as_deref(),
+        Some("first")
+    );
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.execution_expanded.get("first"),
+        Some(&true)
+    );
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.execution_expanded.get("first"),
+        Some(&false)
+    );
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.selected_execution.as_deref(),
+        Some("second")
+    );
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    assert!(harness.app.state.execution_expanded.is_empty());
+    assert!(harness.app.state.selected_execution.is_none());
+    assert_eq!(harness.app.state.input, "draft-to-preserve");
+    assert!(!screen(&harness.app.state, 100, 30).contains("output-detail"));
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
+fn approval_closes_execution_view_and_empty_view_can_exit() {
+    let mut harness = test_harness();
+    harness.app.open_executions();
+    assert!(harness.app.state.selected_execution.is_none());
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    harness.app.open_executions();
+    harness
+        .app
+        .state
+        .execution_expanded
+        .insert(String::from("old"), true);
+    harness.app.enter_script_decision_phase();
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    assert!(harness.app.state.execution_expanded.is_empty());
+    assert_eq!(
+        harness.app.state.script_phase,
+        ScriptPhase::AwaitingApproval
+    );
+}
+
+#[test]
+fn delayed_profile_response_closes_execution_view() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.open_executions();
+    harness
+        .app
+        .state
+        .execution_expanded
+        .insert(String::from("old"), true);
+    harness.app.state.selected_execution = Some(String::from("old"));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SetSessionProfile {
+            session_id: String::from("session"),
+            profile_id: String::from("agent"),
+            result: Ok(()),
+        });
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    assert!(harness.app.state.execution_expanded.is_empty());
+    assert!(harness.app.state.selected_execution.is_none());
 }

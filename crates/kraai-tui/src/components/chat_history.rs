@@ -388,7 +388,7 @@ impl<'a> ChatHistory<'a> {
         let style = Style::default().fg(if selected { Color::Cyan } else { Color::Gray });
         let marker = if expanded { "▼" } else { "▶" };
         let mut lines = Self::wrap_with_prefix(
-            &format!("{marker} {summary}  [F6 select · F7 toggle]"),
+            &format!("{marker} {summary}  [F6 executions]"),
             width as usize,
             "",
             "",

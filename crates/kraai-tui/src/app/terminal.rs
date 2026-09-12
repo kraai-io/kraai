@@ -52,11 +52,13 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if self.state.mode != UiMode::Chat {
+        if !matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
             return;
         }
 
-        if self.state.script_phase == ScriptPhase::AwaitingApproval {
+        if self.state.mode == UiMode::Chat
+            && self.state.script_phase == ScriptPhase::AwaitingApproval
+        {
             match mouse_event.kind {
                 MouseEventKind::ScrollUp => self
                     .state
@@ -82,6 +84,11 @@ impl App {
     }
 
     pub(super) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.state.mode == UiMode::Executions {
+            self.handle_execution_key_event(key_event);
+            return;
+        }
+
         if self.state.mode == UiMode::Chat
             && self.state.script_phase == ScriptPhase::AwaitingApproval
         {
@@ -120,6 +127,7 @@ impl App {
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
+            UiMode::Executions => self.handle_execution_key_event(key_event),
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
@@ -142,16 +150,9 @@ impl App {
         if self.handle_composer_shortcut(key_event) {
             return;
         }
-        match key_event.code {
-            KeyCode::F(6) => {
-                self.select_execution(!key_event.modifiers.contains(KeyModifiers::SHIFT));
-                return;
-            }
-            KeyCode::F(7) => {
-                self.toggle_execution();
-                return;
-            }
-            _ => {}
+        if key_event.code == KeyCode::F(6) {
+            self.open_executions();
+            return;
         }
 
         match key_event.code {

@@ -299,15 +299,20 @@ impl AppState {
         let mut execution_offsets = HashMap::new();
 
         for msg in &rendered_messages {
+            if self.mode == UiMode::Executions
+                && !matches!(msg.content, ConversationItem::ScriptResult { .. })
+            {
+                continue;
+            }
             let key = msg.id.as_str().to_string();
             let mut fingerprint = message_fingerprint(msg);
             let lines = if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
-                let (summary, successful) = super::executions::result_summary(output);
+                let summary = super::executions::result_summary(output);
                 let expanded = self
                     .execution_expanded
                     .get(call_id.as_str())
                     .copied()
-                    .unwrap_or(!successful);
+                    .unwrap_or(false);
                 execution_offsets.insert(
                     call_id.to_string(),
                     total_lines.saturating_add(u16::from(!sections.is_empty())),

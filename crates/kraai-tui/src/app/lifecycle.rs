@@ -123,8 +123,9 @@ impl App {
                 continue;
             }
 
-            if self.state.mode == UiMode::Chat
-                && self.state.script_phase == ScriptPhase::AwaitingApproval
+            if self.state.mode == UiMode::Executions
+                || (self.state.mode == UiMode::Chat
+                    && self.state.script_phase == ScriptPhase::AwaitingApproval)
             {
                 terminal.hide_cursor()?;
             } else {
@@ -133,7 +134,7 @@ impl App {
 
             terminal.draw(|frame| {
                 let area = frame.area();
-                if self.state.mode == UiMode::Chat {
+                if matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
                     let [chat_area, _, _] = ui::chat_layout(&self.state, area);
                     self.state.refresh_chat_render_cache(chat_area.width);
                     self.update_chat_viewport(chat_area.height);

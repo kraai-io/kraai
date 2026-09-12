@@ -22,6 +22,7 @@ mod auth;
 mod chat;
 mod composer;
 mod cost;
+mod duration;
 mod executions;
 mod lifecycle;
 mod menu_search;

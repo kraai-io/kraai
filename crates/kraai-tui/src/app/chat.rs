@@ -228,6 +228,9 @@ impl App {
     }
 
     pub(super) fn enter_script_decision_phase(&mut self) {
+        if self.state.mode == UiMode::Executions {
+            self.close_executions();
+        }
         self.state.approval_scroll.set(0);
         self.state.approval_expanded = false;
         self.state.mode = UiMode::Chat;
