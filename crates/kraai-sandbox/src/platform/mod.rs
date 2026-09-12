@@ -1,10 +1,18 @@
 use crate::config::{LaunchPlan, PreparedCommand, path_is_absolute};
 use crate::error::SandboxError;
-use crate::temp_dir::PrivateTempDir;
 use kraai_types::SandboxCapability;
 
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
+
+#[cfg(unix)]
+mod metadata;
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod macos;
+
+pub(crate) const PROTECTED_METADATA_NAMES: &[&str] =
+    &[".git", ".jj", ".kraai", ".agents", ".codex"];
 
 pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedCommand, SandboxError> {
     validate_plan(&plan)?;
@@ -14,7 +22,20 @@ pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedComm
         return Ok(PreparedCommand::unsandboxed(plan, private_temp));
     }
 
-    prepare_sandboxed_command(plan, private_temp).await
+    #[cfg(target_os = "linux")]
+    {
+        linux::prepare(plan, private_temp).await
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::prepare(plan, private_temp).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(SandboxError::SandboxUnavailable(String::from(
+            "sandboxed execution is only implemented on Linux and macOS",
+        )))
+    }
 }
 
 fn validate_plan(plan: &LaunchPlan) -> Result<(), SandboxError> {
@@ -66,22 +87,4 @@ fn path_is_visible(
         .chain(roots.iter().map(std::path::PathBuf::as_path))
         .filter_map(|root| root.canonicalize().ok())
         .any(|root| executable.starts_with(root))
-}
-
-#[cfg(target_os = "linux")]
-async fn prepare_sandboxed_command(
-    plan: LaunchPlan,
-    private_temp: PrivateTempDir,
-) -> Result<PreparedCommand, SandboxError> {
-    linux::prepare(plan, private_temp).await
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn prepare_sandboxed_command(
-    _plan: LaunchPlan,
-    _private_temp: PrivateTempDir,
-) -> Result<PreparedCommand, SandboxError> {
-    Err(SandboxError::SandboxUnavailable(String::from(
-        "sandboxed execution is currently only implemented on Linux",
-    )))
 }

@@ -77,12 +77,20 @@ async fn spawn_and_wait(
             "spawned process did not provide a stderr pipe",
         ))
     })?;
+    let stop_output = CancellationToken::new();
+    let _output_guard = stop_output.clone().drop_guard();
     let mut stdout_task = tokio::spawn(read_output(
         stdout,
         OutputStream::Stdout,
         output_events.clone(),
+        stop_output.clone(),
     ));
-    let mut stderr_task = tokio::spawn(read_output(stderr, OutputStream::Stderr, output_events));
+    let mut stderr_task = tokio::spawn(read_output(
+        stderr,
+        OutputStream::Stderr,
+        output_events,
+        stop_output.clone(),
+    ));
 
     let deadline = tokio::time::Instant::now() + timeout;
     let mut termination = tokio::select! {
@@ -100,22 +108,24 @@ async fn spawn_and_wait(
         }
     };
 
+    let outputs = join_outputs(&mut stdout_task, &mut stderr_task);
+    tokio::pin!(outputs);
     let outputs = if matches!(termination, Termination::Exited { .. }) {
         tokio::select! {
-            outputs = join_outputs(&mut stdout_task, &mut stderr_task) => outputs,
+            outputs = &mut outputs => outputs,
             () = tokio::time::sleep_until(deadline) => {
                 terminate_process_tree(&mut child, process_group_id).await?;
                 termination = Termination::TimedOut;
-                join_outputs(&mut stdout_task, &mut stderr_task).await
+                finish_outputs(&mut outputs, &stop_output).await
             }
             () = cancellation.cancelled() => {
                 terminate_process_tree(&mut child, process_group_id).await?;
                 termination = Termination::Cancelled;
-                join_outputs(&mut stdout_task, &mut stderr_task).await
+                finish_outputs(&mut outputs, &stop_output).await
             }
         }
     } else {
-        join_outputs(&mut stdout_task, &mut stderr_task).await
+        finish_outputs(&mut outputs, &stop_output).await
     }?;
     let (stdout, stderr) = outputs;
     let exit_code = match termination {
@@ -141,11 +151,16 @@ async fn read_output(
     mut reader: impl AsyncRead + Unpin,
     stream: OutputStream,
     events: Option<UnboundedSender<OutputEvent>>,
+    cancellation: CancellationToken,
 ) -> std::io::Result<Vec<u8>> {
     let mut captured = Vec::new();
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
-        let read = reader.read(&mut buffer).await?;
+        let read = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Ok(captured),
+            read = reader.read(&mut buffer) => read?,
+        };
         if read == 0 {
             return Ok(captured);
         }
@@ -153,6 +168,20 @@ async fn read_output(
         captured.extend_from_slice(&bytes);
         if let Some(events) = &events {
             let _ = events.send(OutputEvent { stream, bytes });
+        }
+    }
+}
+
+async fn finish_outputs(
+    outputs: impl Future<Output = Result<(Vec<u8>, Vec<u8>), SandboxError>>,
+    stop_output: &CancellationToken,
+) -> Result<(Vec<u8>, Vec<u8>), SandboxError> {
+    tokio::pin!(outputs);
+    tokio::select! {
+        output = &mut outputs => output,
+        () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+            stop_output.cancel();
+            outputs.await
         }
     }
 }

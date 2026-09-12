@@ -35,7 +35,7 @@ pub(crate) async fn prepare(
         network_enabled,
         &plan.private_ipc_connect_descriptors,
     )?;
-    let args = bubblewrap::build_bwrap_args(&plan, private_temp.path());
+    let args = bubblewrap::build_bwrap_args(&plan, private_temp.path())?;
     let mut environment = plan.environment;
     if let Some(path) = environment.get_mut(std::ffi::OsStr::new("PATH")) {
         *path = resolve_search_path(path);

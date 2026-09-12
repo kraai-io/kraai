@@ -118,6 +118,9 @@ pub async fn execute(
     launch
         .private_ipc_connect_descriptors
         .push(TRANSPORT_DESCRIPTOR);
+    launch
+        .private_ipc_connect_paths
+        .push(transport_path.clone());
 
     let effect_execution_id = execution_id.clone();
     let transport_connected = Arc::new(AtomicBool::new(false));

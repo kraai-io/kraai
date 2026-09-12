@@ -22,19 +22,35 @@ pub(crate) async fn write_request(
 }
 
 pub(crate) fn connect_transport(path: &Path) -> Result<std::fs::File, WireError> {
-    let socket = rustix::net::socket_with(
-        rustix::net::AddressFamily::UNIX,
-        rustix::net::SocketType::STREAM,
-        rustix::net::SocketFlags::CLOEXEC,
-        None,
-    )
-    .map_err(|error| WireError::Descriptor(error.to_string()))?;
+    let socket = transport_socket().map_err(|error| WireError::Descriptor(error.to_string()))?;
     let transport = claim_transport_descriptor(socket, TRANSPORT_DESCRIPTOR)?;
     let address = rustix::net::SocketAddrUnix::new(path)
         .map_err(|error| WireError::Descriptor(error.to_string()))?;
     rustix::net::connect(&transport, &address)
         .map_err(|error| WireError::Descriptor(error.to_string()))?;
     Ok(std::fs::File::from(transport))
+}
+
+fn transport_socket() -> rustix::io::Result<OwnedFd> {
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        rustix::net::socket_with(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::STREAM,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        let socket = rustix::net::socket(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::STREAM,
+            None,
+        )?;
+        rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC)?;
+        Ok(socket)
+    }
 }
 
 fn claim_transport_descriptor(socket: OwnedFd, descriptor: RawFd) -> Result<OwnedFd, WireError> {
@@ -110,17 +126,17 @@ impl std::error::Error for WireError {}
 mod tests {
     use std::os::fd::{AsRawFd, IntoRawFd};
 
-    use super::claim_transport_descriptor;
+    use super::{claim_transport_descriptor, transport_socket};
 
     #[test]
     fn transport_descriptor_replaces_an_inherited_collision()
     -> Result<(), Box<dyn std::error::Error>> {
-        let socket = rustix::net::socket_with(
-            rustix::net::AddressFamily::UNIX,
-            rustix::net::SocketType::STREAM,
-            rustix::net::SocketFlags::CLOEXEC,
-            None,
-        )?;
+        let socket = transport_socket()?;
+        if !rustix::io::fcntl_getfd(&socket)?.contains(rustix::io::FdFlags::CLOEXEC) {
+            return Err(
+                std::io::Error::other("transport socket can be inherited across exec").into(),
+            );
+        }
         let occupied = std::fs::File::open("/dev/null")?;
         let target = occupied.into_raw_fd();
         if socket.as_raw_fd() == target {

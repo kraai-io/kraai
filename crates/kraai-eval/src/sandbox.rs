@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::time::Duration;
@@ -7,8 +9,11 @@ use std::time::Duration;
 use color_eyre::eyre::{Result, bail};
 
 use crate::NetworkPolicy;
-use crate::command::{CommandOutcome, run_trusted};
+use crate::command::CommandOutcome;
+#[cfg(target_os = "linux")]
+use crate::command::run_trusted;
 
+#[cfg_attr(not(target_os = "linux"), expect(dead_code))]
 pub(crate) struct SandboxRequest {
     pub command: Vec<String>,
     pub workspace: PathBuf,
@@ -23,6 +28,7 @@ pub(crate) struct SandboxRequest {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "linux"), expect(dead_code))]
 pub(crate) struct ResourceLimits {
     pub max_memory_bytes: u64,
     pub max_processes: u64,
@@ -370,7 +376,6 @@ fn host_ca_bundle() -> Option<PathBuf> {
         .find_map(|candidate| candidate.canonicalize().ok().filter(|path| path.is_file()))
 }
 
-#[cfg(target_os = "linux")]
 fn find_program(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
