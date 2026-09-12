@@ -52,6 +52,20 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if self.state.mode == UiMode::Help {
+            match mouse_event.kind {
+                MouseEventKind::ScrollUp => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(3)),
+                MouseEventKind::ScrollDown => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(3)),
+                _ => {}
+            }
+            return;
+        }
         if !matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
             return;
         }
@@ -132,11 +146,28 @@ impl App {
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
-            UiMode::Help => {
-                if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
-                    self.state.mode = UiMode::Chat;
-                }
-            }
+            UiMode::Help => match key_event.code {
+                KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,
+                KeyCode::Up => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(1)),
+                KeyCode::Down => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(1)),
+                KeyCode::PageUp => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(10)),
+                KeyCode::PageDown => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(10)),
+                KeyCode::Home => self.state.help_scroll.set(0),
+                KeyCode::End => self.state.help_scroll.set(u16::MAX),
+                _ => {}
+            },
         }
     }
 

@@ -94,7 +94,7 @@ impl Widget for &AppState {
             UiMode::ModelMenu => render_model_menu(self, area, buf),
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Help => render_help_menu(area, buf),
+            UiMode::Help => render_help_menu(self, area, buf),
             UiMode::Chat | UiMode::Executions => {}
         }
     }

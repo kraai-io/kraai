@@ -431,3 +431,37 @@ fn delayed_profile_response_closes_execution_view() {
     assert!(harness.app.state.execution_expanded.is_empty());
     assert!(harness.app.state.selected_execution.is_none());
 }
+
+#[test]
+fn short_help_scrolls_to_final_binding_and_resets_on_reopen() {
+    let mut harness = test_harness();
+    harness.app.handle_command("help");
+    let first = screen(&harness.app.state, 90, 8);
+    assert!(first.contains("Commands"));
+    assert!(!first.contains("Esc closes menus"));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    assert!(screen(&harness.app.state, 90, 8).contains("Esc closes menus"));
+    let end = harness.app.state.help_scroll.get();
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(harness.app.state.help_scroll.get(), end - 1);
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert!(screen(&harness.app.state, 90, 8).contains("Esc closes menus"));
+    screen(&harness.app.state, 90, 30);
+    assert_eq!(harness.app.state.help_scroll.get(), 0);
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    screen(&harness.app.state, 90, 8);
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    harness.app.handle_command("help");
+    assert_eq!(harness.app.state.help_scroll.get(), 0);
+}

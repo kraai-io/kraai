@@ -163,6 +163,7 @@ impl App {
                 self.request(RuntimeRequest::ContinueSession { session_id });
             }
             "help" => {
+                self.state.help_scroll.set(0);
                 self.state.mode = UiMode::Help;
             }
             _ => {

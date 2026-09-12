@@ -216,7 +216,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
         .render(popup_area, buf);
 }
 
-pub(super) fn render_help_menu(area: Rect, buf: &mut Buffer) {
+pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(area.width, area.height, area);
 
     let lines = vec![
@@ -241,8 +241,17 @@ pub(super) fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::raw("Esc closes menus or stops the active turn"),
     ];
 
+    let max_scroll =
+        (lines.len() as u16).saturating_sub(popup_area.height.saturating_sub(2).max(1));
+    let scroll = state.help_scroll.get().min(max_scroll);
+    state.help_scroll.set(scroll);
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(Block::default().title("/help").borders(Borders::ALL))
+        .scroll((scroll, 0))
+        .block(
+            Block::default()
+                .title("/help · ↑/↓ scroll · Esc close")
+                .borders(Borders::ALL),
+        )
         .render(popup_area, buf);
 }
