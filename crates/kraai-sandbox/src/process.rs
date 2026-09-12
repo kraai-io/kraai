@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 use std::process::Stdio;
 
 #[cfg(unix)]
@@ -5,6 +6,7 @@ use nix::sys::signal::{Signal, killpg};
 #[cfg(unix)]
 use nix::unistd::Pid;
 use tokio::io::{AsyncRead, AsyncReadExt};
+#[cfg(not(windows))]
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -19,54 +21,26 @@ pub async fn run(
     cancellation: CancellationToken,
 ) -> Result<ExecutionOutput, SandboxError> {
     let timeout = plan.timeout;
-    let command = prepare_command(plan).await?;
-    spawn_and_wait(command, timeout, cancellation).await
+    let mut command = prepare_command(plan).await?;
+    let output = spawn_and_wait(&mut command, timeout, cancellation).await;
+    #[cfg(windows)]
+    command.cleanup().await?;
+    output
 }
 
 async fn spawn_and_wait(
-    command: PreparedCommand,
+    command: &mut PreparedCommand,
     timeout: std::time::Duration,
     cancellation: CancellationToken,
 ) -> Result<ExecutionOutput, SandboxError> {
-    let PreparedCommand {
-        executable,
-        args,
-        cwd,
-        environment,
-        sandboxed,
-        output_events,
-        private_temp: _private_temp,
-        #[cfg(target_os = "linux")]
-        seccomp_filter,
-    } = command;
-
-    let stdin = {
-        #[cfg(target_os = "linux")]
-        {
-            seccomp_filter.map_or_else(Stdio::null, Stdio::from)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Stdio::null()
-        }
-    };
-
-    let mut process = Command::new(&executable);
-    process
-        .args(&args)
-        .current_dir(&cwd)
-        .env_clear()
-        .envs(environment)
-        .stdin(stdin)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    configure_process_tree(&mut process)?;
-    let mut child = process.spawn().map_err(|error| SandboxError::Spawn {
-        executable: executable.to_string_lossy().into_owned(),
-        message: error.to_string(),
-    })?;
+    let sandboxed = command.sandboxed;
+    let output_events = command.output_events.take();
+    let mut child = spawn(command)?;
+    let _private_temp = &command.private_temp;
+    #[cfg(not(windows))]
     let process_group_id = child.id();
+    #[cfg(windows)]
+    let process_group_id = None;
     let stdout = child.stdout.take().ok_or_else(|| {
         SandboxError::Wait(String::from(
             "spawned process did not provide a stdout pipe",
@@ -77,12 +51,20 @@ async fn spawn_and_wait(
             "spawned process did not provide a stderr pipe",
         ))
     })?;
+    let stop_output = CancellationToken::new();
+    let _output_guard = stop_output.clone().drop_guard();
     let mut stdout_task = tokio::spawn(read_output(
         stdout,
         OutputStream::Stdout,
         output_events.clone(),
+        stop_output.clone(),
     ));
-    let mut stderr_task = tokio::spawn(read_output(stderr, OutputStream::Stderr, output_events));
+    let mut stderr_task = tokio::spawn(read_output(
+        stderr,
+        OutputStream::Stderr,
+        output_events,
+        stop_output.clone(),
+    ));
 
     let deadline = tokio::time::Instant::now() + timeout;
     let mut termination = tokio::select! {
@@ -100,22 +82,24 @@ async fn spawn_and_wait(
         }
     };
 
+    let outputs = join_outputs(&mut stdout_task, &mut stderr_task);
+    tokio::pin!(outputs);
     let outputs = if matches!(termination, Termination::Exited { .. }) {
         tokio::select! {
-            outputs = join_outputs(&mut stdout_task, &mut stderr_task) => outputs,
+            outputs = &mut outputs => outputs,
             () = tokio::time::sleep_until(deadline) => {
                 terminate_process_tree(&mut child, process_group_id).await?;
                 termination = Termination::TimedOut;
-                join_outputs(&mut stdout_task, &mut stderr_task).await
+                finish_outputs(&mut outputs, &stop_output).await
             }
             () = cancellation.cancelled() => {
                 terminate_process_tree(&mut child, process_group_id).await?;
                 termination = Termination::Cancelled;
-                join_outputs(&mut stdout_task, &mut stderr_task).await
+                finish_outputs(&mut outputs, &stop_output).await
             }
         }
     } else {
-        join_outputs(&mut stdout_task, &mut stderr_task).await
+        finish_outputs(&mut outputs, &stop_output).await
     }?;
     let (stdout, stderr) = outputs;
     let exit_code = match termination {
@@ -137,15 +121,63 @@ async fn spawn_and_wait(
     })
 }
 
+#[cfg(windows)]
+use crate::platform::windows::process::spawn;
+
+#[cfg(not(windows))]
+fn spawn(command: &mut PreparedCommand) -> Result<tokio::process::Child, SandboxError> {
+    let stdin = {
+        #[cfg(target_os = "linux")]
+        {
+            command
+                .seccomp_filter
+                .take()
+                .map_or_else(Stdio::null, Stdio::from)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Stdio::null()
+        }
+    };
+    let mut process = Command::new(&command.executable);
+    process
+        .args(&command.args)
+        .current_dir(&command.cwd)
+        .env_clear()
+        .envs(&command.environment)
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_process_tree(&mut process)?;
+    process.spawn().map_err(|error| SandboxError::Spawn {
+        executable: command.executable.to_string_lossy().into_owned(),
+        message: error.to_string(),
+    })
+}
+
+#[cfg(windows)]
+async fn terminate_process_tree(
+    child: &mut crate::platform::windows::process::Child,
+    _process_group_id: Option<u32>,
+) -> Result<(), SandboxError> {
+    child.terminate().await
+}
+
 async fn read_output(
     mut reader: impl AsyncRead + Unpin,
     stream: OutputStream,
     events: Option<UnboundedSender<OutputEvent>>,
+    cancellation: CancellationToken,
 ) -> std::io::Result<Vec<u8>> {
     let mut captured = Vec::new();
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
-        let read = reader.read(&mut buffer).await?;
+        let read = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Ok(captured),
+            read = reader.read(&mut buffer) => read?,
+        };
         if read == 0 {
             return Ok(captured);
         }
@@ -153,6 +185,20 @@ async fn read_output(
         captured.extend_from_slice(&bytes);
         if let Some(events) = &events {
             let _ = events.send(OutputEvent { stream, bytes });
+        }
+    }
+}
+
+async fn finish_outputs(
+    outputs: impl Future<Output = Result<(Vec<u8>, Vec<u8>), SandboxError>>,
+    stop_output: &CancellationToken,
+) -> Result<(Vec<u8>, Vec<u8>), SandboxError> {
+    tokio::pin!(outputs);
+    tokio::select! {
+        output = &mut outputs => output,
+        () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+            stop_output.cancel();
+            outputs.await
         }
     }
 }
@@ -180,7 +226,7 @@ fn configure_process_tree(process: &mut Command) -> Result<(), SandboxError> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn configure_process_tree(_process: &mut Command) -> Result<(), SandboxError> {
     Ok(())
 }
@@ -213,7 +259,7 @@ async fn terminate_process_tree(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn terminate_process_tree(
     child: &mut tokio::process::Child,
     _process_group_id: Option<u32>,
@@ -234,8 +280,9 @@ pub(crate) fn is_likely_sandbox_denied(exit_code: Option<i32>, stdout: &str, std
         return false;
     }
 
-    const SANDBOX_DENIED_KEYWORDS: [&str; 8] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 9] = [
         "operation not permitted",
+        "access is denied",
         "permission denied",
         "no permissions",
         "read-only file system",

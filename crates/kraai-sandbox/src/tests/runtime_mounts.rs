@@ -7,6 +7,96 @@ use super::{capabilities, find_bwrap, shell_plan, temp_dir};
 use crate::{SandboxError, Termination, run};
 
 #[tokio::test]
+async fn executable_in_aliased_workspace_runs_without_host_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = crate::temp_dir::PrivateTempDir::create(None).expect("create fixture");
+    let workspace = fixture.path().join("workspace");
+    let alias = fixture.path().join("alias");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    std::os::unix::fs::symlink(&workspace, &alias).expect("link workspace");
+    let tool = workspace.join("tool");
+    std::fs::write(
+        &tool,
+        "#!/bin/sh\nprintf allowed > ordinary\nprintf success\n",
+    )
+    .expect("write executable");
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700))
+        .expect("make executable");
+    let mut plan = shell_plan(
+        &alias,
+        "",
+        capabilities([
+            SandboxCapability::WorkspaceWrite,
+            SandboxCapability::Network,
+        ]),
+        Duration::from_secs(5),
+    );
+    plan.executable = alias.join("tool");
+    plan.args.clear();
+    plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    plan.runtime_roots.push(alias);
+    let output = match run(plan, CancellationToken::new()).await {
+        Err(SandboxError::SandboxUnavailable(_)) => return,
+        result => result.expect("run sandbox"),
+    };
+    assert_eq!(
+        output.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"success");
+    assert!(workspace.join("ordinary").exists());
+}
+
+#[tokio::test]
+async fn external_symlink_executable_runs_at_its_declared_runtime_root() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = crate::temp_dir::PrivateTempDir::create(None).expect("create fixture");
+    let workspace = fixture.path().join("workspace");
+    let external = fixture.path().join("external");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    std::fs::create_dir(&external).expect("create external directory");
+    let target = external.join("tool");
+    std::fs::write(&target, "#!/bin/sh\nprintf success\n").expect("write executable");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))
+        .expect("make executable");
+    let executable = fixture.path().join("tool-alias");
+    std::os::unix::fs::symlink(&target, &executable).expect("link executable");
+    let mut plan = shell_plan(
+        &workspace,
+        "",
+        capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
+        Duration::from_secs(5),
+    );
+    plan.executable = executable.clone();
+    plan.args.clear();
+    plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    plan.runtime_roots.push(executable);
+    let output = match run(plan, CancellationToken::new()).await {
+        Err(SandboxError::SandboxUnavailable(_)) => return,
+        result => result.expect("run sandbox"),
+    };
+    assert_eq!(
+        output.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"success");
+}
+
+#[tokio::test]
 async fn skill_runtime_root_is_read_only_with_default_capabilities() {
     let base = temp_dir("skill-read-root");
     let workspace = base.join("workspace");

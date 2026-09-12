@@ -1,0 +1,29 @@
+name: Sandbox behavior
+on:
+  pull_request:
+  push:
+    branches: [main, t3code/combine-pull-request-features]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: cargo check --locked --workspace --all-targets
+      - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets

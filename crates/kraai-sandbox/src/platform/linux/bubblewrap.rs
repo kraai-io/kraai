@@ -16,7 +16,7 @@ use super::seccomp::restricted_network_seccomp_filter;
 const BWRAP_PROGRAM: &str = "bwrap";
 const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const BWRAP_SECCOMP_STDIN_FD: &str = "0";
-const PROTECTED_METADATA_NAMES: &[&str] = &[".git", ".jj", ".kraai", ".agents", ".codex"];
+use crate::platform::metadata::protected_paths;
 
 type BwrapProbeCache = BTreeMap<(PathBuf, bool), Result<(), String>>;
 
@@ -136,7 +136,10 @@ fn is_network_namespace_error(stderr: &str) -> bool {
         || lower.contains("unshare-net")
 }
 
-pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<OsString> {
+pub(crate) fn build_bwrap_args(
+    plan: &LaunchPlan,
+    private_temp: &Path,
+) -> Result<Vec<OsString>, SandboxError> {
     let capabilities = &plan.capabilities;
     let network_enabled = capabilities.contains(SandboxCapability::Network);
     let mut args = vec![
@@ -152,25 +155,34 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
         push_bind(&mut args, "--bind", Path::new("/"));
     } else if capabilities.contains(SandboxCapability::HostRead) {
         push_bind(&mut args, "--ro-bind", Path::new("/"));
-    } else {
-        args.extend([
-            "--proc".into(),
-            "/proc".into(),
-            "--dev".into(),
-            "/dev".into(),
-        ]);
     }
+    args.extend([
+        "--proc".into(),
+        "/proc".into(),
+        "--dev".into(),
+        "/dev".into(),
+    ]);
 
-    let resolved_workspace = plan.workspace_root.canonicalize().ok();
+    let resolved_workspace = plan.workspace_root.canonicalize().map_err(|error| {
+        SandboxError::SandboxUnavailable(format!("unable to resolve workspace: {error}"))
+    })?;
     for root in deduplicated_roots(&plan.runtime_roots) {
+        let root = if capabilities.contains(SandboxCapability::HostRead) {
+            root.canonicalize().map_err(|error| {
+                SandboxError::SandboxUnavailable(format!(
+                    "unable to resolve runtime root '{}': {error}",
+                    root.display()
+                ))
+            })?
+        } else {
+            root
+        };
         // The workspace mount already exposes these paths. A separate recursive
         // read-only bind would override workspace-write even after rebinding its parent.
         // Keep mounts for symlinks that resolve outside the workspace.
-        if root.starts_with(&plan.workspace_root)
-            && resolved_workspace.as_ref().is_some_and(|workspace| {
-                root.canonicalize()
-                    .is_ok_and(|resolved| resolved.starts_with(workspace))
-            })
+        if root
+            .canonicalize()
+            .is_ok_and(|resolved| resolved.starts_with(&resolved_workspace))
         {
             continue;
         }
@@ -185,8 +197,8 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
     } else {
         "--ro-bind"
     };
-    push_parent_dirs(&mut args, &plan.workspace_root);
-    push_bind(&mut args, workspace_flag, &plan.workspace_root);
+    push_parent_dirs(&mut args, &resolved_workspace);
+    push_bind(&mut args, workspace_flag, &resolved_workspace);
 
     if network_enabled
         && !capabilities.contains(SandboxCapability::HostRead)
@@ -210,7 +222,22 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
     if capabilities.contains(SandboxCapability::WorkspaceWrite)
         && !capabilities.contains(SandboxCapability::MetadataWrite)
     {
-        for protected in protected_metadata_paths(&plan.workspace_root) {
+        for protected in protected_paths(&resolved_workspace)?
+            .into_iter()
+            .filter(|path| path.starts_with(&resolved_workspace) && path.exists())
+        {
+            if std::fs::symlink_metadata(&protected)
+                .map_err(|error| {
+                    SandboxError::SandboxUnavailable(format!("unable to inspect metadata: {error}"))
+                })?
+                .file_type()
+                .is_symlink()
+            {
+                return Err(SandboxError::SandboxUnavailable(String::from(
+                    "symlinked workspace metadata requires metadata-write on Linux",
+                )));
+            }
+            push_parent_dirs(&mut args, &protected);
             push_bind(&mut args, "--ro-bind", &protected);
         }
     }
@@ -223,12 +250,20 @@ pub(crate) fn build_bwrap_args(plan: &LaunchPlan, private_temp: &Path) -> Vec<Os
         args.push(BWRAP_SECCOMP_STDIN_FD.into());
     }
 
+    let executable = plan.executable.canonicalize().map_err(|error| {
+        SandboxError::SandboxUnavailable(format!("unable to resolve executable: {error}"))
+    })?;
+    let executable = if executable.starts_with(&resolved_workspace) {
+        executable
+    } else {
+        plan.executable.clone()
+    };
     args.push("--chdir".into());
-    args.push(plan.workspace_root.as_os_str().to_os_string());
+    args.push(resolved_workspace.into_os_string());
     args.push("--".into());
-    args.push(plan.executable.as_os_str().to_os_string());
+    args.push(executable.into_os_string());
     args.extend(plan.args.iter().cloned());
-    args
+    Ok(args)
 }
 
 fn deduplicated_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
@@ -237,14 +272,6 @@ fn deduplicated_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
         .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect()
-}
-
-fn protected_metadata_paths(root: &Path) -> Vec<PathBuf> {
-    PROTECTED_METADATA_NAMES
-        .iter()
-        .map(|name| root.join(name))
-        .filter(|path| path.exists())
         .collect()
 }
 

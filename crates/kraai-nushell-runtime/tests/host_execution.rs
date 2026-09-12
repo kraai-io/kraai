@@ -28,7 +28,10 @@ impl TestWorkspace {
         let path = std::env::temp_dir().join(format!("kraai-nu-host-{}", Ulid::generate()));
         std::fs::create_dir(&path)
             .unwrap_or_else(|error| panic!("unable to create test workspace: {error}"));
-        Self(path)
+        Self(
+            path.canonicalize()
+                .unwrap_or_else(|error| panic!("unable to resolve test workspace: {error}")),
+        )
     }
 }
 
@@ -54,15 +57,9 @@ fn plan(source: impl Into<Vec<u8>>, workspace: &TestWorkspace) -> ScriptExecutio
     plan
 }
 
+#[cfg(target_os = "linux")]
 fn inherited_path() -> String {
     std::env::var("PATH").unwrap_or_else(|_| String::from("/usr/bin:/bin"))
-}
-
-fn external_executable(name: &str) -> PathBuf {
-    std::env::split_paths(&std::ffi::OsString::from(inherited_path()))
-        .map(|directory| directory.join(name))
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| panic!("unable to find test executable '{name}'"))
 }
 
 #[derive(Default)]
@@ -204,16 +201,10 @@ async fn inherited_startup_evaluates_env_and_config_files_before_the_script() {
 #[tokio::test]
 async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
     let workspace = TestWorkspace::new();
-    let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
-    let execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::generate()),
-        external_executable("true"),
-        b"'unreachable'".to_vec(),
-        workspace.0.clone(),
-        capabilities,
-        Duration::from_secs(30),
-    );
+    let mut execution = plan(b"'unreachable'".to_vec(), &workspace);
+    execution
+        .host_arguments
+        .push("--invalid-host-argument".into());
 
     let result = tokio::time::timeout(
         Duration::from_secs(2),
@@ -228,10 +219,11 @@ async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn transport_descriptor_is_closed_before_external_commands_can_run() {
     let workspace = TestWorkspace::new();
     let mut execution = plan(
-        br#"^sh -c 'test ! -e /proc/self/fd/20'; "closed""#.to_vec(),
+        br#"^sh -c 'test ! -e /dev/fd/20 && printf "closed\n"'"#.to_vec(),
         &workspace,
     );
     execution
@@ -249,8 +241,8 @@ async fn transport_descriptor_is_closed_before_external_commands_can_run() {
 }
 
 #[tokio::test]
-#[cfg(target_os = "linux")]
-async fn private_transport_crosses_the_bubblewrap_boundary() {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn private_transport_crosses_the_sandbox_boundary() {
     let workspace = TestWorkspace::new();
     let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
@@ -278,6 +270,7 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
+        #[cfg(target_os = "linux")]
         Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
         Err(error) => panic!("sandboxed host execution failed: {error}"),
     };
@@ -295,7 +288,7 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
 }
 
 #[tokio::test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation() {
     let workspace = TestWorkspace::new();
     let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
@@ -325,6 +318,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
+        #[cfg(target_os = "linux")]
         Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
         Err(error) => panic!("sandboxed host execution failed: {error}"),
     };
@@ -411,6 +405,68 @@ async fn stateful_commands_ack_each_completed_effect_in_script_order() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].deltas[0].operation, "open");
     assert_eq!(requests[1].deltas[0].operation, "close");
+    drop(requests);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn inherited_pipe_delivers_authenticated_effects_without_network_access() {
+    let workspace = TestWorkspace::new();
+    std::fs::write(workspace.0.join("notes.txt"), "sandboxed context")
+        .unwrap_or_else(|error| panic!("unable to write fixture: {error}"));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap_or_else(|error| panic!("unable to bind network fixture: {error}"));
+    listener
+        .set_nonblocking(true)
+        .unwrap_or_else(|error| panic!("unable to configure network fixture: {error}"));
+    let address = listener
+        .local_addr()
+        .unwrap_or_else(|error| panic!("unable to get network fixture address: {error}"));
+    let effects = Arc::new(RecordingEffects::default());
+    let mut execution = plan(
+        format!(
+            "kraai-open-files notes.txt | ignore; \
+             try {{ http get --max-time 1sec http://{address} | ignore }} catch {{}}; \
+             'effect-acknowledged'"
+        )
+        .into_bytes(),
+        &workspace,
+    );
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
+        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    execution.runtime_roots.push(
+        host_executable()
+            .parent()
+            .unwrap_or_else(|| panic!("host executable has no parent"))
+            .to_path_buf(),
+    );
+    execution.active_commands = vec![String::from("kraai-open-files")];
+    execution.state_effect_handler = effects.clone();
+
+    let result = execute(execution, CancellationToken::new())
+        .await
+        .unwrap_or_else(|error| panic!("sandboxed host execution failed: {error}"));
+    assert_eq!(
+        result.output.termination,
+        Termination::Exited { code: Some(0) },
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.output.stdout),
+        String::from_utf8_lossy(&result.output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.output.stdout),
+        "effect-acknowledged\n"
+    );
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+    let requests = effects
+        .requests
+        .lock()
+        .unwrap_or_else(|error| panic!("recording lock failed: {error}"));
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].command_id, "kraai-open-files");
     drop(requests);
 }
 

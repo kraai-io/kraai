@@ -2995,6 +2995,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "ulid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3109,9 +3110,11 @@ dependencies = [
  "kraai-types",
  "libc",
  "nix 0.31.3",
+ "rand 0.10.2",
  "rustix 1.1.4",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3159,6 +3162,7 @@ dependencies = [
  "rustix 1.1.4",
  "thiserror 2.0.20",
  "ulid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

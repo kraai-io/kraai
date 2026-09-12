@@ -40,6 +40,13 @@
     workspaceTestInputs = {
       "kraai-eval" = [pkgs.git];
     };
+    darwinNestedSandboxTests = {
+      "kraai-sandbox" = ["tests::macos::"];
+      "kraai-nushell-runtime" = [
+        "private_transport_crosses_the_sandbox_boundary"
+        "native_commands_remain_registered_when_the_sandbox_denies_the_operation"
+      ];
+    };
 
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
@@ -110,10 +117,10 @@
         + ''
           install -Dm755 ${nushellHost}/bin/kraai-nushell-host "$out/bin/kraai-nushell-host"
           wrapProgram "$out/bin/kraai" \
-            --prefix PATH : ${lib.makeBinPath [
-            pkgs.bubblewrap
-            pkgs.ripgrep
-          ]} \
+            --prefix PATH : ${lib.makeBinPath (
+            [pkgs.ripgrep]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
+          )} \
             --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
         '';
       meta =
@@ -145,14 +152,30 @@
 
     workspaceTestChecks = builtins.listToAttrs (
       map
-      (name:
-        lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
+      (name: let
+        tested = cargoCheckNix.workspaceMembers.${name}.build.override {
           runTests = true;
           testInputs = workspaceTestInputs.${name} or [];
+          testCrateFlags =
+            lib.optionals pkgs.stdenv.hostPlatform.isDarwin (
+              lib.concatMap (test: ["--skip" test]) (darwinNestedSandboxTests.${name} or [])
+            )
+            ++ lib.optionals (name == "kraai-sandbox") [
+              "--skip"
+              "capability_matrix"
+              "--skip"
+              "linked_metadata_obeys_the_same_capabilities"
+            ];
           testPreRun = ''
             export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
           '';
-        }))
+        };
+      in
+        lib.nameValuePair "test-${name}" (
+          if pkgs.stdenv.hostPlatform.isDarwin
+          then tested.test.overrideAttrs {__darwinAllowLocalNetworking = true;}
+          else tested
+        ))
       crate2nixTestMemberNames
     );
     cargoTestChecks = builtins.listToAttrs (
@@ -168,10 +191,12 @@
       cargoTestMemberNames
     );
   in {
-    packages = {
-      inherit kraai kraai-eval;
-      default = kraai;
-    };
+    packages =
+      {
+        inherit kraai;
+        default = kraai;
+      }
+      // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {inherit kraai-eval;};
 
     checks =
       workspaceTestChecks
