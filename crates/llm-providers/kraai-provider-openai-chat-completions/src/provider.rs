@@ -17,9 +17,9 @@ use crate::messages::normalize_chat_messages;
 use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
+use crate::usage::normalize_usage;
 use crate::wire::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamOptions, ChatCompletionUsage,
-    ListModelsResponse,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse,
 };
 
 #[derive(Clone)]
@@ -176,16 +176,22 @@ where
             .send_chat_completion_request("chat completions stream", &request, request_context)
             .await?;
 
-        Ok(adapt_chat_completion_stream(stream_sse_data(response)))
+        Ok(adapt_chat_completion_stream(
+            stream_sse_data(response),
+            reqwest::Url::parse(&self.base_url)
+                .ok()
+                .is_some_and(|url| url.host_str() == Some("openrouter.ai")),
+        ))
     }
 }
 
 fn adapt_chat_completion_stream(
     source: BoxStream<'static, Result<SseEvent>>,
+    reported_costs: bool,
 ) -> BoxStream<'static, Result<ProviderStreamEvent>> {
     stream::unfold(
         (source, VecDeque::new(), false),
-        |(mut source, mut pending, finished)| async move {
+        move |(mut source, mut pending, finished)| async move {
             if finished {
                 return None;
             }
@@ -199,7 +205,7 @@ fn adapt_chat_completion_stream(
                     Some(Ok(SseEvent::Data(payload))) => {
                         pending.extend(
                             serde_json::from_str::<ChatCompletionChunk>(&payload)
-                                .map(events_from_chunk)
+                                .map(|chunk| events_from_chunk(chunk, reported_costs))
                                 .unwrap_or_else(|error| vec![Err(eyre!(error))]),
                         );
                     }
@@ -222,7 +228,10 @@ fn adapt_chat_completion_stream(
     .boxed()
 }
 
-fn events_from_chunk(chunk: ChatCompletionChunk) -> Vec<Result<ProviderStreamEvent>> {
+fn events_from_chunk(
+    chunk: ChatCompletionChunk,
+    reported_costs: bool,
+) -> Vec<Result<ProviderStreamEvent>> {
     let mut events = Vec::with_capacity(2);
 
     if let Some(delta) = chunk
@@ -236,47 +245,14 @@ fn events_from_chunk(chunk: ChatCompletionChunk) -> Vec<Result<ProviderStreamEve
             delta,
         }));
     }
-    if let Some(usage) = chunk.usage.and_then(normalize_usage) {
+    if let Some(usage) = chunk
+        .usage
+        .and_then(|usage| normalize_usage(usage, reported_costs))
+    {
         events.push(Ok(ProviderStreamEvent::Usage(usage)));
     }
 
     events
-}
-
-fn normalize_usage(usage: ChatCompletionUsage) -> Option<kraai_types::TokenUsage> {
-    let cache_read_tokens = usage
-        .prompt_tokens_details
-        .and_then(|details| details.cached_tokens)
-        .unwrap_or_default();
-    let reasoning_tokens = usage
-        .completion_tokens_details
-        .and_then(|details| details.reasoning_tokens)
-        .unwrap_or_default();
-    let input_tokens = usage.prompt_tokens.saturating_sub(cache_read_tokens);
-    let output_tokens = usage.completion_tokens.saturating_sub(reasoning_tokens);
-    let total_tokens = usage.total_tokens.unwrap_or_else(|| {
-        input_tokens
-            .saturating_add(output_tokens)
-            .saturating_add(reasoning_tokens)
-            .saturating_add(cache_read_tokens)
-    });
-
-    if total_tokens == 0
-        && input_tokens == 0
-        && output_tokens == 0
-        && reasoning_tokens == 0
-        && cache_read_tokens == 0
-    {
-        return None;
-    }
-
-    Some(kraai_types::TokenUsage {
-        total_tokens,
-        input_tokens,
-        output_tokens,
-        reasoning_tokens,
-        cache_read_tokens,
-    })
 }
 
 async fn ensure_success_response(operation: &str, response: Response) -> Result<Response> {
@@ -552,17 +528,23 @@ mod tests {
 
     #[test]
     fn normalize_usage_splits_cache_and_reasoning_tokens() {
-        let usage = normalize_usage(ChatCompletionUsage {
-            prompt_tokens: 120,
-            completion_tokens: 45,
-            total_tokens: Some(165),
-            prompt_tokens_details: Some(crate::wire::PromptTokenDetails {
-                cached_tokens: Some(20),
-            }),
-            completion_tokens_details: Some(crate::wire::CompletionTokenDetails {
-                reasoning_tokens: Some(5),
-            }),
-        })
+        let usage = normalize_usage(
+            crate::wire::ChatCompletionUsage {
+                cost: None,
+                cost_details: None,
+                prompt_tokens: 120,
+                completion_tokens: 45,
+                total_tokens: Some(165),
+                prompt_tokens_details: Some(crate::wire::PromptTokenDetails {
+                    cached_tokens: Some(20),
+                    cache_write_tokens: None,
+                }),
+                completion_tokens_details: Some(crate::wire::CompletionTokenDetails {
+                    reasoning_tokens: Some(5),
+                }),
+            },
+            false,
+        )
         .expect("usage should normalize");
 
         assert_eq!(usage.total_tokens, 165);
@@ -582,7 +564,7 @@ mod tests {
         )
         .unwrap();
 
-        let events = events_from_chunk(chunk)
+        let events = events_from_chunk(chunk, false)
             .into_iter()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -601,6 +583,7 @@ mod tests {
                     output_tokens: 1,
                     reasoning_tokens: 0,
                     cache_read_tokens: 0,
+                    ..Default::default()
                 }),
             ]
         );
@@ -612,7 +595,7 @@ mod tests {
             r#"{"choices":[{"delta":{"content":"partial"}}]}"#,
         )))])
         .boxed();
-        let events = adapt_chat_completion_stream(source)
+        let events = adapt_chat_completion_stream(source, false)
             .collect::<Vec<_>>()
             .await;
 
@@ -631,7 +614,7 @@ mod tests {
 
         let event = tokio::time::timeout(
             Duration::from_secs(1),
-            adapt_chat_completion_stream(source).next(),
+            adapt_chat_completion_stream(source, false).next(),
         )
         .await
         .unwrap();

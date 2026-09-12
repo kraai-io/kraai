@@ -153,6 +153,7 @@ fn session_snapshot_at(
         SessionActivity::Idle
     };
     SessionSnapshot {
+        requests: std::collections::BTreeMap::new(),
         turn_timer: Default::default(),
         event_sequence,
         session: Session {
@@ -552,3 +553,5 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     );
     Ok(())
 }
+
+mod cost;

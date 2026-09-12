@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 
+mod cost;
 mod error;
 mod permissions;
 mod policy;
 mod profile;
 mod script;
+
+pub use cost::{CostSummary, RequestCost, RequestUsage, TokenRates, Usd};
 
 pub use error::{DomainError, DomainErrorKind};
 pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
@@ -173,6 +176,10 @@ pub struct TokenUsage {
     pub reasoning_tokens: usize,
     #[serde(default)]
     pub cache_read_tokens: usize,
+    #[serde(default)]
+    pub cache_write_tokens: usize,
+    #[serde(default)]
+    pub cost: Option<RequestCost>,
 }
 
 impl TokenUsage {
@@ -181,6 +188,7 @@ impl TokenUsage {
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
     }
 }
 

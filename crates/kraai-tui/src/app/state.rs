@@ -20,6 +20,12 @@ use super::types::{
 };
 
 pub(super) struct AppState {
+    pub(super) session_cost: kraai_types::CostSummary,
+    pub(super) session_requests: BTreeMap<String, BTreeMap<MessageId, kraai_types::RequestUsage>>,
+    pub(super) launch_requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
+    pub(super) launched_at: u64,
+    pub(super) cost_recovery_list_pending: bool,
+    pub(super) cost_recovery_sessions: std::collections::BTreeSet<String>,
     pub(super) exit: bool,
     pub(super) input: String,
     pub(super) input_cursor: usize,
@@ -88,6 +94,17 @@ pub(super) struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            session_cost: Default::default(),
+            cost_recovery_list_pending: false,
+            cost_recovery_sessions: Default::default(),
+            session_requests: BTreeMap::new(),
+            launch_requests: BTreeMap::new(),
+            launched_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
             exit: false,
             input: String::new(),
             input_cursor: 0,

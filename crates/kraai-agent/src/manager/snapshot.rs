@@ -16,15 +16,21 @@ pub struct SessionSnapshotReader {
     pub streaming: bool,
     messages: Arc<dyn MessageStore>,
     in_flight: HashMap<MessageId, Message>,
+    requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
 }
 
 pub struct SessionSnapshotData {
+    pub requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub history: BTreeMap<MessageId, Message>,
     pub context_usage: Option<SessionContextUsage>,
     pub profiles: AgentProfilesState,
 }
 
 impl AgentManager {
+    pub fn request_usage_store(&self) -> Arc<kraai_persistence::RequestUsageStore> {
+        self.usage_store.clone()
+    }
+
     pub async fn capture_session_snapshot(
         &self,
         session_id: &str,
@@ -43,6 +49,7 @@ impl AgentManager {
             streaming: !in_flight.is_empty(),
             messages: self.message_store.clone(),
             in_flight,
+            requests: self.usage_store.load(session_id).await?,
         })
     }
 }
@@ -67,6 +74,23 @@ impl SessionSnapshotReader {
                 .map(|(id, message)| (id.clone(), message.clone())),
         );
 
+        let mut requests = self.requests.clone();
+        for message in history.values() {
+            if let Some(generation) = &message.generation {
+                requests
+                    .entry(message.id.clone())
+                    .or_insert_with(|| kraai_types::RequestUsage {
+                        message_id: message.id.clone(),
+                        provider_id: generation.provider_id.clone(),
+                        model_id: generation.model_id.clone(),
+                        started_at: 0,
+                        subscription: false,
+                        unpriced_attempts: 0,
+                        usage: generation.usage.clone(),
+                    });
+            }
+        }
+
         let workspace = self.session.workspace_dir.clone();
         let resolved = tokio::task::spawn_blocking(move || {
             crate::profiles::resolve_profiles(&workspace, &crate::profiles::available_command_ids())
@@ -83,6 +107,7 @@ impl SessionSnapshotReader {
             profile_locked: self.profile_locked,
         };
         Ok(SessionSnapshotData {
+            requests,
             history,
             context_usage,
             profiles,

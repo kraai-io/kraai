@@ -6,17 +6,17 @@ use color_eyre::eyre::Result;
 use futures::{FutureExt, StreamExt};
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::{
-    ProviderManager, ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver,
-    ProviderStreamEvent, ScriptToolTransport,
+    ProviderManager, ProviderRequestContext, ProviderStreamEvent, ScriptToolTransport,
 };
 use kraai_script_protocol::{
     InvalidScriptBlock, ProtocolError, ScriptBlock, ScriptProtocolParser, parse_script_input,
 };
-use kraai_types::{MessageId, ModelId, ProviderId, SandboxCapabilities, ToolCallId};
+use kraai_types::{MessageId, SandboxCapabilities, ToolCallId};
 use tokio::sync::Notify;
 use ulid::Ulid;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
+use super::request_usage::RuntimeRetryObserver;
 use crate::api::Event;
 use crate::handle::RuntimeEventSender;
 use crate::{ContinueSessionOutcome, RuntimeError, RuntimeResult};
@@ -24,35 +24,11 @@ use crate::{ContinueSessionOutcome, RuntimeError, RuntimeResult};
 const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
-struct RuntimeRetryObserver {
-    session_id: String,
-    provider_id: ProviderId,
-    model_id: ModelId,
-    event_tx: RuntimeEventSender,
-}
-
 struct CompletedProtocolBoundary {
     call_id: ToolCallId,
     script: Option<ScriptBlock>,
     invalid_script: Option<InvalidScriptBlock>,
     protocol_error: Option<ProtocolError>,
-}
-
-impl ProviderRetryObserver for RuntimeRetryObserver {
-    fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
-        emit_event(
-            &self.event_tx,
-            Event::ProviderRetryScheduled {
-                session_id: self.session_id.clone(),
-                provider_id: self.provider_id.to_string(),
-                model_id: self.model_id.to_string(),
-                operation: event.operation.to_string(),
-                retry_number: event.retry_number,
-                delay_seconds: event.delay.as_secs(),
-                reason: event.reason.clone(),
-            },
-        );
-    }
 }
 
 #[derive(Debug)]
@@ -252,7 +228,9 @@ impl RuntimeCore {
             },
         );
         if let Some(previous) = previous {
+            let agent = self.agent_manager.write().await;
             previous.abort_handle.abort();
+            drop(agent);
         }
         if !context_notifications.is_empty() {
             emit_event(
@@ -554,9 +532,35 @@ impl RuntimeCore {
                 provider_id: provider_id.clone(),
                 model_id: model_id.clone(),
                 event_tx: event_tx.clone(),
+                message_id: message_id.clone(),
+                agent_manager: Arc::clone(&agent_manager),
+                session_state_barrier: Arc::clone(&session_state_barrier),
             }),
             session_id.clone(),
         );
+        {
+            let _state_guard = session_state_barrier.read().await;
+            match agent_manager
+                .read()
+                .await
+                .record_request_started(&message_id)
+                .await
+            {
+                Ok(Some(request)) => emit_event(
+                    &event_tx,
+                    Event::RequestUsageUpdated {
+                        session_id: session_id.clone(),
+                        request: Box::new(request),
+                    },
+                ),
+                Ok(None) => {}
+                Err(error) => {
+                    return StreamDriveResult::FailedToStart {
+                        error: error.to_string(),
+                    };
+                }
+            }
+        }
         let mut stream = match providers
             .generate_reply_stream(provider_id, &model_id, provider_request, request_context)
             .await
@@ -776,8 +780,20 @@ impl RuntimeCore {
                 Ok(ProviderStreamEvent::Usage(usage)) => {
                     let _state_guard = session_state_barrier.read().await;
                     let agent = agent_manager.read().await;
-                    if !agent.set_streaming_message_usage(&message_id, usage).await {
-                        return StreamDriveResult::Stopped;
+                    match agent.set_streaming_message_usage(&message_id, usage).await {
+                        Ok(Some(request)) => emit_event(
+                            &event_tx,
+                            Event::RequestUsageUpdated {
+                                session_id: session_id.clone(),
+                                request: Box::new(request),
+                            },
+                        ),
+                        Ok(None) => return StreamDriveResult::Stopped,
+                        Err(error) => {
+                            return StreamDriveResult::FailedDuringStream {
+                                error: error.to_string(),
+                            };
+                        }
                     }
                     drop(agent);
                     if draining_after_boundary {
@@ -885,10 +901,9 @@ impl RuntimeCore {
             return Ok(self.cancel_active_script(&session_id).await);
         };
 
-        active_stream.abort_handle.abort();
-
         let cancelled_stream = {
             let mut agent = self.agent_manager.write().await;
+            active_stream.abort_handle.abort();
             let cancelled = match agent
                 .cancel_streaming_message(&active_stream.message_id)
                 .await

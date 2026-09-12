@@ -18,6 +18,8 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 
 impl RuntimeCore {
     pub(super) async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
+        let usage_store = self.agent_manager.read().await.request_usage_store();
+        usage_store.refresh(session_id).await?;
         let snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;
@@ -65,6 +67,7 @@ impl RuntimeCore {
         };
 
         Ok(SessionSnapshot {
+            requests: data.requests,
             turn_timer,
             event_sequence,
             session,
@@ -274,16 +277,13 @@ impl RuntimeCore {
                     ))));
                     return Ok(());
                 }
+                let mut agent = self.agent_manager.write().await;
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
                 self.queued_messages.lock().await.remove(&session_id);
-                let result = self
-                    .agent_manager
-                    .write()
-                    .await
-                    .delete_session(&session_id)
-                    .await;
+                let result = agent.delete_session(&session_id).await;
+                drop(agent);
                 if result.is_ok() {
                     self.event_tx.remove_timer(&session_id);
                 }

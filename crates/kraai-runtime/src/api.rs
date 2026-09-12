@@ -239,6 +239,7 @@ pub enum SessionActivity {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
+    pub requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub turn_timer: crate::TurnTimer,
     /// The snapshot contains this session's state represented by events through this global
     /// sequence. After installing it, discard covered events for this session only; unrelated
@@ -261,6 +262,10 @@ pub struct RuntimeEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    RequestUsageUpdated {
+        session_id: String,
+        request: Box<kraai_types::RequestUsage>,
+    },
     TurnTimingChanged {
         session_id: String,
         timer: crate::TurnTimer,
@@ -346,7 +351,8 @@ impl Event {
     /// Returns the session this event concerns, if any.
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Self::TurnTimingChanged { session_id, .. }
+            Self::RequestUsageUpdated { session_id, .. }
+            | Self::TurnTimingChanged { session_id, .. }
             | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }
             | Self::StreamChunk { session_id, .. }

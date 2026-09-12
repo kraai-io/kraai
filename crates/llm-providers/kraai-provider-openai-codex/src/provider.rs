@@ -511,6 +511,7 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
         output_tokens,
         reasoning_tokens,
         cache_read_tokens,
+        ..Default::default()
     })
 }
 

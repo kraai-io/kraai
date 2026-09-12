@@ -254,6 +254,7 @@ impl App {
         self.state.current_tip_id = None;
         self.state.chat_history.clear();
         self.state.context_usage = None;
+        self.restore_session_cost();
         self.state.optimistic_messages.clear();
         self.stream_event_content.clear();
         self.state.pending_script = None;

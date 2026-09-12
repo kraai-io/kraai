@@ -32,6 +32,7 @@ impl AgentManager {
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
         context_state_store: Arc<dyn ContextStateStore>,
+        usage_store: Arc<kraai_persistence::RequestUsageStore>,
     ) -> Self {
         let conversation_store =
             ConversationStore::new(message_store.clone(), session_store.clone());
@@ -45,6 +46,7 @@ impl AgentManager {
             message_store,
             session_store,
             context_state_store,
+            usage_store,
             session_states: HashMap::new(),
             pending_message_rollbacks: HashMap::new(),
             last_used_profile_id: None,
@@ -270,7 +272,8 @@ impl AgentManager {
         self.session_states.remove(session_id);
         self.session_store.delete(session_id).await?;
         self.pending_message_rollbacks.remove(session_id);
-        self.context_state_store.delete(session_id).await
+        self.context_state_store.delete(session_id).await?;
+        self.usage_store.delete(session_id).await
     }
 
     pub async fn set_workspace_dir(

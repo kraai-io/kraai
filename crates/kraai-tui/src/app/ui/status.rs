@@ -16,6 +16,21 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
             Style::default().fg(statusline_activity_color(state)),
         ),
         separator.clone(),
+        Span::raw(format!(
+            "Session {}{}",
+            state.session_cost,
+            if state.cost_recovery_list_pending
+                || state
+                    .current_session_id
+                    .as_ref()
+                    .is_some_and(|id| state.cost_recovery_sessions.contains(id))
+            {
+                " (incomplete)"
+            } else {
+                ""
+            }
+        )),
+        separator.clone(),
         Span::raw(statusline_model_label(state)),
         separator.clone(),
         Span::raw(statusline_agent_label(state)),

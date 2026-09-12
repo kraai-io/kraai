@@ -80,6 +80,14 @@ impl ProviderRegistry {
         }
 
         definition.type_id = key.clone();
+        if key != "openai-codex" {
+            definition
+                .provider_fields
+                .extend(crate::pricing::pricing_fields(false));
+            definition
+                .model_fields
+                .extend(crate::pricing::pricing_fields(true));
+        }
 
         let entry = FactoryEntry {
             definition,
@@ -118,7 +126,17 @@ impl ProviderRegistry {
             .factories
             .get(type_id)
             .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
-        Ok((entry.validate_provider_config)(config))
+        let mut errors = (entry.validate_provider_config)(config);
+        if config
+            .get("pricing_provider")
+            .is_some_and(|value| value.as_str().is_none())
+        {
+            errors.push(ValidationError {
+                field: String::from("pricing_provider"),
+                message: String::from("Pricing provider must be a models.dev provider ID"),
+            });
+        }
+        Ok(errors)
     }
 
     pub fn validate_model_config(
@@ -130,7 +148,9 @@ impl ProviderRegistry {
             .factories
             .get(type_id)
             .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
-        Ok((entry.validate_model_config)(config))
+        let mut errors = (entry.validate_model_config)(config);
+        errors.extend(crate::pricing::validate_pricing_config(config));
+        Ok(errors)
     }
 
     pub(crate) fn create_provider(
@@ -158,6 +178,38 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::test_support::{MockFactory, MockProvider, simple_provider_definition};
+
+    #[test]
+    fn pricing_fields_are_only_exposed_for_metered_providers() -> Result<()> {
+        let mut registry = ProviderRegistry::default();
+        for type_id in ["openai-codex", "openai"] {
+            registry.register_dynamic_factory(
+                type_id,
+                simple_provider_definition("Provider", "Provider", false, type_id),
+                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )?;
+            let definition = registry
+                .get_definition(type_id)
+                .ok_or_else(|| eyre!("missing definition"))?;
+            assert_eq!(
+                definition
+                    .provider_fields
+                    .iter()
+                    .any(|field| field.key == "pricing_provider"),
+                type_id == "openai"
+            );
+            assert_eq!(
+                definition
+                    .model_fields
+                    .iter()
+                    .any(|field| field.key.starts_with("price_")),
+                type_id == "openai"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_registry_registration() -> Result<()> {

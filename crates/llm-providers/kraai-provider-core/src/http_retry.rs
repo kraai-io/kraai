@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -57,6 +58,13 @@ pub struct ProviderRetryEvent {
 
 pub trait ProviderRetryObserver: Send + Sync {
     fn on_retry_scheduled(&self, event: &ProviderRetryEvent);
+
+    fn before_attempt(
+        &self,
+        _unpriced_prior_attempts: u32,
+    ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 #[derive(Clone, Default)]
@@ -111,15 +119,19 @@ pub async fn send_with_retry<F, Fut>(
     policy: &HttpRetryPolicy,
     request_context: &ProviderRequestContext,
     mut send: F,
-) -> reqwest::Result<Response>
+) -> color_eyre::Result<Response>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = reqwest::Result<Response>>,
 {
     let started = Instant::now();
     let max_attempts = policy.max_attempts.max(1);
+    let mut unpriced_prior_attempts = 0;
 
     for attempt_number in 1..=max_attempts {
+        if let Some(observer) = request_context.retry_observer() {
+            observer.before_attempt(unpriced_prior_attempts).await?;
+        }
         match send().await {
             Ok(response) => {
                 if !is_retryable_status(response.status()) || attempt_number >= max_attempts {
@@ -131,6 +143,11 @@ where
                 let delay = retry_delay_from_response(policy, retry_number, &response);
                 if !retry_fits_budget(policy, started, delay) {
                     return Ok(response);
+                }
+                if response.status().is_server_error()
+                    || response.status() == StatusCode::REQUEST_TIMEOUT
+                {
+                    unpriced_prior_attempts += 1;
                 }
                 notify_retry(
                     request_context,
@@ -150,13 +167,16 @@ where
             }
             Err(error) => {
                 if !is_retryable_error(&error) || attempt_number >= max_attempts {
-                    return Err(error);
+                    return Err(error.into());
                 }
 
                 let retry_number = attempt_number;
                 let delay = policy.jittered_backoff_for_retry(retry_number);
                 if !retry_fits_budget(policy, started, delay) {
-                    return Err(error);
+                    return Err(error.into());
+                }
+                if !error.is_connect() {
+                    unpriced_prior_attempts += 1;
                 }
                 let reason = error.to_string();
                 notify_retry(
@@ -305,6 +325,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct RetryCollector {
         events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
+        attempts: Arc<Mutex<Vec<u32>>>,
     }
 
     impl RetryCollector {
@@ -317,6 +338,18 @@ mod tests {
     }
 
     impl ProviderRetryObserver for RetryCollector {
+        fn before_attempt(
+            &self,
+            unpriced_prior_attempts: u32,
+        ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + '_>> {
+            Box::pin(async move {
+                self.attempts
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(unpriced_prior_attempts);
+                Ok(())
+            })
+        }
         fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
             self.events
                 .lock()
@@ -426,6 +459,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
+        struct RejectRetry;
+        impl ProviderRetryObserver for RejectRetry {
+            fn on_retry_scheduled(&self, _event: &ProviderRetryEvent) {}
+            fn before_attempt(
+                &self,
+                unpriced_prior_attempts: u32,
+            ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + '_>> {
+                Box::pin(async move {
+                    if unpriced_prior_attempts > 0 {
+                        return Err(eyre!("receipt unavailable"));
+                    }
+                    Ok(())
+                })
+            }
+        }
+        let address = spawn_server(vec![ScriptedResponse::Status {
+            status_line: "500 Internal Server Error",
+            headers: Vec::new(),
+            body: "try again",
+        }])
+        .await?;
+        let Some(client) = test_client_or_skip() else {
+            return Ok(());
+        };
+        let context = ProviderRequestContext::with_retry_observer(Arc::new(RejectRetry));
+        let mut sends = 0;
+        let result = send_with_retry("test", &test_policy(), &context, || {
+            sends += 1;
+            client.get(format!("http://{address}/")).send()
+        })
+        .await;
+        assert_eq!(sends, 1);
+        assert!(result.is_err_and(|error| error.to_string() == "receipt unavailable"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn retries_500_then_succeeds() -> Result<()> {
         let address = spawn_server(vec![
             ScriptedResponse::Status {
@@ -444,15 +515,21 @@ mod tests {
             return Ok(());
         };
 
-        let response = send_with_retry(
-            "test",
-            &test_policy(),
-            &ProviderRequestContext::default(),
-            || client.get(format!("http://{address}/")).send(),
-        )
+        let observer = Arc::new(RetryCollector::default());
+        let context = ProviderRequestContext::with_retry_observer(observer.clone());
+        let response = send_with_retry("test", &test_policy(), &context, || {
+            client.get(format!("http://{address}/")).send()
+        })
         .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *observer
+                .attempts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            [0, 1]
+        );
         Ok(())
     }
 
@@ -475,15 +552,21 @@ mod tests {
             return Ok(());
         };
 
-        let response = send_with_retry(
-            "test",
-            &test_policy(),
-            &ProviderRequestContext::default(),
-            || client.get(format!("http://{address}/")).send(),
-        )
+        let observer = Arc::new(RetryCollector::default());
+        let context = ProviderRequestContext::with_retry_observer(observer.clone());
+        let response = send_with_retry("test", &test_policy(), &context, || {
+            client.get(format!("http://{address}/")).send()
+        })
         .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *observer
+                .attempts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            [0, 0]
+        );
         Ok(())
     }
 
@@ -506,15 +589,21 @@ mod tests {
             return Ok(());
         };
 
-        let response = send_with_retry(
-            "test",
-            &test_policy(),
-            &ProviderRequestContext::default(),
-            || client.get(format!("http://{address}/")).send(),
-        )
+        let observer = Arc::new(RetryCollector::default());
+        let context = ProviderRequestContext::with_retry_observer(observer.clone());
+        let response = send_with_retry("test", &test_policy(), &context, || {
+            client.get(format!("http://{address}/")).send()
+        })
         .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *observer
+                .attempts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            [0, 1]
+        );
         Ok(())
     }
 

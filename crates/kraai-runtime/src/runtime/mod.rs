@@ -3,6 +3,7 @@ mod config;
 mod core;
 mod dispatch;
 mod queue;
+mod request_usage;
 mod script_execution;
 mod scripts;
 mod streaming;

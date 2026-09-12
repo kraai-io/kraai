@@ -170,8 +170,12 @@ impl RuntimeCore {
             .drain()
             .map(|(_, stream)| stream)
             .collect::<Vec<_>>();
-        for stream in active_streams {
-            stream.abort_handle.abort();
+        if !active_streams.is_empty() {
+            let agent = self.agent_manager.write().await;
+            for stream in active_streams {
+                stream.abort_handle.abort();
+            }
+            drop(agent);
         }
         let active_script_tasks = self
             .active_script_tasks
