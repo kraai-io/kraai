@@ -285,6 +285,12 @@ impl Provider for OpenAiCodexProvider {
         self.id.clone()
     }
 
+    async fn pricing_model_id(&self, model_id: &ModelId) -> Result<ModelId> {
+        Ok(ModelId::new(
+            self.models.read().await.resolve(model_id)?.api_model,
+        ))
+    }
+
     async fn list_models(&self) -> Vec<Model> {
         self.models.read().await.list(&self.model_configs)
     }

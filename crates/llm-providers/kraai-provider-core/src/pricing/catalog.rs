@@ -258,6 +258,62 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn reasoning_variant_uses_base_catalog_rates_for_all_token_categories()
+    -> color_eyre::Result<()> {
+        use crate::{DynamicConfig, ProviderConfig, ProviderManagerConfig, ProviderStreamEvent};
+        use futures::StreamExt;
+        use kraai_types::{ModelId, ProviderId};
+
+        let provider = ProviderId::new("codex");
+        let pricing = super::super::Pricing::new(&ProviderManagerConfig {
+            providers: vec![ProviderConfig {
+                id: provider.clone(),
+                type_id: "openai-codex".into(),
+                config: DynamicConfig::new(),
+            }],
+            models: vec![],
+        })?;
+        *pricing.catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+            "fetched_at": 123,
+            "providers": {
+                "openai": {"models": {"gpt-6-astra": {"cost": {
+                    "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5,
+                    "tiers": [{"tier": {"type": "context", "size": 272000},
+                        "input": 20, "output": 75, "cache_read": 2, "cache_write": 25}]
+                }}}}
+            }
+        }))?;
+        for (input_tokens, expected) in [(100, Usd(9_025_000)), (272001, Usd(5_452_320_000))] {
+            let source = futures::stream::iter([Ok(ProviderStreamEvent::Usage(TokenUsage {
+                input_tokens,
+                cache_read_tokens: 400,
+                cache_write_tokens: 10,
+                output_tokens: 100,
+                reasoning_tokens: 50,
+                ..Default::default()
+            }))])
+            .boxed();
+            let mut stream = pricing
+                .apply(
+                    &provider,
+                    &ModelId::new("gpt-6-astra-low"),
+                    &ModelId::new("gpt-6-astra"),
+                    source,
+                )
+                .await;
+            let Some(Ok(ProviderStreamEvent::Usage(usage))) = stream.next().await else {
+                return Err(color_eyre::eyre::eyre!("missing usage"));
+            };
+            assert_eq!(usage.cost.as_ref().map(|cost| cost.amount), Some(expected));
+            assert_eq!(
+                usage.cost.as_ref().map(|cost| cost.source.as_str()),
+                Some("models.dev/openai/gpt-6-astra")
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn unknown_pricing_conditions_are_not_silently_ignored() {
         let cost = serde_json::json!({"input":1,"output":2,"tiers":[{}]});

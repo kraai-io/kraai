@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::super::duration::format_duration;
 
@@ -78,7 +78,12 @@ fn statusline_activity_label(state: &AppState) -> String {
         return state
             .turn_timer
             .elapsed(Instant::now())
-            .map(|elapsed| format!("{frame} {activity} {}", format_duration(elapsed)))
+            .map(|elapsed| {
+                format!(
+                    "{frame} {activity} {}",
+                    format_duration(Duration::from_secs(elapsed.as_secs()))
+                )
+            })
             .unwrap_or_else(|| format!("{frame} {activity}"));
     }
     if state.status == "Stream cancelled" {
@@ -91,7 +96,12 @@ fn statusline_terminal_activity_label(label: &str, state: &AppState) -> String {
     state
         .turn_timer
         .last_duration()
-        .map(|elapsed| format!("{label} {}", format_duration(elapsed)))
+        .map(|elapsed| {
+            format!(
+                "{label} {}",
+                format_duration(Duration::from_secs(elapsed.as_secs()))
+            )
+        })
         .unwrap_or_else(|| label.to_string())
 }
 

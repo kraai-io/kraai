@@ -11,6 +11,10 @@ use crate::stream::ProviderStreamEvent;
 pub trait Provider: Send + Sync {
     fn get_provider_id(&self) -> ProviderId;
 
+    async fn pricing_model_id(&self, model_id: &ModelId) -> Result<ModelId> {
+        Ok(model_id.clone())
+    }
+
     async fn list_models(&self) -> Vec<Model>;
 
     async fn cache_models(&self) -> Result<()>;

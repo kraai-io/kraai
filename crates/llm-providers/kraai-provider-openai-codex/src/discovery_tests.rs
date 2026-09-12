@@ -304,3 +304,22 @@ async fn initial_discovery_failure_does_not_create_models() -> Result<()> {
     server.await??;
     Ok(())
 }
+
+#[tokio::test]
+async fn pricing_uses_discovered_base_model_for_reasoning_variants() -> Result<()> {
+    let provider = provider(String::from("http://127.0.0.1/backend-api"))?;
+    *provider.models.write().await = DiscoveredModels::new(vec![serde_json::from_value(json!({
+        "slug": "gpt-6-astra",
+        "display_name": "Astra",
+        "visibility": "list",
+        "default_reasoning_level": "low",
+        "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
+    }))?])?;
+    assert_eq!(
+        provider
+            .pricing_model_id(&ModelId::new("gpt-6-astra-low"))
+            .await?,
+        ModelId::new("gpt-6-astra")
+    );
+    Ok(())
+}

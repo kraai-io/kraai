@@ -128,15 +128,7 @@ impl std::fmt::Display for CostSummary {
             ));
         }
         if self.unknown != 0 {
-            parts.push(format!(
-                "unknown ({} {})",
-                self.unknown,
-                if self.unknown == 1 {
-                    "request"
-                } else {
-                    "requests"
-                }
-            ));
+            parts.push(String::from("$unknown"));
         }
         if self.upstream.0 != 0 {
             parts.push(format!("~{} upstream", self.upstream));
@@ -196,7 +188,7 @@ mod tests {
         };
         let mut summary = CostSummary::default();
         summary.add(&request);
-        assert_eq!(summary.to_string(), "unknown (1 request)");
+        assert_eq!(summary.to_string(), "$unknown");
         request.usage = Some(TokenUsage {
             cost: Some(RequestCost {
                 amount: Usd(0),
@@ -210,14 +202,14 @@ mod tests {
         summary.add(&request);
         request.subscription = true;
         summary.add(&request);
-        assert_eq!(summary.to_string(), "~$0.0000 + unknown (1 request)");
+        assert_eq!(summary.to_string(), "~$0.0000 + $unknown");
         if let Some(usage) = &mut request.usage
             && let Some(cost) = &mut usage.cost
         {
             cost.amount = Usd(50_000_000);
         }
         summary.add(&request);
-        assert_eq!(summary.to_string(), "~$0.0500 + unknown (1 request)");
+        assert_eq!(summary.to_string(), "~$0.0500 + $unknown");
     }
 
     #[test]
@@ -245,7 +237,7 @@ mod tests {
         assert_eq!(summary.amount, Usd(0));
         assert_eq!(
             summary.to_string(),
-            "$0.0000 + unknown (2 requests) + ~$0.0400 upstream"
+            "$0.0000 + $unknown + ~$0.0400 upstream"
         );
         request.usage = None;
         summary.add(&request);

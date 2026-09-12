@@ -74,7 +74,7 @@ fn lag_recovery_restores_costs_from_background_sessions() {
             .app
             .exit_cost_summary()
             .iter()
-            .any(|line| line.contains("total: unknown (1 request)"))
+            .any(|line| line.contains("total: $unknown"))
     );
     harness
         .app
@@ -162,7 +162,7 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
         harness
             .app
             .exit_token_usage_summary()
-            .is_some_and(|summary| summary.contains("total: unknown (2 requests)"))
+            .is_some_and(|summary| summary.contains("total: $unknown"))
     );
     harness
         .app
