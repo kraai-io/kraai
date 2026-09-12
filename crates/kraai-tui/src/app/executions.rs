@@ -15,13 +15,19 @@ pub(super) fn result_summary(output: &str) -> String {
     };
     let status = attribute("status").unwrap_or("unknown");
     let exit = attribute("exit_code");
-    let mut summary = format!("Nushell · {status}");
-    if let Some(exit) = exit {
-        summary.push_str(&format!(" · exit {exit}"));
-    }
+    let mut summary = if status == "completed" {
+        format!("exit {}", exit.unwrap_or("unknown"))
+    } else if status == "cancelled" {
+        String::from("cancelled")
+    } else {
+        match exit {
+            Some(exit) => format!("{status} · exit {exit}"),
+            None => status.to_string(),
+        }
+    };
     if let Some(elapsed) = attribute("elapsed_ms").and_then(|value| value.parse::<u64>().ok()) {
         summary.push_str(&format!(
-            " · {} total",
+            " · {}",
             super::duration::format_duration(Duration::from_millis(elapsed))
         ));
     }
@@ -123,6 +129,27 @@ impl App {
         if let Some(offset) = offset {
             self.state.auto_scroll = false;
             self.state.scroll = offset.min(self.state.chat_max_scroll());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_summary;
+
+    #[test]
+    fn summaries_show_exit_or_cancellation_without_redundant_labels() {
+        for (status, expected) in [
+            ("completed", "exit 1 · 0.5s"),
+            ("cancelled", "cancelled · 0.5s"),
+            ("timed-out", "timed-out · exit 1 · 0.5s"),
+        ] {
+            assert_eq!(
+                result_summary(&format!(
+                    "<tool_call_result status=\"{status}\" exit_code=\"1\" elapsed_ms=\"500\"></tool_call_result>"
+                )),
+                expected
+            );
         }
     }
 }

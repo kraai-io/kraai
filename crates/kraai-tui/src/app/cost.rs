@@ -50,7 +50,7 @@ impl App {
             }
         }
         if self.state.current_session_id.as_deref() == Some(session_id) {
-            self.state.session_cost = summarize(session_requests.values());
+            self.state.session_cost = summarize_reported(session_requests.values());
         }
     }
 
@@ -60,7 +60,7 @@ impl App {
             .current_session_id
             .as_ref()
             .and_then(|id| self.state.session_requests.get(id))
-            .map(|requests| summarize(requests.values()))
+            .map(|requests| summarize_reported(requests.values()))
             .unwrap_or_default();
     }
 
@@ -101,6 +101,20 @@ fn summarize<'a>(requests: impl Iterator<Item = &'a RequestUsage>) -> CostSummar
     let mut summary = CostSummary::default();
     for request in requests {
         summary.add(request);
+    }
+    summary
+}
+
+fn summarize_reported<'a>(requests: impl Iterator<Item = &'a RequestUsage>) -> CostSummary {
+    let mut summary = CostSummary::default();
+    for request in requests {
+        if request.usage.is_some() {
+            summary.add(request);
+        } else {
+            summary.unknown = summary
+                .unknown
+                .saturating_add(request.unpriced_attempts as usize);
+        }
     }
     summary
 }

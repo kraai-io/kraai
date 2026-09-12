@@ -192,7 +192,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         .chat_history
         .insert(result.id.clone(), result);
     let collapsed = screen(&harness.app.state, 100, 30);
-    assert!(collapsed.contains("0.1s total"));
+    assert!(collapsed.contains("0.1s"));
     assert!(!collapsed.contains("secret-source"));
     assert!(!collapsed.contains("secret-output"));
     harness.app.select_execution(true);
