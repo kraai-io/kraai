@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod auth;
-mod catalog;
 mod messages;
+mod models;
 mod provider;
 mod wire;
 

@@ -897,7 +897,7 @@ fn openai_allowed_paths() -> BTreeSet<String> {
 fn codex_allowed_paths() -> BTreeSet<String> {
     BTreeSet::from([
         String::from("/backend-api/codex/responses"),
-        String::from("/backend-api/models"),
+        String::from("/backend-api/codex/models"),
     ])
 }
 

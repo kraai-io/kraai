@@ -20,6 +20,7 @@ pub use error::{ProviderError, ProviderModelCacheRefreshError};
 pub use http_client::{
     HTTP_CONNECT_TIMEOUT, HTTP_FINITE_REQUEST_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT,
     build_finite_http_client, build_streaming_http_client, finite_request,
+    streaming_http_client_builder,
 };
 pub use http_retry::{
     DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderRequestContext, ProviderRetryEvent,
