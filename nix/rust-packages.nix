@@ -40,6 +40,13 @@
     workspaceTestInputs = {
       "kraai-eval" = [pkgs.git];
     };
+    darwinNestedSandboxTests = {
+      "kraai-sandbox" = ["tests::macos::"];
+      "kraai-nushell-runtime" = [
+        "private_transport_crosses_the_sandbox_boundary"
+        "native_commands_remain_registered_when_the_sandbox_denies_the_operation"
+      ];
+    };
 
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
@@ -145,14 +152,23 @@
 
     workspaceTestChecks = builtins.listToAttrs (
       map
-      (name:
-        lib.nameValuePair "test-${name}" (cargoCheckNix.workspaceMembers.${name}.build.override {
+      (name: let
+        tested = cargoCheckNix.workspaceMembers.${name}.build.override {
           runTests = true;
           testInputs = workspaceTestInputs.${name} or [];
+          testCrateFlags = lib.optionals pkgs.stdenv.hostPlatform.isDarwin (
+            lib.concatMap (test: ["--skip" test]) (darwinNestedSandboxTests.${name} or [])
+          );
           testPreRun = ''
             export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
           '';
-        }))
+        };
+      in
+        lib.nameValuePair "test-${name}" (
+          if pkgs.stdenv.hostPlatform.isDarwin
+          then tested.test.overrideAttrs {__darwinAllowLocalNetworking = true;}
+          else tested
+        ))
       crate2nixTestMemberNames
     );
     cargoTestChecks = builtins.listToAttrs (

@@ -5,6 +5,9 @@ use kraai_types::SandboxCapability;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 
+#[cfg(unix)]
+mod metadata;
+
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod macos;
 

@@ -212,3 +212,21 @@ fn non_utf8_paths_are_rejected_instead_of_lossily_granted() {
     plan.workspace_root = workspace;
     assert!(build_args(&plan, &private_temp).is_err());
 }
+
+#[test]
+fn sysctl_access_is_limited_to_runtime_information() {
+    for capabilities in [
+        vec![SandboxCapability::WorkspaceRead],
+        vec![SandboxCapability::HostWrite, SandboxCapability::Network],
+    ] {
+        let (_root, plan, private_temp) = fixture(&capabilities);
+        let args = build_args(&plan, &private_temp).expect("build policy");
+        let policy = source(&args);
+        assert!(!policy.contains("(allow sysctl-read)"));
+        assert!(!policy.contains("kern.procargs"));
+        assert!(!policy.contains("(sysctl-name-prefix \"kern.\")"));
+        for name in ["kern.argmax", "hw.ncpu", "machdep.cpu.brand_string"] {
+            assert!(policy.contains(&format!("(sysctl-name \"{name}\")")));
+        }
+    }
+}

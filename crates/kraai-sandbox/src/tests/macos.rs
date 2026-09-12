@@ -1,3 +1,6 @@
+#[path = "macos/sysctl.rs"]
+mod sysctl;
+
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -12,6 +15,9 @@ use tokio_util::sync::CancellationToken;
 use super::{capabilities, temp_dir};
 use crate::platform::PROTECTED_METADATA_NAMES;
 use crate::{ExecutionOutput, LaunchPlan, PrivateTempConfig, Termination, run};
+
+#[path = "git_metadata.rs"]
+mod git_metadata;
 
 struct Fixture(PathBuf);
 
@@ -63,6 +69,13 @@ async fn successful_run(plan: LaunchPlan) -> ExecutionOutput {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+#[tokio::test]
+async fn timeout_bounds_detached_output_capture() {
+    for mode in ["both", "stderr"] {
+        super::process::detached_output(mode, SandboxCapability::WorkspaceWrite, false).await;
+    }
 }
 
 #[tokio::test]

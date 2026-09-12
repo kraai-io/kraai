@@ -20,6 +20,10 @@ use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandb
 #[path = "tests/macos.rs"]
 mod macos;
 
+#[cfg(unix)]
+#[path = "tests/process.rs"]
+mod process;
+
 #[cfg(target_os = "linux")]
 #[path = "tests/seccomp.rs"]
 mod seccomp;
@@ -35,6 +39,10 @@ mod dns;
 #[cfg(target_os = "linux")]
 #[path = "tests/runtime_mounts.rs"]
 mod runtime_mounts;
+
+#[cfg(target_os = "linux")]
+#[path = "tests/git_metadata.rs"]
+mod git_metadata;
 
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -336,7 +344,7 @@ fn bwrap_args_encode_capability_boundaries() {
         ]),
         Duration::from_secs(1),
     );
-    let args = build_bwrap_args(&plan, &private_temp);
+    let args = build_bwrap_args(&plan, &private_temp).expect("build bubblewrap args");
 
     assert!(contains_mount(&args, "--bind", &workspace));
     assert!(contains_mount(

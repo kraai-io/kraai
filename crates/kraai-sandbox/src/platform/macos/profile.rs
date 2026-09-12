@@ -6,7 +6,7 @@ use kraai_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;
-use crate::platform::PROTECTED_METADATA_NAMES;
+use crate::platform::metadata::protected_paths;
 
 pub(super) fn build_args(
     plan: &LaunchPlan,
@@ -75,19 +75,8 @@ pub(super) fn build_args(
     }
 
     if !plan.capabilities.contains(SandboxCapability::MetadataWrite) {
-        for name in PROTECTED_METADATA_NAMES {
-            let path = workspace.join(name);
+        for path in protected_paths(&workspace)? {
             profile.deny_writes(&path)?;
-            match std::fs::symlink_metadata(&path) {
-                Ok(_) => {
-                    let resolved = resolve(&path)?;
-                    if resolved != path {
-                        profile.deny_writes(&resolved)?;
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(unavailable(&path, &error.to_string())),
-            }
         }
     }
     profile.protect_directory(&workspace)?;
