@@ -63,7 +63,13 @@ lint-fix:
 lint-fix-dirty:
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty -- {{ clippy-flags }}
 
-check: generate-cargo-nix format lint test
+check: generate-cargo-nix format lint test check-node
+
+build-node:
+    node packages/runtime/scripts/build.mjs
+
+check-node: build-node
+    cd packages/runtime && npm run typecheck && npm test
 
 eval-open-close-files model provider attempt="0":
     @evals/run-open-close-files run '{{ model }}' '{{ provider }}' --attempt '{{ attempt }}'

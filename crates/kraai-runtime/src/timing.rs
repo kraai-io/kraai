@@ -1,11 +1,22 @@
 use std::time::{Duration, Instant};
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnTimer {
+    #[cfg_attr(
+        feature = "typescript",
+        ts(type = "{ secs_since_epoch: number; nanos_since_epoch: number } | null")
+    )]
     #[serde(with = "instant_serde")]
     started_at: Option<Instant>,
+    #[cfg_attr(feature = "typescript", ts(type = "{ secs: number; nanos: number }"))]
     accumulated: Duration,
     active: bool,
+    #[cfg_attr(
+        feature = "typescript",
+        ts(type = "{ secs: number; nanos: number } | null")
+    )]
     last_duration: Option<Duration>,
 }
 

@@ -6,18 +6,22 @@ use kraai_agent::AgentManager;
 use kraai_persistence::agent_state_root;
 use kraai_provider_core::{ProviderManager, ProviderRegistry};
 use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
-use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexFactory};
+use kraai_provider_openai_codex::{
+    OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexFactory,
+};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::core::{RuntimeCore, emit_event};
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
 use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle};
-use crate::settings::resolve_provider_config_path;
 
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
     provider_config_path: Option<PathBuf>,
+    nushell_host_path: Option<PathBuf>,
+    script_runtime_roots: Option<Vec<PathBuf>>,
+    storage_root: Option<PathBuf>,
     use_current_executable_as_nushell_host: bool,
 }
 
@@ -32,6 +36,9 @@ struct RuntimeParts {
 }
 
 struct RuntimeHostOptions {
+    nushell_host_path: Option<PathBuf>,
+    script_runtime_roots: Option<Vec<PathBuf>>,
+    storage_root: Option<PathBuf>,
     provider_config_path_override: Option<PathBuf>,
     use_current_executable_as_nushell_host: bool,
     initialize_tracing: bool,
@@ -67,8 +74,26 @@ impl RuntimeBuilder {
     pub fn new() -> Self {
         Self {
             provider_config_path: None,
+            nushell_host_path: None,
+            script_runtime_roots: None,
+            storage_root: None,
             use_current_executable_as_nushell_host: false,
         }
+    }
+
+    pub fn storage_root(mut self, path: PathBuf) -> Self {
+        self.storage_root = Some(path);
+        self
+    }
+
+    pub fn script_runtime_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.script_runtime_roots = Some(roots);
+        self
+    }
+
+    pub fn nushell_host_path(mut self, path: PathBuf) -> Self {
+        self.nushell_host_path = Some(path);
+        self
     }
 
     pub fn provider_config_path(mut self, path: PathBuf) -> Self {
@@ -99,6 +124,9 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            nushell_host_path: self.nushell_host_path,
+            script_runtime_roots: self.script_runtime_roots,
+            storage_root: self.storage_root,
             provider_config_path_override: self.provider_config_path,
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: true,
@@ -153,6 +181,9 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            nushell_host_path: self.nushell_host_path,
+            script_runtime_roots: self.script_runtime_roots,
+            storage_root: self.storage_root,
             provider_config_path_override: self.provider_config_path,
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: false,
@@ -211,12 +242,15 @@ impl RuntimeBuilder {
         startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
         host_options: RuntimeHostOptions,
     ) -> Result<()> {
+        let storage_root = match host_options.storage_root {
+            Some(path) => path,
+            None => agent_state_root()?,
+        };
         if host_options.initialize_tracing {
-            Self::init_tracing()?;
+            Self::init_tracing(&storage_root)?;
         }
-
         let (message_store, session_store, execution_store, context_state_store) =
-            kraai_persistence::init()
+            kraai_persistence::init_at(&storage_root.join("data"))
                 .await
                 .wrap_err("Failed to initialize persistence layer")?;
 
@@ -226,11 +260,15 @@ impl RuntimeBuilder {
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
         let openai_codex_auth = Arc::new(
-            OpenAiCodexAuthController::new().wrap_err("Failed to initialize OpenAI auth")?,
+            OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+                storage_root.join("provider-state/openai-codex/auth.json"),
+            ))
+            .wrap_err("Failed to initialize OpenAI auth")?,
         );
         let registry = build_provider_registry(openai_codex_auth.clone())?;
-        let provider_config_path =
-            resolve_provider_config_path(host_options.provider_config_path_override)?;
+        let provider_config_path = host_options
+            .provider_config_path_override
+            .unwrap_or_else(|| storage_root.join("providers.toml"));
 
         let agent_manager = Arc::new(RwLock::new(AgentManager::new(
             providers,
@@ -238,6 +276,7 @@ impl RuntimeBuilder {
             message_store,
             session_store,
             context_state_store.clone(),
+            storage_root.clone(),
         )));
 
         let runtime = RuntimeCore {
@@ -256,6 +295,8 @@ impl RuntimeBuilder {
             session_state_barrier: Arc::new(RwLock::new(())),
             openai_codex_auth,
             provider_config_path,
+            nushell_host_path: host_options.nushell_host_path,
+            script_runtime_roots: host_options.script_runtime_roots,
             use_current_executable_as_nushell_host: host_options
                 .use_current_executable_as_nushell_host,
             startup_tx,
@@ -265,7 +306,7 @@ impl RuntimeBuilder {
         Ok(())
     }
 
-    fn init_tracing() -> Result<()> {
+    fn init_tracing(storage_root: &std::path::Path) -> Result<()> {
         use color_eyre::eyre::Context;
         use std::sync::{Mutex, Once};
 
@@ -274,7 +315,7 @@ impl RuntimeBuilder {
 
         INIT.call_once(|| {
             let result = (|| -> Result<()> {
-                let log_dir = agent_state_root()?.join("logs");
+                let log_dir = storage_root.join("logs");
 
                 std::fs::create_dir_all(&log_dir).wrap_err_with(|| {
                     format!("Failed to create log directory {}", log_dir.display())

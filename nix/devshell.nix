@@ -31,6 +31,9 @@
           rust-analyzer
 
           just
+          nodejs
+          typescript
+          binutils
 
           ripgrep
           bubblewrap

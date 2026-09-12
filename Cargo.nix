@@ -173,6 +173,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-runtime-node" = rec {
+      packageId = "kraai-runtime-node";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-runtime-node";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-sandbox" = rec {
       packageId = "kraai-sandbox";
       build = internal.buildRustCrateWithFeatures {
@@ -2211,7 +2221,7 @@ rec {
           }
           {
             name = "libloading";
-            packageId = "libloading";
+            packageId = "libloading 0.8.9";
             optional = true;
           }
         ];
@@ -2783,11 +2793,27 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" ];
       };
-      "convert_case" = rec {
+      "convert_case 0.10.0" = rec {
         crateName = "convert_case";
         version = "0.10.0";
         edition = "2021";
         sha256 = "1fff1x78mp2c233g68my0ag0zrmjdbym8bfyahjbfy4cxza5hd33";
+        authors = [
+          "rutrum <dave@rutrum.net>"
+        ];
+        dependencies = [
+          {
+            name = "unicode-segmentation";
+            packageId = "unicode-segmentation";
+          }
+        ];
+
+      };
+      "convert_case 0.12.0" = rec {
+        crateName = "convert_case";
+        version = "0.12.0";
+        edition = "2021";
+        sha256 = "06zxk7w9jwlsrp4nvlalzckcpycy7f5wgj6zx99bym1lygqhkxqs";
         authors = [
           "rutrum <dave@rutrum.net>"
         ];
@@ -3514,6 +3540,20 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
+      "ctor" = rec {
+        crateName = "ctor";
+        version = "1.0.13";
+        edition = "2021";
+        sha256 = "03cqq01sx1jp07c26wdhm60ip6nvw8wigkppryyz4jidgidpajli";
+        authors = [
+          "Matt Mastracci <matthew@mastracci.com>"
+        ];
+        features = {
+          "default" = [ "std" "proc_macro" "priority" ];
+          "priority" = [ "dep:link-section" ];
+          "proc_macro" = [ "dep:linktime-proc-macro" ];
+        };
+      };
       "ctutils" = rec {
         crateName = "ctutils";
         version = "0.4.2";
@@ -3907,7 +3947,7 @@ rec {
         dependencies = [
           {
             name = "convert_case";
-            packageId = "convert_case";
+            packageId = "convert_case 0.10.0";
             optional = true;
           }
           {
@@ -9279,6 +9319,12 @@ rec {
             name = "tracing";
             packageId = "tracing";
           }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
+          }
         ];
         devDependencies = [
           {
@@ -9286,7 +9332,10 @@ rec {
             packageId = "tracing";
           }
         ];
-
+        features = {
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
       };
       "kraai-provider-openai-chat-completions" = rec {
         crateName = "kraai-provider-openai-chat-completions";
@@ -9515,6 +9564,12 @@ rec {
             features = [ "env-filter" "fmt" ];
           }
           {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
+          }
+          {
             name = "ulid";
             packageId = "ulid";
           }
@@ -9528,6 +9583,75 @@ rec {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
+          }
+        ];
+        features = {
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
+      };
+      "kraai-runtime-node" = rec {
+        crateName = "kraai-runtime-node";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "export-types";
+            path = "src/bin/export-types.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-runtime-node; };
+        libName = "kraai_runtime_node";type = [ "cdylib" "rlib" ];
+        dependencies = [
+          {
+            name = "kraai-runtime";
+            packageId = "kraai-runtime";
+            features = [ "typescript" ];
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+            features = [ "typescript" ];
+          }
+          {
+            name = "napi";
+            packageId = "napi";
+            usesDefaultFeatures = false;
+            features = [ "napi8" "tokio_rt" "serde-json" "dyn-symbols" ];
+          }
+          {
+            name = "napi-derive";
+            packageId = "napi-derive";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            features = [ "serde-json-impl" ];
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "napi-build";
+            packageId = "napi-build";
           }
         ];
 
@@ -9679,8 +9803,17 @@ rec {
             name = "serde_json";
             packageId = "serde_json";
           }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
+          }
         ];
-
+        features = {
+          "typescript" = [ "dep:ts-rs" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
       };
       "kraai-workspace-fs" = rec {
         crateName = "kraai-workspace-fs";
@@ -9824,7 +9957,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "vendored" ];
       };
-      "libloading" = rec {
+      "libloading 0.8.9" = rec {
         crateName = "libloading";
         version = "0.8.9";
         edition = "2015";
@@ -9845,6 +9978,31 @@ rec {
           }
         ];
 
+      };
+      "libloading 0.9.0" = rec {
+        crateName = "libloading";
+        version = "0.9.0";
+        edition = "2021";
+        sha256 = "0q4bvhp4kqy2v3bw4cn2bmyq73hskqd1ansa9125gfq5x0ns4k3m";
+        authors = [
+          "Simonas Kazlauskas <libloading@kazlauskas.me>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "windows-link";
+            packageId = "windows-link";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "libm" = rec {
         crateName = "libm";
@@ -10932,6 +11090,254 @@ rec {
           }
         ];
 
+      };
+      "napi" = rec {
+        crateName = "napi";
+        version = "3.12.4";
+        edition = "2021";
+        sha256 = "0857glfdy7d4xqqcqhzic8i8qpy18y9zng5zgqsc2bl41h41sb1x";
+        authors = [
+          "Nathan Sobo <nathan@github.com>"
+          "Yinan Long <lynweklm@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags 2.13.0";
+          }
+          {
+            name = "ctor";
+            packageId = "ctor";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "napi-sys";
+            packageId = "napi-sys";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nohash-hasher";
+            packageId = "nohash-hasher";
+          }
+          {
+            name = "rustc-hash";
+            packageId = "rustc-hash";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && (!(target."tokio_unstable" or false)));
+            features = [ "rt" "sync" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            target = { target, features }: (((builtins.elem "wasm" target."family") && (target."tokio_unstable" or false)) || (!(builtins.elem "wasm" target."family")));
+            features = [ "rt" "rt-multi-thread" "sync" ];
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "napi-build";
+            packageId = "napi-build";
+          }
+        ];
+        features = {
+          "anyhow" = [ "dep:anyhow" ];
+          "async" = [ "tokio_rt" ];
+          "async-runtime" = [ "napi4" ];
+          "chrono" = [ "dep:chrono" ];
+          "chrono_date" = [ "chrono" "napi5" ];
+          "default" = [ "napi4" "dyn-symbols" ];
+          "deferred_trace" = [ "napi4" ];
+          "dyn-symbols" = [ "napi-sys/dyn-symbols" ];
+          "encoding_rs" = [ "dep:encoding_rs" ];
+          "error_anyhow" = [ "anyhow" ];
+          "experimental" = [ "napi-sys/experimental" ];
+          "full" = [ "latin1" "napi10" "async" "serde-json" "experimental" "chrono_date" ];
+          "futures-core" = [ "dep:futures-core" ];
+          "indexmap" = [ "dep:indexmap" ];
+          "latin1" = [ "encoding_rs" ];
+          "napi10" = [ "napi9" "napi-sys/napi10" ];
+          "napi2" = [ "napi1" "napi-sys/napi2" ];
+          "napi3" = [ "napi2" "napi-sys/napi3" ];
+          "napi4" = [ "napi3" "napi-sys/napi4" ];
+          "napi5" = [ "napi4" "napi-sys/napi5" ];
+          "napi6" = [ "napi5" "napi-sys/napi6" ];
+          "napi7" = [ "napi6" "napi-sys/napi7" ];
+          "napi8" = [ "napi7" "napi-sys/napi8" ];
+          "napi9" = [ "napi8" "napi-sys/napi9" ];
+          "object_indexmap" = [ "indexmap" ];
+          "serde" = [ "dep:serde" ];
+          "serde-json" = [ "serde" "serde_json" ];
+          "serde-json-ordered" = [ "serde-json" "serde_json/preserve_order" ];
+          "serde_json" = [ "dep:serde_json" ];
+          "tokio" = [ "dep:tokio" ];
+          "tokio-stream" = [ "dep:tokio-stream" ];
+          "tokio_fs" = [ "tokio/fs" ];
+          "tokio_full" = [ "tokio/full" ];
+          "tokio_io_std" = [ "tokio/io-std" ];
+          "tokio_io_util" = [ "tokio/io-util" ];
+          "tokio_macros" = [ "tokio/macros" ];
+          "tokio_net" = [ "tokio/net" ];
+          "tokio_process" = [ "tokio/process" ];
+          "tokio_rt" = [ "tokio" "napi4" ];
+          "tokio_signal" = [ "tokio/signal" ];
+          "tokio_sync" = [ "tokio/sync" ];
+          "tokio_test_util" = [ "tokio/test-util" ];
+          "tokio_time" = [ "tokio/time" ];
+          "tracing" = [ "dep:tracing" ];
+          "web_stream" = [ "futures-core" "tokio-stream" "napi4" "tokio_rt" ];
+        };
+        resolvedDefaultFeatures = [ "dyn-symbols" "napi1" "napi2" "napi3" "napi4" "napi5" "napi6" "napi7" "napi8" "serde" "serde-json" "serde_json" "tokio" "tokio_rt" ];
+      };
+      "napi-build" = rec {
+        crateName = "napi-build";
+        version = "2.4.2";
+        edition = "2021";
+        sha256 = "19zzshnnmj8cxqndvmycppcz73nqmpmzk6fy7jwcz5aghr07q3l6";
+        libName = "napi_build";
+        authors = [
+          "LongYinan <lynweklm@gmail.com>"
+        ];
+
+      };
+      "napi-derive" = rec {
+        crateName = "napi-derive";
+        version = "3.6.5";
+        edition = "2021";
+        sha256 = "18l5nzhfzxmld9jkcb5y20bk4qdan03d980idjkqldihd82mf01m";
+        procMacro = true;
+        libName = "napi_derive";
+        authors = [
+          "LongYinan <lynweklm@gmail.com>"
+          "Forehalo <forehalo@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "convert_case";
+            packageId = "convert_case 0.12.0";
+          }
+          {
+            name = "ctor";
+            packageId = "ctor";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "napi-derive-backend";
+            packageId = "napi-derive-backend";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "fold" "full" "extra-traits" ];
+          }
+        ];
+        features = {
+          "ctor" = [ "dep:ctor" ];
+          "default" = [ "type-def" "strict" ];
+          "full" = [ "type-def" "strict" "compat-mode" ];
+          "noop" = [ "napi-derive-backend/noop" ];
+          "strict" = [ "napi-derive-backend/strict" ];
+          "tracing" = [ "napi-derive-backend/tracing" ];
+          "type-def" = [ "napi-derive-backend/type-def" "ctor" ];
+        };
+        resolvedDefaultFeatures = [ "ctor" "default" "strict" "type-def" ];
+      };
+      "napi-derive-backend" = rec {
+        crateName = "napi-derive-backend";
+        version = "6.1.3";
+        edition = "2021";
+        sha256 = "0qz4p43kwwamh26b992fpd8b4r2hyn7qf43bfdfgxwv82nkqf72c";
+        libName = "napi_derive_backend";
+        dependencies = [
+          {
+            name = "convert_case";
+            packageId = "convert_case 0.12.0";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "semver";
+            packageId = "semver";
+            optional = true;
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "fold" "full" "extra-traits" ];
+          }
+        ];
+        features = {
+          "semver" = [ "dep:semver" ];
+          "type-def" = [ "semver" ];
+        };
+        resolvedDefaultFeatures = [ "semver" "strict" "type-def" ];
+      };
+      "napi-sys" = rec {
+        crateName = "napi-sys";
+        version = "3.3.1";
+        edition = "2021";
+        sha256 = "05crq3jkjm7vvl2qr3rbm70k3rqbax3rhiy6wrh6jiaf211a4aad";
+        libName = "napi_sys";
+        authors = [
+          "LongYinan <lynweklm@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "libloading";
+            packageId = "libloading 0.9.0";
+          }
+        ];
+        features = {
+          "default" = [ "dyn-symbols" ];
+          "napi10" = [ "napi9" ];
+          "napi2" = [ "napi1" ];
+          "napi3" = [ "napi2" ];
+          "napi4" = [ "napi3" ];
+          "napi5" = [ "napi4" ];
+          "napi6" = [ "napi5" ];
+          "napi7" = [ "napi6" ];
+          "napi8" = [ "napi7" ];
+          "napi9" = [ "napi8" ];
+        };
+        resolvedDefaultFeatures = [ "dyn-symbols" "napi1" "napi2" "napi3" "napi4" "napi5" "napi6" "napi7" "napi8" ];
       };
       "ndarray" = rec {
         crateName = "ndarray";
@@ -20237,6 +20643,23 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "getrandom" ];
       };
+      "termcolor" = rec {
+        crateName = "termcolor";
+        version = "1.4.1";
+        edition = "2018";
+        sha256 = "0mappjh3fj3p2nmrg4y7qv94rchwi9mzmgmfflr8p2awdj7lyy86";
+        authors = [
+          "Andrew Gallant <jamslam@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "winapi-util";
+            packageId = "winapi-util";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+
+      };
       "termina" = rec {
         crateName = "termina";
         version = "0.3.3";
@@ -21975,6 +22398,111 @@ rec {
           "Sean McArthur <sean@seanmonstar.com>"
         ];
 
+      };
+      "ts-rs" = rec {
+        crateName = "ts-rs";
+        version = "12.0.1";
+        edition = "2021";
+        sha256 = "1n1if87wnpdg3p7gzibkn0l79cax29cgbaallm3isaarcq350q3m";
+        libName = "ts_rs";
+        authors = [
+          "Moritz Bischof <moritz.bischof1@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.20";
+          }
+          {
+            name = "ts-rs-macros";
+            packageId = "ts-rs-macros";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+        ];
+        features = {
+          "arrayvec" = [ "dep:arrayvec" ];
+          "arrayvec-impl" = [ "arrayvec" ];
+          "bigdecimal" = [ "dep:bigdecimal" ];
+          "bigdecimal-impl" = [ "bigdecimal" ];
+          "bson" = [ "dep:bson" ];
+          "bson-uuid-impl" = [ "bson" ];
+          "bytes" = [ "dep:bytes" ];
+          "bytes-impl" = [ "bytes" ];
+          "chrono" = [ "dep:chrono" ];
+          "chrono-impl" = [ "chrono" ];
+          "default" = [ "serde-compat" ];
+          "dprint-plugin-typescript" = [ "dep:dprint-plugin-typescript" ];
+          "format" = [ "dprint-plugin-typescript" ];
+          "heapless" = [ "dep:heapless" ];
+          "heapless-impl" = [ "heapless" ];
+          "indexmap" = [ "dep:indexmap" ];
+          "indexmap-impl" = [ "indexmap" ];
+          "jiff" = [ "dep:jiff" ];
+          "jiff-impl" = [ "jiff" ];
+          "no-serde-warnings" = [ "ts-rs-macros/no-serde-warnings" ];
+          "ordered-float" = [ "dep:ordered-float" ];
+          "ordered-float-impl" = [ "ordered-float" ];
+          "semver" = [ "dep:semver" ];
+          "semver-impl" = [ "semver" ];
+          "serde-compat" = [ "ts-rs-macros/serde-compat" ];
+          "serde-json-impl" = [ "serde_json" ];
+          "serde_json" = [ "dep:serde_json" ];
+          "smol_str" = [ "dep:smol_str" ];
+          "smol_str-impl" = [ "smol_str" ];
+          "tokio" = [ "dep:tokio" ];
+          "tokio-impl" = [ "tokio" ];
+          "url" = [ "dep:url" ];
+          "url-impl" = [ "url" ];
+          "uuid" = [ "dep:uuid" ];
+          "uuid-impl" = [ "uuid" ];
+        };
+        resolvedDefaultFeatures = [ "default" "serde-compat" "serde-json-impl" "serde_json" ];
+      };
+      "ts-rs-macros" = rec {
+        crateName = "ts-rs-macros";
+        version = "12.0.1";
+        edition = "2021";
+        sha256 = "1ajjnsl39fz492mrqpjkkrrh8s5shl5ghjv7kvpqhydwa7m0xn9q";
+        procMacro = true;
+        libName = "ts_rs_macros";
+        authors = [
+          "Moritz Bischof <moritz.bischof1@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "full" "extra-traits" ];
+          }
+          {
+            name = "termcolor";
+            packageId = "termcolor";
+            optional = true;
+          }
+        ];
+        features = {
+          "serde-compat" = [ "termcolor" ];
+          "termcolor" = [ "dep:termcolor" ];
+        };
+        resolvedDefaultFeatures = [ "serde-compat" "termcolor" ];
       };
       "type-map" = rec {
         crateName = "type-map";

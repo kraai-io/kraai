@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use kraai_persistence::agent_state_root;
 use kraai_types::{
     AgentProfileSource, AgentProfileSummary, AgentProfileWarning, CapabilityPermissionRules,
     EnvironmentPolicy, EscalationPolicy, NushellStartup, PathPolicy, SandboxCapability,
@@ -85,6 +84,7 @@ struct ExternalProfile {
 
 pub fn resolve_profiles(
     workspace_dir: &Path,
+    storage_root: &Path,
     available_commands: &HashSet<String>,
 ) -> ResolvedProfiles {
     let mut resolved = ResolvedProfiles {
@@ -92,7 +92,8 @@ pub fn resolve_profiles(
         warnings: Vec::new(),
     };
 
-    if let Some(path) = global_profiles_path() {
+    {
+        let path = storage_root.join("agents.toml");
         match load_layer(
             &path,
             AgentProfileSource::Global,
@@ -172,10 +173,6 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             source: AgentProfileSource::BuiltIn,
         },
     ]
-}
-
-fn global_profiles_path() -> Option<PathBuf> {
-    agent_state_root().ok().map(|path| path.join("agents.toml"))
 }
 
 fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {
@@ -442,7 +439,7 @@ mod tests {
     #[test]
     fn built_ins_match_the_locked_command_and_capability_sets() {
         let workspace = temp_dir("built-ins");
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         let plan = resolved
             .profiles
             .iter()
@@ -497,7 +494,7 @@ path = "packaged"
 "#,
         )
         .unwrap();
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert!(resolved.warnings.is_empty());
         let plan = resolved
             .profiles
@@ -533,7 +530,7 @@ path = "inherit"
         )
         .unwrap();
 
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert!(resolved.warnings.is_empty());
         let coding = resolved
             .profiles
@@ -582,7 +579,7 @@ environment = "inherit"
         )
         .unwrap();
 
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert_eq!(resolved.warnings.len(), 1);
         assert!(
             resolved
@@ -620,7 +617,7 @@ path = "inherit"
 "#,
         )
         .unwrap();
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert_eq!(resolved.warnings.len(), 1);
         assert!(
             resolved
@@ -653,7 +650,7 @@ path = "inherit"
         )
         .unwrap();
 
-        let resolved = resolve_profiles(&workspace, &commands());
+        let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert_eq!(resolved.warnings.len(), 1);
         assert!(
             resolved

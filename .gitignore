@@ -5,3 +5,5 @@ target
 crate-sources*
 .codex
 result
+node_modules/
+packages/runtime/dist/

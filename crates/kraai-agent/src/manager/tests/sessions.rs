@@ -434,6 +434,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         message_store,
         session_store,
         context_state_store,
+        data_dir.clone(),
     );
 
     let session_id = manager.create_session().await?;
