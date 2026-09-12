@@ -437,7 +437,7 @@ fn short_help_scrolls_to_final_binding_and_resets_on_reopen() {
     let mut harness = test_harness();
     harness.app.handle_command("help");
     let first = screen(&harness.app.state, 90, 8);
-    assert!(first.contains("Commands"));
+    assert!(first.contains("/ for commands"));
     assert!(!first.contains("Close / cancel"));
     harness
         .app

@@ -218,7 +218,8 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 
 pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let lines = vec![
-        Line::raw("/            Commands"),
+        Line::raw("/ for commands"),
+        Line::raw(""),
         Line::raw("Enter        Send       Shift+Enter  Newline"),
         Line::raw("↑/↓          History    Ctrl+E       Editor"),
         Line::raw("Ctrl+←/→     Move word  Ctrl+W       Delete word"),
