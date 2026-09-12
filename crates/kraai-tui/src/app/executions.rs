@@ -38,6 +38,9 @@ impl App {
             })
             .collect();
         if ids.is_empty() {
+            if self.state.selected_execution.take().is_some() {
+                self.invalidate_chat_cache();
+            }
             return;
         }
         let index = self
@@ -57,7 +60,12 @@ impl App {
     }
 
     pub(super) fn toggle_execution(&mut self) {
-        if self.state.selected_execution.is_none() {
+        let selection_visible = self.state.selected_execution.as_ref().is_some_and(|selected| {
+            self.state.rendered_messages().iter().any(|message| {
+                matches!(&message.content, ConversationItem::ScriptResult { call_id, .. } if call_id.as_str() == selected)
+            })
+        });
+        if !selection_visible {
             self.select_execution(false);
         }
         let Some(id) = self.state.selected_execution.clone() else {

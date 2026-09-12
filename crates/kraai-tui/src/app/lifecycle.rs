@@ -110,7 +110,10 @@ impl App {
             needs_redraw |= self.handle_events(event_timeout)?;
             if self.state.editor_requested {
                 if let Err(error) = self.open_composer_editor(&mut terminal) {
-                    self.state.status = format!("Editor error: {error}");
+                    if self.state.exit {
+                        return Err(error);
+                    }
+                    self.set_error(format!("Editor error: {error}"));
                 }
                 needs_redraw = true;
             }

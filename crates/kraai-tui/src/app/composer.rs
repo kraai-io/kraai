@@ -69,12 +69,16 @@ impl App {
             self.state.status = String::from("Set VISUAL or EDITOR to edit the prompt externally");
             return Ok(());
         };
+        let original_input = self.state.input.clone();
+        let original_session = self.state.current_session_id.clone();
         let mut file = tempfile::Builder::new()
             .prefix("kraai-prompt-")
             .suffix(".txt")
             .tempfile()?;
         file.write_all(self.state.input.as_bytes())?;
         file.flush()?;
+        #[cfg(unix)]
+        let _signal_guard = EditorSignalGuard::new()?;
         disable_raw_mode()?;
         let edit_result = (|| -> Result<()> {
             execute!(
@@ -105,19 +109,74 @@ impl App {
                 path.display()
             ));
         }
-        let edited = edit_result.and_then(|()| Ok(std::fs::read_to_string(file.path())?));
+        let edited = edit_result.and_then(|()| {
+            let text = std::fs::read_to_string(file.path())?;
+            self.apply_edited_prompt(text, original_session.as_deref(), &original_input)
+        });
         match edited {
-            Ok(text) => {
-                self.set_input_text(text);
-                self.reset_input_history_navigation();
+            Ok(()) => {
                 self.state.status = String::from("Prompt updated from editor");
             }
             Err(error) => {
                 let (_, path) = file.keep()?;
-                self.state.status = format!("{error}; draft preserved at {}", path.display());
+                self.set_error(format!("{error}; draft preserved at {}", path.display()));
+                if self.state.exit {
+                    return Err(color_eyre::eyre::eyre!(self.state.status.clone()));
+                }
             }
         }
         Ok(())
+    }
+
+    pub(super) fn apply_edited_prompt(
+        &mut self,
+        text: String,
+        original_session: Option<&str>,
+        original_input: &str,
+    ) -> Result<()> {
+        if self.state.exit
+            || self.state.current_session_id.as_deref() != original_session
+            || self.state.input != original_input
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "Session or prompt changed, or Kraai is exiting"
+            ));
+        }
+        self.set_input_text(text);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+struct EditorSignalGuard(&'static std::sync::atomic::AtomicBool);
+
+#[cfg(unix)]
+impl EditorSignalGuard {
+    fn new() -> Result<Self> {
+        use std::sync::{
+            Arc, OnceLock,
+            atomic::{AtomicBool, Ordering},
+        };
+        static DEFAULT_ENABLED: OnceLock<std::io::Result<Arc<AtomicBool>>> = OnceLock::new();
+        let enabled = DEFAULT_ENABLED
+            .get_or_init(|| {
+                let enabled = Arc::new(AtomicBool::new(true));
+                for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGQUIT] {
+                    signal_hook::flag::register_conditional_default(signal, enabled.clone())?;
+                }
+                Ok(enabled)
+            })
+            .as_ref()
+            .map_err(|error| color_eyre::eyre::eyre!("Cannot handle editor signals: {error}"))?;
+        enabled.store(false, Ordering::SeqCst);
+        Ok(Self(enabled))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for EditorSignalGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -181,6 +240,45 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path)?, "edited");
         assert!(run_editor("sh -c 'exit 7' editor", &path, || {}).is_err());
         assert_eq!(std::fs::read_to_string(&path)?, "edited");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "subprocess assertions verify signal handling"
+    )]
+    fn editor_signal_guard_protects_parent_and_restores_default() -> color_eyre::Result<()> {
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        const CHILD_ENV: &str = "KRAAI_EDITOR_SIGNAL_TEST";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            for _ in 0..2 {
+                let guard = super::EditorSignalGuard::new()?;
+                signal_hook::low_level::raise(signal_hook::consts::SIGINT)?;
+                signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)?;
+                let child = std::process::Command::new("sh")
+                    .args(["-c", "kill -INT $$"])
+                    .status()?;
+                assert_eq!(child.signal(), Some(signal_hook::consts::SIGINT));
+                drop(guard);
+            }
+            std::io::stdout().write_all(b"editor survived interrupts\n")?;
+            std::io::stdout().flush()?;
+            signal_hook::low_level::raise(signal_hook::consts::SIGINT)?;
+            return Ok(());
+        }
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "app::composer::tests::editor_signal_guard_protects_parent_and_restores_default",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()?;
+        assert!(String::from_utf8_lossy(&output.stdout).contains("editor survived interrupts"));
+        assert_eq!(output.status.signal(), Some(signal_hook::consts::SIGINT));
         Ok(())
     }
 }

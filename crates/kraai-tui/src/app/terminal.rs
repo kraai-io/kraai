@@ -17,7 +17,9 @@ impl App {
                 changed = true;
             }
 
-            if batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
+            if self.state.editor_requested
+                || self.state.exit
+                || batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
                 || !event::poll(Duration::ZERO)?
             {
                 break;
@@ -28,6 +30,9 @@ impl App {
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        if self.state.editor_requested || self.state.exit {
+            return false;
+        }
         match event {
             CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event);

@@ -215,6 +215,64 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
 }
 
 #[test]
+fn execution_toggle_recovers_selection_after_tip_changes() {
+    use kraai_types::{ConversationItem, ToolCallId};
+    let mut harness = test_harness();
+    for (id, parent_id) in [("first", None), ("second", Some("first"))] {
+        let message = Message {
+            id: MessageId::new(id),
+            parent_id: parent_id.map(MessageId::new),
+            content: ConversationItem::ScriptResult {
+                call_id: ToolCallId::new(id),
+                output: String::from(
+                    "<tool_call_result status=\"completed\" exit_code=\"0\"></tool_call_result>",
+                ),
+            },
+            status: MessageStatus::Complete,
+            agent_profile_id: None,
+            generation: None,
+        };
+        harness
+            .app
+            .state
+            .chat_history
+            .insert(message.id.clone(), message);
+    }
+    harness.app.state.current_tip_id = Some(String::from("second"));
+    harness.app.select_execution(false);
+    assert_eq!(
+        harness.app.state.selected_execution.as_deref(),
+        Some("second")
+    );
+    harness.app.state.current_tip_id = Some(String::from("first"));
+    harness
+        .app
+        .state
+        .chat_history
+        .remove(&MessageId::new("second"));
+    harness.app.invalidate_chat_cache();
+    harness.app.toggle_execution();
+    assert_eq!(
+        harness.app.state.selected_execution.as_deref(),
+        Some("first")
+    );
+    assert_eq!(
+        harness.app.state.execution_expanded.get("first"),
+        Some(&true)
+    );
+    assert!(!harness.app.state.execution_expanded.contains_key("second"));
+
+    harness.app.state.chat_history.clear();
+    harness.app.invalidate_chat_cache();
+    harness.app.toggle_execution();
+    assert!(harness.app.state.selected_execution.is_none());
+    assert_eq!(
+        harness.app.state.execution_expanded.get("first"),
+        Some(&true)
+    );
+}
+
+#[test]
 fn model_search_matches_provider_name_and_id_with_empty_results() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::ModelMenu;

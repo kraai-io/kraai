@@ -31,21 +31,36 @@ pub(super) fn render_script_approval_panel(state: &AppState, area: Rect, buf: &m
         "",
         "",
     );
-    let metadata_height = metadata.len().min(u16::MAX as usize) as u16;
+    let metadata_overflows = metadata.len() > inner.height.saturating_sub(2) as usize;
+    let metadata_height = if metadata_overflows {
+        1
+    } else {
+        metadata.len().min(u16::MAX as usize) as u16
+    };
     let [metadata_area, source_area, footer_area] = Layout::vertical([
         Constraint::Length(metadata_height.min(inner.height.saturating_sub(2))),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(inner);
-    Paragraph::new(metadata.into_iter().map(Line::raw).collect::<Vec<_>>())
-        .render(metadata_area, buf);
-    let source = ChatHistory::wrap_with_prefix(
+    let pinned = if metadata_overflows {
+        vec![Line::raw("Capabilities and script (scroll)")]
+    } else {
+        metadata.iter().cloned().map(Line::raw).collect::<Vec<_>>()
+    };
+    Paragraph::new(pinned).render(metadata_area, buf);
+    let mut source = ChatHistory::wrap_with_prefix(
         &normalize_terminal_text(&script.source),
         source_area.width as usize,
         "",
         "",
     );
+    if metadata_overflows {
+        let mut content = metadata;
+        content.push(String::new());
+        content.append(&mut source);
+        source = content;
+    }
     let max_scroll = source.len().saturating_sub(source_area.height as usize);
     state
         .approval_scroll
