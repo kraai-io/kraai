@@ -22,12 +22,43 @@ pub struct TaskManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SourceSpec {
+    Git(GitSourceSpec),
+    Directory(DirectorySourceSpec),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SourceSpec {
+pub struct GitSourceSpec {
     pub repository: PathBuf,
     pub revision: String,
     #[serde(default)]
     pub public_patch: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectorySourceSpec {
+    pub directory: PathBuf,
+    #[serde(default)]
+    pub public_patch: Option<PathBuf>,
+}
+
+impl SourceSpec {
+    pub fn revision(&self) -> Option<&str> {
+        match self {
+            Self::Git(source) => Some(&source.revision),
+            Self::Directory(_) => None,
+        }
+    }
+
+    pub fn public_patch(&self) -> Option<&Path> {
+        match self {
+            Self::Git(source) => source.public_patch.as_deref(),
+            Self::Directory(source) => source.public_patch.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +104,10 @@ pub enum NetworkPolicy {
 pub struct GraderSpec {
     #[serde(default)]
     pub hidden_patch: Option<PathBuf>,
+    #[serde(default)]
+    pub reference_patch: Option<PathBuf>,
+    #[serde(default)]
+    pub mutation_patches: Vec<PathBuf>,
     pub commands: Vec<CommandSpec>,
 }
 
@@ -122,26 +157,57 @@ impl TaskManifest {
                 bail!("grader commands and timeouts must not be empty");
             }
         }
-        let repository = resolve_repository(task_dir, &self.source.repository)?;
-        if !repository.is_dir() {
-            bail!("source repository does not exist: {}", repository.display());
+        match &self.source {
+            SourceSpec::Git(source) => {
+                let repository = resolve_repository(task_dir, &source.repository)?;
+                if !repository.is_dir() {
+                    bail!("source repository does not exist: {}", repository.display());
+                }
+            }
+            SourceSpec::Directory(source) => {
+                let directory = resolve_public_path(task_dir, &source.directory)?;
+                fixture_files(&directory)?;
+                for private in self
+                    .grader
+                    .hidden_patch
+                    .iter()
+                    .chain(self.grader.reference_patch.iter())
+                    .chain(self.grader.mutation_patches.iter())
+                {
+                    if resolve_private_path(task_dir, private)?.starts_with(&directory) {
+                        bail!(
+                            "private grader material must not be inside the public fixture: {}",
+                            private.display()
+                        );
+                    }
+                }
+            }
         }
-        if let Some(path) = &self.source.public_patch {
+        if let Some(path) = self.source.public_patch() {
             resolve_public_path(task_dir, path)?;
         }
         if let Some(path) = &self.grader.hidden_patch {
+            resolve_private_path(task_dir, path)?;
+        }
+        if let Some(path) = &self.grader.reference_patch {
+            resolve_private_path(task_dir, path)?;
+        }
+        for path in &self.grader.mutation_patches {
             resolve_private_path(task_dir, path)?;
         }
         Ok(())
     }
 
     pub fn resolve_source_revision(&mut self, task_dir: &Path) -> Result<()> {
-        let repository = resolve_repository(task_dir, &self.source.repository)?;
+        let SourceSpec::Git(source) = &mut self.source else {
+            return Ok(());
+        };
+        let repository = resolve_repository(task_dir, &source.repository)?;
         let command = [
             String::from("git"),
             String::from("rev-parse"),
             String::from("--verify"),
-            format!("{}^{{commit}}", self.source.revision),
+            format!("{}^{{commit}}", source.revision),
         ];
         let outcome = run_trusted(&command, &repository, Duration::from_secs(30))?;
         if outcome.timed_out {
@@ -157,17 +223,35 @@ impl TaskManifest {
         if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             bail!("git returned a non-canonical source revision: {revision}");
         }
-        self.source.revision = revision;
+        source.revision = revision;
         Ok(())
     }
 
     pub fn public_digest(&self, task_dir: &Path) -> Result<String> {
         let mut public = self.clone();
-        public.source.repository = PathBuf::new();
+        match &mut public.source {
+            SourceSpec::Git(source) => source.repository = PathBuf::new(),
+            SourceSpec::Directory(source) => source.directory = PathBuf::new(),
+        }
         public.grader.hidden_patch = None;
+        public.grader.reference_patch = None;
+        public.grader.mutation_patches.clear();
         public.grader.commands.clear();
         let mut chunks = vec![toml::to_string(&public)?.into_bytes()];
-        if let Some(path) = &self.source.public_patch {
+        if let SourceSpec::Directory(source) = &self.source {
+            let directory = resolve_public_path(task_dir, &source.directory)?;
+            for path in fixture_files(&directory)? {
+                chunks.push(
+                    path.strip_prefix(&directory)?
+                        .as_os_str()
+                        .as_encoded_bytes()
+                        .to_vec(),
+                );
+                chunks.push(vec![u8::from(fixture_executable(&path)?)]);
+                chunks.push(fs::read(path)?);
+            }
+        }
+        if let Some(path) = self.source.public_patch() {
             chunks.push(fs::read(resolve_public_path(task_dir, path)?)?);
         }
         Ok(crate::cache::hash_chunks(&chunks))
@@ -178,7 +262,62 @@ impl TaskManifest {
         if let Some(path) = &self.grader.hidden_patch {
             chunks.push(fs::read(resolve_private_path(task_dir, path)?)?);
         }
+        if let Some(path) = &self.grader.reference_patch {
+            chunks.push(fs::read(resolve_private_path(task_dir, path)?)?);
+        }
+        for path in &self.grader.mutation_patches {
+            chunks.push(fs::read(resolve_private_path(task_dir, path)?)?);
+        }
         Ok(crate::cache::hash_chunks(&chunks))
+    }
+}
+
+pub(crate) fn fixture_files(directory: &Path) -> Result<Vec<PathBuf>> {
+    if !directory.is_dir() {
+        bail!("fixture source is not a directory: {}", directory.display());
+    }
+    let mut pending = vec![directory.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            if entry.file_name() == ".git" || kind.is_symlink() {
+                bail!(
+                    "fixture source must not contain .git or symlinks: {}",
+                    path.display()
+                );
+            }
+            if kind.is_dir() {
+                pending.push(path);
+            } else if fs::metadata(&path)?.is_file() {
+                files.push(path);
+            } else {
+                bail!(
+                    "fixture source contains a non-regular file: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    files.sort();
+    if files.is_empty() {
+        bail!("fixture source must contain at least one file");
+    }
+    Ok(files)
+}
+
+pub(crate) fn fixture_executable(path: &Path) -> Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = fs::metadata(path)?;
+        Ok(false)
     }
 }
 

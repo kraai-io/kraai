@@ -1,0 +1,117 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,31 +1,82 @@
+-#[derive(Debug, Clone, PartialEq, Eq)]
+-pub struct Job {
+-    pub id: String,
+-    pub dependencies: Vec<String>,
+-    pub resources: Vec<String>,
+-}
+-
+-#[derive(Debug, Clone, PartialEq, Eq)]
+-pub enum PlanError {
+-    ZeroCapacity,
+-    EmptyId,
+-    DuplicateId(String),
+-    UnknownDependency { job: String, dependency: String },
+-    UnknownCompleted(String),
+-    Blocked(Vec<String>),
+-}
+-
+-pub fn plan(
+-    jobs: &[Job],
+-    completed: &[String],
+-    capacity: usize,
+-) -> Result<Vec<Vec<String>>, PlanError> {
+-    if capacity == 0 {
+-        return Err(PlanError::ZeroCapacity);
+-    }
+-    Ok(jobs
+-        .iter()
+-        .filter(|job| !completed.contains(&job.id))
+-        .map(|job| vec![job.id.clone()])
+-        .collect())
+-}
++use std::collections::{BTreeMap, BTreeSet};
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Job {
++    pub id: String,
++    pub dependencies: Vec<String>,
++    pub resources: Vec<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum PlanError {
++    ZeroCapacity,
++    EmptyId,
++    DuplicateId(String),
++    UnknownDependency { job: String, dependency: String },
++    UnknownCompleted(String),
++    Blocked(Vec<String>),
++}
++
++pub fn plan(
++    jobs: &[Job],
++    completed: &[String],
++    capacity: usize,
++) -> Result<Vec<Vec<String>>, PlanError> {
++    if capacity == 0 {
++        return Err(PlanError::ZeroCapacity);
++    }
++    let mut by_id = BTreeMap::new();
++    for job in jobs {
++        if job.id.is_empty() {
++            return Err(PlanError::EmptyId);
++        }
++        if by_id.insert(job.id.as_str(), job).is_some() {
++            return Err(PlanError::DuplicateId(job.id.clone()));
++        }
++    }
++    for job in jobs {
++        for dependency in &job.dependencies {
++            if !by_id.contains_key(dependency.as_str()) {
++                return Err(PlanError::UnknownDependency {
++                    job: job.id.clone(),
++                    dependency: dependency.clone(),
++                });
++            }
++        }
++    }
++    let mut done = BTreeSet::new();
++    for id in completed {
++        if !by_id.contains_key(id.as_str()) {
++            return Err(PlanError::UnknownCompleted(id.clone()));
++        }
++        done.insert(id.as_str());
++    }
++    let mut waves = Vec::new();
++    while done.len() < by_id.len() {
++        let mut wave = Vec::new();
++        let mut reserved = BTreeSet::new();
++        for (&id, job) in &by_id {
++            if done.contains(id) || !job.dependencies.iter().all(|dependency| done.contains(dependency.as_str())) {
++                continue;
++            }
++            if job.resources.iter().any(|resource| reserved.contains(resource.as_str())) {
++                continue;
++            }
++            wave.push(id.to_owned());
++            reserved.extend(job.resources.iter().map(String::as_str));
++            if wave.len() == capacity {
++                break;
++            }
++        }
++        if wave.is_empty() {
++            return Err(PlanError::Blocked(by_id.keys().filter(|id| !done.contains(**id)).map(|id| (*id).to_owned()).collect()));
++        }
++        for id in &wave {
++            if let Some((key, _)) = by_id.get_key_value(id.as_str()) {
++                done.insert(*key);
++            }
++        }
++        waves.push(wave);
++    }
++    Ok(waves)
++}

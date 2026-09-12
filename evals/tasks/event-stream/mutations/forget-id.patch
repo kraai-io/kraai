@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -88,7 +88,7 @@
+             if !self.data.is_empty() {
+                 events.push(Event {
+                     event: if self.event.is_empty() { "message".into() } else { self.event.clone() },
+-                    id: self.id.clone(),
++                    id: None,
+                     data: self.data.join("\n"),
+                 });
+             }

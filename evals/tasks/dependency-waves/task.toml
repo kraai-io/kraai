@@ -1,0 +1,33 @@
+id = "dependency-waves"
+prompt = """
+Implement plan in src/lib.rs. Preserve the public Job and PlanError definitions and plan signature and keep existing public tests. You may change internals and add modules or tests. Jobs form a dependency graph; each job also names exclusive resources that cannot be shared by jobs in the same execution wave.
+
+plan(jobs, completed, capacity) returns waves of job IDs. A job is ready only when every dependency was completed before its wave. Completed jobs never appear in output, and completed need not be dependency-closed. In each wave, scan all ready unfinished jobs in lexicographic ID order using Rust string ordering. Greedily select up to capacity jobs whose resource sets do not intersect resources already selected in that wave. Skip conflicts and continue scanning. Every selected job completes at the end of that wave, then readiness is recomputed. Resource names are arbitrary strings, and duplicate dependencies/resources/completed IDs have set semantics. Input job ordering must not affect successful output.
+
+Validate in this exact order: capacity zero returns ZeroCapacity. Then scan jobs in input order, rejecting an empty ID as EmptyId and repeated ID as DuplicateId with that ID. Then scan jobs in input order and dependencies in listed order, returning UnknownDependency with the first missing job/dependency pair, even if that job is completed. Then scan completed in listed order, returning UnknownCompleted for the first ID not present in jobs. Empty resource names are allowed. Empty jobs with nonzero capacity and empty completed succeeds with zero waves.
+
+If unfinished jobs remain but none are ready, return Blocked containing all remaining unfinished IDs in lexicographic order, including downstream jobs, even if earlier waves could run. A self-dependency blocks unless its job was already completed. Cycles consisting entirely of completed jobs do not block anything. Return no partial plan on errors. Only these observable behaviors are graded; no internal algorithm or layout is required. The crate has no dependencies and must work offline.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/reverse-order.patch",
+  "mutations/ignore-resources.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern dependency_waves=\"$grade_dir/target/debug/libdependency_waves.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

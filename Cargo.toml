@@ -95,6 +95,7 @@ sha2 = "0.11.0"
 signal-hook = "0.3.18"
 syn = { version = "3.0.0", features = ["derive", "extra-traits", "full"] }
 tachyonfx = "0.25.1"
+terminal_size = "0.4.4"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.52.3" }

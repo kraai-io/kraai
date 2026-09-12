@@ -13,6 +13,7 @@
         ../Cargo.toml
         ../Cargo.nix
         ../crates
+        ../evals
         ../deny.toml
         ../justfile
       ];
@@ -38,7 +39,7 @@
       (member: member.name)
       (lib.filter (member: member.procMacro) workspaceMembers);
     workspaceTestInputs = {
-      "kraai-eval" = [pkgs.git];
+      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils rustToolchain];
     };
     darwinNestedSandboxTests = {
       "kraai-sandbox" = ["tests::macos::"];
@@ -144,12 +145,20 @@
       postInstall =
         (old.postInstall or "")
         + ''
-          wrapProgram "$out/bin/kraai-eval" --prefix PATH : ${lib.makeBinPath [
+          wrapProgram "$out/bin/kraai-eval" \
+            --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
+            --prefix PATH : ${lib.makeBinPath [
+            kraai
             pkgs.bubblewrap
+            pkgs.clang
             pkgs.coreutils
             pkgs.git
             pkgs.gnutar
+            pkgs.gnused
+            pkgs.pkg-config
+            pkgs.ripgrep
             pkgs.systemd
+            rustToolchain
           ]}
         '';
       meta =
@@ -181,6 +190,9 @@
             ];
           testPreRun = ''
             export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
+            ${lib.optionalString (name == "kraai-eval") ''
+              export KRAAI_EVAL_ASSETS=${../evals}
+            ''}
           '';
         };
       in

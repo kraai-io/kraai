@@ -9049,6 +9049,10 @@ rec {
             packageId = "sha2 0.11.0";
           }
           {
+            name = "terminal_size";
+            packageId = "terminal_size";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -9060,6 +9064,10 @@ rec {
           {
             name = "ulid";
             packageId = "ulid";
+          }
+          {
+            name = "unicode-width";
+            packageId = "unicode-width 0.2.2";
           }
         ];
 

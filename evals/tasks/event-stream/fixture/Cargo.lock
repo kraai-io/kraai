@@ -1,0 +1,5 @@
+version = 4
+
+[[package]]
+name = "event-stream"
+version = "0.1.0"
