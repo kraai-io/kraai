@@ -110,10 +110,10 @@
         + ''
           install -Dm755 ${nushellHost}/bin/kraai-nushell-host "$out/bin/kraai-nushell-host"
           wrapProgram "$out/bin/kraai" \
-            --prefix PATH : ${lib.makeBinPath [
-            pkgs.bubblewrap
-            pkgs.ripgrep
-          ]} \
+            --prefix PATH : ${lib.makeBinPath (
+            [pkgs.ripgrep]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
+          )} \
             --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
         '';
       meta =
@@ -168,10 +168,12 @@
       cargoTestMemberNames
     );
   in {
-    packages = {
-      inherit kraai kraai-eval;
-      default = kraai;
-    };
+    packages =
+      {
+        inherit kraai;
+        default = kraai;
+      }
+      // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {inherit kraai-eval;};
 
     checks =
       workspaceTestChecks

@@ -21,6 +21,8 @@ pub struct LaunchPlan {
     pub private_temp: PrivateTempConfig,
     #[cfg(unix)]
     pub private_ipc_connect_descriptors: Vec<std::os::fd::RawFd>,
+    #[cfg(unix)]
+    pub private_ipc_connect_paths: Vec<PathBuf>,
 }
 
 impl LaunchPlan {
@@ -42,6 +44,8 @@ impl LaunchPlan {
             private_temp: PrivateTempConfig::default(),
             #[cfg(unix)]
             private_ipc_connect_descriptors: Vec::new(),
+            #[cfg(unix)]
+            private_ipc_connect_paths: Vec::new(),
         }
     }
 

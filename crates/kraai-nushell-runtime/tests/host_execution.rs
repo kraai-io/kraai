@@ -231,7 +231,7 @@ async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
 async fn transport_descriptor_is_closed_before_external_commands_can_run() {
     let workspace = TestWorkspace::new();
     let mut execution = plan(
-        br#"^sh -c 'test ! -e /proc/self/fd/20'; "closed""#.to_vec(),
+        br#"^sh -c 'test ! -e /dev/fd/20 && printf "closed\n"'"#.to_vec(),
         &workspace,
     );
     execution
@@ -249,8 +249,8 @@ async fn transport_descriptor_is_closed_before_external_commands_can_run() {
 }
 
 #[tokio::test]
-#[cfg(target_os = "linux")]
-async fn private_transport_crosses_the_bubblewrap_boundary() {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn private_transport_crosses_the_sandbox_boundary() {
     let workspace = TestWorkspace::new();
     let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
@@ -278,6 +278,7 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
+        #[cfg(target_os = "linux")]
         Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
         Err(error) => panic!("sandboxed host execution failed: {error}"),
     };
@@ -295,7 +296,7 @@ async fn private_transport_crosses_the_bubblewrap_boundary() {
 }
 
 #[tokio::test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation() {
     let workspace = TestWorkspace::new();
     let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
@@ -325,6 +326,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
+        #[cfg(target_os = "linux")]
         Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
         Err(error) => panic!("sandboxed host execution failed: {error}"),
     };

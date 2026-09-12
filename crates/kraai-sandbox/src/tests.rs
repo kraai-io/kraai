@@ -8,11 +8,17 @@ use kraai_types::{SandboxCapabilities, SandboxCapability};
 use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
 use crate::{
-    BWRAP_SECCOMP_STDIN_FD, LaunchPlan, OutputStream, SandboxError, SeccompInstruction,
-    Termination, build_bwrap_args, build_bwrap_probe_args, bwrap_probe_failure_message, find_bwrap,
-    is_likely_sandbox_denied, restricted_network_seccomp_program, run, run_bwrap_sandbox_probe,
+    BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,
+    bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
+    run_bwrap_sandbox_probe,
 };
+use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandbox_denied, run};
+
+#[cfg(target_os = "macos")]
+#[path = "tests/macos.rs"]
+mod macos;
 
 #[cfg(target_os = "linux")]
 #[path = "tests/seccomp.rs"]

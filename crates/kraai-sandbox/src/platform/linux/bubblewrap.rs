@@ -16,7 +16,7 @@ use super::seccomp::restricted_network_seccomp_filter;
 const BWRAP_PROGRAM: &str = "bwrap";
 const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const BWRAP_SECCOMP_STDIN_FD: &str = "0";
-const PROTECTED_METADATA_NAMES: &[&str] = &[".git", ".jj", ".kraai", ".agents", ".codex"];
+use crate::platform::PROTECTED_METADATA_NAMES;
 
 type BwrapProbeCache = BTreeMap<(PathBuf, bool), Result<(), String>>;
 
