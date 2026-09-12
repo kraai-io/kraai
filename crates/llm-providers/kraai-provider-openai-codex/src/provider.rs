@@ -17,38 +17,18 @@ use tokio::sync::RwLock;
 use tracing::{error, warn};
 
 use crate::auth::{OpenAiCodexAuthController, OpenAiCodexRequestAuth};
-use crate::catalog::{CatalogModel, all_catalog_models, visible_catalog_models};
 use crate::messages::normalize_conversation;
+use crate::models::{DiscoveredModels, ModelMetadata};
 use crate::wire::{
-    ListModelEntry, ListModelsResponse, ResponsesCustomTool, ResponsesReasoning, ResponsesRequest,
-    ResponsesStreamEvent, ResponsesUsage,
+    ListModelsResponse, ResponsesCustomTool, ResponsesRequest, ResponsesStreamEvent, ResponsesUsage,
 };
 
 const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
+const CODEX_CLIENT_VERSION: &str = "0.154.0";
 
-#[derive(Clone)]
-struct ModelMetadata {
-    name: Option<String>,
-    max_context: Option<usize>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct RemoteModelMetadata {
-    title: Option<String>,
-    max_context: Option<usize>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedCatalogModel<'a> {
-    catalog_model: &'a CatalogModel,
-    reasoning_effort: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedRequestModel {
-    api_model: String,
-    reasoning: Option<ResponsesReasoning>,
-}
+#[cfg(test)]
+#[path = "discovery_tests.rs"]
+mod discovery_tests;
 
 fn valid_backend_url(value: &str) -> bool {
     Url::parse(value).is_ok_and(|url| {
@@ -239,7 +219,7 @@ impl OpenAiCodexFactory {
             id,
             auth: self.auth.clone(),
             client: build_streaming_http_client()?,
-            cached_models: RwLock::new(BTreeMap::new()),
+            models: RwLock::new(DiscoveredModels::default()),
             model_configs: BTreeMap::new(),
             base_url,
             proxy_token,
@@ -251,7 +231,7 @@ pub struct OpenAiCodexProvider {
     id: ProviderId,
     auth: Arc<OpenAiCodexAuthController>,
     client: Client,
-    cached_models: RwLock<BTreeMap<ModelId, Model>>,
+    models: RwLock<DiscoveredModels>,
     model_configs: BTreeMap<ModelId, ModelMetadata>,
     base_url: String,
     proxy_token: Option<String>,
@@ -264,29 +244,12 @@ impl Provider for OpenAiCodexProvider {
     }
 
     async fn list_models(&self) -> Vec<Model> {
-        self.cached_models.read().await.values().cloned().collect()
+        self.models.read().await.list(&self.model_configs)
     }
 
     async fn cache_models(&self) -> Result<()> {
-        let remote_availability = match self.fetch_remote_model_availability().await {
-            Ok(availability) => Some(availability),
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    "OpenAI Codex model discovery failed; using bundled model catalog"
-                );
-                None
-            }
-        };
-
-        let models = self.discovered_models(remote_availability.as_ref());
-        let mut cache = self.cached_models.write().await;
-        cache.clear();
-        for model in models {
-            cache.insert(model.id.clone(), model);
-        }
-        drop(cache);
-
+        let models = self.fetch_models().await?;
+        *self.models.write().await = models;
         Ok(())
     }
 
@@ -310,13 +273,8 @@ impl Provider for OpenAiCodexProvider {
         Ok(())
     }
 
-    fn script_tool_transport(&self, model_id: &ModelId) -> ScriptToolTransport {
-        resolve_catalog_model(model_id.as_str())
-            .ok()
-            .flatten()
-            .map_or(ScriptToolTransport::TextEnvelope, |_| {
-                ScriptToolTransport::NativeCustom
-            })
+    fn script_tool_transport(&self, _model_id: &ModelId) -> ScriptToolTransport {
+        ScriptToolTransport::NativeCustom
     }
 
     async fn generate_reply_stream(
@@ -538,101 +496,18 @@ impl OpenAiCodexProvider {
         auth.apply(builder)
     }
 
-    async fn fetch_remote_model_availability(
-        &self,
-    ) -> Result<BTreeMap<String, RemoteModelMetadata>> {
+    async fn fetch_models(&self) -> Result<DiscoveredModels> {
+        let mut url = Url::parse(&self.endpoint("codex/models"))?;
+        url.query_pairs_mut()
+            .append_pair("client_version", CODEX_CLIENT_VERSION);
         let request_context = ProviderRequestContext::default();
         let response = self
             .send_authenticated_request("list models", &request_context, |auth| {
-                self.authenticated_get(
-                    &format!(
-                        "{}?history_and_training_disabled=false",
-                        self.endpoint("models")
-                    ),
-                    auth,
-                )
+                self.authenticated_get(url.as_str(), auth)
             })
             .await?;
-        let models = response.json::<ListModelsResponse>().await?;
-
-        Ok(models
-            .into_models()
-            .into_iter()
-            .map(
-                |ListModelEntry {
-                     id,
-                     title,
-                     max_context,
-                 }| { (id, RemoteModelMetadata { title, max_context }) },
-            )
-            .collect())
-    }
-
-    fn discovered_models(
-        &self,
-        remote_availability: Option<&BTreeMap<String, RemoteModelMetadata>>,
-    ) -> Vec<Model> {
-        let models = visible_catalog_models()
-            .filter_map(|catalog_model| match remote_availability {
-                Some(availability) => availability
-                    .get(catalog_model.slug)
-                    .cloned()
-                    .map(|remote| (catalog_model, remote)),
-                None => Some((catalog_model, RemoteModelMetadata::default())),
-            })
-            .flat_map(|(catalog_model, remote)| self.expand_catalog_model(catalog_model, &remote))
-            .collect::<Vec<_>>();
-
-        if !models.is_empty() || remote_availability.is_none() {
-            return models;
-        }
-
-        warn!(
-            "OpenAI Codex remote model discovery returned no matching bundled models; falling back to bundled catalog"
-        );
-
-        visible_catalog_models()
-            .flat_map(|catalog_model| {
-                self.expand_catalog_model(catalog_model, &RemoteModelMetadata::default())
-            })
-            .collect()
-    }
-
-    fn expand_catalog_model(
-        &self,
-        catalog_model: &CatalogModel,
-        remote: &RemoteModelMetadata,
-    ) -> Vec<Model> {
-        catalog_model
-            .supported_reasoning_efforts
-            .iter()
-            .map(|effort| {
-                let variant_id = ModelId::new(format!("{}-{}", catalog_model.slug, effort.effort));
-                let variant_config = self.model_configs.get(&variant_id);
-                let base_config = self
-                    .model_configs
-                    .get(&ModelId::new(catalog_model.slug.to_string()));
-                let max_context = variant_config
-                    .and_then(|entry| entry.max_context)
-                    .or(base_config.and_then(|entry| entry.max_context))
-                    .or(catalog_model.max_context)
-                    .or(remote.max_context);
-
-                Model {
-                    id: variant_id,
-                    name: variant_config
-                        .and_then(|entry| entry.name.clone())
-                        .unwrap_or_else(|| {
-                            format!(
-                                "{} {}",
-                                display_name(catalog_model, remote.title.as_deref()),
-                                effort.effort
-                            )
-                        }),
-                    max_context,
-                }
-            })
-            .collect()
+        let response = response.json::<ListModelsResponse>().await?;
+        DiscoveredModels::new(response.models)
     }
 
     async fn send_responses_request(
@@ -641,22 +516,11 @@ impl OpenAiCodexProvider {
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
-        let expected_transport = self.script_tool_transport(model_id);
-        match (expected_transport, provider_request.script_tool.as_ref()) {
-            (ScriptToolTransport::NativeCustom, None) => {
-                return Err(eyre!(
-                    "OpenAI native-custom model request omitted the Kraai script tool"
-                ));
-            }
-            (ScriptToolTransport::TextEnvelope, Some(_)) => {
-                return Err(eyre!(
-                    "OpenAI text-envelope model request unexpectedly registered a native tool"
-                ));
-            }
-            _ => {}
+        if provider_request.script_tool.is_none() {
+            return Err(eyre!("OpenAI Codex request omitted the Kraai script tool"));
         }
         let normalized = normalize_conversation(provider_request.messages);
-        let resolved_model = resolve_request_model(model_id)?;
+        let resolved_model = self.models.read().await.resolve(model_id)?;
         let tools: Vec<ResponsesCustomTool> = provider_request
             .script_tool
             .into_iter()
@@ -751,77 +615,6 @@ fn apply_responses_session_headers(
     } else {
         builder
     }
-}
-
-fn resolve_request_model(model_id: &ModelId) -> Result<ResolvedRequestModel> {
-    let raw_model = model_id.to_string();
-    let Some(resolved) = resolve_catalog_model(&raw_model)? else {
-        return Ok(ResolvedRequestModel {
-            api_model: raw_model,
-            reasoning: None,
-        });
-    };
-
-    Ok(ResolvedRequestModel {
-        api_model: resolved.catalog_model.slug.to_string(),
-        reasoning: Some(ResponsesReasoning {
-            effort: resolved.reasoning_effort.to_string(),
-            context: "current_turn",
-        }),
-    })
-}
-
-fn resolve_catalog_model(raw_model: &str) -> Result<Option<ResolvedCatalogModel<'static>>> {
-    let matched = all_catalog_models()
-        .iter()
-        .filter(|model| {
-            raw_model == model.slug || raw_model.starts_with(&format!("{}-", model.slug))
-        })
-        .max_by_key(|model| model.slug.len());
-
-    let Some(catalog_model) = matched else {
-        return Ok(None);
-    };
-
-    if raw_model == catalog_model.slug {
-        return Ok(Some(ResolvedCatalogModel {
-            catalog_model,
-            reasoning_effort: catalog_model.default_reasoning_effort.to_string(),
-        }));
-    }
-
-    let suffix = raw_model
-        .strip_prefix(catalog_model.slug)
-        .and_then(|value| value.strip_prefix('-'))
-        .ok_or_else(|| eyre!("Invalid OpenAI Codex model id '{raw_model}'"))?;
-
-    if catalog_model
-        .supported_reasoning_efforts
-        .iter()
-        .any(|effort| effort.effort == suffix)
-    {
-        return Ok(Some(ResolvedCatalogModel {
-            catalog_model,
-            reasoning_effort: suffix.to_string(),
-        }));
-    }
-
-    Err(eyre!(
-        "OpenAI Codex model '{raw_model}' uses unsupported reasoning effort '{suffix}' for base model '{}'",
-        catalog_model.slug
-    ))
-}
-
-fn display_name(catalog_model: &CatalogModel, remote_title: Option<&str>) -> String {
-    if !catalog_model.display_name.trim().is_empty() {
-        return catalog_model.display_name.to_string();
-    }
-
-    remote_title
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or(catalog_model.slug)
-        .to_string()
 }
 
 async fn log_retryable_auth_failure(operation: &str, response: Response) {
@@ -919,7 +712,7 @@ mod tests {
             id: ProviderId::new("openai"),
             auth: Arc::new(auth),
             client,
-            cached_models: RwLock::new(BTreeMap::new()),
+            models: RwLock::new(DiscoveredModels::default()),
             model_configs: BTreeMap::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,
@@ -952,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_models_use_native_custom_tools_but_unknown_models_fall_back() {
+    fn codex_models_use_native_custom_tools() {
         let Some(provider) = provider() else {
             return;
         };
@@ -967,7 +760,7 @@ mod tests {
         );
         assert_eq!(
             provider.script_tool_transport(&ModelId::new("custom-experimental-model")),
-            ScriptToolTransport::TextEnvelope
+            ScriptToolTransport::NativeCustom
         );
     }
 
@@ -985,124 +778,6 @@ mod tests {
             "Bearer short-lived"
         );
         assert!(request.headers().get("chatgpt-account-id").is_none());
-    }
-
-    #[test]
-    fn resolve_unsuffixed_catalog_model_uses_default_reasoning_effort() {
-        let resolved = resolve_request_model(&ModelId::new("gpt-5.4")).unwrap();
-
-        assert_eq!(resolved.api_model, "gpt-5.4");
-        assert_eq!(
-            resolved.reasoning,
-            Some(ResponsesReasoning {
-                effort: "medium".to_string(),
-                context: "current_turn",
-            })
-        );
-    }
-
-    #[test]
-    fn resolve_suffixed_catalog_model_uses_requested_reasoning_effort() {
-        let resolved = resolve_request_model(&ModelId::new("gpt-5.5-high")).unwrap();
-
-        assert_eq!(resolved.api_model, "gpt-5.5");
-        assert_eq!(
-            resolved.reasoning,
-            Some(ResponsesReasoning {
-                effort: "high".to_string(),
-                context: "current_turn",
-            })
-        );
-    }
-
-    #[test]
-    fn resolve_unknown_model_passes_through_unchanged() {
-        let resolved = resolve_request_model(&ModelId::new("custom-experimental-model")).unwrap();
-
-        assert_eq!(resolved.api_model, "custom-experimental-model");
-        assert_eq!(resolved.reasoning, None);
-    }
-
-    #[test]
-    fn resolve_invalid_effort_suffix_returns_error() {
-        let error = resolve_request_model(&ModelId::new("gpt-5.5-minimal"))
-            .expect_err("unsupported effort should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported reasoning effort 'minimal'")
-        );
-    }
-
-    #[test]
-    fn discovered_models_expand_visible_catalog_entries_into_variants() {
-        let Some(provider) = provider() else {
-            return;
-        };
-        let models = provider
-            .discovered_models(None)
-            .into_iter()
-            .map(|model| (model.id.to_string(), model.name))
-            .collect::<BTreeMap<_, _>>();
-
-        assert!(models.contains_key("gpt-5.5-low"));
-        assert!(models.contains_key("gpt-6-astra-ultra"));
-        assert!(models.contains_key("gpt-5.5-medium"));
-        assert!(models.contains_key("gpt-5.5-high"));
-        assert_eq!(
-            models.get("gpt-5.5-xhigh").map(String::as_str),
-            Some("gpt-5.5 xhigh")
-        );
-        assert!(models.contains_key("gpt-5.2-medium"));
-        assert!(!models.contains_key("gpt-5.4-mini-medium"));
-        assert!(!models.contains_key("codex-auto-review-medium"));
-    }
-
-    #[test]
-    fn discovered_models_intersect_remote_availability() {
-        let Some(provider) = provider() else {
-            return;
-        };
-        let remote = BTreeMap::from([(
-            "gpt-5.5".to_string(),
-            RemoteModelMetadata {
-                title: Some("ignored".to_string()),
-                max_context: Some(111),
-            },
-        )]);
-
-        let discovered = provider.discovered_models(Some(&remote));
-        let ids = discovered
-            .into_iter()
-            .map(|model| model.id.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(ids.contains(&"gpt-5.5-low".to_string()));
-        assert!(!ids.contains(&"gpt-5.2-low".to_string()));
-    }
-
-    #[test]
-    fn discovered_models_fall_back_when_remote_matches_nothing() {
-        let Some(provider) = provider() else {
-            return;
-        };
-        let remote = BTreeMap::from([(
-            "totally-different-model".to_string(),
-            RemoteModelMetadata {
-                title: Some("Different".to_string()),
-                max_context: Some(123),
-            },
-        )]);
-
-        let discovered = provider.discovered_models(Some(&remote));
-        let ids = discovered
-            .into_iter()
-            .map(|model| model.id.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(ids.contains(&"gpt-5.5-low".to_string()));
-        assert!(ids.contains(&"gpt-5.2-low".to_string()));
     }
 
     #[test]

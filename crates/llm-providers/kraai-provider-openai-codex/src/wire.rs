@@ -37,30 +37,22 @@ pub struct ResponsesCustomTool {
 
 #[derive(Deserialize)]
 pub struct ListModelsResponse {
-    #[serde(default)]
-    pub data: Vec<ListModelEntry>,
-    #[serde(default)]
     pub models: Vec<ListModelEntry>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ListModelEntry {
-    #[serde(alias = "slug")]
-    pub id: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default, alias = "max_tokens")]
-    pub max_context: Option<usize>,
+    pub slug: String,
+    pub display_name: String,
+    pub visibility: String,
+    pub context_window: Option<usize>,
+    pub default_reasoning_level: Option<String>,
+    pub supported_reasoning_levels: Vec<ReasoningLevel>,
 }
 
-impl ListModelsResponse {
-    pub fn into_models(self) -> Vec<ListModelEntry> {
-        if !self.data.is_empty() {
-            self.data
-        } else {
-            self.models
-        }
-    }
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReasoningLevel {
+    pub effort: String,
 }
 
 #[derive(Deserialize)]
