@@ -57,7 +57,7 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
                     .join("auth.json"),
             ),
         )?),
-        client: build_codex_http_client(true)?,
+        client: build_codex_http_client(true, &base_url)?,
         models: RwLock::new(DiscoveredModels::default()),
         model_configs: BTreeMap::new(),
         base_url,
@@ -145,10 +145,12 @@ async fn unsafe_backends_are_rejected_before_loading_auth_or_building_requests()
     Ok(())
 }
 
-#[tokio::test]
-async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<()> {
+async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
+    let response = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await?;
         let mut buffer = [0_u8; 4096];
@@ -156,10 +158,38 @@ async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<(
             stream.read(&mut buffer).await? > 0,
             "missing redirect request"
         );
-        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://example.com/backend-api/codex/models\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+        stream.write_all(response.as_bytes()).await?;
         Ok::<_, color_eyre::Report>(())
     });
-    let provider = provider(format!("http://{address}/backend-api"))?;
+    Ok((format!("http://{address}/backend-api"), server))
+}
+
+#[tokio::test]
+async fn subscription_redirect_policy_rejects_cross_origin_https_targets() -> Result<()> {
+    let origin = Url::parse("https://backend.example/backend-api")?.origin();
+    for target in [
+        "https://elsewhere.example/codex/models",
+        "https://backend.example:8443/codex/models",
+    ] {
+        let (base_url, server) = redirect_server(target).await?;
+        let client = streaming_http_client_builder()
+            .redirect(codex_redirect_policy(false, origin.clone()))
+            .build()?;
+        let result = client
+            .get(base_url)
+            .header("ChatGPT-Account-Id", "test-account")
+            .send()
+            .await;
+        assert!(result.is_err_and(|error| error.is_redirect()), "{target}");
+        server.await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<()> {
+    let (base_url, server) = redirect_server("http://example.com/backend-api/codex/models").await?;
+    let provider = provider(base_url)?;
     let result = provider.cache_models().await;
     assert!(result.is_err_and(|error| {
         error
@@ -172,7 +202,7 @@ async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<(
 
 #[tokio::test]
 async fn subscription_client_rejects_http_requests() -> Result<()> {
-    let result = build_codex_http_client(false)?
+    let result = build_codex_http_client(false, DEFAULT_CHATGPT_BACKEND_URL)?
         .get("http://127.0.0.1:1/backend-api/codex/models")
         .send()
         .await;

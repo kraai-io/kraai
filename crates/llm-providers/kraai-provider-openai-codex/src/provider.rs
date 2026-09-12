@@ -53,19 +53,30 @@ fn valid_backend_transport(url: &Url, proxy_token: bool) -> bool {
             })
 }
 
-fn build_codex_http_client(proxy_token: bool) -> reqwest::Result<Client> {
-    streaming_http_client_builder()
+fn codex_redirect_policy(proxy_token: bool, origin: url::Origin) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if !valid_backend_transport(attempt.url(), proxy_token) {
+            attempt.error(BACKEND_URL_ERROR)
+        } else if !proxy_token && attempt.url().origin() != origin {
+            attempt.error(
+                "OpenAI Codex subscription redirects must stay on the configured backend origin",
+            )
+        } else if attempt.previous().len() >= 10 {
+            attempt.error("too many redirects")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+fn build_codex_http_client(proxy_token: bool, base_url: &str) -> Result<Client> {
+    Ok(streaming_http_client_builder()
         .https_only(!proxy_token)
-        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if !valid_backend_transport(attempt.url(), proxy_token) {
-                attempt.error(BACKEND_URL_ERROR)
-            } else if attempt.previous().len() >= 10 {
-                attempt.error("too many redirects")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
+        .redirect(codex_redirect_policy(
+            proxy_token,
+            Url::parse(base_url)?.origin(),
+        ))
+        .build()?)
 }
 
 fn valid_environment_name(value: &str) -> bool {
@@ -249,7 +260,7 @@ impl OpenAiCodexFactory {
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
-            client: build_codex_http_client(proxy_token.is_some())?,
+            client: build_codex_http_client(proxy_token.is_some(), &base_url)?,
             models: RwLock::new(DiscoveredModels::default()),
             model_configs: BTreeMap::new(),
             base_url,
