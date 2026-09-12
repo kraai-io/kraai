@@ -6,6 +6,7 @@ mod error;
 mod http_client;
 mod http_retry;
 mod manager;
+mod pricing;
 mod provider;
 mod registry;
 mod sse;

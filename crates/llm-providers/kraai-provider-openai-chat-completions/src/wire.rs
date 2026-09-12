@@ -42,6 +42,10 @@ pub struct ChatCompletionChunkDelta {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChatCompletionUsage {
     #[serde(default)]
+    pub cost: Option<serde_json::Value>,
+    #[serde(default)]
+    pub cost_details: Option<serde_json::Value>,
+    #[serde(default)]
     pub prompt_tokens: usize,
     #[serde(default)]
     pub completion_tokens: usize,
@@ -57,6 +61,8 @@ pub struct ChatCompletionUsage {
 pub struct PromptTokenDetails {
     #[serde(default)]
     pub cached_tokens: Option<usize>,
+    #[serde(default)]
+    pub cache_write_tokens: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -238,6 +238,9 @@ impl RuntimeBuilder {
             message_store,
             session_store,
             context_state_store.clone(),
+            Arc::new(kraai_persistence::RequestUsageStore::new(
+                &kraai_persistence::get_data_dir()?,
+            )),
         )));
 
         let runtime = RuntimeCore {

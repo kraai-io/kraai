@@ -20,6 +20,9 @@ use super::types::{
 };
 
 pub(super) struct AppState {
+    pub(super) session_cost: kraai_types::CostSummary,
+    pub(super) launch_requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
+    pub(super) launched_at: u64,
     pub(super) exit: bool,
     pub(super) input: String,
     pub(super) input_cursor: usize,
@@ -88,6 +91,14 @@ pub(super) struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            session_cost: Default::default(),
+            launch_requests: BTreeMap::new(),
+            launched_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
             exit: false,
             input: String::new(),
             input_cursor: 0,

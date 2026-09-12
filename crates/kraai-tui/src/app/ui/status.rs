@@ -16,6 +16,8 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
             Style::default().fg(statusline_activity_color(state)),
         ),
         separator.clone(),
+        Span::raw(format!("Session {}", state.session_cost)),
+        separator.clone(),
         Span::raw(statusline_model_label(state)),
         separator.clone(),
         Span::raw(statusline_agent_label(state)),

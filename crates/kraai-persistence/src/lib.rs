@@ -15,6 +15,8 @@ use ulid::Ulid;
 mod context;
 mod executions;
 mod turns;
+mod usage;
+pub use usage::RequestUsageStore;
 
 pub use context::{
     ContextStateEvent, ContextStateEventSource, ContextStateMutation, ContextStateStore,

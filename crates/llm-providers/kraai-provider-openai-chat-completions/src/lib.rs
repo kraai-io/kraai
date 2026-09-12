@@ -7,3 +7,5 @@ mod provider;
 mod wire;
 
 pub use provider::{OpenAiChatCompletionsFactory, OpenAiFactory};
+
+mod usage;

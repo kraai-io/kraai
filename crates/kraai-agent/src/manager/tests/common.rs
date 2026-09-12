@@ -87,6 +87,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         message_store,
         session_store,
         context_state_store,
+        Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
     );
     manager.user_agents_path = Some(data_dir.join(AGENTS_MD_FILE_NAME));
     (manager, data_dir)

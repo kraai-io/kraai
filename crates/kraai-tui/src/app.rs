@@ -23,6 +23,7 @@ use crate::components::TextInput;
 
 mod auth;
 mod chat;
+mod cost;
 mod lifecycle;
 mod providers_flow;
 mod runtime_bridge;
@@ -166,6 +167,9 @@ impl App {
             model_usage.reasoning_tokens = model_usage
                 .reasoning_tokens
                 .saturating_add(usage.reasoning_tokens);
+            model_usage.cache_write_tokens = model_usage
+                .cache_write_tokens
+                .saturating_add(usage.cache_write_tokens);
             model_usage.cache_read_tokens = model_usage
                 .cache_read_tokens
                 .saturating_add(usage.cache_read_tokens);

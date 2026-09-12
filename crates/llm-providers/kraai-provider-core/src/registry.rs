@@ -80,6 +80,12 @@ impl ProviderRegistry {
         }
 
         definition.type_id = key.clone();
+        definition
+            .provider_fields
+            .extend(crate::pricing::pricing_fields(false));
+        definition
+            .model_fields
+            .extend(crate::pricing::pricing_fields(true));
 
         let entry = FactoryEntry {
             definition,
@@ -118,7 +124,17 @@ impl ProviderRegistry {
             .factories
             .get(type_id)
             .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
-        Ok((entry.validate_provider_config)(config))
+        let mut errors = (entry.validate_provider_config)(config);
+        if config
+            .get("pricing_provider")
+            .is_some_and(|value| value.as_str().is_none())
+        {
+            errors.push(ValidationError {
+                field: String::from("pricing_provider"),
+                message: String::from("Pricing provider must be a models.dev provider ID"),
+            });
+        }
+        Ok(errors)
     }
 
     pub fn validate_model_config(
@@ -130,7 +146,9 @@ impl ProviderRegistry {
             .factories
             .get(type_id)
             .ok_or_else(|| ProviderError::UnknownProviderType(type_id.to_string()))?;
-        Ok((entry.validate_model_config)(config))
+        let mut errors = (entry.validate_model_config)(config);
+        errors.extend(crate::pricing::validate_pricing_config(config));
+        Ok(errors)
     }
 
     pub(crate) fn create_provider(

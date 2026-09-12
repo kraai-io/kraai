@@ -65,6 +65,7 @@ impl RuntimeCore {
         };
 
         Ok(SessionSnapshot {
+            requests: data.requests,
             turn_timer,
             event_sequence,
             session,

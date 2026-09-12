@@ -46,6 +46,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
                 output_tokens: 8,
                 reasoning_tokens: 5,
                 cache_read_tokens: 0,
+                ..Default::default()
             }),
         ],
         vec![ScriptedChunk::plain("The requested escalation was denied.")],
@@ -166,6 +167,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
                 output_tokens: 12,
                 reasoning_tokens: 6,
                 cache_read_tokens: 4,
+                    ..Default::default()
             }),
         ],
         vec![ScriptedChunk::plain("The requested escalation was denied.")],
@@ -325,6 +327,7 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
         output_tokens: 12,
         reasoning_tokens: 6,
         cache_read_tokens: 4,
+        ..Default::default()
     }));
     let Some(harness) = RuntimeTestHarness::new(vec![chunks]).await else {
         return Ok(());

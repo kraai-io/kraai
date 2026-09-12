@@ -282,6 +282,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
             output_tokens: 20,
             reasoning_tokens: 3,
             cache_read_tokens: 7,
+            ..Default::default()
         }),
     ]])
     .await

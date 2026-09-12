@@ -26,6 +26,7 @@ mod prompts;
 mod sessions;
 mod snapshot;
 mod streaming;
+mod usage;
 
 pub use snapshot::{SessionSnapshotData, SessionSnapshotReader};
 
@@ -128,9 +129,12 @@ struct StreamingMessageState {
     previous_title: Option<String>,
     message: Message,
     text_item_ids: HashMap<String, usize>,
+    request_started_at: u64,
+    subscription: bool,
 }
 
 pub struct AgentManager {
+    usage_store: Arc<kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
     user_agents_path: Option<PathBuf>,

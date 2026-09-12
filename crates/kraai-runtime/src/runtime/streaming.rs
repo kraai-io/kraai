@@ -557,6 +557,19 @@ impl RuntimeCore {
             }),
             session_id.clone(),
         );
+        {
+            let _state_guard = session_state_barrier.read().await;
+            if let Err(error) = agent_manager
+                .read()
+                .await
+                .record_request_started(&message_id)
+                .await
+            {
+                return StreamDriveResult::FailedToStart {
+                    error: error.to_string(),
+                };
+            }
+        }
         let mut stream = match providers
             .generate_reply_stream(provider_id, &model_id, provider_request, request_context)
             .await
@@ -776,8 +789,14 @@ impl RuntimeCore {
                 Ok(ProviderStreamEvent::Usage(usage)) => {
                     let _state_guard = session_state_barrier.read().await;
                     let agent = agent_manager.read().await;
-                    if !agent.set_streaming_message_usage(&message_id, usage).await {
-                        return StreamDriveResult::Stopped;
+                    match agent.set_streaming_message_usage(&message_id, usage).await {
+                        Ok(true) => {}
+                        Ok(false) => return StreamDriveResult::Stopped,
+                        Err(error) => {
+                            return StreamDriveResult::FailedDuringStream {
+                                error: error.to_string(),
+                            };
+                        }
                     }
                     drop(agent);
                     if draining_after_boundary {

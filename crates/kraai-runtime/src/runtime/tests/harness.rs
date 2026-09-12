@@ -353,6 +353,7 @@ path = \"inherit\"\n",
             message_store,
             session_store,
             context_state_store.clone(),
+            Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
         )));
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()

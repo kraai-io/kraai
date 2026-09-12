@@ -360,6 +360,9 @@ impl AgentManager {
             ))));
         }
 
+        let subscription = generation
+            .as_ref()
+            .is_some_and(|generation| self.providers.is_subscription(&generation.provider_id));
         let appended = self
             .conversation_store
             .append_message(AppendMessageRequest {
@@ -381,6 +384,13 @@ impl AgentManager {
                 previous_title: appended.previous_title,
                 message: appended.message,
                 text_item_ids: HashMap::new(),
+                subscription,
+                request_started_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
             },
         );
         Ok(message_id)
@@ -464,23 +474,6 @@ impl AgentManager {
         });
         drop(streaming);
         Some(visible)
-    }
-
-    pub async fn set_streaming_message_usage(
-        &self,
-        message_id: &MessageId,
-        usage: TokenUsage,
-    ) -> bool {
-        let mut streaming = self.streaming_messages.write().await;
-        if let Some(state) = streaming.get_mut(message_id)
-            && let Some(generation) = state.message.generation.as_mut()
-        {
-            generation.usage = Some(usage);
-            drop(streaming);
-            return true;
-        }
-        drop(streaming);
-        false
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {

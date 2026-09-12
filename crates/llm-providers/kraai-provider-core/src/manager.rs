@@ -16,11 +16,16 @@ use crate::stream::ProviderStreamEvent;
 #[derive(Default, Clone)]
 pub struct ProviderManager {
     providers: BTreeMap<ProviderId, Arc<dyn Provider>>,
+    pricing: crate::pricing::Pricing,
 }
 
 impl ProviderManager {
     const PROVIDER_INITIALIZATION_CONCURRENCY: usize = 8;
     const MODEL_CACHE_REFRESH_CONCURRENCY: usize = 8;
+
+    pub fn is_subscription(&self, provider: &ProviderId) -> bool {
+        self.pricing.is_subscription(provider)
+    }
 
     pub fn new() -> Self {
         Self::default()
@@ -47,6 +52,7 @@ impl ProviderManager {
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
     ) -> Result<()> {
+        let pricing = crate::pricing::Pricing::new(&config)?;
         let mut provider_types = BTreeMap::new();
         let mut provider_configs = BTreeMap::new();
         let mut models_by_provider: BTreeMap<ProviderId, Vec<ModelConfig>> = BTreeMap::new();
@@ -135,6 +141,8 @@ impl ProviderManager {
             .map(|(id, provider)| (id, Arc::from(provider)))
             .collect();
 
+        self.pricing = pricing;
+        self.pricing.start().await;
         self.providers = providers;
         self.update_models_list().await
     }
@@ -227,9 +235,10 @@ impl ProviderManager {
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        provider
+        let stream = provider
             .generate_reply_stream(model_id, request, &request_context)
-            .await
+            .await?;
+        Ok(self.pricing.apply(&provider_id, model_id, stream).await)
     }
 }
 

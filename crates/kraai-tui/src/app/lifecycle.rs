@@ -167,7 +167,8 @@ impl App {
 
     pub fn exit_token_usage_summary(&self) -> Option<String> {
         if self.state.exit_usage_totals.usage_by_model.is_empty() {
-            return None;
+            let lines = self.exit_cost_summary();
+            return (!lines.is_empty()).then(|| lines.join("\n"));
         }
 
         let mut lines = vec![String::from("Token usage since launch:")];
@@ -184,6 +185,7 @@ impl App {
         }
 
         lines.push(format!("  total: {}", format_exit_usage_fields(&total)));
+        lines.extend(self.exit_cost_summary());
         Some(lines.join("\n"))
     }
 
@@ -210,6 +212,7 @@ impl App {
                     "output_tokens": usage.output_tokens,
                     "reasoning_tokens": usage.reasoning_tokens,
                     "cache_read_tokens": usage.cache_read_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
                 })
             });
         serde_json::json!({
@@ -218,6 +221,7 @@ impl App {
             "script_executions": script_executions,
             "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
             "usage": usage,
+            "request_costs": self.state.launch_requests,
         })
     }
 
@@ -319,6 +323,9 @@ fn accumulate_token_usage(
     total.reasoning_tokens = total
         .reasoning_tokens
         .saturating_add(usage.reasoning_tokens);
+    total.cache_write_tokens = total
+        .cache_write_tokens
+        .saturating_add(usage.cache_write_tokens);
     total.cache_read_tokens = total
         .cache_read_tokens
         .saturating_add(usage.cache_read_tokens);

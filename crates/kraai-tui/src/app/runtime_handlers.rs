@@ -92,6 +92,9 @@ impl App {
                         self.ci_metrics_context_pending = true;
                     }
                 }
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    self.request_sync_for_session(&session_id);
+                }
                 self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamError {
@@ -112,6 +115,9 @@ impl App {
                     self.request_sync_for_session(&session_id);
                 }
                 self.fail_ci(format!("Stream error: {error}"));
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    self.request_sync_for_session(&session_id);
+                }
                 self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamCancelled {
@@ -128,6 +134,9 @@ impl App {
                         .remove(&MessageId::new(message_id));
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.status = String::from("Stream cancelled");
+                    self.request_sync_for_session(&session_id);
+                }
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     self.request_sync_for_session(&session_id);
                 }
                 self.request(RuntimeRequest::ListSessions);
@@ -501,6 +510,7 @@ impl App {
                             .insert(session_id.clone(), snapshot.event_sequence);
                         self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
+                        self.update_costs(&session_id, snapshot.requests);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                             self.state.turn_timer = snapshot.turn_timer;
                             self.state.current_tip_id = snapshot.session.tip_id.clone();

@@ -239,6 +239,7 @@ pub enum SessionActivity {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
+    pub requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub turn_timer: crate::TurnTimer,
     /// The snapshot contains this session's state represented by events through this global
     /// sequence. After installing it, discard covered events for this session only; unrelated

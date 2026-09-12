@@ -9233,8 +9233,16 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "atomic-write-file";
+            packageId = "atomic-write-file";
+          }
+          {
             name = "color-eyre";
             packageId = "color-eyre";
+          }
+          {
+            name = "directories";
+            packageId = "directories";
           }
           {
             name = "futures";
@@ -9261,6 +9269,10 @@ rec {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
           {
             name = "thiserror";
