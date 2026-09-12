@@ -438,11 +438,11 @@ fn short_help_scrolls_to_final_binding_and_resets_on_reopen() {
     harness.app.handle_command("help");
     let first = screen(&harness.app.state, 90, 8);
     assert!(first.contains("Commands"));
-    assert!(!first.contains("Esc closes menus"));
+    assert!(!first.contains("Close / cancel"));
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    assert!(screen(&harness.app.state, 90, 8).contains("Esc closes menus"));
+    assert!(screen(&harness.app.state, 90, 8).contains("Close / cancel"));
     let end = harness.app.state.help_scroll.get();
     harness
         .app
@@ -451,7 +451,7 @@ fn short_help_scrolls_to_final_binding_and_resets_on_reopen() {
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert!(screen(&harness.app.state, 90, 8).contains("Esc closes menus"));
+    assert!(screen(&harness.app.state, 90, 8).contains("Close / cancel"));
     screen(&harness.app.state, 90, 30);
     assert_eq!(harness.app.state.help_scroll.get(), 0);
     harness

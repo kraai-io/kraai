@@ -217,29 +217,23 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 }
 
 pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let popup_area = centered_rect(area.width, area.height, area);
-
     let lines = vec![
         Line::styled("Commands", Style::default().add_modifier(Modifier::BOLD)),
-        Line::raw("/agent /model /providers  Configure agent and model"),
-        Line::raw("/sessions /new /undo /continue /quit"),
+        Line::raw("/agent /model /providers /sessions"),
+        Line::raw("/new /undo /continue /quit"),
         Line::raw(""),
-        Line::styled("Composer", Style::default().add_modifier(Modifier::BOLD)),
-        Line::raw("Enter send · Shift+Enter newline · Up/Down recall"),
-        Line::raw("Ctrl+←/→ or Alt+B/F move by word"),
-        Line::raw("Ctrl+W delete previous word · Ctrl+Del delete next"),
-        Line::raw("Ctrl+E edit prompt with VISUAL / EDITOR"),
-        Line::raw(""),
-        Line::styled("Transcript", Style::default().add_modifier(Modifier::BOLD)),
-        Line::raw("PgUp/PgDn scroll · Home/End first/latest"),
-        Line::raw("F6 execution view · ↑/↓ select · Enter toggle · Esc close"),
-        Line::raw("Execution time excludes approval waiting"),
-        Line::raw(""),
-        Line::raw("Menus: type to filter · Enter select · Delete session"),
-        Line::raw("Approval: ↑/↓ or PgUp/PgDn scroll · f expand"),
-        Line::raw("Approval: Home/End first/last · ←/→ select · Enter confirm"),
-        Line::raw("Esc closes menus or stops the active turn"),
+        Line::raw("Enter        Send       Shift+Enter  Newline"),
+        Line::raw("↑/↓          History    Ctrl+E       Editor"),
+        Line::raw("Ctrl+←/→     Move word  Ctrl+W       Delete word"),
+        Line::raw("PgUp/PgDn    Scroll     Home/End     First/last"),
+        Line::raw("F6           Executions"),
+        Line::raw("Esc          Close / cancel"),
     ];
+    let popup_area = centered_rect(
+        area.width.min(52),
+        area.height.min(lines.len() as u16 + 2),
+        area,
+    );
 
     let max_scroll =
         (lines.len() as u16).saturating_sub(popup_area.height.saturating_sub(2).max(1));
@@ -250,7 +244,7 @@ pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         .scroll((scroll, 0))
         .block(
             Block::default()
-                .title("/help · ↑/↓ scroll · Esc close")
+                .title("Help · ↑/↓ scroll · Esc close")
                 .borders(Borders::ALL),
         )
         .render(popup_area, buf);
