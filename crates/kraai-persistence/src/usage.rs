@@ -109,7 +109,19 @@ impl RequestUsageStore {
         if revision != cache.revision.load(Ordering::Acquire) {
             return Ok(false);
         }
-        *cache.requests.write().await = Some(requests?);
+        let requests = match requests {
+            Ok(requests) => requests,
+            Err(error) => {
+                let cached = cache.requests.read().await.is_some();
+                drop(io);
+                if cached {
+                    tracing::warn!(%error, "Using cached request usage after refresh failed");
+                    return Ok(true);
+                }
+                return Err(error);
+            }
+        };
+        *cache.requests.write().await = Some(requests);
         cache.revision.fetch_add(1, Ordering::Release);
         drop(io);
         Ok(true)
@@ -157,6 +169,32 @@ mod tests {
             unpriced_attempts: 0,
             usage: None,
         }
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_uses_initialized_cache_and_recovers() -> Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
+        let store = RequestUsageStore::new(&directory);
+        let mut request = request();
+        store.save("session", &request).await?;
+        let cached = store.load("session").await?;
+        let receipt_path = store.session_dir("session")?.join("request.json");
+        fs::write(&receipt_path, b"invalid json").await?;
+        store.refresh("session").await?;
+        assert_eq!(store.load("session").await?, cached);
+        let cold = RequestUsageStore::new(&directory);
+        assert!(cold.refresh("session").await.is_err());
+        assert!(cold.load("session").await.is_err());
+        request.unpriced_attempts = 1;
+        cold.save("session", &request).await?;
+        store.refresh("session").await?;
+        assert_eq!(
+            store.load("session").await?.get(&request.message_id),
+            Some(&request)
+        );
+        fs::remove_dir_all(directory).await?;
+        Ok(())
     }
 
     #[tokio::test]

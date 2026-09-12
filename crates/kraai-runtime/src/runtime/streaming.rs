@@ -228,7 +228,9 @@ impl RuntimeCore {
             },
         );
         if let Some(previous) = previous {
+            let agent = self.agent_manager.write().await;
             previous.abort_handle.abort();
+            drop(agent);
         }
         if !context_notifications.is_empty() {
             emit_event(
@@ -899,10 +901,9 @@ impl RuntimeCore {
             return Ok(self.cancel_active_script(&session_id).await);
         };
 
-        active_stream.abort_handle.abort();
-
         let cancelled_stream = {
             let mut agent = self.agent_manager.write().await;
+            active_stream.abort_handle.abort();
             let cancelled = match agent
                 .cancel_streaming_message(&active_stream.message_id)
                 .await

@@ -80,12 +80,14 @@ impl ProviderRegistry {
         }
 
         definition.type_id = key.clone();
-        definition
-            .provider_fields
-            .extend(crate::pricing::pricing_fields(false));
-        definition
-            .model_fields
-            .extend(crate::pricing::pricing_fields(true));
+        if key != "openai-codex" {
+            definition
+                .provider_fields
+                .extend(crate::pricing::pricing_fields(false));
+            definition
+                .model_fields
+                .extend(crate::pricing::pricing_fields(true));
+        }
 
         let entry = FactoryEntry {
             definition,
@@ -176,6 +178,38 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::test_support::{MockFactory, MockProvider, simple_provider_definition};
+
+    #[test]
+    fn pricing_fields_are_only_exposed_for_metered_providers() -> Result<()> {
+        let mut registry = ProviderRegistry::default();
+        for type_id in ["openai-codex", "openai"] {
+            registry.register_dynamic_factory(
+                type_id,
+                simple_provider_definition("Provider", "Provider", false, type_id),
+                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )?;
+            let definition = registry
+                .get_definition(type_id)
+                .ok_or_else(|| eyre!("missing definition"))?;
+            assert_eq!(
+                definition
+                    .provider_fields
+                    .iter()
+                    .any(|field| field.key == "pricing_provider"),
+                type_id == "openai"
+            );
+            assert_eq!(
+                definition
+                    .model_fields
+                    .iter()
+                    .any(|field| field.key.starts_with("price_")),
+                type_id == "openai"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_registry_registration() -> Result<()> {

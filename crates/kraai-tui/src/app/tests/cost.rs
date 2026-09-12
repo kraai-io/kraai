@@ -1,3 +1,4 @@
+use super::super::UsageModelKey;
 use super::*;
 
 fn pending_request(id: &str) -> kraai_types::RequestUsage {
@@ -10,6 +11,25 @@ fn pending_request(id: &str) -> kraai_types::RequestUsage {
         unpriced_attempts: 0,
         usage: None,
     }
+}
+
+#[test]
+fn evaluation_metrics_preserve_cache_write_only_usage() {
+    let mut harness = test_harness();
+    harness.app.state.exit_usage_totals.usage_by_model.insert(
+        UsageModelKey {
+            provider_id: "provider".into(),
+            model_id: "model".into(),
+        },
+        kraai_types::TokenUsage {
+            cache_write_tokens: 42,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        harness.app.evaluation_metrics()["usage"]["cache_write_tokens"],
+        42
+    );
 }
 
 #[test]

@@ -204,7 +204,8 @@ impl App {
             || usage.input_tokens != 0
             || usage.output_tokens != 0
             || usage.reasoning_tokens != 0
-            || usage.cache_read_tokens != 0)
+            || usage.cache_read_tokens != 0
+            || usage.cache_write_tokens != 0)
             .then(|| {
                 serde_json::json!({
                     "total_tokens": usage.total_tokens,
