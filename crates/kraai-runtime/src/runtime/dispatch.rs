@@ -18,6 +18,8 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 
 impl RuntimeCore {
     pub(super) async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
+        let usage_store = self.agent_manager.read().await.request_usage_store();
+        usage_store.refresh(session_id).await?;
         let snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;

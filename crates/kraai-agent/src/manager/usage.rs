@@ -12,27 +12,51 @@ impl AgentManager {
             model_id: generation.model_id.clone(),
             started_at: state.request_started_at,
             subscription: state.subscription,
+            unpriced_attempts: state.unpriced_attempts,
             usage,
         })
     }
 
-    pub async fn record_request_started(&self, message_id: &MessageId) -> Result<()> {
+    pub async fn record_request_started(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<kraai_types::RequestUsage>> {
         let streaming = self.streaming_messages.read().await;
         let state = streaming
             .get(message_id)
             .ok_or_else(|| eyre!("Missing streaming message"))?;
-        if let Some(request) = Self::request_usage(state, None) {
-            self.usage_store.save(&state.session_id, &request).await?;
+        let request = Self::request_usage(state, None);
+        if let Some(request) = &request {
+            self.usage_store.save(&state.session_id, request).await?;
         }
         drop(streaming);
-        Ok(())
+        Ok(request)
+    }
+
+    pub async fn record_request_attempt(
+        &self,
+        message_id: &MessageId,
+        unpriced_attempts: u32,
+    ) -> Result<Option<kraai_types::RequestUsage>> {
+        let mut streaming = self.streaming_messages.write().await;
+        let state = streaming
+            .get_mut(message_id)
+            .ok_or_else(|| eyre!("Missing streaming message"))?;
+        let mut request = Self::request_usage(state, None);
+        if let Some(request) = &mut request {
+            request.unpriced_attempts = unpriced_attempts;
+            self.usage_store.save(&state.session_id, request).await?;
+            state.unpriced_attempts = unpriced_attempts;
+        }
+        drop(streaming);
+        Ok(request)
     }
 
     pub async fn set_streaming_message_usage(
         &self,
         message_id: &MessageId,
         usage: TokenUsage,
-    ) -> Result<bool> {
+    ) -> Result<Option<kraai_types::RequestUsage>> {
         let mut streaming = self.streaming_messages.write().await;
         if let Some(state) = streaming.get_mut(message_id)
             && let Some(request) = Self::request_usage(state, Some(usage.clone()))
@@ -42,9 +66,9 @@ impl AgentManager {
                 generation.usage = Some(usage);
             }
             drop(streaming);
-            return Ok(true);
+            return Ok(Some(request));
         }
         drop(streaming);
-        Ok(false)
+        Ok(None)
     }
 }

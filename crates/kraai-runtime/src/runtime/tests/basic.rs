@@ -316,6 +316,22 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
         })
         .await;
 
+    let events = harness.events.snapshot();
+    let receipt_states = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::RequestUsageUpdated {
+                session_id: updated_session,
+                request,
+            } if updated_session == &session_id => Some(request.usage.is_some()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(receipt_states, vec![false, true]);
+    let completed = events.iter().position(|event| matches!(event, Event::StreamComplete { session_id: completed_session, .. } if completed_session == &session_id)).expect("stream completion");
+    let priced = events.iter().position(|event| matches!(event, Event::RequestUsageUpdated { request, .. } if request.usage.is_some())).expect("usage update");
+    assert!(priced < completed);
+
     let usage = harness
         .handle
         .get_session_context_usage(session_id.clone())

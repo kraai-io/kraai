@@ -385,6 +385,7 @@ impl AgentManager {
                 message: appended.message,
                 text_item_ids: HashMap::new(),
                 subscription,
+                unpriced_attempts: 0,
                 request_started_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

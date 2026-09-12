@@ -71,12 +71,15 @@ pub struct RequestUsage {
     pub model_id: ModelId,
     pub started_at: u64,
     pub subscription: bool,
+    #[serde(default)]
+    pub unpriced_attempts: u32,
     pub usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostSummary {
     pub amount: Usd,
+    pub upstream: Usd,
     pub estimated: bool,
     pub unknown: usize,
     pub subscriptions: usize,
@@ -90,6 +93,9 @@ impl CostSummary {
             self.subscriptions = self.subscriptions.saturating_add(1);
             return;
         }
+        self.unknown = self
+            .unknown
+            .saturating_add(request.unpriced_attempts as usize);
         let Some(cost) = request.usage.as_ref().and_then(|usage| usage.cost.as_ref()) else {
             self.unknown = self.unknown.saturating_add(1);
             return;
@@ -99,6 +105,12 @@ impl CostSummary {
         match self.amount.0.checked_add(cost.amount.0) {
             Some(amount) => self.amount = Usd(amount),
             None => self.overflow = true,
+        }
+        if let Some(upstream) = cost.upstream {
+            match self.upstream.0.checked_add(upstream.0) {
+                Some(amount) => self.upstream = Usd(amount),
+                None => self.overflow = true,
+            }
         }
     }
 }
@@ -126,6 +138,9 @@ impl std::fmt::Display for CostSummary {
                     "requests"
                 }
             ));
+        }
+        if self.upstream.0 != 0 {
+            parts.push(format!("~{} upstream", self.upstream));
         }
         if self.subscriptions != 0 {
             parts.push(String::from("subscription"));
@@ -180,6 +195,7 @@ mod tests {
             model_id: ModelId::new("model"),
             started_at: 0,
             subscription: false,
+            unpriced_attempts: 0,
             usage: None,
         };
         let mut summary = CostSummary::default();
@@ -202,5 +218,41 @@ mod tests {
             summary.to_string(),
             "$0.0000 + unknown (1 request) + subscription"
         );
+    }
+
+    #[test]
+    fn summary_keeps_upstream_estimates_separate_and_counts_unpriced_attempts() {
+        let mut request = RequestUsage {
+            message_id: MessageId::new("request"),
+            provider_id: ProviderId::new("openrouter"),
+            model_id: ModelId::new("model"),
+            started_at: 0,
+            subscription: false,
+            unpriced_attempts: 2,
+            usage: Some(TokenUsage {
+                cost: Some(RequestCost {
+                    amount: Usd(0),
+                    source: "openrouter".into(),
+                    rates: None,
+                    priced_at: 0,
+                    upstream: Some(Usd(40_000_000)),
+                }),
+                ..Default::default()
+            }),
+        };
+        let mut summary = CostSummary::default();
+        summary.add(&request);
+        assert_eq!(summary.amount, Usd(0));
+        assert_eq!(
+            summary.to_string(),
+            "$0.0000 + unknown (2 requests) + ~$0.0400 upstream"
+        );
+        request.usage = None;
+        summary.add(&request);
+        assert_eq!(summary.unknown, 5);
+        request.subscription = true;
+        summary.add(&request);
+        assert_eq!(summary.unknown, 5);
+        assert_eq!(summary.subscriptions, 1);
     }
 }

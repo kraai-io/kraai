@@ -15,6 +15,24 @@ use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::runtime::core::ActiveScriptTask;
 use crate::{Event, SessionActivity};
 
+async fn wait_for_snapshot_writer(
+    snapshot: impl std::future::Future + Send,
+    barrier: &tokio::sync::RwLock<()>,
+) -> Result<()> {
+    tokio::pin!(snapshot);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            assert!(poll!(&mut snapshot).is_pending());
+            if barrier.try_read().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn session_stays_running_between_streams_until_turn_finishes() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
@@ -102,7 +120,7 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
     let runtime = harness.runtime.clone();
     let snapshot = runtime.build_session_snapshot(&session_id);
     tokio::pin!(snapshot);
-    assert!(poll!(&mut snapshot).is_pending());
+    wait_for_snapshot_writer(&mut snapshot, &harness.runtime.session_state_barrier).await?;
 
     harness
         .runtime
@@ -187,7 +205,7 @@ async fn cancellation_finishes_with_a_queued_snapshot_and_stays_active_until_fin
     let mutation = harness.runtime.session_state_barrier.read().await;
     let snapshot = cancel_runtime.build_session_snapshot(&session_id);
     tokio::pin!(snapshot);
-    assert!(poll!(&mut snapshot).is_pending());
+    wait_for_snapshot_writer(&mut snapshot, &harness.runtime.session_state_barrier).await?;
     finish_tx.send(()).expect("finish task still running");
     tokio::task::yield_now().await;
     drop(mutation);

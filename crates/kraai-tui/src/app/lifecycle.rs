@@ -222,6 +222,7 @@ impl App {
             "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
             "usage": usage,
             "request_costs": self.state.launch_requests,
+            "request_costs_complete": !self.costs_incomplete(),
         })
     }
 
@@ -275,6 +276,7 @@ impl App {
                 self.handle_runtime_event(event.event);
             }
             RuntimeEventBridgeMessage::Lagged(skipped) => {
+                self.state.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;

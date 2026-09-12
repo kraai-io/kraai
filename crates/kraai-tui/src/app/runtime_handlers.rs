@@ -3,6 +3,15 @@ use super::*;
 impl App {
     pub(super) fn handle_runtime_event(&mut self, event: Event) {
         match event {
+            Event::RequestUsageUpdated {
+                session_id,
+                request,
+            } => {
+                self.update_costs(
+                    &session_id,
+                    std::collections::BTreeMap::from([(request.message_id.clone(), *request)]),
+                );
+            }
             Event::TurnTimingChanged { session_id, timer } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.turn_timer = timer;
@@ -511,6 +520,7 @@ impl App {
                         self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
                         self.update_costs(&session_id, snapshot.requests);
+                        self.state.cost_recovery_sessions.remove(&session_id);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                             self.state.turn_timer = snapshot.turn_timer;
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
@@ -622,6 +632,18 @@ impl App {
                 if self.event_lag_session_resync_pending {
                     self.sync_current_session_streaming_from_sessions();
                     self.event_lag_session_resync_pending = false;
+                }
+                if self.state.cost_recovery_list_pending {
+                    self.state.cost_recovery_list_pending = false;
+                    self.state.cost_recovery_sessions = self
+                        .state
+                        .sessions
+                        .iter()
+                        .map(|session| session.id.clone())
+                        .collect();
+                    for session_id in self.state.cost_recovery_sessions.clone() {
+                        self.request_sync_for_session(&session_id);
+                    }
                 }
                 self.maybe_finish_ci_run();
             }

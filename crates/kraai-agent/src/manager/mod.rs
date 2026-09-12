@@ -130,6 +130,7 @@ struct StreamingMessageState {
     message: Message,
     text_item_ids: HashMap<String, usize>,
     request_started_at: u64,
+    unpriced_attempts: u32,
     subscription: bool,
 }
 

@@ -26,6 +26,9 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
             .get(&pending.message_id)
             .is_some_and(|request| request.usage.is_none())
     );
+    manager
+        .record_request_attempt(&pending.message_id, 1)
+        .await?;
     let usage = TokenUsage {
         input_tokens: 10,
         total_tokens: 10,
@@ -42,6 +45,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
         manager
             .set_streaming_message_usage(&pending.message_id, usage.clone())
             .await?
+            .is_some()
     );
     manager
         .cancel_streaming_message(&pending.message_id)
@@ -66,6 +70,12 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
         .load()
         .await?;
     assert_eq!(snapshot.requests, requests);
+    assert_eq!(
+        requests
+            .get(&pending.message_id)
+            .map(|request| request.unpriced_attempts),
+        Some(1)
+    );
     assert!(store.load("../escape").await.is_err());
     cleanup_dir(data_dir).await;
     Ok(())

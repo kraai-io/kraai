@@ -27,6 +27,10 @@ pub struct SessionSnapshotData {
 }
 
 impl AgentManager {
+    pub fn request_usage_store(&self) -> Arc<kraai_persistence::RequestUsageStore> {
+        self.usage_store.clone()
+    }
+
     pub async fn capture_session_snapshot(
         &self,
         session_id: &str,
@@ -81,6 +85,7 @@ impl SessionSnapshotReader {
                         model_id: generation.model_id.clone(),
                         started_at: 0,
                         subscription: false,
+                        unpriced_attempts: 0,
                         usage: generation.usage.clone(),
                     });
             }
