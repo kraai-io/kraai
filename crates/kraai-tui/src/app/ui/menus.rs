@@ -218,10 +218,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 
 pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let lines = vec![
-        Line::styled("Commands", Style::default().add_modifier(Modifier::BOLD)),
-        Line::raw("/agent /model /providers /sessions"),
-        Line::raw("/new /undo /continue /quit"),
-        Line::raw(""),
+        Line::raw("/            Commands"),
         Line::raw("Enter        Send       Shift+Enter  Newline"),
         Line::raw("↑/↓          History    Ctrl+E       Editor"),
         Line::raw("Ctrl+←/→     Move word  Ctrl+W       Delete word"),
