@@ -64,6 +64,7 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
     };
     let mut programs = vec![
         cargo.clone(),
+        required_program("rustc")?,
         required_program("cc")?,
         required_program("git")?,
         required_program("rg")?,

@@ -1,0 +1,32 @@
+id = "event-stream"
+prompt = """
+Implement the Event/DecodeError/Decoder API in src/lib.rs as an incremental UTF-8 server-event decoder. Keep the public names and signatures, and keep the existing public tests. You may change all internals and add modules or tests.
+
+Decoder::new starts an empty stream. feed accepts arbitrary byte chunks, including chunks that split UTF-8 characters and line endings, and returns events completed during that call. Empty chunks are allowed. Lines end in LF, CRLF, or bare CR. A CR ends a line immediately; a following LF is swallowed even across chunks. Ignore one UTF-8 BOM only at the very start of the stream.
+
+A blank line completes a block. Emit an Event only if the block contained a data field. Join data field values with one newline, without a final extra newline. An empty data field still emits an event. A comment line starts with colon and is ignored. For other lines split at the first colon; remove exactly one leading ASCII space from the value. A line without a colon is a field with an empty value. Ignore unknown fields. The last event field supplies the event type, defaulting to "message" when absent or empty. Reset data and event type after every blank line.
+
+The last id field without a NUL updates the persistent last-event ID immediately when its line ends, even in a block without data. Ignore id values containing NUL. An empty id sets the persistent ID to Some(""). Each emitted event contains the persistent ID at dispatch. last_event_id exposes that ID, initially None.
+
+Return InvalidUtf8 if a completed line contains invalid UTF-8. A partial final character may span calls. finish validates any unfinished line's UTF-8, discards the unfinished line and unfinished block, emits no events, and closes the decoder. After finish, feed and finish return Finished. InvalidUtf8 is sticky: once encountered, every later feed or finish returns InvalidUtf8. Events collected in a failing feed are discarded. Only observable behavior matters; no internal representation or algorithm is required. The crate has no dependencies and must work offline.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = ["mutations/trim-spaces.patch", "mutations/forget-id.patch"]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern event_stream=\"$grade_dir/target/debug/libevent_stream.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120
