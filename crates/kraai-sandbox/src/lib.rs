@@ -15,16 +15,16 @@ pub use process::run;
 #[cfg(target_os = "linux")]
 pub use platform::linux::restrict_network_after_startup;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 use platform::linux::{
     BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,
     bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
     run_bwrap_sandbox_probe,
 };
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 use process::is_likely_sandbox_denied;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 #[expect(
     clippy::expect_used,
     clippy::indexing_slicing,

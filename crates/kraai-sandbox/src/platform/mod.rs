@@ -3,8 +3,15 @@ use crate::error::SandboxError;
 use crate::temp_dir::PrivateTempDir;
 use kraai_types::SandboxCapability;
 
+#[cfg(any(target_os = "linux", windows))]
+pub(super) const PROTECTED_METADATA_NAMES: &[&str] =
+    &[".git", ".jj", ".kraai", ".agents", ".codex"];
+
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
+
+#[cfg(windows)]
+pub(crate) mod windows;
 
 pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedCommand, SandboxError> {
     validate_plan(&plan)?;
@@ -76,12 +83,22 @@ async fn prepare_sandboxed_command(
     linux::prepare(plan, private_temp).await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+async fn prepare_sandboxed_command(
+    plan: LaunchPlan,
+    private_temp: PrivateTempDir,
+) -> Result<PreparedCommand, SandboxError> {
+    tokio::task::spawn_blocking(move || windows::prepare(plan, private_temp))
+        .await
+        .map_err(|error| SandboxError::SandboxUnavailable(error.to_string()))?
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 async fn prepare_sandboxed_command(
     _plan: LaunchPlan,
     _private_temp: PrivateTempDir,
 ) -> Result<PreparedCommand, SandboxError> {
     Err(SandboxError::SandboxUnavailable(String::from(
-        "sandboxed execution is currently only implemented on Linux",
+        "sandboxed execution is only implemented on Linux and Windows",
     )))
 }

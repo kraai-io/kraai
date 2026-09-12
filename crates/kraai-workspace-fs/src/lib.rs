@@ -1,6 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(windows)]
+mod windows;
+
+#[cfg(not(windows))]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -125,7 +130,10 @@ pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadErro
     Ok(file)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+pub use windows::open_scoped_file;
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn open_scoped_file(_root: &Path, path: &Path) -> Result<File, ScopedReadError> {
     Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
 }
@@ -380,12 +388,13 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
         match mode {
             WriteMode::Create => rename_without_replacement(&temp_path, path)?,
             WriteMode::Replace { .. } => {
-                fs::rename(&temp_path, path).map_err(|source| WorkspaceFsError::Write {
+                replace_file(&temp_path, path).map_err(|source| WorkspaceFsError::Write {
                     path: path.to_path_buf(),
                     source,
                 })?;
             }
         }
+        #[cfg(not(windows))]
         sync_directory(parent)?;
         Ok(())
     })();
@@ -410,7 +419,15 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), W
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
+    windows::rename(source, destination, false).map_err(|source| WorkspaceFsError::Write {
+        path: destination.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
     if destination.exists() {
         return Err(WorkspaceFsError::AlreadyExists(destination.to_path_buf()));
@@ -421,6 +438,17 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), W
     })
 }
 
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    windows::rename(source, destination, true)
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<(), WorkspaceFsError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -600,6 +628,32 @@ mod tests {
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scoped_reads_reject_traversal_and_alternate_streams() {
+        let root = temp_dir("windows-scoped-read").canonicalize().unwrap();
+        let path = root.join("file.txt");
+        fs::write(&path, "contents").unwrap();
+        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "contents");
+        for relative in ["..\\secret.txt", "file.txt:secret", "file.txt::$DATA"] {
+            assert!(matches!(
+                read_scoped_text_file(&root, &root.join(relative)),
+                Err(ScopedReadError::OutsideRoot(_))
+            ));
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_create_preserves_a_destination_created_after_validation() {
+        let root = temp_dir("atomic-create");
+        let path = root.join("file.txt");
+        atomic_write(&path, b"original", WriteMode::Create).unwrap();
+        assert!(atomic_write(&path, b"replacement", WriteMode::Create).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "linux")]
