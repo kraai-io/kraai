@@ -44,10 +44,18 @@ pub struct ListModelsResponse {
 pub struct ListModelEntry {
     pub slug: String,
     pub display_name: String,
-    pub visibility: String,
+    pub visibility: ModelVisibility,
     pub context_window: Option<usize>,
     pub default_reasoning_level: Option<String>,
     pub supported_reasoning_levels: Vec<ReasoningLevel>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelVisibility {
+    List,
+    Hide,
+    None,
 }
 
 #[derive(Clone, Debug, Deserialize)]

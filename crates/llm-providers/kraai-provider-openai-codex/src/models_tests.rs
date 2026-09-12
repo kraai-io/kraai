@@ -54,15 +54,29 @@ fn discovery_uses_remote_models_efforts_names_and_context() -> Result<()> {
 
 #[test]
 fn hidden_models_resolve_without_appearing_in_the_picker() -> Result<()> {
-    let mut hidden = model("hidden-model")?;
-    hidden.visibility = "hide".into();
-    let models = DiscoveredModels::new(vec![hidden])?;
-    assert!(models.list(&BTreeMap::new()).is_empty());
-    assert_eq!(
-        models.resolve(&ModelId::new("hidden-model-low"))?.api_model,
-        "hidden-model"
-    );
+    for value in ["hide", "none"] {
+        let mut hidden = model("hidden-model")?;
+        hidden.visibility = serde_json::from_value(json!(value))?;
+        let models = DiscoveredModels::new(vec![hidden])?;
+        assert!(models.list(&BTreeMap::new()).is_empty());
+        for id in ["hidden-model", "hidden-model-low"] {
+            assert_eq!(models.resolve(&ModelId::new(id))?.api_model, "hidden-model");
+        }
+    }
     Ok(())
+}
+
+#[test]
+fn unknown_visibility_is_rejected_during_deserialization() {
+    for visibility in ["hidden", "LIST", "", "future"] {
+        let value = json!({
+            "slug": "invalid-model",
+            "display_name": "Invalid Model",
+            "visibility": visibility,
+            "supported_reasoning_levels": []
+        });
+        assert!(serde_json::from_value::<ListModelEntry>(value).is_err());
+    }
 }
 
 #[test]

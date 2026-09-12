@@ -6,9 +6,8 @@ use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
     DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Model,
     ModelConfig, Provider, ProviderDefinition, ProviderRequest, ProviderRequestContext,
-    ProviderStreamEvent, ScriptToolTransport, SseEvent, ValidationError,
-    build_streaming_http_client, finite_request, send_with_retry as send_http_with_retry,
-    stream_sse_data,
+    ProviderStreamEvent, ScriptToolTransport, SseEvent, ValidationError, finite_request,
+    send_with_retry as send_http_with_retry, stream_sse_data, streaming_http_client_builder,
 };
 use kraai_types::{AssistantPhase, ModelId, ProviderId, ToolCallId};
 use reqwest::header::{ACCEPT, HeaderValue};
@@ -25,20 +24,48 @@ use crate::wire::{
 
 const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_CLIENT_VERSION: &str = "0.154.0";
+const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must use HTTPS; HTTP is allowed only for loopback endpoints with proxy-token authentication";
 
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
 
-fn valid_backend_url(value: &str) -> bool {
+fn valid_backend_url(value: &str, proxy_token: bool) -> bool {
     Url::parse(value).is_ok_and(|url| {
-        matches!(url.scheme(), "http" | "https")
+        valid_backend_transport(&url, proxy_token)
             && url.host_str().is_some()
             && url.username().is_empty()
             && url.password().is_none()
             && url.query().is_none()
             && url.fragment().is_none()
     })
+}
+
+fn valid_backend_transport(url: &Url, proxy_token: bool) -> bool {
+    url.scheme() == "https"
+        || (url.scheme() == "http"
+            && proxy_token
+            && match url.host() {
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                Some(url::Host::Domain(host)) => host == "localhost",
+                None => false,
+            })
+}
+
+fn build_codex_http_client(proxy_token: bool) -> reqwest::Result<Client> {
+    streaming_http_client_builder()
+        .https_only(!proxy_token)
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if !valid_backend_transport(attempt.url(), proxy_token) {
+                attempt.error(BACKEND_URL_ERROR)
+            } else if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
 }
 
 fn valid_environment_name(value: &str) -> bool {
@@ -134,18 +161,22 @@ impl OpenAiCodexFactory {
     }
 
     pub fn validate_provider_config(config: &DynamicConfig) -> Vec<ValidationError> {
+        let proxy_token = config
+            .get("proxy_token_env")
+            .and_then(DynamicValue::as_str)
+            .is_some_and(|name| !name.trim().is_empty());
         let mut errors = match config.get("base_url") {
             None => Vec::new(),
             Some(value)
                 if value
                     .as_str()
-                    .is_some_and(|url| valid_backend_url(url.trim())) =>
+                    .is_some_and(|url| valid_backend_url(url.trim(), proxy_token)) =>
             {
                 Vec::new()
             }
             Some(_) => vec![ValidationError {
                 field: "base_url".to_string(),
-                message: "Backend URL must be an absolute HTTP or HTTPS URL".to_string(),
+                message: BACKEND_URL_ERROR.to_string(),
             }],
         };
         if let Some(value) = config.get("proxy_token_env")
@@ -196,9 +227,6 @@ impl OpenAiCodexFactory {
             .unwrap_or(DEFAULT_CHATGPT_BACKEND_URL)
             .trim_end_matches('/')
             .to_string();
-        if !valid_backend_url(&base_url) {
-            return Err(eyre!("Invalid OpenAI Codex backend URL"));
-        }
         let proxy_token = config
             .get("proxy_token_env")
             .and_then(DynamicValue::as_str)
@@ -210,6 +238,9 @@ impl OpenAiCodexFactory {
                 })
             })
             .transpose()?;
+        if !valid_backend_url(&base_url, proxy_token.is_some()) {
+            return Err(eyre!(BACKEND_URL_ERROR));
+        }
         if proxy_token.is_some() && base_url == DEFAULT_CHATGPT_BACKEND_URL {
             return Err(eyre!(
                 "OpenAI Codex proxy token requires a non-default backend URL"
@@ -218,7 +249,7 @@ impl OpenAiCodexFactory {
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
-            client: build_streaming_http_client()?,
+            client: build_codex_http_client(proxy_token.is_some())?,
             models: RwLock::new(DiscoveredModels::default()),
             model_configs: BTreeMap::new(),
             base_url,
@@ -563,6 +594,9 @@ impl OpenAiCodexProvider {
     where
         F: Fn(RequestAuthentication) -> RequestBuilder + Send + Sync,
     {
+        if !valid_backend_url(&self.base_url, self.proxy_token.is_some()) {
+            return Err(eyre!(BACKEND_URL_ERROR));
+        }
         if let Some(token) = &self.proxy_token {
             let auth = RequestAuthentication::ProxyToken(token.clone());
             let response = send_http_with_retry(
@@ -721,14 +755,16 @@ mod tests {
 
     #[test]
     fn backend_url_validation_rejects_credentials_queries_and_non_http_schemes() {
-        assert!(valid_backend_url("https://chatgpt.com/backend-api"));
-        assert!(valid_backend_url("http://127.0.0.1:1234/backend-api"));
-        assert!(!valid_backend_url("file:///tmp/backend"));
+        assert!(valid_backend_url("https://chatgpt.com/backend-api", false));
+        assert!(valid_backend_url("http://127.0.0.1:1234/backend-api", true));
+        assert!(!valid_backend_url("file:///tmp/backend", true));
         assert!(!valid_backend_url(
-            "https://user:secret@example.com/backend"
+            "https://user:secret@example.com/backend",
+            false
         ));
         assert!(!valid_backend_url(
-            "https://example.com/backend?redirect=elsewhere"
+            "https://example.com/backend?redirect=elsewhere",
+            false
         ));
     }
 

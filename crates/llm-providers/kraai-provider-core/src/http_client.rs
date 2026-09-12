@@ -11,7 +11,11 @@ pub const HTTP_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The read timeout resets whenever bytes arrive, so healthy streams may live
 /// indefinitely while stalled response bodies are bounded.
 pub fn build_streaming_http_client() -> reqwest::Result<Client> {
-    base_client_builder(HTTP_CONNECT_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT).build()
+    streaming_http_client_builder().build()
+}
+
+pub fn streaming_http_client_builder() -> ClientBuilder {
+    base_client_builder(HTTP_CONNECT_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT)
 }
 
 /// Build a client for authentication and other finite JSON requests.

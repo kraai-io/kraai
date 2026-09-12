@@ -4,7 +4,7 @@ use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_provider_core::Model;
 use kraai_types::ModelId;
 
-use crate::wire::{ListModelEntry, ResponsesReasoning};
+use crate::wire::{ListModelEntry, ModelVisibility, ResponsesReasoning};
 
 #[cfg(test)]
 #[path = "models_tests.rs"]
@@ -74,7 +74,7 @@ impl DiscoveredModels {
         for entry in self
             .entries
             .values()
-            .filter(|entry| entry.visibility == "list")
+            .filter(|entry| entry.visibility == ModelVisibility::List)
         {
             if entry.supported_reasoning_levels.is_empty() {
                 let model = Self::listed_model(entry, None, configs);
