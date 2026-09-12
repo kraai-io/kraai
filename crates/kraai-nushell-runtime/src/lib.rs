@@ -4,6 +4,7 @@ mod effects;
 mod execution;
 pub mod host;
 pub mod request;
+mod transport;
 mod wire;
 
 pub use effects::{RejectStateEffects, StateEffectHandler};
@@ -21,7 +22,7 @@ pub fn run_host_process() -> i32 {
             return 64;
         }
     };
-    let transport = match wire::connect_transport(&transport_path) {
+    let transport = match transport::connect(&transport_path) {
         Ok(transport) => transport,
         Err(error) => {
             report_host_error(error);

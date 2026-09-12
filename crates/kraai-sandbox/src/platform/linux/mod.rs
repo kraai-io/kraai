@@ -49,7 +49,7 @@ pub(crate) async fn prepare(
         environment,
         sandboxed: true,
         output_events: plan.output_events,
-        private_temp,
+        private_temp: Some(private_temp),
         seccomp_filter,
     })
 }
