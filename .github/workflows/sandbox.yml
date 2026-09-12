@@ -26,4 +26,4 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: cargo check --locked --workspace --all-targets
-      - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets
+      - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --no-fail-fast

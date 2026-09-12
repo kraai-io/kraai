@@ -186,9 +186,16 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
             .to_string()
             .into(),
     );
-    let output = kraai_sandbox::run(plan, CancellationToken::new())
-        .await
-        .expect("sandbox must launch");
+    let workspace_read = plan.capabilities.contains(SandboxCapability::WorkspaceRead);
+    let result = kraai_sandbox::run(plan, CancellationToken::new()).await;
+    if !workspace_read {
+        assert!(matches!(
+            result,
+            Err(kraai_sandbox::SandboxError::WorkspaceReadRequired)
+        ));
+        return;
+    }
+    let output = result.expect("sandbox must launch");
     assert_eq!(
         output.termination,
         Termination::Exited { code: Some(0) },
@@ -210,29 +217,30 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
 
 #[tokio::test]
 async fn capability_matrix() {
-    for capability in [
-        SandboxCapability::WorkspaceRead,
-        SandboxCapability::WorkspaceWrite,
-        SandboxCapability::MetadataWrite,
-        SandboxCapability::HostRead,
-        SandboxCapability::HostWrite,
+    for filesystem in [
+        vec![],
+        vec![SandboxCapability::WorkspaceRead],
+        vec![SandboxCapability::WorkspaceWrite],
+        vec![SandboxCapability::MetadataWrite],
+        vec![SandboxCapability::HostRead],
+        vec![
+            SandboxCapability::HostRead,
+            SandboxCapability::WorkspaceWrite,
+        ],
+        vec![
+            SandboxCapability::HostRead,
+            SandboxCapability::MetadataWrite,
+        ],
+        vec![SandboxCapability::HostWrite],
     ] {
         for network in [false, true] {
-            let mut capabilities = vec![capability];
+            let mut capabilities = filesystem.clone();
             if network {
                 capabilities.push(SandboxCapability::Network);
             }
             verify(&capabilities, false).await;
         }
     }
-    verify(
-        &[
-            SandboxCapability::HostRead,
-            SandboxCapability::WorkspaceWrite,
-        ],
-        false,
-    )
-    .await;
     verify(&[SandboxCapability::NoSandbox], false).await;
 }
 
