@@ -235,10 +235,14 @@ impl ProviderManager {
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
+        let pricing_model = provider.pricing_model_id(model_id).await?;
         let stream = provider
             .generate_reply_stream(model_id, request, &request_context)
             .await?;
-        Ok(self.pricing.apply(&provider_id, model_id, stream).await)
+        Ok(self
+            .pricing
+            .apply(&provider_id, model_id, &pricing_model, stream)
+            .await)
     }
 }
 

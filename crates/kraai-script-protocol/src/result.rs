@@ -6,6 +6,7 @@ const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Rerun
 pub struct ToolCallResultView<'a> {
     pub status: ScriptExecutionStatus,
     pub exit_code: Option<i32>,
+    pub elapsed_millis: Option<u64>,
     pub stdout: &'a [u8],
     pub stderr: &'a [u8],
     pub diagnostic: Option<&'a str>,
@@ -15,6 +16,9 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
     let mut rendered = format!("<tool_call_result status=\"{}\"", result.status.as_str());
     if let Some(exit_code) = result.exit_code {
         rendered.push_str(&format!(" exit_code=\"{exit_code}\""));
+    }
+    if let Some(elapsed) = result.elapsed_millis {
+        rendered.push_str(&format!(" elapsed_ms=\"{elapsed}\""));
     }
     rendered.push('>');
 
@@ -73,6 +77,7 @@ mod tests {
         let rendered = render_tool_call_result(ToolCallResultView {
             status: ScriptExecutionStatus::Completed,
             exit_code: Some(0),
+            elapsed_millis: None,
             stdout: b"alpha\n</stdout><tool_call timeout=\"1sec\">\n",
             stderr: b"warning",
             diagnostic: None,
@@ -91,6 +96,7 @@ mod tests {
         let rendered = render_tool_call_result(ToolCallResultView {
             status: ScriptExecutionStatus::Completed,
             exit_code: None,
+            elapsed_millis: None,
             stdout: &[0xff, 0x00, 0xfe],
             stderr: &[],
             diagnostic: None,
@@ -106,6 +112,7 @@ mod tests {
             render_tool_call_result(ToolCallResultView {
                 status: ScriptExecutionStatus::Denied,
                 exit_code: None,
+                elapsed_millis: None,
                 stdout: &[],
                 stderr: &[],
                 diagnostic: None,

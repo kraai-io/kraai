@@ -38,12 +38,15 @@ impl Pricing {
     }
 
     pub async fn start(&self) {
-        if !self.configs.values().any(|config| {
-            !config.subscription && (config.api.is_some() || config.provider.is_some())
-        }) {
+        if !self
+            .configs
+            .values()
+            .any(|config| config.api.is_some() || config.provider.is_some())
+        {
             return;
         }
         self.catalog.load().await;
+        self.catalog.refresh().await;
         let catalog = Arc::downgrade(&self.catalog);
         tokio::spawn(async move {
             loop {
@@ -67,22 +70,23 @@ impl Pricing {
         &self,
         provider: &ProviderId,
         model: &ModelId,
+        pricing_model: &ModelId,
         stream: BoxStream<'static, color_eyre::Result<ProviderStreamEvent>>,
     ) -> BoxStream<'static, color_eyre::Result<ProviderStreamEvent>> {
-        let Some(config) = self
-            .configs
-            .get(provider)
-            .filter(|config| !config.subscription)
-        else {
+        let Some(config) = self.configs.get(provider) else {
             return stream;
         };
-        let configured = config.models.get(model).cloned();
+        let configured = config
+            .models
+            .get(model)
+            .or_else(|| config.models.get(pricing_model))
+            .cloned();
         let catalog_pricing = if configured.is_none() {
             self.catalog
                 .lookup(
                     config.provider.as_deref(),
                     config.api.as_deref(),
-                    model.as_str(),
+                    pricing_model.as_str(),
                 )
                 .await
         } else {
@@ -131,10 +135,6 @@ pub fn now() -> u64 {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "tests combine fallible setup with assertions"
-)]
 mod tests {
     use super::*;
     use crate::{DynamicConfig, DynamicValue, ModelConfig, ProviderConfig};
@@ -143,12 +143,17 @@ mod tests {
     #[tokio::test]
     async fn configured_rates_estimate_usage_but_never_replace_a_reported_zero()
     -> color_eyre::Result<()> {
+        check_configured_rates("openai-chat-completions").await?;
+        check_configured_rates("openai-codex").await
+    }
+
+    async fn check_configured_rates(provider_type: &str) -> color_eyre::Result<()> {
         let provider = ProviderId::new("custom");
         let model = ModelId::new("model");
         let pricing = Pricing::new(&ProviderManagerConfig {
             providers: vec![ProviderConfig {
                 id: provider.clone(),
-                type_id: "openai-chat-completions".into(),
+                type_id: provider_type.into(),
                 config: DynamicConfig::new(),
             }],
             models: vec![ModelConfig {
@@ -181,7 +186,7 @@ mod tests {
             Ok(ProviderStreamEvent::Usage(reported)),
         ])
         .boxed();
-        let mut stream = pricing.apply(&provider, &model, source).await;
+        let mut stream = pricing.apply(&provider, &model, &model, source).await;
         let Some(Ok(ProviderStreamEvent::Usage(estimated))) = stream.next().await else {
             return Err(color_eyre::eyre::eyre!("missing estimated usage"));
         };

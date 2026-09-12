@@ -66,6 +66,7 @@ impl CompletedScriptExecution {
         Ok(render_tool_call_result(ToolCallResultView {
             status,
             exit_code: self.record.exit_code,
+            elapsed_millis: self.record.elapsed_millis(),
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,
             diagnostic: self.record.error.as_deref(),

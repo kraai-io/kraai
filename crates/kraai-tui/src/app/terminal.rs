@@ -17,7 +17,9 @@ impl App {
                 changed = true;
             }
 
-            if batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
+            if self.state.editor_requested
+                || self.state.exit
+                || batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
                 || !event::poll(Duration::ZERO)?
             {
                 break;
@@ -28,6 +30,9 @@ impl App {
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        if self.state.editor_requested || self.state.exit {
+            return false;
+        }
         match event {
             CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event);
@@ -47,10 +52,40 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if self.state.mode != UiMode::Chat {
+        if self.state.mode == UiMode::Help {
+            match mouse_event.kind {
+                MouseEventKind::ScrollUp => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(3)),
+                MouseEventKind::ScrollDown => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(3)),
+                _ => {}
+            }
+            return;
+        }
+        if !matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
             return;
         }
 
+        if self.state.mode == UiMode::Chat
+            && self.state.script_phase == ScriptPhase::AwaitingApproval
+        {
+            match mouse_event.kind {
+                MouseEventKind::ScrollUp => self
+                    .state
+                    .approval_scroll
+                    .set(self.state.approval_scroll.get().saturating_sub(3)),
+                MouseEventKind::ScrollDown => self
+                    .state
+                    .approval_scroll
+                    .set(self.state.approval_scroll.get().saturating_add(3)),
+                _ => {}
+            }
+            return;
+        }
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
                 self.scroll_chat_by(-WHEEL_SCROLL_LINES);
@@ -63,6 +98,11 @@ impl App {
     }
 
     pub(super) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.state.mode == UiMode::Executions {
+            self.handle_execution_key_event(key_event);
+            return;
+        }
+
         if self.state.mode == UiMode::Chat
             && self.state.script_phase == ScriptPhase::AwaitingApproval
         {
@@ -101,15 +141,33 @@ impl App {
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
+            UiMode::Executions => self.handle_execution_key_event(key_event),
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
-            UiMode::Help => {
-                if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('q')) {
-                    self.state.mode = UiMode::Chat;
-                }
-            }
+            UiMode::Help => match key_event.code {
+                KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,
+                KeyCode::Up => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(1)),
+                KeyCode::Down => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(1)),
+                KeyCode::PageUp => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_sub(10)),
+                KeyCode::PageDown => self
+                    .state
+                    .help_scroll
+                    .set(self.state.help_scroll.get().saturating_add(10)),
+                KeyCode::Home => self.state.help_scroll.set(0),
+                KeyCode::End => self.state.help_scroll.set(u16::MAX),
+                _ => {}
+            },
         }
     }
 
@@ -120,6 +178,13 @@ impl App {
         }
 
         self.state.ctrl_c_exit_armed = false;
+        if self.handle_composer_shortcut(key_event) {
+            return;
+        }
+        if key_event.code == KeyCode::F(6) {
+            self.open_executions();
+            return;
+        }
 
         match key_event.code {
             KeyCode::Enter => {
@@ -188,6 +253,13 @@ impl App {
     }
 
     pub(super) fn handle_paste(&mut self, text: String) {
+        if matches!(self.state.mode, UiMode::ModelMenu | UiMode::SessionsMenu) {
+            self.state
+                .menu_search
+                .extend(text.chars().filter(|ch| !ch.is_control()));
+            self.state.reset_menu_selection();
+            return;
+        }
         if self.state.mode != UiMode::Chat
             || self.state.script_phase == ScriptPhase::AwaitingApproval
             || text.is_empty()
@@ -296,7 +368,10 @@ impl App {
     }
 
     pub(super) fn handle_model_menu_key_event(&mut self, key_event: KeyEvent) {
-        let models = self.flatten_models();
+        if self.handle_menu_search(key_event) {
+            return;
+        }
+        let models = self.state.filtered_models();
         let len = models.len();
 
         match key_event.code {
@@ -359,7 +434,11 @@ impl App {
     }
 
     pub(super) fn handle_sessions_menu_key_event(&mut self, key_event: KeyEvent) {
-        let total = self.state.sessions.len() + 1;
+        if self.handle_menu_search(key_event) {
+            return;
+        }
+        let sessions = self.state.filtered_sessions();
+        let total = sessions.len() + 1;
 
         match key_event.code {
             KeyCode::Up if total > 0 => {
@@ -372,22 +451,18 @@ impl App {
             KeyCode::Enter => {
                 if self.state.sessions_menu_index == 0 {
                     self.start_new_chat();
-                } else if let Some(session) = self
-                    .state
-                    .sessions
-                    .get(self.state.sessions_menu_index.saturating_sub(1))
+                } else if let Some(session) =
+                    sessions.get(self.state.sessions_menu_index.saturating_sub(1))
                 {
                     self.request(RuntimeRequest::LoadSession {
                         session_id: session.id.clone(),
                     });
                 }
             }
-            KeyCode::Char('x') => {
+            KeyCode::Delete => {
                 if self.state.sessions_menu_index > 0
-                    && let Some(session) = self
-                        .state
-                        .sessions
-                        .get(self.state.sessions_menu_index.saturating_sub(1))
+                    && let Some(session) =
+                        sessions.get(self.state.sessions_menu_index.saturating_sub(1))
                 {
                     self.request(RuntimeRequest::DeleteSession {
                         session_id: session.id.clone(),
@@ -403,10 +478,25 @@ impl App {
             KeyCode::Left | KeyCode::BackTab => self.select_previous_script_action(),
             KeyCode::Right | KeyCode::Tab => self.select_next_script_action(),
             KeyCode::Enter => self.confirm_current_script_action(),
-            KeyCode::PageUp => self.scroll_chat_by(-10),
-            KeyCode::PageDown => self.scroll_chat_by(10),
-            KeyCode::Home => self.scroll_chat_to_top(),
-            KeyCode::End => self.scroll_chat_to_bottom(),
+            KeyCode::Up => self
+                .state
+                .approval_scroll
+                .set(self.state.approval_scroll.get().saturating_sub(1)),
+            KeyCode::Down => self
+                .state
+                .approval_scroll
+                .set(self.state.approval_scroll.get().saturating_add(1)),
+            KeyCode::PageUp => self
+                .state
+                .approval_scroll
+                .set(self.state.approval_scroll.get().saturating_sub(10)),
+            KeyCode::PageDown => self
+                .state
+                .approval_scroll
+                .set(self.state.approval_scroll.get().saturating_add(10)),
+            KeyCode::Home => self.state.approval_scroll.set(0),
+            KeyCode::End => self.state.approval_scroll.set(usize::MAX),
+            KeyCode::Char('f') => self.state.approval_expanded = !self.state.approval_expanded,
             _ => {}
         }
     }

@@ -91,7 +91,6 @@ impl CostSummary {
     pub fn add(&mut self, request: &RequestUsage) {
         if request.subscription {
             self.subscriptions = self.subscriptions.saturating_add(1);
-            return;
         }
         self.unknown = self
             .unknown
@@ -101,7 +100,7 @@ impl CostSummary {
             return;
         };
         self.reported = self.reported.saturating_add(1);
-        self.estimated |= cost.rates.is_some();
+        self.estimated |= request.subscription || cost.rates.is_some();
         match self.amount.0.checked_add(cost.amount.0) {
             Some(amount) => self.amount = Usd(amount),
             None => self.overflow = true,
@@ -121,7 +120,7 @@ impl std::fmt::Display for CostSummary {
             return f.write_str("cost overflow");
         }
         let mut parts = Vec::new();
-        if self.reported != 0 || (self.unknown == 0 && self.subscriptions == 0) {
+        if self.reported != 0 || self.unknown == 0 {
             parts.push(format!(
                 "{}{}",
                 if self.estimated { "~" } else { "" },
@@ -129,21 +128,10 @@ impl std::fmt::Display for CostSummary {
             ));
         }
         if self.unknown != 0 {
-            parts.push(format!(
-                "unknown ({} {})",
-                self.unknown,
-                if self.unknown == 1 {
-                    "request"
-                } else {
-                    "requests"
-                }
-            ));
+            parts.push(String::from("$unknown"));
         }
         if self.upstream.0 != 0 {
             parts.push(format!("~{} upstream", self.upstream));
-        }
-        if self.subscriptions != 0 {
-            parts.push(String::from("subscription"));
         }
         f.write_str(&parts.join(" + "))
     }
@@ -188,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_distinguishes_unknown_free_and_subscription() {
+    fn summary_includes_subscription_estimates_and_unknown_requests() {
         let mut request = RequestUsage {
             message_id: MessageId::new("request"),
             provider_id: ProviderId::new("provider"),
@@ -200,7 +188,7 @@ mod tests {
         };
         let mut summary = CostSummary::default();
         summary.add(&request);
-        assert_eq!(summary.to_string(), "unknown (1 request)");
+        assert_eq!(summary.to_string(), "$unknown");
         request.usage = Some(TokenUsage {
             cost: Some(RequestCost {
                 amount: Usd(0),
@@ -214,10 +202,14 @@ mod tests {
         summary.add(&request);
         request.subscription = true;
         summary.add(&request);
-        assert_eq!(
-            summary.to_string(),
-            "$0.0000 + unknown (1 request) + subscription"
-        );
+        assert_eq!(summary.to_string(), "~$0.0000 + $unknown");
+        if let Some(usage) = &mut request.usage
+            && let Some(cost) = &mut usage.cost
+        {
+            cost.amount = Usd(50_000_000);
+        }
+        summary.add(&request);
+        assert_eq!(summary.to_string(), "~$0.0500 + $unknown");
     }
 
     #[test]
@@ -245,14 +237,14 @@ mod tests {
         assert_eq!(summary.amount, Usd(0));
         assert_eq!(
             summary.to_string(),
-            "$0.0000 + unknown (2 requests) + ~$0.0400 upstream"
+            "$0.0000 + $unknown + ~$0.0400 upstream"
         );
         request.usage = None;
         summary.add(&request);
         assert_eq!(summary.unknown, 5);
         request.subscription = true;
         summary.add(&request);
-        assert_eq!(summary.unknown, 5);
+        assert_eq!(summary.unknown, 8);
         assert_eq!(summary.subscriptions, 1);
     }
 }

@@ -48,10 +48,18 @@ pub struct ScriptExecutionRecord {
     pub phase: ScriptExecutionPhase,
     pub status: Option<ScriptExecutionStatus>,
     pub created_at_millis: u64,
+    pub started_at_millis: Option<u64>,
     pub updated_at_millis: u64,
     pub exit_code: Option<i32>,
     pub sandbox_denied: bool,
     pub error: Option<String>,
+}
+
+impl ScriptExecutionRecord {
+    pub fn elapsed_millis(&self) -> Option<u64> {
+        self.started_at_millis
+            .map(|started| self.updated_at_millis.saturating_sub(started))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +177,9 @@ impl FileScriptExecutionStore {
         require_phase(&record, expected)?;
         record.phase = target;
         record.updated_at_millis = now_millis();
+        if target == ScriptExecutionPhase::Running {
+            record.started_at_millis = Some(record.updated_at_millis);
+        }
         self.persist_record(&self.execution_dir(id)?, &record)
             .await?;
         Ok(record)
@@ -211,6 +222,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
             phase: ScriptExecutionPhase::Prepared,
             status: None,
             created_at_millis: timestamp,
+            started_at_millis: None,
             updated_at_millis: timestamp,
             exit_code: None,
             sandbox_denied: false,
@@ -474,6 +486,59 @@ mod tests {
                 .unwrap(),
             timeout: Some(Duration::from_secs(10)),
         }
+    }
+
+    #[tokio::test]
+    async fn execution_timing_starts_at_running_and_survives_reopen() {
+        let data_dir = test_dir("execution-timing");
+        let store = FileScriptExecutionStore::new(&data_dir);
+        for run in [false, true] {
+            let id = ScriptExecutionId::new(Ulid::generate());
+            let prepared = store.create(execution(&id)).await.unwrap();
+            assert_eq!(prepared.started_at_millis, None);
+            assert_eq!(prepared.elapsed_millis(), None);
+            let waiting = store.mark_awaiting_approval(&id).await.unwrap();
+            assert_eq!(waiting.started_at_millis, None);
+            let started = if run {
+                let running = store.mark_running(&id).await.unwrap();
+                assert_eq!(running.started_at_millis, Some(running.updated_at_millis));
+                assert!(store.mark_running(&id).await.is_err());
+                running.started_at_millis
+            } else {
+                None
+            };
+            store
+                .finish(
+                    &id,
+                    ScriptExecutionCompletion {
+                        status: if run {
+                            ScriptExecutionStatus::Completed
+                        } else {
+                            ScriptExecutionStatus::Denied
+                        },
+                        exit_code: run.then_some(0),
+                        sandbox_denied: false,
+                        error: None,
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                    },
+                )
+                .await
+                .unwrap();
+            let reopened = FileScriptExecutionStore::new(&data_dir);
+            let mut record = reopened.get(&id).await.unwrap().unwrap();
+            assert_eq!(record.started_at_millis, started);
+            record.created_at_millis = 1;
+            if let Some(started) = started {
+                record.updated_at_millis = started + 125;
+                assert_eq!(record.elapsed_millis(), Some(125));
+                record.updated_at_millis = started.saturating_sub(1);
+                assert_eq!(record.elapsed_millis(), Some(0));
+            } else {
+                assert_eq!(record.elapsed_millis(), None);
+            }
+        }
+        let _ = fs::remove_dir_all(data_dir).await;
     }
 
     #[tokio::test]

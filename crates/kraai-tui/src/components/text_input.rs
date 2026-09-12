@@ -204,26 +204,58 @@ impl<'a> TextInput<'a> {
 
     pub fn get_height(&self, max_width: u16) -> u16 {
         let content_width = max_width.saturating_sub(H_PADDING * 2) as usize;
-        Self::wrap_text(&self.input, content_width).len().max(1) as u16 + (V_PADDING * 2)
+        (Self::wrap_text(&self.input, content_width)
+            .len()
+            .max(1)
+            .min(u16::MAX as usize) as u16)
+            .saturating_add(V_PADDING * 2)
+    }
+
+    fn viewport(&self, area: Rect) -> (Vec<String>, usize, usize, usize) {
+        let width = area.width.saturating_sub(H_PADDING * 2) as usize;
+        let segments = Self::wrap_segments(&self.input, width);
+        let row = segments
+            .iter()
+            .position(|segment| self.cursor >= segment.start && self.cursor <= segment.end)
+            .unwrap_or(0);
+        let column = segments
+            .get(row)
+            .map(|segment| {
+                let prefix = if row == 0 {
+                    PROMPT
+                } else {
+                    CONTINUATION_PREFIX
+                };
+                display_width(prefix)
+                    + display_width(
+                        self.input
+                            .get(segment.start..self.cursor)
+                            .unwrap_or_default(),
+                    )
+            })
+            .unwrap_or(0);
+        let visible = area.height.saturating_sub(V_PADDING * 2).max(1) as usize;
+        let offset = row.saturating_sub(visible.saturating_sub(1));
+        (
+            segments.into_iter().map(|segment| segment.text).collect(),
+            offset,
+            row,
+            column,
+        )
     }
 
     pub fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
-        let safe_cursor = self
-            .cursor
-            .min(self.input.len())
-            .min(next_char_boundary(&self.input, self.cursor));
-        let max_width = area.width.saturating_sub(H_PADDING * 2) as usize;
-        let lines = Self::wrap_text(&self.input[..safe_cursor], max_width);
-
-        let line_count = lines.len();
-        let empty = String::new();
-        let last_line = lines.last().unwrap_or(&empty);
-
-        let cursor_line_idx = (line_count.saturating_sub(1)) as u16;
-        let cursor_x = area.x + H_PADDING + display_width(last_line) as u16;
-        let cursor_y = area.y + V_PADDING + cursor_line_idx;
-
-        (cursor_x, cursor_y)
+        let (_, offset, row, column) = self.viewport(area);
+        (
+            area.x
+                .saturating_add(H_PADDING)
+                .saturating_add(column.min(u16::MAX as usize) as u16)
+                .min(area.right().saturating_sub(1)),
+            area.y
+                .saturating_add(V_PADDING.min(area.height.saturating_sub(1)))
+                .saturating_add((row - offset) as u16)
+                .min(area.bottom().saturating_sub(1)),
+        )
     }
 }
 
@@ -238,11 +270,13 @@ impl<'a> Widget for TextInput<'a> {
             }
         }
 
-        let max_width = area.width.saturating_sub(H_PADDING * 2) as usize;
-        let lines = Self::wrap_text(&self.input, max_width);
-
-        for (i, line) in lines.iter().enumerate() {
-            let y = area.y + V_PADDING + i as u16;
+        if area.width <= H_PADDING * 2 || area.height == 0 {
+            return;
+        }
+        let (lines, offset, _, _) = self.viewport(area);
+        let visible = area.height.saturating_sub(V_PADDING * 2).max(1) as usize;
+        for (i, line) in lines.iter().skip(offset).take(visible).enumerate() {
+            let y = area.y + V_PADDING.min(area.height.saturating_sub(1)) + i as u16;
             if y < area.y + area.height {
                 buf.set_stringn(
                     area.x + H_PADDING,
@@ -305,20 +339,6 @@ fn line_cursor(
         }
     }
     segment.end
-}
-
-fn next_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-    if s.is_char_boundary(idx) {
-        return idx;
-    }
-    let mut i = idx;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
 }
 
 fn previous_char_boundary(s: &str, idx: usize) -> usize {

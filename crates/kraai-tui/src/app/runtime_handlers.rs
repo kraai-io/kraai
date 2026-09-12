@@ -23,12 +23,12 @@ impl App {
                 self.request_sync();
             }
             Event::ServiceError { error } => {
-                self.state.status = format!("Runtime error: {error}");
+                self.set_error(format!("Runtime error: {error}"));
                 self.fail_ci(format!("Runtime error: {error}"));
             }
             Event::SessionError { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.status = format!("Session error: {error}");
+                    self.set_error(format!("Session error: {error}"));
                     self.request_sync_for_session(&session_id);
                     self.fail_ci(format!("Session error: {error}"));
                 } else {
@@ -120,7 +120,7 @@ impl App {
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
-                    self.state.status = format!("Stream error: {error}");
+                    self.set_error(format!("Stream error: {error}"));
                     self.request_sync_for_session(&session_id);
                 }
                 self.fail_ci(format!("Stream error: {error}"));
@@ -181,7 +181,7 @@ impl App {
                     self.last_statusline_animation_tick = None;
                     self.last_stream_history_request = None;
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
-                    self.state.status = format!("Continuation failed: {error}");
+                    self.set_error(format!("Continuation failed: {error}"));
                     self.request_sync_for_session(&session_id);
                 } else {
                     self.request(RuntimeRequest::ListSessions);
@@ -230,7 +230,7 @@ impl App {
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.pending_script = None;
-                    self.state.script_phase = ScriptPhase::Executing;
+                    self.state.script_phase = ScriptPhase::Idle;
                     self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status = format!("Script {status}; waiting for assistant");
                 } else {
@@ -244,7 +244,24 @@ impl App {
         match response {
             RuntimeResponse::Models(Ok(models)) => {
                 self.state.config_loaded = true;
+                let selected = self
+                    .state
+                    .filtered_models()
+                    .get(self.state.model_menu_index)
+                    .map(|(provider, model)| (provider.clone(), model.id.clone()));
                 self.state.models_by_provider = models;
+                if let Some((provider, id)) = selected {
+                    self.state.model_menu_index = self
+                        .state
+                        .filtered_models()
+                        .iter()
+                        .position(|(candidate, model)| candidate == &provider && model.id == id)
+                        .unwrap_or(0);
+                }
+                self.state.model_menu_index = self
+                    .state
+                    .model_menu_index
+                    .min(self.state.filtered_models().len().saturating_sub(1));
                 if self.is_ci_mode() {
                     if let Err(err) = self.validate_ci_model_selection() {
                         self.fail_ci(err);
@@ -256,7 +273,7 @@ impl App {
                 self.maybe_send_startup_message();
             }
             RuntimeResponse::Models(Err(err)) => {
-                self.state.status = format!("Failed loading models: {err}");
+                self.set_error(format!("Failed loading models: {err}"));
                 self.fail_ci(format!("Failed loading models: {err}"));
             }
             RuntimeResponse::AgentProfileCatalog(result) => match result {
@@ -293,7 +310,7 @@ impl App {
                     self.maybe_send_startup_message();
                 }
                 Err(error) => {
-                    self.state.status = format!("Failed loading agent profiles: {error}");
+                    self.set_error(format!("Failed loading agent profiles: {error}"));
                     self.fail_ci(format!("Failed loading agent profiles: {error}"));
                 }
             },
@@ -301,7 +318,7 @@ impl App {
                 self.state.provider_definitions = definitions;
             }
             RuntimeResponse::ProviderDefinitions(Err(err)) => {
-                self.state.status = format!("Failed loading provider definitions: {err}");
+                self.set_error(format!("Failed loading provider definitions: {err}"));
             }
             RuntimeResponse::Settings(Ok(settings)) => {
                 self.state.settings_draft = Some(settings);
@@ -318,11 +335,14 @@ impl App {
                 self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
                 self.state.connect_provider_search.clear();
                 self.state.connect_provider_index = 0;
+                if self.state.mode == UiMode::Executions {
+                    self.close_executions();
+                }
                 self.state.mode = UiMode::ProvidersMenu;
                 self.state.status = String::from("Providers loaded");
             }
             RuntimeResponse::Settings(Err(err)) => {
-                self.state.status = format!("Failed loading settings: {err}");
+                self.set_error(format!("Failed loading settings: {err}"));
             }
             RuntimeResponse::OpenAiCodexAuthStatus(result)
             | RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
@@ -333,7 +353,7 @@ impl App {
                     self.apply_openai_codex_auth_status(status);
                 }
                 Err(err) => {
-                    self.state.status = format!("OpenAI auth failed: {err}");
+                    self.set_error(format!("OpenAI auth failed: {err}"));
                 }
             },
             RuntimeResponse::CreateSession {
@@ -381,7 +401,7 @@ impl App {
                     return;
                 }
                 self.state.pending_submit = None;
-                self.state.status = format!("Failed creating session: {err}");
+                self.set_error(format!("Failed creating session: {err}"));
                 self.fail_ci(format!("Failed creating session: {err}"));
             }
             RuntimeResponse::SetSessionProfile {
@@ -399,6 +419,9 @@ impl App {
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
+                    if self.state.mode == UiMode::Executions {
+                        self.close_executions();
+                    }
                     self.state.mode = UiMode::Chat;
                 }
 
@@ -444,7 +467,7 @@ impl App {
                 }
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status = format!("Failed changing agent: {err}");
+                    self.set_error(format!("Failed changing agent: {err}"));
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
@@ -457,7 +480,7 @@ impl App {
                 }
                 self.state.is_streaming = false;
                 self.state.profile_lock_stale_after_terminal_event = false;
-                self.state.status = format!("Send failed: {err}");
+                self.set_error(format!("Send failed: {err}"));
                 self.fail_ci(format!("Send failed: {err}"));
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
@@ -474,7 +497,7 @@ impl App {
                     .iter()
                     .map(|violation| (violation.field.clone(), violation.message.clone()))
                     .collect();
-                self.state.status = format!("Failed saving settings: {err}");
+                self.set_error(format!("Failed saving settings: {err}"));
             }
             RuntimeResponse::ChatHistory { session_id, result } => {
                 match result {
@@ -490,7 +513,7 @@ impl App {
                     }
                     Err(err) => {
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                            self.state.status = format!("Failed loading history: {err}");
+                            self.set_error(format!("Failed loading history: {err}"));
                         }
                     }
                 }
@@ -526,6 +549,19 @@ impl App {
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
                             self.state.chat_history = snapshot.history;
                             self.state.context_usage = snapshot.context_usage;
+                            if self
+                                .state
+                                .pending_script
+                                .as_ref()
+                                .map(|script| &script.execution_id)
+                                != snapshot
+                                    .pending_script
+                                    .as_ref()
+                                    .map(|script| &script.execution_id)
+                            {
+                                self.state.approval_scroll.set(0);
+                                self.state.approval_expanded = false;
+                            }
                             self.state.pending_script = snapshot.pending_script;
                             self.apply_agent_profiles_state(snapshot.profiles);
                             self.state.is_streaming = matches!(
@@ -542,6 +578,11 @@ impl App {
                                 kraai_runtime::SessionActivity::Idle
                                 | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
                             };
+                            if self.state.mode == UiMode::Executions
+                                && self.state.script_phase == ScriptPhase::AwaitingApproval
+                            {
+                                self.close_executions();
+                            }
                             self.state.profile_locked = snapshot.session.profile_locked;
                             if let Some(existing) = self
                                 .state
@@ -558,7 +599,7 @@ impl App {
                     }
                     Err(error) => {
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                            self.state.status = format!("Failed loading session: {error}");
+                            self.set_error(format!("Failed loading session: {error}"));
                         }
                     }
                 }
@@ -583,7 +624,7 @@ impl App {
                         }
                     }
                     Err(err) => {
-                        self.state.status = format!("Failed loading tip: {err}");
+                        self.set_error(format!("Failed loading tip: {err}"));
                     }
                 }
             }
@@ -602,7 +643,7 @@ impl App {
                         self.state.status = String::from("No user message to undo");
                     }
                     Err(err) => {
-                        self.state.status = format!("Failed to undo: {err}");
+                        self.set_error(format!("Failed to undo: {err}"));
                     }
                 }
             }
@@ -621,13 +662,32 @@ impl App {
             RuntimeResponse::LoadSession {
                 result: Err(err), ..
             } => {
-                self.state.status = format!("Failed to load session: {err}");
+                self.set_error(format!("Failed to load session: {err}"));
             }
             RuntimeResponse::Sessions(Ok(sessions)) => {
+                let selected = self
+                    .state
+                    .sessions_menu_index
+                    .checked_sub(1)
+                    .and_then(|index| {
+                        self.state
+                            .filtered_sessions()
+                            .get(index)
+                            .map(|session| session.id.clone())
+                    });
                 self.state.sessions = sessions;
-                if self.state.sessions_menu_index > self.state.sessions.len() {
-                    self.state.sessions_menu_index = self.state.sessions.len();
+                if let Some(id) = selected {
+                    self.state.sessions_menu_index = self
+                        .state
+                        .filtered_sessions()
+                        .iter()
+                        .position(|session| session.id == id)
+                        .map_or(0, |index| index + 1);
                 }
+                self.state.sessions_menu_index = self
+                    .state
+                    .sessions_menu_index
+                    .min(self.state.filtered_sessions().len());
                 self.sync_current_session_profile_from_sessions();
                 if self.event_lag_session_resync_pending {
                     self.sync_current_session_streaming_from_sessions();
@@ -648,14 +708,14 @@ impl App {
                 self.maybe_finish_ci_run();
             }
             RuntimeResponse::Sessions(Err(err)) => {
-                self.state.status = format!("Failed loading sessions: {err}");
+                self.set_error(format!("Failed loading sessions: {err}"));
             }
             RuntimeResponse::UserInputHistory(Ok(history)) => {
                 self.state.input_history = history;
                 self.reset_input_history_navigation();
             }
             RuntimeResponse::UserInputHistory(Err(err)) => {
-                self.state.status = format!("Failed loading input history: {err}");
+                self.set_error(format!("Failed loading input history: {err}"));
             }
             RuntimeResponse::DeleteSession {
                 session_id,
@@ -670,7 +730,7 @@ impl App {
             RuntimeResponse::DeleteSession {
                 result: Err(err), ..
             } => {
-                self.state.status = format!("Failed deleting session: {err}");
+                self.set_error(format!("Failed deleting session: {err}"));
             }
             RuntimeResponse::ApproveScript {
                 session_id,
@@ -698,7 +758,7 @@ impl App {
                 ..
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.status = format!("Failed approving script: {err}");
+                    self.set_error(format!("Failed approving script: {err}"));
                 }
             }
             RuntimeResponse::DenyScript {
@@ -726,7 +786,7 @@ impl App {
                 ..
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.status = format!("Failed denying script: {err}");
+                    self.set_error(format!("Failed denying script: {err}"));
                 }
             }
             RuntimeResponse::CancelStream(Ok(true)) => {}
@@ -734,7 +794,7 @@ impl App {
                 self.state.status = String::from("No active stream to cancel");
             }
             RuntimeResponse::CancelStream(Err(err)) => {
-                self.state.status = format!("Failed cancelling stream: {err}");
+                self.set_error(format!("Failed cancelling stream: {err}"));
             }
             RuntimeResponse::ContinueSession(Ok(outcome)) => match outcome {
                 kraai_runtime::ContinueSessionOutcome::Started => {
@@ -747,7 +807,7 @@ impl App {
                 }
             },
             RuntimeResponse::ContinueSession(Err(err)) => {
-                self.state.status = format!("Failed continuing session: {err}");
+                self.set_error(format!("Failed continuing session: {err}"));
             }
         }
     }

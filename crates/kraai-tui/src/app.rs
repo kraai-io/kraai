@@ -11,20 +11,21 @@ use kraai_runtime::{
 use kraai_types::{
     AssistantItem, AssistantPhase, ChatRole, ConversationItem, MessageId, MessageStatus,
 };
-use ratatui::{
-    crossterm::event::{
-        self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-        MouseEventKind,
-    },
-    layout::{Constraint, Flex, Layout},
+use ratatui::crossterm::event::{
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+    MouseEventKind,
 };
 
 use crate::components::TextInput;
 
 mod auth;
 mod chat;
+mod composer;
 mod cost;
+mod duration;
+mod executions;
 mod lifecycle;
+mod menu_search;
 mod providers_flow;
 mod runtime_bridge;
 mod runtime_handlers;
@@ -53,9 +54,9 @@ use self::types::{
     ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, UsageModelKey,
 };
 use self::ui::{
-    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, bottom_panel_height,
-    copy_via_osc52, format_token_count, is_known_slash_command, model_menu_next_index,
-    model_menu_previous_index, slash_command_matches,
+    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, copy_via_osc52,
+    format_token_count, is_known_slash_command, model_menu_next_index, model_menu_previous_index,
+    slash_command_matches,
 };
 use self::workspace_preferences::WorkspacePreferences;
 

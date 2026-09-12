@@ -28,11 +28,33 @@ use status::statusline_line;
 pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
-    if state.mode == UiMode::Chat && state.script_phase == ScriptPhase::AwaitingApproval {
-        10.min(area.height.saturating_sub(1).max(3))
-    } else {
-        TextInput::new(&state.input, state.input_cursor).get_height(area.width)
+    if state.mode == UiMode::Executions {
+        return 0;
     }
+    let available = area.height.saturating_sub(1);
+    if state.mode == UiMode::Chat && state.script_phase == ScriptPhase::AwaitingApproval {
+        if state.approval_expanded {
+            available
+        } else {
+            12.min(available)
+        }
+    } else {
+        TextInput::new(&state.input, state.input_cursor)
+            .get_height(area.width)
+            .min(10)
+            .min((area.height / 3).max(3))
+            .min(available)
+    }
+}
+
+pub(super) fn chat_layout(state: &AppState, area: Rect) -> [Rect; 3] {
+    Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(bottom_panel_height(state, area)),
+    ])
+    .flex(Flex::End)
+    .areas(area)
 }
 
 impl Widget for &AppState {
@@ -40,14 +62,7 @@ impl Widget for &AppState {
     where
         Self: Sized,
     {
-        let input_height = bottom_panel_height(self, area);
-        let layout = Layout::vertical([
-            Constraint::Min(area.height.saturating_sub(input_height + 1)),
-            Constraint::Length(1),
-            Constraint::Length(input_height),
-        ])
-        .flex(Flex::End);
-        let [chat_history_area, status_area, input_area] = layout.areas(area);
+        let [chat_history_area, status_area, input_area] = chat_layout(self, area);
 
         self.refresh_chat_render_cache(chat_history_area.width);
         {
@@ -79,8 +94,8 @@ impl Widget for &AppState {
             UiMode::ModelMenu => render_model_menu(self, area, buf),
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Help => render_help_menu(area, buf),
-            UiMode::Chat => {}
+            UiMode::Help => render_help_menu(self, area, buf),
+            UiMode::Chat | UiMode::Executions => {}
         }
     }
 }

@@ -51,8 +51,9 @@ impl PricingConfig {
             .filter(|value| !value.is_empty())
             .map(String::from)
             .or_else(|| {
-                (api.as_deref().map(|url| url.trim_end_matches('/'))
-                    == Some("https://api.openai.com/v1"))
+                (provider.type_id == "openai-codex"
+                    || api.as_deref().map(|url| url.trim_end_matches('/'))
+                        == Some("https://api.openai.com/v1"))
                 .then(|| String::from("openai"))
             });
         Ok(Self {
@@ -154,6 +155,22 @@ mod tests {
             PricingConfig::new(&provider, &[])?.provider.as_deref(),
             Some("reseller")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn subscription_uses_openai_prices_with_custom_backend() -> Result<()> {
+        let provider = ProviderConfig {
+            id: kraai_types::ProviderId::new("subscription"),
+            type_id: "openai-codex".into(),
+            config: DynamicConfig::from([(
+                "base_url".into(),
+                DynamicValue::from("https://chatgpt.com/backend-api"),
+            )]),
+        };
+        let config = PricingConfig::new(&provider, &[])?;
+        assert_eq!(config.provider.as_deref(), Some("openai"));
+        assert!(config.subscription);
         Ok(())
     }
 

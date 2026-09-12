@@ -100,6 +100,8 @@ impl App {
                 self.state.exit = true;
             }
             "model" => {
+                self.state.menu_search.clear();
+                self.state.model_menu_index = 0;
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
             }
@@ -128,6 +130,8 @@ impl App {
                 self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
             }
             "sessions" => {
+                self.state.menu_search.clear();
+                self.state.sessions_menu_index = 0;
                 self.state.mode = UiMode::SessionsMenu;
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -159,6 +163,7 @@ impl App {
                 self.request(RuntimeRequest::ContinueSession { session_id });
             }
             "help" => {
+                self.state.help_scroll.set(0);
                 self.state.mode = UiMode::Help;
             }
             _ => {
@@ -445,9 +450,5 @@ impl App {
         {
             self.state.is_streaming = session.is_streaming;
         }
-    }
-
-    pub(super) fn flatten_models(&self) -> Vec<(String, Model)> {
-        flatten_models_map(&self.state.models_by_provider)
     }
 }

@@ -1,6 +1,11 @@
 use super::*;
 
 impl App {
+    pub(super) fn set_error(&mut self, error: String) {
+        self.state.last_error = Some(error.clone());
+        self.state.status = error;
+    }
+
     pub(super) fn copy_text_to_clipboard(&mut self, text: &str) -> Result<(), String> {
         let mut errors = Vec::new();
         let mut copied = false;
@@ -223,6 +228,11 @@ impl App {
     }
 
     pub(super) fn enter_script_decision_phase(&mut self) {
+        if self.state.mode == UiMode::Executions {
+            self.close_executions();
+        }
+        self.state.approval_scroll.set(0);
+        self.state.approval_expanded = false;
         self.state.mode = UiMode::Chat;
         self.state.script_phase = ScriptPhase::AwaitingApproval;
         self.state.script_approval_action = ScriptApprovalAction::Allow;
@@ -252,7 +262,12 @@ impl App {
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
         self.state.current_tip_id = None;
+        self.state.last_error = None;
         self.state.chat_history.clear();
+        self.state.execution_expanded.clear();
+        self.state.selected_execution = None;
+        self.state.approval_scroll.set(0);
+        self.state.approval_expanded = false;
         self.state.context_usage = None;
         self.restore_session_cost();
         self.state.optimistic_messages.clear();
@@ -308,6 +323,7 @@ impl App {
             return;
         }
 
+        self.state.last_error = None;
         let content_key = message.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self

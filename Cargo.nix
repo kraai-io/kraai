@@ -9656,6 +9656,14 @@ rec {
             packageId = "serde_json";
           }
           {
+            name = "signal-hook";
+            packageId = "signal-hook";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];

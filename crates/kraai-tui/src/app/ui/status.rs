@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
+use super::super::duration::format_duration;
+
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
 
-use super::super::AppState;
+use super::super::{AppState, ScriptPhase};
 use super::STATUSLINE_STREAMING_FRAMES;
 
 pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
@@ -16,20 +18,11 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
             Style::default().fg(statusline_activity_color(state)),
         ),
         separator.clone(),
-        Span::raw(format!(
-            "Session {}{}",
-            state.session_cost,
-            if state.cost_recovery_list_pending
-                || state
-                    .current_session_id
-                    .as_ref()
-                    .is_some_and(|id| state.cost_recovery_sessions.contains(id))
-            {
-                " (incomplete)"
-            } else {
-                ""
-            }
-        )),
+        Span::raw(if state.mode == super::super::UiMode::Executions {
+            String::from("Executions · ↑/↓ select · Enter toggle · Esc close")
+        } else {
+            state.status.clone()
+        }),
         separator.clone(),
         Span::raw(statusline_model_label(state)),
         separator.clone(),
@@ -38,13 +31,45 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
 
     spans.push(separator.clone());
     spans.push(Span::raw(statusline_context_label(state)));
-    spans.push(separator);
-    spans.push(Span::raw(state.status.clone()));
+    spans.push(Span::raw(format!(
+        " {}{}",
+        state.session_cost,
+        if state.cost_recovery_list_pending
+            || state
+                .current_session_id
+                .as_ref()
+                .is_some_and(|id| state.cost_recovery_sessions.contains(id))
+        {
+            " (incomplete)"
+        } else {
+            ""
+        }
+    )));
+
+    if let Some(error) = &state.last_error {
+        spans.insert(0, separator);
+        spans.insert(
+            0,
+            Span::styled(error.clone(), Style::default().fg(Color::Red)),
+        );
+    }
     Line::from(spans)
 }
 
 fn statusline_activity_label(state: &AppState) -> String {
+    if state.script_phase == ScriptPhase::AwaitingApproval {
+        return String::from("approval required");
+    }
     if state.runtime_is_active() {
+        let activity = if state.retry_waiting {
+            "retrying"
+        } else if state.script_phase == ScriptPhase::Executing {
+            "executing script"
+        } else if state.is_streaming {
+            "generating"
+        } else {
+            "working"
+        };
         let frame_index = state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len();
         let frame = STATUSLINE_STREAMING_FRAMES
             .get(frame_index)
@@ -53,8 +78,13 @@ fn statusline_activity_label(state: &AppState) -> String {
         return state
             .turn_timer
             .elapsed(Instant::now())
-            .map(|elapsed| format!(" {frame} {}", format_turn_duration(elapsed)))
-            .unwrap_or_else(|| format!(" {frame}"));
+            .map(|elapsed| {
+                format!(
+                    "{frame} {activity} {}",
+                    format_duration(Duration::from_secs(elapsed.as_secs()))
+                )
+            })
+            .unwrap_or_else(|| format!("{frame} {activity}"));
     }
     if state.status == "Stream cancelled" {
         return statusline_terminal_activity_label("cancelled", state);
@@ -66,26 +96,19 @@ fn statusline_terminal_activity_label(label: &str, state: &AppState) -> String {
     state
         .turn_timer
         .last_duration()
-        .map(|elapsed| format!("{label} {}", format_turn_duration(elapsed)))
+        .map(|elapsed| {
+            format!(
+                "{label} {}",
+                format_duration(Duration::from_secs(elapsed.as_secs()))
+            )
+        })
         .unwrap_or_else(|| label.to_string())
 }
 
-fn format_turn_duration(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds < 60 {
-        return format!("{seconds}s");
-    }
-
-    let minutes = seconds / 60;
-    if minutes < 60 {
-        return format!("{}m{:02}s", minutes, seconds % 60);
-    }
-
-    format!("{}h{:02}m", minutes / 60, minutes % 60)
-}
-
 fn statusline_activity_color(state: &AppState) -> Color {
-    if state.runtime_is_active() {
+    if state.script_phase == ScriptPhase::AwaitingApproval || state.retry_waiting {
+        Color::Yellow
+    } else if state.runtime_is_active() {
         Color::Cyan
     } else if state.status == "Stream cancelled" {
         Color::Yellow
@@ -164,13 +187,36 @@ fn format_context_label(used_context_tokens: Option<usize>, max_context: Option<
     let used = format_token_count(used_context_tokens);
     match max_context {
         Some(max_context) if max_context > 0 => format!(
-            "ctx {used}/{} ({}%)",
+            "{used}/{} ({}%)",
             format_token_count(max_context),
             used_context_tokens
                 .saturating_mul(100)
                 .checked_div(max_context)
                 .unwrap_or_default()
         ),
-        _ => format!("ctx {used}"),
+        _ => used,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_is_followed_by_cost_without_labels() {
+        assert_eq!(
+            format_context_label(Some(4553), Some(272000)),
+            "4,553/272,000 (1%)"
+        );
+        let state = AppState::default();
+        let line = statusline_line(&state);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.ends_with("0 $0.0000"));
+        assert!(!text.contains("ctx"));
+        assert!(!text.contains("Session"));
     }
 }

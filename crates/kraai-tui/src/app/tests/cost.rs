@@ -74,12 +74,12 @@ fn lag_recovery_restores_costs_from_background_sessions() {
             .app
             .exit_cost_summary()
             .iter()
-            .any(|line| line.contains("total: unknown (1 request)"))
+            .any(|line| line.contains("total: $unknown"))
     );
     harness
         .app
         .reset_chat_session(Some("background".into()), "");
-    assert_eq!(harness.app.state.session_cost.unknown, 1);
+    assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
                 request: Box::new(pending_request(session)),
             });
     }
-    assert_eq!(harness.app.state.session_cost.unknown, 1);
+    assert_eq!(harness.app.state.session_cost.unknown, 0);
     assert_eq!(harness.app.state.launch_requests.len(), 2);
     harness.app.handle_ctrl_c();
     harness.app.handle_ctrl_c();
@@ -162,12 +162,12 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
         harness
             .app
             .exit_token_usage_summary()
-            .is_some_and(|summary| summary.contains("total: unknown (2 requests)"))
+            .is_some_and(|summary| summary.contains("total: $unknown"))
     );
     harness
         .app
         .reset_chat_session(Some("background".into()), "");
-    assert_eq!(harness.app.state.session_cost.unknown, 1);
+    assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
         std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())])
     };
     harness.app.update_costs("session", records(&request));
-    assert_eq!(harness.app.state.session_cost.unknown, 1);
+    assert_eq!(harness.app.state.session_cost.unknown, 0);
     request.usage = Some(kraai_types::TokenUsage {
         cost: Some(kraai_types::RequestCost {
             amount: kraai_types::Usd(12_300_000),
@@ -288,4 +288,23 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     harness.app.state.current_session_id = Some("other".into());
     harness.app.update_costs("other", records(&request));
     assert_eq!(harness.app.state.session_cost.to_string(), "$0.0123");
+}
+
+#[test]
+fn session_cost_waits_for_usage_but_preserves_unpriced_usage_and_attempts() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some("session".into());
+    let mut request = pending_request("request");
+    let records = |request: &kraai_types::RequestUsage| {
+        std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())])
+    };
+    harness.app.update_costs("session", records(&request));
+    assert_eq!(harness.app.state.session_cost.to_string(), "$0.0000");
+    request.usage = Some(kraai_types::TokenUsage::default());
+    harness.app.update_costs("session", records(&request));
+    assert_eq!(harness.app.state.session_cost.to_string(), "$unknown");
+    let mut retry = pending_request("retry");
+    retry.unpriced_attempts = 1;
+    harness.app.update_costs("session", records(&retry));
+    assert_eq!(harness.app.state.session_cost.unknown, 2);
 }
