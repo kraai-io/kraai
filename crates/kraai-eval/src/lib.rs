@@ -191,6 +191,8 @@ pub struct SandboxRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyRecord {
+    #[serde(default)]
+    pub transport_revision: u32,
     pub kind: String,
     pub upstream: String,
     pub allowed_paths: Vec<String>,

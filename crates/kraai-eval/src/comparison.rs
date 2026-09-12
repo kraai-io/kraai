@@ -389,6 +389,11 @@ fn validate_pair(left: &RunResult, right: &RunResult) -> Result<()> {
     }
     match (&left.model_proxy, &right.model_proxy) {
         (Some(left), Some(right)) => {
+            matching(
+                &left.transport_revision,
+                &right.transport_revision,
+                "model proxy transport revision",
+            )?;
             matching(&left.kind, &right.kind, "model proxy kind")?;
             matching(&left.upstream, &right.upstream, "model proxy upstream")?;
             matching(

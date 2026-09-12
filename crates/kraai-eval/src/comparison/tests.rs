@@ -121,6 +121,7 @@ fn run(harness: &str, attempt: u64, status: RunStatus) -> RunResult {
         completed_at_ms: 100,
         duration_ms: 100,
         model_proxy: Some(ProxyRecord {
+            transport_revision: 1,
             kind: String::from("openai"),
             upstream: String::from("https://example.com"),
             allowed_paths: vec![String::from("/v1/responses")],
@@ -278,6 +279,11 @@ fn rejects_changed_tasks_graders_and_execution_constraints() -> Result<()> {
         ("CPU limit", |run| run.sandbox.cpu_quota_percent += 1),
         ("Rust toolchain", |run| run.rust_environment_programs = None),
         ("model proxy configuration", |run| run.model_proxy = None),
+        ("model proxy transport revision", |run| {
+            if let Some(proxy) = &mut run.model_proxy {
+                proxy.transport_revision += 1;
+            }
+        }),
         ("model proxy request limit", |run| {
             if let Some(proxy) = &mut run.model_proxy {
                 proxy.max_requests += 1;
@@ -295,6 +301,30 @@ fn rejects_changed_tasks_graders_and_execution_constraints() -> Result<()> {
         let right = cache.write_suite("right", &[result], &[])?;
         rejects(compare(&left, &right), field)?;
     }
+    Ok(())
+}
+
+#[test]
+fn results_without_a_proxy_transport_revision_require_revision_zero() -> Result<()> {
+    let cache = TestCache::new()?;
+    let left_result = run("left", 0, RunStatus::Passed);
+    let result_path = cache.0.join(&left_result.artifact_path).join("result.json");
+    let left = cache.write_suite("left", std::slice::from_ref(&left_result), &[])?;
+    let mut result_json = serde_json::to_value(&left_result)?;
+    result_json
+        .get_mut("model_proxy")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| eyre!("missing model proxy fixture"))?
+        .remove("transport_revision");
+    fs::write(result_path, serde_json::to_vec(&result_json)?)?;
+    let mut right_result = run("right", 0, RunStatus::Passed);
+    let right = cache.write_suite("right", std::slice::from_ref(&right_result), &[])?;
+    rejects(compare(&left, &right), "model proxy transport revision")?;
+    if let Some(proxy) = &mut right_result.model_proxy {
+        proxy.transport_revision = 0;
+    }
+    let right = cache.write_suite("right", &[right_result], &[])?;
+    ensure!(compare(&left, &right)?.evaluated_pairs == 1);
     Ok(())
 }
 
