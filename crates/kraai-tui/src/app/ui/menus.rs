@@ -233,7 +233,7 @@ pub(super) fn render_help_menu(area: Rect, buf: &mut Buffer) {
         Line::styled("Transcript", Style::default().add_modifier(Modifier::BOLD)),
         Line::raw("PgUp/PgDn scroll · Home/End first/latest"),
         Line::raw("F6 execution view · ↑/↓ select · Enter toggle · Esc close"),
-        Line::raw("Execution total time includes approval waiting"),
+        Line::raw("Execution time excludes approval waiting"),
         Line::raw(""),
         Line::raw("Menus: type to filter · Enter select · Delete session"),
         Line::raw("Approval: ↑/↓ or PgUp/PgDn scroll · f expand"),
