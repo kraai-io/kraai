@@ -1,0 +1,114 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,109 @@
++use dependency_waves::{Job, PlanError, plan};
++
++fn job(id: &str, dependencies: &[&str], resources: &[&str]) -> Job {
++    Job {
++        id: id.into(),
++        dependencies: dependencies.iter().map(|s| (*s).into()).collect(),
++        resources: resources.iter().map(|s| (*s).into()).collect(),
++    }
++}
++
++fn waves(values: &[&[&str]]) -> Vec<Vec<String>> {
++    values.iter().map(|wave| wave.iter().map(|id| (*id).into()).collect()).collect()
++}
++
++#[test]
++fn greedy_selection_skips_conflicts_and_only_completes_between_waves() {
++    let jobs = [
++        job("a", &[], &["x", "x"]),
++        job("b", &[], &["x", "y"]),
++        job("c", &[], &["z"]),
++        job("d", &["a"], &[]),
++        job("e", &["a", "c", "c"], &["y"]),
++    ];
++    assert_eq!(plan(&jobs, &[], 3), Ok(waves(&[&["a", "c"], &["b", "d"], &["e"]])));
++    assert_eq!(plan(&jobs, &["a".into(), "a".into()], 2), Ok(waves(&[&["b", "c"], &["d", "e"]])));
++}
++
++#[test]
++fn completed_jobs_can_break_cycles_and_need_not_include_dependencies() {
++    let jobs = [job("a", &["b"], &[]), job("b", &["a"], &[]), job("c", &["b"], &[])];
++    assert_eq!(plan(&jobs, &["b".into()], 4), Ok(waves(&[&["a", "c"]])));
++    assert_eq!(plan(&jobs, &["a".into(), "b".into(), "c".into()], 1), Ok(vec![]));
++    assert_eq!(plan(&[job("self", &["self"], &[])], &["self".into()], 1), Ok(vec![]));
++}
++
++#[test]
++fn blocked_reports_all_remaining_jobs_sorted_and_no_partial_plan() {
++    let jobs = [
++        job("tail", &["a"], &[]), job("b", &["a"], &[]),
++        job("a", &["b"], &[]), job("free", &[], &[]),
++    ];
++    assert_eq!(plan(&jobs, &[], 2), Err(PlanError::Blocked(vec!["a".into(), "b".into(), "tail".into()])));
++    assert_eq!(plan(&[job("self", &["self"], &[])], &[], 1), Err(PlanError::Blocked(vec!["self".into()])));
++}
++
++#[test]
++fn validation_precedence_is_stable() {
++    let missing = job("a", &["missing"], &[]);
++    assert_eq!(plan(&[missing.clone(), job("", &[], &[])], &["unknown".into()], 0), Err(PlanError::ZeroCapacity));
++    assert_eq!(plan(&[missing.clone(), job("", &[], &[])], &["unknown".into()], 1), Err(PlanError::EmptyId));
++    assert_eq!(plan(&[missing.clone(), job("a", &[], &[])], &[], 1), Err(PlanError::DuplicateId("a".into())));
++    assert_eq!(plan(&[missing.clone()], &["unknown".into()], 1), Err(PlanError::UnknownDependency { job: "a".into(), dependency: "missing".into() }));
++    assert_eq!(plan(&[missing], &["a".into()], 1), Err(PlanError::UnknownDependency { job: "a".into(), dependency: "missing".into() }));
++    assert_eq!(plan(&[job("ok", &[], &[])], &["first".into(), "second".into()], 1), Err(PlanError::UnknownCompleted("first".into())));
++    assert_eq!(plan(&[], &[], 1), Ok(vec![]));
++}
++
++#[test]
++fn ordering_uses_full_unicode_ids_and_empty_resources_are_exclusive() {
++    let jobs = [job("é", &[], &[""]), job("A", &[], &[""]), job("a10", &[], &[]), job("a2", &[], &[])];
++    assert_eq!(plan(&jobs, &[], 4), Ok(waves(&[&["A", "a10", "a2"], &["é"]])));
++}
++
++#[test]
++fn generated_dags_match_independent_bitset_scheduler() {
++    let names = ["a", "b", "c", "d", "e"];
++    for graph in 0_u32..1024 {
++        let mut dependencies = [0_u32; 5];
++        let mut edge = 0;
++        for node in 0..5 {
++            for earlier in 0..node {
++                if graph & (1 << edge) != 0 {
++                    dependencies[node] |= 1 << earlier;
++                }
++                edge += 1;
++            }
++        }
++        let resources: [u32; 5] = std::array::from_fn(|index| (graph.rotate_left(index as u32) >> 3) & 3);
++        let jobs: Vec<_> = (0..5).rev().map(|index| {
++            let deps: Vec<_> = (0..5).filter(|&other| dependencies[index] & (1 << other) != 0).map(|other| names[other]).collect();
++            let locks: Vec<_> = (0..2).filter(|&lock| resources[index] & (1 << lock) != 0).map(|lock| if lock == 0 { "x" } else { "y" }).collect();
++            job(names[index], &deps, &locks)
++        }).collect();
++        for capacity in 1..=3 {
++            let mut done = graph & 31;
++            let initial: Vec<String> = (0..5).filter(|&index| done & (1 << index) != 0).map(|index| names[index].into()).collect();
++            let mut expected = Vec::new();
++            while done != 31 {
++                let mut selected = 0;
++                let mut reserved = 0;
++                let mut wave = Vec::new();
++                for index in 0..5 {
++                    if done & (1 << index) == 0 && dependencies[index] & !done == 0 && resources[index] & reserved == 0 {
++                        wave.push(names[index].to_owned());
++                        selected |= 1 << index;
++                        reserved |= resources[index];
++                        if wave.len() == capacity {
++                            break;
++                        }
++                    }
++                }
++                assert_ne!(selected, 0);
++                done |= selected;
++                expected.push(wave);
++            }
++            assert_eq!(plan(&jobs, &initial, capacity), Ok(expected), "graph={graph}, capacity={capacity}");
++        }
++    }
++}

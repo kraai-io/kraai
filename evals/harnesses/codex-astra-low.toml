@@ -1,0 +1,36 @@
+args = [
+  "exec",
+  "--ignore-user-config",
+  "--ignore-rules",
+  "--ephemeral",
+  "--json",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--model",
+  "gpt-6-astra",
+  "--config",
+  'model_reasoning_effort="low"',
+  "--config",
+  'model_provider="eval"',
+  "--config",
+  'model_providers.eval.name="Kraai evaluation proxy"',
+  "--config",
+  'model_providers.eval.base_url="{proxy_url}/codex"',
+  "--config",
+  'model_providers.eval.env_key="KRAAI_EVAL_CODEX_PROXY_TOKEN"',
+  "--config",
+  'model_providers.eval.wire_api="responses"',
+  "--config",
+  "model_providers.eval.requires_openai_auth=false",
+  "--config",
+  "model_providers.eval.supports_websockets=false",
+  "--config",
+  "mcp_servers={}",
+  "--config",
+  'web_search="disabled"',
+  "{prompt}",
+]
+max_requests = 64
+name = "codex"
+program = "codex"
+proxy = "codex_subscription"
+schema_version = 1

@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -55,7 +55,7 @@
+     while done.len() < by_id.len() {
+         let mut wave = Vec::new();
+         let mut reserved = BTreeSet::new();
+-        for (&id, job) in &by_id {
++        for (&id, job) in by_id.iter().rev() {
+             if done.contains(id) || !job.dependencies.iter().all(|dependency| done.contains(dependency.as_str())) {
+                 continue;
+             }

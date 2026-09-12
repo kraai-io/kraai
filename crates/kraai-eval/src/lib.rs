@@ -4,20 +4,30 @@
 mod cache;
 mod cargo_dependencies;
 mod command;
+mod comparison;
+mod execution;
+mod harness;
 mod manifest;
 mod metrics;
 mod provider_config;
 mod proxy;
 mod sandbox;
 mod suite;
+mod validation;
 mod workspace;
 
 pub use cache::{ExperimentIdentity, ResultStore, RunCoordinates};
+pub use comparison::{
+    ComparedRun, ComparisonResult, ComparisonSuite, PairOutcome, PairedMetric, compare,
+    compare_with_cache_roots,
+};
+pub use harness::{HarnessProfile, ProxyKind, ResolvedHarness};
 pub use manifest::{CommandSpec, NetworkPolicy, TaskManifest};
 pub use metrics::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, UsageMetrics};
 pub use provider_config::KraaiProviderConfigRequest;
 pub use proxy::ModelProxyRequest;
 pub use suite::{SuiteRequest, SuiteResult, run_suite};
+pub use validation::{MutationValidation, TaskValidation, validate_task};
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -29,8 +39,7 @@ use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{CommandOutcome, run_trusted};
-use crate::sandbox::{ResourceLimits, SandboxRequest, run_sandboxed, rust_environment};
-use crate::workspace::{capture_submission, commit_fixture, materialize_base, replay_submission};
+use crate::sandbox::{ResourceLimits, rust_environment};
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
@@ -46,6 +55,30 @@ pub struct RunRequest {
     pub model_proxy: Option<ModelProxyRequest>,
     pub kraai_provider_config: Option<KraaiProviderConfigRequest>,
     pub progress: Option<ProgressReporter>,
+}
+
+impl RunRequest {
+    fn resolved_harness_name(&self) -> String {
+        self.harness_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.runner_program
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| String::from("unnamed-harness"))
+    }
+
+    fn resolved_model_label(&self) -> Option<String> {
+        self.model_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -158,6 +191,8 @@ pub struct SandboxRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyRecord {
+    #[serde(default)]
+    pub transport_revision: u32,
     pub kind: String,
     pub upstream: String,
     pub allowed_paths: Vec<String>,
@@ -198,25 +233,8 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     task.validate(task_dir)?;
     task.resolve_source_revision(task_dir)?;
 
-    let harness_name = request
-        .harness_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            request
-                .runner_program
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .ok_or_else(|| color_eyre::eyre::eyre!("runner program has no file name"))?;
-    let model_label = request
-        .model_label
-        .as_deref()
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(str::to_owned);
+    let harness_name = request.resolved_harness_name();
+    let model_label = request.resolved_model_label();
     if let Some(progress) = &request.progress {
         progress.initialize(
             &task.id,
@@ -296,7 +314,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         if request.reuse_result {
             return Ok(result);
         }
-        bail!("experiment result already exists; use --reuse-result or select another --attempt");
+        bail!("experiment result already exists; use --resume or select another --start-attempt");
     }
 
     let run_root = cache_dir
@@ -306,26 +324,20 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     let artifact_dir = store.begin()?;
     let started = Instant::now();
     let started_at_ms = unix_timestamp_ms()?;
-    let result = execute(
+    let result = execution::execute(execution::Execution {
         request,
-        &task,
+        task: &task,
         task_dir,
-        &cache_dir,
-        &run_root,
-        &experiment_id,
-        &runner_artifact_sha256,
-        &task_sha256,
-        &grader_sha256,
-        provider_config_sha256.as_deref(),
-        rust_environment.as_ref(),
-        rust_environment_programs.clone(),
-        &harness_name,
-        model_label.as_deref(),
-        store.relative_dir(),
-        &artifact_dir,
+        cache_dir: &cache_dir,
+        run_root: &run_root,
+        experiment_id: &experiment_id,
+        identity: &identity,
+        rust_environment: rust_environment.as_ref(),
+        artifact_path: store.relative_dir(),
+        artifact_dir: &artifact_dir,
         started,
         started_at_ms,
-    );
+    });
     let result = match result {
         Ok(result) => result,
         Err(error) => {
@@ -422,263 +434,6 @@ fn persist_launch_failure(request: &RunRequest, error: &color_eyre::Report) -> R
     Ok(path)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "execution receives resolved immutable identities"
-)]
-fn execute(
-    request: &RunRequest,
-    task: &TaskManifest,
-    task_dir: &Path,
-    cache_dir: &Path,
-    run_root: &Path,
-    experiment_id: &str,
-    runner_artifact_sha256: &str,
-    task_sha256: &str,
-    grader_sha256: &str,
-    provider_config_sha256: Option<&str>,
-    rust_environment: Option<&sandbox::RustEnvironment>,
-    rust_environment_programs: Option<Vec<String>>,
-    harness_name: &str,
-    model_label: Option<&str>,
-    artifact_path: &Path,
-    artifact_dir: &Path,
-    started: Instant,
-    started_at_ms: u128,
-) -> Result<RunResult> {
-    let mut events = EventLog::new(artifact_dir.join("events.jsonl"))?;
-    events.write(
-        "experiment_started",
-        serde_json::json!({
-            "experiment_id": experiment_id,
-            "task_id": task.id,
-            "source_revision": task.source.revision,
-            "runner_artifact_sha256": runner_artifact_sha256,
-            "task_sha256": task_sha256,
-            "grader_sha256": grader_sha256,
-        }),
-    )?;
-
-    set_progress(request, "materializing source revision");
-    let base = run_root.join("base");
-    events.write("source_materialization_started", serde_json::json!({}))?;
-    materialize_base(task, task_dir, &base)?;
-    let cargo_dependencies = if let Some(rust_environment) = rust_environment {
-        set_progress(request, "fetching Rust dependencies");
-        events.write("rust_dependencies_fetch_started", serde_json::json!({}))?;
-        let dependencies =
-            cargo_dependencies::prepare(cache_dir, &base, task_sha256, rust_environment)?;
-        events.write(
-            "rust_dependencies_fetch_finished",
-            serde_json::json!({
-                "cache_key": dependencies.key,
-                "reused": dependencies.reused,
-            }),
-        )?;
-        Some(dependencies)
-    } else {
-        None
-    };
-    set_progress(request, "starting credential proxy");
-    let proxy = request
-        .model_proxy
-        .as_ref()
-        .map(|config| config.start(artifact_dir.join("proxy.events.jsonl")))
-        .transpose()?;
-    let proxy_url = proxy.as_ref().map(proxy::ModelProxy::base_url);
-    let provider_config_relative = if let Some(config) = &request.kraai_provider_config {
-        let proxy_url = proxy_url.as_deref().ok_or_else(|| {
-            color_eyre::eyre::eyre!("provider config requires an active model proxy")
-        })?;
-        let path = config.materialize(&base, proxy_url)?;
-        commit_fixture(&base, "sanitized evaluation provider config")?;
-        Some(path.strip_prefix(&base)?.to_path_buf())
-    } else {
-        None
-    };
-    events.write("source_materialization_finished", serde_json::json!({}))?;
-    set_progress(request, "creating agent workspace");
-    let agent_workspace = run_root.join("agent");
-    workspace::copy_tree(&base, &agent_workspace)?;
-    events.write("agent_workspace_created", serde_json::json!({}))?;
-
-    let provider_config_path = provider_config_relative
-        .as_ref()
-        .map(|path| agent_workspace.join(path));
-    let provider_id = request
-        .kraai_provider_config
-        .as_ref()
-        .map(KraaiProviderConfigRequest::selected_provider_id)
-        .transpose()?;
-    let runner_command = expand_runner_command(
-        request,
-        task,
-        &agent_workspace,
-        proxy_url.as_deref(),
-        provider_config_path.as_deref(),
-        provider_id.as_deref(),
-    )?;
-    let harness_metrics_path = artifact_dir.join("harness-metrics.json");
-    File::create(&harness_metrics_path)?;
-    let script_executions_dir = artifact_dir.join("script-executions");
-    fs::create_dir(&script_executions_dir)?;
-    events.write(
-        "runner_started",
-        serde_json::json!({"command": runner_command}),
-    )?;
-    let runner_network = if proxy.is_some() {
-        NetworkPolicy::Enabled
-    } else {
-        task.runner.network.clone()
-    };
-    set_progress(request, "running harness");
-    let runner_outcome = run_sandboxed(SandboxRequest {
-        command: runner_command.clone(),
-        workspace: agent_workspace.clone(),
-        timeout: Duration::from_secs(task.runner.timeout_seconds),
-        network: runner_network.clone(),
-        environment: proxy.as_ref().map_or_else(
-            std::collections::BTreeMap::new,
-            proxy::ModelProxy::environment,
-        ),
-        extra_programs: rust_environment
-            .map(|environment| environment.programs.clone())
-            .unwrap_or_default(),
-        cargo_home: cargo_dependencies
-            .as_ref()
-            .map(|dependencies| dependencies.home.clone()),
-        metrics_output: Some(harness_metrics_path.clone()),
-        script_executions_dir: Some(script_executions_dir),
-        resource_limits: Some(resource_limits(task)),
-    })?;
-    let proxy_record = proxy.as_ref().map(proxy::ModelProxy::record);
-    let proxy_metrics = proxy.map(proxy::ModelProxy::finish).transpose()?;
-    let harness_metrics = match HarnessMetrics::load(&harness_metrics_path) {
-        Ok(metrics) => metrics,
-        Err(error) => {
-            events.write(
-                "harness_metrics_rejected",
-                serde_json::json!({"error": format!("{error:#}")}),
-            )?;
-            None
-        }
-    };
-    write_process_logs(artifact_dir, "runner", &runner_outcome)?;
-    events.write("runner_finished", outcome_json(&runner_outcome))?;
-
-    set_progress(request, "capturing submission");
-    let submission_path = artifact_dir.join("submission.patch");
-    let submission_sha256 = capture_submission(
-        &agent_workspace,
-        &submission_path,
-        task.max_submission_bytes,
-    )?;
-    events.write(
-        "submission_captured",
-        serde_json::json!({"sha256": submission_sha256}),
-    )?;
-
-    let mut graders = Vec::new();
-    let mut passed = false;
-    if runner_outcome.success() {
-        set_progress(request, "preparing hidden grading workspace");
-        let grading_workspace = run_root.join("grading");
-        replay_submission(&base, &grading_workspace, &submission_path)?;
-        events.write("grading_workspace_created", serde_json::json!({}))?;
-        if let Some(patch) = &task.grader.hidden_patch {
-            let patch = manifest::resolve_private_path(task_dir, patch)?;
-            apply_patch(&grading_workspace, &patch)?;
-            events.write("hidden_grader_applied", serde_json::json!({}))?;
-        }
-
-        passed = true;
-        for (index, command) in task.grader.commands.iter().enumerate() {
-            set_progress(
-                request,
-                format!(
-                    "running grader {}/{}",
-                    index + 1,
-                    task.grader.commands.len()
-                ),
-            );
-            events.write(
-                "grader_started",
-                serde_json::json!({"index": index, "command": command.command}),
-            )?;
-            let outcome = run_sandboxed(SandboxRequest {
-                command: command.command.clone(),
-                workspace: grading_workspace.clone(),
-                timeout: Duration::from_secs(command.timeout_seconds),
-                network: NetworkPolicy::Disabled,
-                environment: std::collections::BTreeMap::new(),
-                extra_programs: rust_environment
-                    .map(|environment| environment.programs.clone())
-                    .unwrap_or_default(),
-                cargo_home: cargo_dependencies
-                    .as_ref()
-                    .map(|dependencies| dependencies.home.clone()),
-                metrics_output: None,
-                script_executions_dir: None,
-                resource_limits: Some(resource_limits(task)),
-            })?;
-            write_process_logs(artifact_dir, &format!("grader-{index}"), &outcome)?;
-            events.write(
-                "grader_finished",
-                serde_json::json!({"index": index, "outcome": outcome_json(&outcome)}),
-            )?;
-            passed &= outcome.success();
-            graders.push(process_record(&outcome));
-        }
-    }
-
-    let status = if !runner_outcome.success() {
-        RunStatus::RunnerFailed
-    } else if passed {
-        RunStatus::Passed
-    } else {
-        RunStatus::Failed
-    };
-    let result = RunResult {
-        schema_version: 6,
-        experiment_id: experiment_id.to_owned(),
-        artifact_path: artifact_path.to_path_buf(),
-        task_id: task.id.clone(),
-        harness_name: harness_name.to_owned(),
-        model_label: model_label.map(str::to_owned),
-        attempt: request.attempt,
-        runner_version: request.runner_version.clone(),
-        runner_artifact_sha256: runner_artifact_sha256.to_owned(),
-        task_sha256: task_sha256.to_owned(),
-        grader_sha256: grader_sha256.to_owned(),
-        sandbox: SandboxRecord {
-            backend: String::from("bubblewrap+systemd-cgroup-v2"),
-            network: runner_network,
-            environment_cleared: true,
-            max_memory_bytes: task.runner.max_memory_bytes,
-            max_processes: task.runner.max_processes,
-            cpu_quota_percent: task.runner.cpu_quota_percent,
-        },
-        status,
-        runner: Some(process_record(&runner_outcome)),
-        graders,
-        submission_sha256: Some(submission_sha256),
-        started_at_ms,
-        completed_at_ms: unix_timestamp_ms()?,
-        duration_ms: started.elapsed().as_millis(),
-        model_proxy: proxy_record,
-        metrics: EvaluationMetrics {
-            proxy: proxy_metrics,
-            harness: harness_metrics,
-        },
-        controller_failure: None,
-        provider_config_sha256: provider_config_sha256.map(str::to_owned),
-        rust_environment_programs,
-    };
-    set_progress(request, format!("saving {:?} result", result.status));
-    events.write("experiment_finished", serde_json::to_value(&result)?)?;
-    Ok(result)
-}
-
 fn set_progress(request: &RunRequest, phase: impl Into<String>) {
     if let Some(progress) = &request.progress {
         progress.set_phase(phase);
@@ -731,19 +486,44 @@ fn expand_runner_command(
         .wrap_err("canonicalize runner program")?;
     let workspace = workspace.to_string_lossy();
     let mut command = vec![program.to_string_lossy().into_owned()];
-    command.extend(request.runner_args.iter().map(|arg| {
-        arg.replace("{workspace}", &workspace)
-            .replace("{prompt}", &task.prompt)
-            .replace("{proxy_url}", proxy_url.unwrap_or_default())
-            .replace("{provider_id}", provider_id.unwrap_or_default())
-            .replace(
-                "{provider_config}",
-                &provider_config
-                    .map(|path| path.to_string_lossy())
-                    .unwrap_or_default(),
-            )
-    }));
+    let config = provider_config
+        .map(|path| path.to_string_lossy())
+        .unwrap_or_default();
+    let replacements = [
+        ("{workspace}", workspace.as_ref()),
+        ("{prompt}", task.prompt.as_str()),
+        ("{proxy_url}", proxy_url.unwrap_or_default()),
+        ("{provider_id}", provider_id.unwrap_or_default()),
+        ("{provider_config}", config.as_ref()),
+    ];
+    command.extend(
+        request
+            .runner_args
+            .iter()
+            .map(|arg| expand_argument(arg, &replacements)),
+    );
     Ok(command)
+}
+
+fn expand_argument(argument: &str, replacements: &[(&str, &str)]) -> String {
+    let mut expanded = String::new();
+    let mut remaining = argument;
+    while let Some(start) = remaining.find('{') {
+        expanded.push_str(remaining.get(..start).unwrap_or_default());
+        remaining = remaining.get(start..).unwrap_or_default();
+        if let Some((placeholder, value)) = replacements
+            .iter()
+            .find(|(key, _)| remaining.starts_with(key))
+        {
+            expanded.push_str(value);
+            remaining = remaining.get(placeholder.len()..).unwrap_or_default();
+        } else {
+            expanded.push('{');
+            remaining = remaining.get(1..).unwrap_or_default();
+        }
+    }
+    expanded.push_str(remaining);
+    expanded
 }
 
 fn apply_patch(workspace: &Path, patch: &Path) -> Result<()> {
@@ -840,4 +620,30 @@ impl EventLog {
 
 fn unix_timestamp_ms() -> Result<u128> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
+}
+
+#[cfg(test)]
+fn eval_assets_directory() -> PathBuf {
+    std::env::var_os("KRAAI_EVAL_ASSETS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_argument;
+
+    #[test]
+    fn runner_templates_preserve_placeholder_text_inside_prompts() {
+        assert_eq!(
+            expand_argument(
+                "prefix {prompt} {provider_id} {unknown}",
+                &[
+                    ("{prompt}", "Keep {provider_id} literal, including 🦀."),
+                    ("{provider_id}", "selected")
+                ],
+            ),
+            "prefix Keep {provider_id} literal, including 🦀. selected {unknown}"
+        );
+    }
 }

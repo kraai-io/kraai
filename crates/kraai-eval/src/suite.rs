@@ -74,23 +74,17 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     let suite_id = ulid::Ulid::generate().to_string();
     let first_run = request.runs.first();
     let harness_name = first_run
-        .and_then(|run| run.harness_name.as_deref())
-        .or_else(|| {
-            first_run
-                .and_then(|run| run.runner_program.file_name())
-                .and_then(|name| name.to_str())
-        })
-        .unwrap_or("unnamed-harness")
-        .to_owned();
+        .map(RunRequest::resolved_harness_name)
+        .unwrap_or_else(|| String::from("unnamed-harness"));
     let runner_version = first_run
         .map(|run| run.runner_version.as_str())
         .unwrap_or("unversioned")
         .to_owned();
-    let model_label = first_run.and_then(|run| run.model_label.clone());
+    let model_label = first_run.and_then(RunRequest::resolved_model_label);
     if request.runs.iter().any(|run| {
-        resolved_harness_name(run) != harness_name
+        run.resolved_harness_name() != harness_name
             || run.runner_version != runner_version
-            || run.model_label != model_label
+            || run.resolved_model_label() != model_label
     }) {
         bail!("suite runs must use one harness, runner version, and model label");
     }
@@ -119,7 +113,9 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
                 error: result.controller_failure.map(|failure| failure.error),
             }),
             Err(error) => runs.push(SuiteRunResult {
-                task_id: None,
+                task_id: crate::TaskManifest::load(&run_request.task_path)
+                    .ok()
+                    .map(|task| task.id),
                 attempt: run_request.attempt,
                 status: None,
                 experiment_id: None,
@@ -187,15 +183,6 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     )
     .wrap_err("write suite summary")?;
     Ok(result)
-}
-
-fn resolved_harness_name(run: &RunRequest) -> String {
-    run.harness_name.clone().unwrap_or_else(|| {
-        run.runner_program.file_name().map_or_else(
-            || String::from("unnamed-harness"),
-            |name| name.to_string_lossy().into_owned(),
-        )
-    })
 }
 
 fn count_statuses(runs: &[SuiteRunResult], predicate: impl Fn(&RunStatus) -> bool) -> u64 {

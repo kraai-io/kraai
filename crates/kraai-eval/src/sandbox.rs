@@ -64,6 +64,7 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
     };
     let mut programs = vec![
         cargo.clone(),
+        required_program("rustc")?,
         required_program("cc")?,
         required_program("git")?,
         required_program("rg")?,
@@ -271,6 +272,21 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
             String::from(sandbox_ca_bundle),
         ]);
     }
+    for interpreter in [
+        "/bin/sh",
+        "/bin/bash",
+        "/bin/env",
+        "/usr/bin/sh",
+        "/usr/bin/bash",
+        "/usr/bin/env",
+    ] {
+        let interpreter = Path::new(interpreter);
+        if interpreter.is_file() {
+            executable_roots.push(interpreter.canonicalize()?);
+        }
+    }
+    executable_roots.sort();
+    executable_roots.dedup();
     let mut closure_roots = Vec::new();
     for program in &executable_roots {
         closure_roots.extend(nix_runtime_closure(program)?);
@@ -384,6 +400,45 @@ mod tests {
     use super::*;
     use color_eyre::eyre::ensure;
     use std::fs;
+
+    #[test]
+    fn sandbox_keeps_host_shell_aliases_executable_for_native_runners() -> Result<()> {
+        let Some(git) = find_program("git") else {
+            return Ok(());
+        };
+        if find_program("bwrap").is_none() || !Path::new("/bin/sh").is_file() {
+            return Ok(());
+        }
+        let workspace = std::env::temp_dir().join(format!(
+            "kraai-eval-sandbox-shell-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir_all(workspace.join(".git"))?;
+        let outcome = run_sandboxed(SandboxRequest {
+            command: vec![
+                git.to_string_lossy().into_owned(),
+                String::from("-c"),
+                String::from("alias.eval-shell=!/bin/sh -c 'printf shell-ready'"),
+                String::from("eval-shell"),
+            ],
+            workspace: workspace.clone(),
+            timeout: Duration::from_secs(5),
+            network: NetworkPolicy::Disabled,
+            environment: BTreeMap::new(),
+            extra_programs: Vec::new(),
+            cargo_home: None,
+            metrics_output: None,
+            script_executions_dir: None,
+            resource_limits: None,
+        })?;
+        fs::remove_dir_all(workspace)?;
+        ensure!(
+            outcome.success() && outcome.stdout == b"shell-ready",
+            "native runner could not use host shell alias: {}",
+            String::from_utf8_lossy(&outcome.stderr)
+        );
+        Ok(())
+    }
 
     #[test]
     fn sandbox_clears_host_environment_and_passes_only_explicit_values() -> Result<()> {

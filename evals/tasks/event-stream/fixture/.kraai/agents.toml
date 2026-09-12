@@ -1,0 +1,6 @@
+[[profiles]]
+capabilities = ["no-sandbox"]
+environment = "inherit"
+escalation_policy = "allow"
+extends = "coding"
+id = "eval-coding"

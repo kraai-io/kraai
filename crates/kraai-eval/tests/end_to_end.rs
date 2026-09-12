@@ -6,6 +6,112 @@ use color_eyre::eyre::{Result, bail, ensure};
 use kraai_eval::{RunRequest, RunStatus, SuiteRequest};
 
 #[test]
+fn cli_runs_an_external_profile_resumes_and_compares_attempts() -> Result<()> {
+    let Some(binary) = option_env!("CARGO_BIN_EXE_kraai-eval") else {
+        return Ok(());
+    };
+    let Some(shell) = find_program("sh") else {
+        return Ok(());
+    };
+    if find_program("bwrap").is_none() || !user_scope_available() {
+        return Ok(());
+    }
+    let root = temporary_directory("cli-profile")?;
+    fs::create_dir(root.join("fixture"))?;
+    fs::write(root.join("fixture/answer.txt"), "broken\n")?;
+    let task = root.join("task.toml");
+    fs::write(
+        &task,
+        r#"schema_version = 1
+id = "cli-profile"
+prompt = "Repair answer.txt."
+[source]
+directory = "fixture"
+[[grader.commands]]
+command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
+"#,
+    )?;
+    let profile = root.join("agent.toml");
+    let harness = kraai_eval::HarnessProfile {
+        name: String::from(" external-shell "),
+        program: shell,
+        args: vec![
+            String::from("-c"),
+            String::from("printf 'fixed\\n' > answer.txt"),
+        ],
+        version: Some(String::from("fixture-v1")),
+        proxy: kraai_eval::ProxyKind::None,
+        sanitize_kraai_provider: false,
+        ..kraai_eval::HarnessProfile::kraai()
+    };
+    fs::write(&profile, toml::to_string(&harness)?)?;
+    let cache = root.join("cache");
+    let invoke = |extra: &[&str]| {
+        Command::new(binary)
+            .arg("run")
+            .arg(&task)
+            .args(["--harness"])
+            .arg(&profile)
+            .args(["--cache-dir"])
+            .arg(&cache)
+            .args(["--model", " fixture-model ", "--attempts", "2", "--json"])
+            .args(extra)
+            .output()
+    };
+    let first = invoke(&[])?;
+    ensure!(
+        first.status.success(),
+        "CLI run failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first: kraai_eval::SuiteResult = serde_json::from_slice(&first.stdout)?;
+    ensure!(
+        first.harness_name == "external-shell"
+            && first.model_label.as_deref() == Some("fixture-model"),
+        "suite labels were not normalized"
+    );
+    ensure!(
+        first.passed_runs == 2,
+        "external profile did not pass both attempts"
+    );
+    let duplicate = invoke(&[])?;
+    ensure!(
+        !duplicate.status.success(),
+        "duplicate attempts unexpectedly succeeded"
+    );
+    let duplicate: kraai_eval::SuiteResult = serde_json::from_slice(&duplicate.stdout)?;
+    ensure!(
+        duplicate.launch_failures == 2,
+        "duplicate results were silently reused"
+    );
+    let resumed = invoke(&["--resume"])?;
+    ensure!(
+        resumed.status.success(),
+        "CLI resume failed: {}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resumed: kraai_eval::SuiteResult = serde_json::from_slice(&resumed.stdout)?;
+    let comparison = Command::new(binary)
+        .arg("compare")
+        .arg(cache.join(first.artifact_path).join("summary.json"))
+        .arg(cache.join(resumed.artifact_path).join("summary.json"))
+        .arg("--json")
+        .output()?;
+    ensure!(
+        comparison.status.success(),
+        "CLI comparison failed: {}",
+        String::from_utf8_lossy(&comparison.stderr)
+    );
+    let comparison: kraai_eval::ComparisonResult = serde_json::from_slice(&comparison.stdout)?;
+    ensure!(
+        comparison.evaluated_pairs == 2 && comparison.ties == 2,
+        "cached attempts did not pair correctly"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn agent_cannot_see_hidden_test_and_submission_is_graded_from_clean_base() -> Result<()> {
     let Some(shell) = find_program("sh") else {
         return Ok(());
