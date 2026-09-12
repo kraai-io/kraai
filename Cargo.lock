@@ -1629,7 +1629,7 @@ checksum = "29a4ebea7b8a2840cd59358bbf396f6f04313ce8eae84ac79703ce80298b8731"
 dependencies = [
  "file-id",
  "log",
- "notify 9.0.0-rc.4",
+ "notify 9.0.0-rc.5",
  "notify-types",
  "rustc-hash",
  "walkdir",
@@ -1664,7 +1664,7 @@ dependencies = [
  "memchr",
  "memmap2",
  "neo_frizbee",
- "notify 9.0.0-rc.4",
+ "notify 9.0.0-rc.5",
  "parking_lot",
  "pathdiff",
  "rayon",
@@ -3680,9 +3680,9 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "9.0.0-rc.4"
+version = "9.0.0-rc.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44b771d4dd781ef14c84078693e67495da6b47f609f72e8a4da8420a861240e"
+checksum = "7768eb7201a1964d8eb10224e850df046ab584ee3c3d26e340a993d81f748148"
 dependencies = [
  "bitflags 2.13.0",
  "inotify",
@@ -3972,9 +3972,9 @@ dependencies = [
 
 [[package]]
 name = "nu-engine"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da1ca340a92c4e655db2839b21fb8fe8b9f8bcb40c1c0b39a2369f59ac628a97"
+checksum = "60d346479ba5b64fa93361735cda70010b3a0a179b03c8517e2fb69784014e1b"
 dependencies = [
  "fancy-regex 0.19.0",
  "log",
@@ -4043,9 +4043,9 @@ dependencies = [
 
 [[package]]
 name = "nu-parser"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b1fbcb255cf1e9a7cf8f83bbdf6ce7bf01ff771499babe81e056c96cc538c42"
+checksum = "9672e0c0192a07bcde2fb2ebc5316afedeee1d1a717407b2c4dcae238aae0b98"
 dependencies = [
  "bytesize",
  "chrono",
@@ -6495,9 +6495,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
 dependencies = [
  "indexmap",
  "serde_core",
