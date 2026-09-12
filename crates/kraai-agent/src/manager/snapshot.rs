@@ -15,6 +15,7 @@ pub struct SessionSnapshotReader {
     pub profile_locked: bool,
     pub streaming: bool,
     messages: Arc<dyn MessageStore>,
+    storage_root: std::path::PathBuf,
     in_flight: HashMap<MessageId, Message>,
 }
 
@@ -42,6 +43,7 @@ impl AgentManager {
             profile_locked: self.is_profile_locked(session_id),
             streaming: !in_flight.is_empty(),
             messages: self.message_store.clone(),
+            storage_root: self.storage_root.clone(),
             in_flight,
         })
     }
@@ -68,8 +70,13 @@ impl SessionSnapshotReader {
         );
 
         let workspace = self.session.workspace_dir.clone();
+        let storage_root = self.storage_root.clone();
         let resolved = tokio::task::spawn_blocking(move || {
-            crate::profiles::resolve_profiles(&workspace, &crate::profiles::available_command_ids())
+            crate::profiles::resolve_profiles(
+                &workspace,
+                &storage_root,
+                &crate::profiles::available_command_ids(),
+            )
         })
         .await?;
         let profiles = AgentProfilesState {

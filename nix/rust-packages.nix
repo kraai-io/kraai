@@ -15,6 +15,10 @@
         ../crates
         ../deny.toml
         ../justfile
+        ../packages/runtime/index.cjs
+        ../packages/runtime/package.json
+        ../packages/runtime/scripts
+        ../packages/runtime/test
       ];
     };
     workspaceMembers =
@@ -177,6 +181,14 @@
       workspaceTestChecks
       // cargoTestChecks
       // {
+        node = mkCargoCheck {
+          name = "node";
+          nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils];
+          command = ''
+            ${pkgs.just}/bin/just check-node
+          '';
+        };
+
         clippy = mkCargoCheck {
           name = "clippy";
           command = ''

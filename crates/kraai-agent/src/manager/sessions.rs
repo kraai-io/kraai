@@ -32,15 +32,15 @@ impl AgentManager {
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
         context_state_store: Arc<dyn ContextStateStore>,
+        storage_root: PathBuf,
     ) -> Self {
         let conversation_store =
             ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
             providers,
             default_workspace_dir,
-            user_agents_path: kraai_persistence::agent_state_root()
-                .ok()
-                .map(|root| root.join(AGENTS_MD_FILE_NAME)),
+            user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),
+            storage_root,
             conversation_store,
             message_store,
             session_store,
@@ -395,7 +395,11 @@ impl AgentManager {
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
-        resolve_profiles(workspace_dir, &crate::profiles::available_command_ids())
+        resolve_profiles(
+            workspace_dir,
+            &self.storage_root,
+            &crate::profiles::available_command_ids(),
+        )
     }
 
     pub(super) fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {

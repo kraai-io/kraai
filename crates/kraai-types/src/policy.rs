@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EscalationPolicy {

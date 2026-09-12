@@ -375,7 +375,10 @@ impl RuntimeCore {
         let skill_roots =
             tokio::task::spawn_blocking(move || kraai_agent::discover_skill_read_roots(&workspace))
                 .await?;
-        let mut runtime_roots = configured_runtime_roots();
+        let mut runtime_roots = self
+            .script_runtime_roots
+            .clone()
+            .unwrap_or_else(configured_runtime_roots);
         runtime_roots.extend(skill_roots);
         let request = EffectiveScriptRequest {
             id: ScriptExecutionId::new(Ulid::generate()),

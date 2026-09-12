@@ -598,15 +598,25 @@ pub async fn init() -> Result<(
     Arc<FileScriptExecutionStore>,
     Arc<FileContextStateStore>,
 )> {
-    let data_dir = get_data_dir()?;
-    fs::create_dir_all(&data_dir)
+    init_at(&get_data_dir()?).await
+}
+
+pub async fn init_at(
+    data_dir: &Path,
+) -> Result<(
+    Arc<FileMessageStore>,
+    Arc<FileSessionStore>,
+    Arc<FileScriptExecutionStore>,
+    Arc<FileContextStateStore>,
+)> {
+    fs::create_dir_all(data_dir)
         .await
         .with_context(|| format!("Failed to create data directory: {:?}", data_dir))?;
 
-    let message_store = Arc::new(FileMessageStore::new(&data_dir));
-    let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
-    let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
-    let context_state_store = Arc::new(FileContextStateStore::new(&data_dir));
+    let message_store = Arc::new(FileMessageStore::new(data_dir));
+    let session_store = Arc::new(FileSessionStore::new(data_dir, message_store.clone()));
+    let execution_store = Arc::new(FileScriptExecutionStore::new(data_dir));
+    let context_state_store = Arc::new(FileContextStateStore::new(data_dir));
 
     session_store.load().await?;
 

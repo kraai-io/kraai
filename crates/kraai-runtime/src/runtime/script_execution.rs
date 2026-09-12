@@ -100,7 +100,10 @@ impl RuntimeCore {
         cancellation: CancellationToken,
     ) -> Result<CompletedScriptExecution> {
         let execution_id = request.id.clone();
-        let host = match resolve_nushell_host(self.use_current_executable_as_nushell_host) {
+        let host = match resolve_nushell_host(
+            self.nushell_host_path.as_deref(),
+            self.use_current_executable_as_nushell_host,
+        ) {
             Ok(host) => host,
             Err(error) => {
                 let record = self
@@ -364,7 +367,16 @@ fn completion_from_runtime_error(
     }
 }
 
-fn resolve_nushell_host(use_current_executable: bool) -> Result<NushellHost> {
+fn resolve_nushell_host(
+    explicit_path: Option<&std::path::Path>,
+    use_current_executable: bool,
+) -> Result<NushellHost> {
+    if let Some(path) = explicit_path {
+        return Ok(NushellHost {
+            executable: canonical_executable(path)?,
+            arguments: Vec::new(),
+        });
+    }
     let current_executable = std::env::current_exe()
         .context("Failed to locate the running Kraai executable")?
         .canonicalize()
@@ -471,6 +483,16 @@ mod tests {
         let resolved = resolve_nushell_host_from(frontend, true)?;
         if resolved.executable != packaged || !resolved.arguments.is_empty() {
             return Err(eyre!("packaged host was not preferred over the fallback"));
+        }
+
+        let explicit = directory.join("custom-host");
+        std::fs::write(&explicit, [])?;
+        let resolved = resolve_nushell_host(Some(&explicit), false)?;
+        if resolved.executable != explicit.canonicalize()? || !resolved.arguments.is_empty() {
+            return Err(eyre!("explicit host path was not used"));
+        }
+        if resolve_nushell_host(Some(&directory.join("missing-host")), true).is_ok() {
+            return Err(eyre!("invalid explicit host silently fell back"));
         }
 
         std::fs::remove_dir_all(directory)?;

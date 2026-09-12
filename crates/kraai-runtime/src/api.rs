@@ -7,6 +7,8 @@ use kraai_types::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeErrorKind {
@@ -18,12 +20,16 @@ pub enum RuntimeErrorKind {
     Internal,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldViolation {
     pub field: String,
     pub message: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
@@ -92,6 +98,8 @@ impl std::error::Error for RuntimeError {}
 
 pub type RuntimeResult<T> = std::result::Result<T, RuntimeError>;
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "disposition", rename_all = "snake_case")]
 pub enum SubmitMessageOutcome {
@@ -99,6 +107,8 @@ pub enum SubmitMessageOutcome {
     Queued { position: usize },
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContinueSessionOutcome {
@@ -106,6 +116,8 @@ pub enum ContinueSessionOutcome {
     NothingToContinue,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeStartupState {
     Starting,
@@ -114,6 +126,8 @@ pub enum RuntimeStartupState {
 }
 
 /// Model information
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,
@@ -121,6 +135,8 @@ pub struct Model {
     pub max_context: Option<usize>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionContextUsage {
     pub provider_id: String,
@@ -136,6 +152,8 @@ impl SessionContextUsage {
 }
 
 /// Session information
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -169,6 +187,8 @@ impl Session {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingScriptInfo {
     pub execution_id: String,
@@ -178,23 +198,31 @@ pub struct PendingScriptInfo {
     pub timeout_millis: u64,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceState {
     pub workspace_dir: String,
     pub applies_next_chat: bool,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingBrowserLogin {
     pub auth_url: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingDeviceCodeLogin {
     pub verification_url: String,
     pub user_code: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpenAiCodexLoginState {
     SignedOut,
@@ -203,6 +231,8 @@ pub enum OpenAiCodexLoginState {
     Authenticated,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAiCodexAuthStatus {
     pub state: OpenAiCodexLoginState,
@@ -214,6 +244,8 @@ pub struct OpenAiCodexAuthStatus {
 }
 
 /// Streaming events sent from the runtime to clients
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfileCatalog {
     pub workspace_dir: String,
@@ -222,12 +254,16 @@ pub struct AgentProfileCatalog {
     pub default_profile_id: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     pub workspace_dir: Option<String>,
     pub profile_id: Option<String>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionActivity {
@@ -237,6 +273,8 @@ pub enum SessionActivity {
     ExecutingScript,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub turn_timer: crate::TurnTimer,
@@ -253,12 +291,16 @@ pub struct SessionSnapshot {
     pub queued_messages: usize,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeEvent {
     pub sequence: u64,
     pub event: Event,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
     TurnTimingChanged {

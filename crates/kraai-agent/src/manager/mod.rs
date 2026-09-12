@@ -133,6 +133,7 @@ struct StreamingMessageState {
 pub struct AgentManager {
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
+    storage_root: PathBuf,
     user_agents_path: Option<PathBuf>,
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,

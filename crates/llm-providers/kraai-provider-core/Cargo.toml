@@ -22,3 +22,10 @@ tracing.workspace = true
 
 [dev-dependencies]
 tracing = { workspace = true }
+
+[features]
+typescript = ["dep:ts-rs", "kraai-types/typescript"]
+
+[dependencies.ts-rs]
+optional = true
+workspace = true

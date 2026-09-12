@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use kraai_persistence::agent_state_root;
 use kraai_provider_core::{
     DynamicConfig, ModelConfig, ProviderConfig, ProviderManagerConfig, ProviderRegistry,
 };
@@ -12,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::{FieldViolation, SettingsValue};
 
 /// Editable provider settings shared across clients.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
     pub id: String,
@@ -20,6 +21,8 @@ pub struct ProviderSettings {
 }
 
 /// Editable model settings shared across clients.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelSettings {
     pub id: String,
@@ -28,29 +31,20 @@ pub struct ModelSettings {
 }
 
 /// Full editable settings document persisted to providers.toml.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsDocument {
     pub providers: Vec<ProviderSettings>,
     pub models: Vec<ModelSettings>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldValueEntry {
     pub key: String,
     pub value: SettingsValue,
-}
-
-pub(crate) fn default_provider_config_path() -> Result<PathBuf> {
-    Ok(agent_state_root()?.join("providers.toml"))
-}
-
-pub(crate) fn resolve_provider_config_path(
-    provider_config_path_override: Option<PathBuf>,
-) -> Result<PathBuf> {
-    match provider_config_path_override {
-        Some(path) => Ok(path),
-        None => default_provider_config_path(),
-    }
 }
 
 pub(crate) fn read_settings_document(
