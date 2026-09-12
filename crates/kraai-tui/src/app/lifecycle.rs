@@ -108,6 +108,12 @@ impl App {
                 std::time::Duration::from_millis(100)
             };
             needs_redraw |= self.handle_events(event_timeout)?;
+            if self.state.editor_requested {
+                if let Err(error) = self.open_composer_editor(&mut terminal) {
+                    self.state.status = format!("Editor error: {error}");
+                }
+                needs_redraw = true;
+            }
             needs_redraw |= self.advance_statusline_animation(Instant::now());
 
             if !needs_redraw {
@@ -125,14 +131,7 @@ impl App {
             terminal.draw(|frame| {
                 let area = frame.area();
                 if self.state.mode == UiMode::Chat {
-                    let input_height = bottom_panel_height(&self.state, area);
-                    let layout = Layout::vertical([
-                        Constraint::Min(area.height.saturating_sub(input_height + 1)),
-                        Constraint::Length(1),
-                        Constraint::Length(input_height),
-                    ])
-                    .flex(Flex::End);
-                    let [chat_area, _, _] = layout.areas(area);
+                    let [chat_area, _, _] = ui::chat_layout(&self.state, area);
                     self.state.refresh_chat_render_cache(chat_area.width);
                     self.update_chat_viewport(chat_area.height);
                 }
@@ -140,20 +139,18 @@ impl App {
                 frame.render_widget(&self.state, area);
 
                 if self.state.mode == UiMode::Chat {
-                    let input_height = bottom_panel_height(&self.state, area);
-                    let layout = Layout::vertical([
-                        Constraint::Min(area.height.saturating_sub(input_height + 1)),
-                        Constraint::Length(1),
-                        Constraint::Length(input_height),
-                    ])
-                    .flex(Flex::End);
-                    let [_chat_area, _status_area, input_area] = layout.areas(area);
+                    let [_, _, input_area] = ui::chat_layout(&self.state, area);
                     self.state.input_width = input_area.width;
 
                     let (cursor_x, cursor_y) =
                         TextInput::new(&self.state.input, self.state.input_cursor)
                             .get_cursor_position(input_area);
-                    frame.set_cursor_position((cursor_x, cursor_y));
+                    if self.state.script_phase != ScriptPhase::AwaitingApproval
+                        && input_area.width > 0
+                        && input_area.height > 0
+                    {
+                        frame.set_cursor_position((cursor_x, cursor_y));
+                    }
                 }
             })?;
             needs_redraw = false;

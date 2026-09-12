@@ -555,3 +555,4 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
 }
 
 mod cost;
+mod enhancements;

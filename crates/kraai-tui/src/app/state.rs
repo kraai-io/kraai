@@ -1,5 +1,5 @@
 use kraai_runtime::TurnTimer;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -27,6 +27,12 @@ pub(super) struct AppState {
     pub(super) cost_recovery_list_pending: bool,
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<String>,
     pub(super) exit: bool,
+    pub(super) editor_requested: bool,
+    pub(super) menu_search: String,
+    pub(super) approval_scroll: Cell<usize>,
+    pub(super) approval_expanded: bool,
+    pub(super) execution_expanded: HashMap<String, bool>,
+    pub(super) selected_execution: Option<String>,
     pub(super) input: String,
     pub(super) input_cursor: usize,
     pub(super) input_width: u16,
@@ -45,6 +51,7 @@ pub(super) struct AppState {
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,
     pub(super) status: String,
+    pub(super) last_error: Option<String>,
     pub(super) is_streaming: bool,
     pub(super) retry_waiting: bool,
     pub(super) turn_timer: TurnTimer,
@@ -106,6 +113,12 @@ impl Default for AppState {
                 .try_into()
                 .unwrap_or(u64::MAX),
             exit: false,
+            editor_requested: false,
+            menu_search: String::new(),
+            approval_scroll: Cell::new(0),
+            approval_expanded: false,
+            execution_expanded: HashMap::new(),
+            selected_execution: None,
             input: String::new(),
             input_cursor: 0,
             input_width: 80,
@@ -124,6 +137,7 @@ impl Default for AppState {
             config_loaded: false,
             mode: UiMode::Chat,
             status: String::from("Type /help for commands"),
+            last_error: None,
             is_streaming: false,
             retry_waiting: false,
             turn_timer: TurnTimer::default(),
@@ -251,7 +265,28 @@ impl AppState {
             return;
         }
 
-        let rendered_messages = self.rendered_messages();
+        let mut rendered_messages = self.rendered_messages();
+        let completed: HashSet<String> = rendered_messages
+            .iter()
+            .filter_map(|message| match &message.content {
+                ConversationItem::ScriptResult { call_id, .. } => Some(call_id.to_string()),
+                _ => None,
+            })
+            .collect();
+        let mut sources = HashMap::new();
+        for message in &mut rendered_messages {
+            if let ConversationItem::Assistant { items } = &mut message.content {
+                items.retain(|item| {
+                    if let kraai_types::AssistantItem::ScriptCall { call_id, input, .. } = item
+                        && completed.contains(call_id.as_str())
+                    {
+                        sources.insert(call_id.to_string(), input.clone());
+                        return false;
+                    }
+                    true
+                });
+            }
+        }
         let mut cache = self.chat_render_cache.borrow_mut();
         let mut prior_entries = std::mem::take(&mut cache.message_cache);
         if cache.width != width {
@@ -261,13 +296,41 @@ impl AppState {
         let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
         let mut sections = Vec::new();
         let mut total_lines: u16 = 0;
+        let mut execution_offsets = HashMap::new();
 
         for msg in &rendered_messages {
             let key = msg.id.as_str().to_string();
-            let fingerprint = message_fingerprint(msg);
-            let lines = match prior_entries.remove(&key) {
-                Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
+            let mut fingerprint = message_fingerprint(msg);
+            let lines = if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
+                let (summary, successful) = super::executions::result_summary(output);
+                let expanded = self
+                    .execution_expanded
+                    .get(call_id.as_str())
+                    .copied()
+                    .unwrap_or(!successful);
+                execution_offsets.insert(
+                    call_id.to_string(),
+                    total_lines.saturating_add(u16::from(!sections.is_empty())),
+                );
+                let source = sources.get(call_id.as_str()).map(String::as_str);
+                let selected = self.selected_execution.as_deref() == Some(call_id.as_str());
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                (fingerprint, source, expanded, selected).hash(&mut hasher);
+                fingerprint = hasher.finish();
+                match prior_entries.remove(&key) {
+                    Some(entry) if entry.fingerprint == fingerprint => entry.lines,
+                    _ => Arc::new(ChatHistory::build_execution_lines(
+                        &summary, source, output, expanded, selected, width,
+                    )),
+                }
+            } else if matches!(&msg.content, ConversationItem::Assistant { items } if items.is_empty())
+            {
+                continue;
+            } else {
+                match prior_entries.remove(&key) {
+                    Some(entry) if entry.fingerprint == fingerprint => entry.lines,
+                    _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
+                }
             };
 
             if lines.is_empty() {
@@ -284,6 +347,7 @@ impl AppState {
             next_entries.insert(key, CachedMessageRender { fingerprint, lines });
         }
 
+        cache.execution_offsets = execution_offsets;
         cache.sections = sections;
         cache.total_lines = total_lines;
         cache.message_cache = next_entries;
@@ -294,6 +358,7 @@ impl AppState {
 
 #[derive(Default)]
 pub(super) struct ChatRenderCache {
+    pub(super) execution_offsets: HashMap<String, u16>,
     pub(super) width: u16,
     pub(super) epoch: u64,
     pub(super) sections: Vec<Arc<Vec<RenderedLine>>>,

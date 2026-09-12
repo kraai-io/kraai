@@ -6,11 +6,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-use super::super::{AppState, flatten_models_map};
+use super::super::AppState;
 use super::{centered_rect, menu_scroll_offset};
 
 pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let models = flatten_models_map(&state.models_by_provider);
+    let models = state.filtered_models();
     let popup_area = centered_rect(area.width.saturating_mul(3) / 4, area.height / 2, area);
 
     let mut lines = vec![Line::styled(
@@ -19,7 +19,7 @@ pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
     )];
 
     if models.is_empty() {
-        lines.push(Line::raw("No models available"));
+        lines.push(Line::raw("No matching models"));
     } else {
         for (idx, (provider, model)) in models.iter().enumerate() {
             let selected = idx == state.model_menu_index;
@@ -51,7 +51,11 @@ pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(Block::default().title("/model").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(format!("/model  Filter: {}", state.menu_search))
+                .borders(Borders::ALL),
+        )
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
@@ -129,12 +133,16 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
 pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(area.width.saturating_mul(4) / 5, area.height / 2, area);
     let visible_lines = popup_area.height.saturating_sub(2) as usize;
-    let total_lines = state.sessions.len() + 2;
-    let selected_line = state.sessions_menu_index.saturating_add(1);
+    let sessions = state.filtered_sessions();
+    let total_lines = sessions.len() * 2 + 2;
+    let selected_line = state
+        .sessions_menu_index
+        .saturating_mul(2)
+        .saturating_add(1);
     let scroll_offset = menu_scroll_offset(selected_line, total_lines, visible_lines);
 
     let mut lines = vec![Line::styled(
-        "Sessions (Enter=load/new, x=delete, Esc=close)",
+        "Sessions (Enter=load/new, Delete=delete, Esc=close)",
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
@@ -152,17 +160,16 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
         },
     ));
 
-    for (idx, session) in state.sessions.iter().enumerate() {
+    for (idx, session) in sessions.iter().enumerate() {
         let selected = state.sessions_menu_index == idx + 1;
         let marker = if selected { "⮞" } else { " " };
         let current = state
             .current_session_id
             .as_ref()
             .is_some_and(|sid| sid == &session.id);
-        let title = session
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("Session {}", &session.id[..8.min(session.id.len())]));
+        let title = session.title.clone().unwrap_or_else(|| {
+            format!("Session {}", session.id.chars().take(8).collect::<String>())
+        });
         let current_suffix = if current { " (current)" } else { "" };
         let approval_suffix = if session.waiting_for_approval {
             " [approval]"
@@ -178,45 +185,60 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
                 Style::default()
             },
         ));
+        let age = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(session.updated_at);
+        let age = if age < 60 {
+            format!("{age}s ago")
+        } else if age < 3600 {
+            format!("{}m ago", age / 60)
+        } else if age < 86400 {
+            format!("{}h ago", age / 3600)
+        } else {
+            format!("{}d ago", age / 86400)
+        };
+        lines.push(Line::styled(
+            format!("    {age} · {}", session.workspace_dir),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(Block::default().title("/sessions").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(format!("/sessions  Filter: {}", state.menu_search))
+                .borders(Borders::ALL),
+        )
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
 
 pub(super) fn render_help_menu(area: Rect, buf: &mut Buffer) {
-    let popup_area = centered_rect(area.width.saturating_mul(3) / 5, area.height / 2, area);
+    let popup_area = centered_rect(area.width, area.height, area);
 
     let lines = vec![
-        Line::styled(
-            "Slash Commands",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Line::raw("/agent     Open agent selector"),
-        Line::raw("/continue  Reprompt the agent"),
-        Line::raw("/help      Open this help menu"),
-        Line::raw("/model     Open model selector"),
-        Line::raw("/new       Start a new chat"),
-        Line::raw("/providers Open providers"),
-        Line::raw("/sessions  Open sessions menu"),
-        Line::raw("/undo      Restore last user message"),
-        Line::raw("/quit      Exit Kraai"),
+        Line::styled("Commands", Style::default().add_modifier(Modifier::BOLD)),
+        Line::raw("/agent /model /providers  Configure agent and model"),
+        Line::raw("/sessions /new /undo /continue /quit"),
         Line::raw(""),
-        Line::styled(
-            "Chat Navigation",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Line::raw("Enter       Send message"),
-        Line::raw("Shift+Enter Add newline"),
-        Line::raw("Up/Down    Scroll history"),
-        Line::raw("PgUp/PgDn  Scroll faster"),
-        Line::raw("End        Jump to latest"),
-        Line::raw("Home       Jump to top"),
+        Line::styled("Composer", Style::default().add_modifier(Modifier::BOLD)),
+        Line::raw("Enter send · Shift+Enter newline · Up/Down recall"),
+        Line::raw("Ctrl+←/→ or Alt+B/F move by word"),
+        Line::raw("Ctrl+W delete previous word · Ctrl+Del delete next"),
+        Line::raw("Ctrl+E edit prompt with VISUAL / EDITOR"),
         Line::raw(""),
-        Line::raw("Esc closes menus."),
+        Line::styled("Transcript", Style::default().add_modifier(Modifier::BOLD)),
+        Line::raw("PgUp/PgDn scroll · Home/End first/latest"),
+        Line::raw("F6/Shift+F6 next/previous execution · F7 toggle"),
+        Line::raw("Execution total time includes approval waiting"),
+        Line::raw(""),
+        Line::raw("Menus: type to filter · Enter select · Delete session"),
+        Line::raw("Approval: ↑/↓ or PgUp/PgDn scroll · f expand"),
+        Line::raw("Approval: Home/End first/last · ←/→ select · Enter confirm"),
+        Line::raw("Esc closes menus or stops the active turn"),
     ];
 
     Clear.render(popup_area, buf);

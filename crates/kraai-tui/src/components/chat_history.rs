@@ -48,7 +48,7 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn wrap_with_prefix(
+    pub(crate) fn wrap_with_prefix(
         text: &str,
         width: usize,
         first_prefix: &str,
@@ -375,6 +375,44 @@ impl<'a> ChatHistory<'a> {
                 line
             })
             .collect()
+    }
+
+    pub(crate) fn build_execution_lines(
+        summary: &str,
+        source: Option<&str>,
+        output: &str,
+        expanded: bool,
+        selected: bool,
+        width: u16,
+    ) -> Vec<RenderedLine> {
+        let style = Style::default().fg(if selected { Color::Cyan } else { Color::Gray });
+        let marker = if expanded { "▼" } else { "▶" };
+        let mut lines = Self::wrap_with_prefix(
+            &format!("{marker} {summary}  [F6 select · F7 toggle]"),
+            width as usize,
+            "",
+            "",
+        )
+        .into_iter()
+        .map(|line| Self::single_span_line(line, style))
+        .collect::<Vec<_>>();
+        if expanded {
+            for (label, text) in [
+                ("Source", source.unwrap_or("Source unavailable")),
+                ("Output", output),
+            ] {
+                lines.push(Self::single_span_line(label.to_string(), style));
+                for line in Self::wrap_with_prefix(
+                    &normalize_terminal_text(text),
+                    width as usize,
+                    "  ",
+                    "  ",
+                ) {
+                    lines.push(Self::single_span_line(line, Style::default()));
+                }
+            }
+        }
+        lines
     }
 
     pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {

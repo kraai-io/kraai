@@ -50,6 +50,7 @@ kraai-sandbox = { path = "crates/kraai-sandbox" }
 kraai-script-protocol = { path = "crates/kraai-script-protocol" }
 kraai-types = { path = "crates/kraai-types" }
 kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }
+tempfile = "3.27.0"
 
 arboard = "3.6.1"
 async-trait = "0.1.89"

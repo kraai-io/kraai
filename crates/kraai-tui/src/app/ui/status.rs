@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::super::AppState;
+use super::super::{AppState, ScriptPhase};
 use super::STATUSLINE_STREAMING_FRAMES;
 
 pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
@@ -15,6 +15,8 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
             statusline_activity_label(state),
             Style::default().fg(statusline_activity_color(state)),
         ),
+        separator.clone(),
+        Span::raw(state.status.clone()),
         separator.clone(),
         Span::raw(format!(
             "Session {}{}",
@@ -38,13 +40,31 @@ pub(super) fn statusline_line(state: &AppState) -> Line<'static> {
 
     spans.push(separator.clone());
     spans.push(Span::raw(statusline_context_label(state)));
-    spans.push(separator);
-    spans.push(Span::raw(state.status.clone()));
+
+    if let Some(error) = &state.last_error {
+        spans.insert(0, separator);
+        spans.insert(
+            0,
+            Span::styled(error.clone(), Style::default().fg(Color::Red)),
+        );
+    }
     Line::from(spans)
 }
 
 fn statusline_activity_label(state: &AppState) -> String {
+    if state.script_phase == ScriptPhase::AwaitingApproval {
+        return String::from("approval required");
+    }
     if state.runtime_is_active() {
+        let activity = if state.retry_waiting {
+            "retrying"
+        } else if state.script_phase == ScriptPhase::Executing {
+            "executing script"
+        } else if state.is_streaming {
+            "generating"
+        } else {
+            "working"
+        };
         let frame_index = state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len();
         let frame = STATUSLINE_STREAMING_FRAMES
             .get(frame_index)
@@ -53,8 +73,8 @@ fn statusline_activity_label(state: &AppState) -> String {
         return state
             .turn_timer
             .elapsed(Instant::now())
-            .map(|elapsed| format!(" {frame} {}", format_turn_duration(elapsed)))
-            .unwrap_or_else(|| format!(" {frame}"));
+            .map(|elapsed| format!("{frame} {activity} {}", format_turn_duration(elapsed)))
+            .unwrap_or_else(|| format!("{frame} {activity}"));
     }
     if state.status == "Stream cancelled" {
         return statusline_terminal_activity_label("cancelled", state);
@@ -85,7 +105,9 @@ fn format_turn_duration(duration: Duration) -> String {
 }
 
 fn statusline_activity_color(state: &AppState) -> Color {
-    if state.runtime_is_active() {
+    if state.script_phase == ScriptPhase::AwaitingApproval || state.retry_waiting {
+        Color::Yellow
+    } else if state.runtime_is_active() {
         Color::Cyan
     } else if state.status == "Stream cancelled" {
         Color::Yellow
