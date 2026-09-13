@@ -163,7 +163,11 @@ pub(crate) fn path_is_absolute(path: &Path) -> bool {
 impl PreparedCommand {
     pub(crate) async fn cleanup(&mut self) -> Result<(), crate::SandboxError> {
         let mut resources = (self.windows_sandbox.take(), self.private_temp.take());
-        tokio::task::spawn_blocking(move || {
+        let network = match resources.0.as_mut() {
+            Some(sandbox) => sandbox.release_network().await,
+            None => Ok(()),
+        };
+        let cleanup = tokio::task::spawn_blocking(move || {
             let result = resources
                 .0
                 .as_mut()
@@ -174,7 +178,8 @@ impl PreparedCommand {
         .await
         .map_err(|error| {
             crate::SandboxError::Wait(format!("Windows sandbox cleanup failed: {error}"))
-        })?
+        })?;
+        network.and(cleanup)
     }
 }
 

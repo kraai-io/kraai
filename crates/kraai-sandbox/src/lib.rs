@@ -7,6 +7,9 @@ mod platform;
 mod process;
 mod temp_dir;
 
+#[cfg(windows)]
+pub mod windows_helper;
+
 pub use config::{LaunchPlan, PrivateTempConfig};
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};

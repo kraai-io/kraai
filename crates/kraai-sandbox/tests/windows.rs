@@ -94,6 +94,14 @@ fn probe() {
         "network" => {
             let _listener = std::net::TcpListener::bind("0.0.0.0:0")
                 .expect("network capability allows listening");
+            assert!(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(r"\\.\pipe\KraaiSandbox.v1")
+                    .is_err(),
+                "sandbox must not configure its own network policy"
+            );
         }
         "metadata" => {
             std::fs::write(".git/config", "authorized").expect("metadata write");

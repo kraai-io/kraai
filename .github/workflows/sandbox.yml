@@ -28,4 +28,16 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: cargo check --locked --workspace --all-targets
+      - if: runner.os == 'Windows'
+        run: |
+          cargo build --locked -p kraai-sandbox --bin kraai-sandbox-helper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./target/debug/kraai-sandbox-helper.exe install
+          exit $LASTEXITCODE
       - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --no-fail-fast
+      - if: always() && runner.os == 'Windows'
+        run: |
+          if (Get-Service KraaiSandbox -ErrorAction SilentlyContinue) {
+            & ./target/debug/kraai-sandbox-helper.exe uninstall
+            exit $LASTEXITCODE
+          }

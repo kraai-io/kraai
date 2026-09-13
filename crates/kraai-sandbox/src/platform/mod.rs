@@ -36,9 +36,14 @@ pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedComm
     }
     #[cfg(windows)]
     {
-        tokio::task::spawn_blocking(move || windows::prepare(plan, private_temp))
+        let network = plan.capabilities.contains(SandboxCapability::Network);
+        let mut command = tokio::task::spawn_blocking(move || windows::prepare(plan, private_temp))
             .await
-            .map_err(|error| SandboxError::SandboxUnavailable(error.to_string()))?
+            .map_err(|error| SandboxError::SandboxUnavailable(error.to_string()))??;
+        if network && let Some(sandbox) = command.windows_sandbox.as_mut() {
+            sandbox.enable_network().await?;
+        }
+        Ok(command)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {

@@ -41,12 +41,15 @@ impl Sid {
 #[derive(Debug)]
 pub(super) struct Identity {
     name: Vec<u16>,
+    pub(super) nonce: [u8; 16],
     pub(super) sid: Sid,
 }
 
 impl Identity {
     pub(super) fn create() -> Result<Self, SandboxError> {
-        let name = format!("kraai.{:032x}", rand::random::<u128>())
+        let nonce = rand::random();
+        let name = crate::windows_helper::profile_name(&nonce)
+            .map_err(|error| SandboxError::SandboxUnavailable(error.to_string()))?
             .encode_utf16()
             .chain([0])
             .collect::<Vec<_>>();
@@ -69,7 +72,7 @@ impl Identity {
         let copied = unsafe { Sid::copy(sid) };
         unsafe { FreeSid(sid) };
         match copied {
-            Ok(sid) => Ok(Self { name, sid }),
+            Ok(sid) => Ok(Self { name, sid, nonce }),
             Err(error) => {
                 unsafe { DeleteAppContainerProfile(name.as_ptr()) };
                 Err(error)
