@@ -86,8 +86,12 @@ fn sysctl_probe_child() {
         return;
     };
     assert!(std::env::var_os(HOST_SECRET).is_none());
-    let error = read_process_arguments(pid.parse().expect("valid host PID"))
-        .expect_err("sandbox must deny host process arguments and environment");
+    let result = read_process_arguments(pid.parse().expect("valid host PID"));
+    assert!(
+        result.is_err(),
+        "sandbox must deny host process arguments and environment"
+    );
+    let error = result.expect_err("checked denial");
     assert!(
         matches!(error.raw_os_error(), Some(libc::EPERM | libc::EACCES)),
         "expected sandbox permission denial, got {error}"

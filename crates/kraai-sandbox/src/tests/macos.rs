@@ -425,9 +425,7 @@ async fn network_capability_and_private_ipc_paths_are_enforced() {
             .set_nonblocking(true)
             .expect("nonblocking listener");
         let (mut connection, _) = private_listener.accept().expect("private IPC connected");
-        connection
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .expect("IPC read deadline");
+        connection.set_nonblocking(true).expect("nonblocking IPC");
         let mut bytes = [0; 3];
         connection
             .read_exact(&mut bytes)

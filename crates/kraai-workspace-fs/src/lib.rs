@@ -404,7 +404,7 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
     result
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
     rustix::fs::renameat_with(
         rustix::fs::CWD,
@@ -427,7 +427,7 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), W
     })
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
     if destination.exists() {
         return Err(WorkspaceFsError::AlreadyExists(destination.to_path_buf()));

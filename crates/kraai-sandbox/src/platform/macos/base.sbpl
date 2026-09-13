@@ -3,6 +3,7 @@
 (allow process-exec process-fork)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
+(deny sysctl-read (sysctl-name-prefix "kern.procargs"))
 (allow system-socket (socket-domain AF_UNIX))
 (allow sysctl-read
   (sysctl-name "hw.activecpu")

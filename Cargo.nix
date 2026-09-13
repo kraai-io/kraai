@@ -9734,7 +9734,7 @@ rec {
           {
             name = "rustix";
             packageId = "rustix 1.1.4";
-            target = { target, features }: ("linux" == target."os" or null);
+            target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null));
             features = [ "fs" "net" "pipe" ];
           }
           {
