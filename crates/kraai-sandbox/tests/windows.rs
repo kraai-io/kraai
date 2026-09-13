@@ -111,6 +111,9 @@ fn probe() {
             }
         }
         "descendant" => {
+            while !std::path::Path::new("parent-finished").exists() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             std::thread::sleep(Duration::from_secs(2));
             std::fs::write("escaped-child", "survived").expect("write descendant marker");
         }
@@ -221,7 +224,7 @@ async fn assert_tree_stopped(fixture: &Fixture, cancel: bool) {
     plan.output_events = Some(sender);
     let cancellation = CancellationToken::new();
     if !cancel {
-        plan.timeout = Duration::from_secs(1);
+        plan.timeout = Duration::from_secs(5);
     }
     let execution = tokio::spawn(kraai_sandbox::run(plan, cancellation.clone()));
     wait_for_descendant(events).await;
@@ -240,6 +243,8 @@ async fn assert_tree_stopped(fixture: &Fixture, cancel: bool) {
             Termination::TimedOut
         }
     );
+    std::fs::write(fixture.0.join("workspace/parent-finished"), "")
+        .expect("release descendant probe");
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(!fixture.0.join("workspace/escaped-child").exists());
 }
@@ -268,6 +273,8 @@ async fn network_capability_allows_sockets() {
 async fn normal_exit_kills_remaining_descendants() {
     let fixture = Fixture::new();
     successful(fixture.plan("tree-exit", &[SandboxCapability::WorkspaceWrite])).await;
+    std::fs::write(fixture.0.join("workspace/parent-finished"), "")
+        .expect("release descendant probe");
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(!fixture.0.join("workspace/escaped-child").exists());
 }
@@ -282,6 +289,8 @@ async fn dropping_execution_kills_descendants() {
     wait_for_descendant(events).await;
     execution.abort();
     assert!(execution.await.expect_err("task cancelled").is_cancelled());
+    std::fs::write(fixture.0.join("workspace/parent-finished"), "")
+        .expect("release descendant probe");
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(!fixture.0.join("workspace/escaped-child").exists());
 }

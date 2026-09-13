@@ -81,8 +81,7 @@ fn run_trusted_with_environment_inheritance(
     for (name, value) in environment {
         process.env(name, value);
     }
-    let mut child = process
-        .spawn()
+    let mut child = kraai_sandbox::spawn_command(&mut process)
         .wrap_err_with(|| format!("spawn trusted command {program}"))?;
     let (status, timed_out, output_limit_exceeded) = loop {
         if let Some(status) = child.try_wait()? {

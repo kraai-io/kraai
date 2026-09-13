@@ -20,7 +20,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC,
     WRITE_OWNER,
 };
-use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, INFINITE, ReleaseMutex, WaitForSingleObject,
+};
 
 use super::Access;
 use windows_sys::Win32::Security::{
@@ -43,7 +45,7 @@ impl Lock {
             return Err(error("create ACL mutation mutex"));
         }
         let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
-        let status = unsafe { WaitForSingleObject(handle.as_raw_handle(), 15000) };
+        let status = unsafe { WaitForSingleObject(handle.as_raw_handle(), INFINITE) };
         if status != WAIT_OBJECT_0 && status != WAIT_ABANDONED {
             return Err(SandboxError::SandboxUnavailable(format!(
                 "ACL mutation mutex wait failed: {status:#x}"
@@ -92,7 +94,6 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
     }
     let mut base = without_sid(dacl, sid)?;
     let mut edited = ptr::null_mut();
-    let mut copied;
     let _edited;
     let dacl = if let Some(access) = access {
         let (mode, mask) = match access {
@@ -149,8 +150,7 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         }
         edited
     } else {
-        copied = without_sid(dacl, sid)?;
-        let copy = copied.as_mut_ptr().cast::<ACL>();
+        let copy = base.as_mut_ptr().cast::<ACL>();
         let changed = unsafe { (*copy).AceCount != (*dacl).AceCount };
         if !changed {
             return Ok(());

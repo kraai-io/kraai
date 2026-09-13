@@ -70,13 +70,19 @@ pub async fn execute(
     plan: ScriptExecutionPlan,
     cancellation: CancellationToken,
 ) -> Result<ScriptExecutionResult, RuntimeError> {
+    let workspace_root = plan.workspace_root.canonicalize().map_err(|error| {
+        RuntimeError::Sandbox(kraai_sandbox::SandboxError::MissingWorkspace(format!(
+            "unable to resolve '{}': {error}",
+            plan.workspace_root.display()
+        )))
+    })?;
     let execution_id = plan.execution_id.clone();
     let secret = rand::random::<[u8; 32]>();
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
         source: plan.source,
-        workspace_root: plan.workspace_root.clone(),
+        workspace_root: workspace_root.clone(),
         environment: plan.environment.clone(),
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
@@ -96,7 +102,7 @@ pub async fn execute(
 
     let mut launch = LaunchPlan::new(
         plan.host_executable,
-        plan.workspace_root,
+        workspace_root,
         plan.capabilities,
         plan.timeout,
     );

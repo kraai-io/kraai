@@ -17,6 +17,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::SandboxError;
 
+const MAX_ACL_ENTRIES: usize = 65_536;
+
 #[derive(Clone, Copy)]
 pub(super) enum Access {
     Read,
@@ -51,9 +53,21 @@ impl Grants {
     }
 
     pub(super) fn grant(&mut self, path: &Path, access: Access) -> Result<(), SandboxError> {
+        self.grant_with_limit(path, access, MAX_ACL_ENTRIES)
+    }
+
+    fn grant_with_limit(
+        &mut self,
+        path: &Path,
+        access: Access,
+        limit: usize,
+    ) -> Result<(), SandboxError> {
         let _lock = mutation::Lock::acquire()?;
         self.roots.push(path.to_path_buf());
         visit_tree(path, |file| {
+            if self.files.len() >= limit {
+                return Err(entry_limit(path, limit));
+            }
             mutation::update(&file, &self.sid, Some(access))?;
             self.files.push(file);
             Ok(())
@@ -101,7 +115,12 @@ fn visit_tree(
 ) -> Result<(), SandboxError> {
     let mut pins = pin_ancestors(root)?;
     let mut pending = vec![(root.to_path_buf(), true)];
+    let mut entries = 0;
     while let Some((path, is_root)) = pending.pop() {
+        if entries >= MAX_ACL_ENTRIES {
+            return Err(entry_limit(root, MAX_ACL_ENTRIES));
+        }
+        entries += 1;
         let pin = open(&path, FILE_READ_ATTRIBUTES, false)?;
         if is_reparse(&pin)? {
             if is_root {
@@ -167,4 +186,45 @@ fn is_reparse(file: &File) -> Result<bool, SandboxError> {
 
 fn failure(path: &Path, message: &str) -> SandboxError {
     SandboxError::SandboxUnavailable(format!("unable to secure '{}': {message}", path.display()))
+}
+
+fn entry_limit(path: &Path, limit: usize) -> SandboxError {
+    failure(
+        path,
+        &format!(
+            "Windows sandbox ACL entry limit ({limit}) exceeded; reduce the workspace or runtime roots"
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert observable behavior"
+    )]
+    fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::error::Error>> {
+        let identity = super::super::identity::Identity::create()?;
+        let root =
+            std::env::temp_dir().join(format!("kraai-acl-limit-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir(&root)?;
+        for name in ["one", "two", "three"] {
+            std::fs::write(root.join(name), b"content")?;
+        }
+        let mut grants = Grants::new(identity.sid.bytes());
+        let result = grants.grant_with_limit(&root, Access::Read, 2);
+        assert!(
+            matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("ACL entry limit (2) exceeded"))
+        );
+        assert_eq!(grants.files.len(), 2);
+        grants.cleanup()?;
+        assert!(grants.files.is_empty());
+        grants.grant_with_limit(&root, Access::Read, 4)?;
+        grants.cleanup()?;
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }

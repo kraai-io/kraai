@@ -9023,6 +9023,10 @@ rec {
             packageId = "kraai-provider-openai-codex";
           }
           {
+            name = "kraai-sandbox";
+            packageId = "kraai-sandbox";
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -9654,6 +9658,10 @@ rec {
           {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
+          }
+          {
+            name = "kraai-sandbox";
+            packageId = "kraai-sandbox";
           }
           {
             name = "kraai-types";

@@ -181,7 +181,7 @@ async fn protected_metadata_cannot_be_created_or_replaced() {
             &workspace,
             r#"
                 printf safe > replacement || exit 1
-                for name in .git .jj .kraai .agents .codex; do
+                for name in $NAMES; do
                     if (printf changed > "$name"); then exit 2; fi
                     if test "$SHAPE" = absent; then
                         if mkdir "$name"; then exit 3; fi
@@ -205,6 +205,8 @@ async fn protected_metadata_cannot_be_created_or_replaced() {
             [SandboxCapability::WorkspaceWrite],
         );
         plan.environment.insert("SHAPE".into(), shape.into());
+        plan.environment
+            .insert("NAMES".into(), PROTECTED_METADATA_NAMES.join(" ").into());
         let output = successful_run(plan).await;
         assert_eq!(output.stdout, b"protected", "{shape}");
         for name in PROTECTED_METADATA_NAMES {
@@ -259,18 +261,20 @@ async fn workspace_alias_preserves_write_and_metadata_boundaries() {
 #[tokio::test]
 async fn metadata_write_capability_allows_metadata_changes() {
     let fixture = Fixture::new("macos-metadata-write");
-    let output = successful_run(shell_plan(
+    let mut plan = shell_plan(
         &fixture.workspace(),
         r#"
-            for name in .git .jj .kraai .agents .codex; do
+            for name in $NAMES; do
                 mkdir "$name" || exit 1
                 printf allowed > "$name/content" || exit 2
             done
             printf metadata
         "#,
         [SandboxCapability::MetadataWrite],
-    ))
-    .await;
+    );
+    plan.environment
+        .insert("NAMES".into(), PROTECTED_METADATA_NAMES.join(" ").into());
+    let output = successful_run(plan).await;
     assert_eq!(output.stdout, b"metadata");
     for name in PROTECTED_METADATA_NAMES {
         assert_eq!(

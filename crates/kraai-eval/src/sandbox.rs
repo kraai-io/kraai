@@ -377,9 +377,28 @@ fn host_ca_bundle() -> Option<PathBuf> {
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(name))
+    let path = std::env::var_os("PATH")?;
+    #[cfg(windows)]
+    let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    #[cfg(not(windows))]
+    let extensions = String::new();
+    find_program_in(name, &path, &extensions)
+}
+
+fn find_program_in(name: &str, path: &std::ffi::OsStr, extensions: &str) -> Option<PathBuf> {
+    std::env::split_paths(path).find_map(|directory| {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if std::path::Path::new(name).extension().is_some() {
+            return None;
+        }
+        extensions
+            .split(';')
+            .map(str::trim)
+            .filter(|extension| extension.starts_with('.') && !extension.contains(['/', '\\']))
+            .map(|extension| directory.join(format!("{name}{extension}")))
             .find(|candidate| candidate.is_file())
     })
 }
@@ -517,5 +536,36 @@ mod tests {
         );
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod executable_lookup_tests {
+    use super::find_program_in;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert observable behavior"
+    )]
+    fn respects_path_and_executable_extension_order() -> std::io::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("kraai-executable-{}", ulid::Ulid::generate()));
+        std::fs::create_dir_all(root.join("first"))?;
+        std::fs::create_dir(root.join("second"))?;
+        std::fs::write(root.join("first/cargo.cmd"), b"")?;
+        std::fs::write(root.join("second/cargo.exe"), b"")?;
+        let path = std::env::join_paths([root.join("first"), root.join("second")])
+            .map_err(std::io::Error::other)?;
+        assert_eq!(
+            find_program_in("cargo", &path, ".exe;.cmd"),
+            Some(root.join("first/cargo.cmd"))
+        );
+        assert_eq!(
+            find_program_in("cargo.exe", &path, ".exe;.cmd"),
+            Some(root.join("second/cargo.exe"))
+        );
+        assert_eq!(find_program_in("missing", &path, ".exe;.cmd"), None);
+        std::fs::remove_dir_all(root)
     }
 }

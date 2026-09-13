@@ -73,7 +73,7 @@ impl Child {
 }
 
 pub(crate) fn spawn(command: &mut PreparedCommand) -> Result<Child, SandboxError> {
-    spawn_inner(command).map_err(|error| SandboxError::Spawn {
+    crate::process_spawn::with_lock(|| spawn_inner(command)).map_err(|error| SandboxError::Spawn {
         executable: command.executable.to_string_lossy().into_owned(),
         message: error.to_string(),
     })

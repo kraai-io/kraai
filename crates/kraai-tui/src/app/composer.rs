@@ -205,12 +205,13 @@ fn word_right(input: &str, cursor: usize) -> usize {
 }
 
 fn run_editor(editor: &str, path: &std::path::Path, mut tick: impl FnMut()) -> Result<()> {
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("kraai-editor")
-        .arg(path)
-        .spawn()?;
+    let mut child = kraai_sandbox::spawn_command(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$1\""))
+            .arg("kraai-editor")
+            .arg(path),
+    )?;
     loop {
         tick();
         if let Some(status) = child.try_wait()? {

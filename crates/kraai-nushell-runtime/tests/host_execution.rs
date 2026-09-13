@@ -136,6 +136,37 @@ async fn exposes_print_from_the_nushell_cli_context() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn sandboxed_host_accepts_a_workspace_symlink_alias() {
+    let workspace = TestWorkspace::new();
+    let aliases = TestWorkspace::new();
+    let alias = aliases.0.join("workspace");
+    std::os::unix::fs::symlink(&workspace.0, &alias).expect("create workspace alias");
+    for capability in [
+        SandboxCapability::WorkspaceRead,
+        SandboxCapability::WorkspaceWrite,
+    ] {
+        let mut execution = plan(b"$env.PWD".to_vec(), &workspace);
+        execution.workspace_root = alias.clone();
+        execution.capabilities = SandboxCapabilities::new([capability]).expect("capabilities");
+        execution.runtime_roots = sandbox_runtime_roots(host_executable());
+        let result = execute(execution, CancellationToken::new())
+            .await
+            .expect("launch aliased workspace");
+        assert_eq!(
+            result.output.termination,
+            Termination::Exited { code: Some(0) },
+            "{}",
+            String::from_utf8_lossy(&result.output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&result.output.stdout).trim(),
+            workspace.0.to_string_lossy()
+        );
+    }
+}
+
 #[tokio::test]
 async fn invalid_source_is_reported_by_nushell_without_partial_evaluation() {
     let workspace = TestWorkspace::new();

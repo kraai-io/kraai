@@ -5,12 +5,14 @@ mod error;
 mod output;
 mod platform;
 mod process;
+mod process_spawn;
 mod temp_dir;
 
 pub use config::{LaunchPlan, PrivateTempConfig};
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 pub use process::run;
+pub use process_spawn::spawn_command;
 
 #[cfg(target_os = "linux")]
 pub use platform::linux::restrict_network_after_startup;
