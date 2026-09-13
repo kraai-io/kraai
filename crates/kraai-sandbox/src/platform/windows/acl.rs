@@ -220,12 +220,21 @@ fn entry_limit(path: &Path, limit: usize) -> SandboxError {
 mod tests {
     use super::*;
 
+    fn lock_fixtures() -> std::io::Result<std::sync::MutexGuard<'static, ()>> {
+        // Traversals pin shared ancestors, including Temp, against other fixtures' renames.
+        static FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        FIXTURES
+            .lock()
+            .map_err(|error| std::io::Error::other(format!("ACL fixture lock poisoned: {error}")))
+    }
+
     #[test]
     #[expect(
         clippy::panic_in_result_fn,
         reason = "regression tests assert permission boundaries"
     )]
     fn acl_setup_does_not_require_file_content_access() -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
         let identity = super::super::identity::Identity::create()?;
         let root = std::env::temp_dir().join(format!(
             "kraai-acl-unreadable-{:032x}",
@@ -258,6 +267,7 @@ mod tests {
         reason = "regression tests assert permission boundaries"
     )]
     fn hard_link_grants_are_rejected_before_mutation() -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
         let identity = super::super::identity::Identity::create()?;
         let root =
             std::env::temp_dir().join(format!("kraai-acl-links-{:032x}", rand::random::<u128>()));
@@ -294,6 +304,7 @@ mod tests {
         reason = "regression tests assert permission boundaries"
     )]
     fn traversal_pins_prevent_ancestor_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
         let root =
             std::env::temp_dir().join(format!("kraai-acl-pins-{:032x}", rand::random::<u128>()));
         let nested = root.join("nested");
@@ -315,6 +326,7 @@ mod tests {
     #[test]
     fn retained_grants_allow_renaming_existing_directories()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
         let identity = super::super::identity::Identity::create()?;
         let root =
             std::env::temp_dir().join(format!("kraai-acl-rename-{:032x}", rand::random::<u128>()));
@@ -337,6 +349,7 @@ mod tests {
         reason = "regression tests assert observable behavior"
     )]
     fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
         let identity = super::super::identity::Identity::create()?;
         let root =
             std::env::temp_dir().join(format!("kraai-acl-limit-{:032x}", rand::random::<u128>()));
