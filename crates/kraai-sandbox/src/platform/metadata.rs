@@ -126,8 +126,12 @@ fn read_pointer(path: &Path, prefix: &[u8]) -> Result<Option<PathBuf>, SandboxEr
     #[cfg(unix)]
     let target = OsStr::from_bytes(value);
     #[cfg(not(unix))]
-    let target = std::str::from_utf8(value)
-        .map_err(|_| invalid(path, "Git metadata pointer must contain a UTF-8 path"))?;
+    let target = std::str::from_utf8(value).map_err(|error| {
+        invalid(
+            path,
+            format!("Git metadata pointer must contain a UTF-8 path: {error}"),
+        )
+    })?;
     Ok(Some(parent.join(target)))
 }
 

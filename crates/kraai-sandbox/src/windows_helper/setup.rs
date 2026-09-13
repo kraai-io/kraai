@@ -61,6 +61,34 @@ fn status(service: &Service) -> io::Result<SERVICE_STATUS_PROCESS> {
     Ok(status)
 }
 
+fn verify_configuration(service: &Service, executable: &std::path::Path) -> io::Result<()> {
+    let mut length = 0;
+    unsafe { QueryServiceConfigW(service.0, ptr::null_mut(), 0, &mut length) };
+    if length == 0 || length > 65536 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buffer = vec![0_u64; (length as usize).div_ceil(8)];
+    if unsafe { QueryServiceConfigW(service.0, buffer.as_mut_ptr().cast(), length, &mut length) }
+        == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let config = unsafe { &*buffer.as_ptr().cast::<QUERY_SERVICE_CONFIGW>() };
+    let expected = super::wide(&format!("\"{}\" service", executable.display()));
+    let mut actual_length = 0;
+    while unsafe { *config.lpBinaryPathName.add(actual_length) } != 0 {
+        actual_length += 1;
+    }
+    let actual = unsafe { std::slice::from_raw_parts(config.lpBinaryPathName, actual_length + 1) };
+    if config.dwServiceType != SERVICE_WIN32_OWN_PROCESS || actual != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "KraaiSandbox belongs to a different service installation",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn verify_server(pipe: HANDLE) -> io::Result<()> {
     let manager = manager(SC_MANAGER_CONNECT)?;
     let service = open(&manager, SERVICE_QUERY_STATUS)?;
@@ -135,8 +163,12 @@ pub(super) fn install() -> io::Result<()> {
     let directory = directory()?;
     let executable = directory.join("kraai-sandbox-helper.exe");
     let source = std::env::current_exe()?;
-    match open(&manager, SERVICE_QUERY_STATUS | SERVICE_START) {
+    match open(
+        &manager,
+        SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG | SERVICE_START,
+    ) {
         Ok(service) => {
+            verify_configuration(&service, &executable)?;
             if std::fs::read(&source)? != std::fs::read(&executable)? {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
@@ -182,6 +214,9 @@ pub(super) fn install() -> io::Result<()> {
         }
         let service = Service(handle);
         if let Err(error) = start(&service) {
+            let mut state = SERVICE_STATUS::default();
+            unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut state) };
+            let _ = wait_for(&service, SERVICE_STOPPED);
             unsafe { DeleteService(service.0) };
             return Err(error);
         }
@@ -239,8 +274,12 @@ pub(super) fn uninstall() -> io::Result<()> {
     let manager = manager(SC_MANAGER_CONNECT)?;
     let service = open(
         &manager,
-        SERVICE_STOP | SERVICE_QUERY_STATUS | windows_sys::Win32::Storage::FileSystem::DELETE,
+        SERVICE_STOP
+            | SERVICE_QUERY_STATUS
+            | SERVICE_QUERY_CONFIG
+            | windows_sys::Win32::Storage::FileSystem::DELETE,
     )?;
+    verify_configuration(&service, &executable)?;
     if status(&service)?.dwCurrentState != SERVICE_STOPPED {
         let mut value = SERVICE_STATUS::default();
         if unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut value) } == 0 {

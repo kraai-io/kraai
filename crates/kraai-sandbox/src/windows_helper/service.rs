@@ -228,7 +228,7 @@ async fn change(leases: Leases, sid: String, acquire: bool) -> io::Result<()> {
     tokio::task::spawn_blocking(move || {
         let mut leases = leases
             .lock()
-            .map_err(|_| io::Error::other("sandbox lease state poisoned"))?;
+            .map_err(|error| io::Error::other(format!("sandbox lease state poisoned: {error}")))?;
         let journal = super::journal::Journal::open()?;
         if acquire {
             if let Some((count, _)) = leases.get_mut(&sid) {

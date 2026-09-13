@@ -8,7 +8,7 @@ use tokio::net::windows::named_pipe::NamedPipeClient;
     unsafe_code,
     reason = "transfer an overlapped pipe handle with no server-creation access to Tokio"
 )]
-pub(super) fn connect() -> io::Result<NamedPipeClient> {
+fn connect_once() -> io::Result<NamedPipeClient> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_APPEND_DATA, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -22,21 +22,29 @@ pub(super) fn connect() -> io::Result<NamedPipeClient> {
     unsafe { NamedPipeClient::from_raw_handle(file.into_raw_handle()) }
 }
 
+pub(super) async fn connect() -> io::Result<NamedPipeClient> {
+    tokio::time::timeout(super::TIMEOUT, async {
+        loop {
+            match connect_once() {
+                Ok(pipe) => return Ok(pipe),
+                Err(error) if error.raw_os_error() == Some(231) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
 #[derive(Debug)]
 pub(crate) struct Lease(NamedPipeClient);
 
 impl Lease {
     pub(crate) async fn acquire(nonce: &[u8; 16]) -> io::Result<Self> {
         tokio::time::timeout(super::TIMEOUT, async {
-            let mut pipe = loop {
-                match connect() {
-                    Ok(pipe) => break pipe,
-                    Err(error) if error.raw_os_error() == Some(231) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await
-                    }
-                    Err(error) => return Err(error),
-                }
-            };
+            let mut pipe = connect().await?;
             super::setup::verify_server(pipe.as_raw_handle())?;
             pipe.write_all(super::MAGIC).await?;
             pipe.write_all(nonce).await?;

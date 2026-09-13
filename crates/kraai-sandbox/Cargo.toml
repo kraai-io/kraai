@@ -40,3 +40,9 @@ windows-sys = { workspace = true, features = [
   "Win32_System_Registry",
   "Win32_NetworkManagement_WindowsFirewall",
 ] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_NetworkManagement_WindowsFilteringPlatform",
+  "Win32_System_Rpc",
+] }
