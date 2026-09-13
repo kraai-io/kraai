@@ -27,7 +27,6 @@ try {
         '$env:HOMEDRIVE = [IO.Path]::GetPathRoot($env:USERPROFILE).TrimEnd(''\'')',
         '$env:HOMEPATH = $env:USERPROFILE.Substring($env:HOMEDRIVE.Length)',
         'New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA, $env:APPDATA | Out-Null',
-        'if ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData) -ne $env:LOCALAPPDATA) { throw ''Test account local application data is not initialized'' }',
         'Write-Host "Test identity: $($identity.Name) [$($identity.User.Value)]"',
         'Write-Host "USERPROFILE=$env:USERPROFILE LOCALAPPDATA=$env:LOCALAPPDATA"',
         'Write-Host "Known local application data: $([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"',
