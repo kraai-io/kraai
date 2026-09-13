@@ -19,6 +19,9 @@ try {
         '$identity = [Security.Principal.WindowsIdentity]::GetCurrent()',
         '$principal = [Security.Principal.WindowsPrincipal]::new($identity)',
         'if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw ''Tests must run without administrator rights'' }',
+        'Write-Host "Test identity: $($identity.Name) [$($identity.User.Value)]"',
+        'Write-Host "USERPROFILE=$env:USERPROFILE LOCALAPPDATA=$env:LOCALAPPDATA"',
+        'Write-Host "Known local application data: $([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"',
         '$env:TEMP = Join-Path $PSScriptRoot ''temp''',
         '$env:TMP = $env:TEMP',
         'New-Item -ItemType Directory -Path $env:TEMP | Out-Null'
@@ -36,12 +39,23 @@ try {
     & icacls.exe $directory /grant ('*' + $user.SID.Value + ':(OI)(CI)F') /T | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Cannot grant test user access to copied executables' }
     $credential = [pscredential]::new("$env:COMPUTERNAME\$name", $password)
+    $testStarted = Get-Date
     $process = Start-Process powershell.exe -Credential $credential -LoadUserProfile -Wait -PassThru `
         -WorkingDirectory $directory -ArgumentList @('-NoProfile', '-NonInteractive', '-File', ('"' + $script + '"')) `
         -RedirectStandardOutput (Join-Path $directory 'stdout') -RedirectStandardError (Join-Path $directory 'stderr')
     Get-Content (Join-Path $directory 'stdout')
     Get-Content (Join-Path $directory 'stderr')
-    if ($process.ExitCode -ne 0) { throw "Standard user tests failed with $($process.ExitCode)" }
+    if ($process.ExitCode -ne 0) {
+        foreach ($log in @('Microsoft-Windows-AppModel-Runtime/Admin', 'Microsoft-Windows-User Profiles Service/Operational')) {
+            try {
+                Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $testStarted } -ErrorAction Stop |
+                    Select-Object TimeCreated, Id, Message | Format-List | Out-Host
+            } catch {
+                Write-Host "Unable to collect ${log}: $_"
+            }
+        }
+        throw "Standard user tests failed with $($process.ExitCode)"
+    }
 } finally {
     Remove-LocalUser -Name $name
     if (Test-Path $directory) { Remove-Item -Recurse -Force $directory }
