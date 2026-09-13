@@ -61,7 +61,7 @@ impl Grants {
         access: Access,
         limit: usize,
     ) -> Result<(), SandboxError> {
-        let _lock = mutation::Lock::acquire()?;
+        let _lock = super::mutation_lock::Lock::acquire()?;
         self.roots.push(path.to_path_buf());
         visit_tree(path, |file| {
             if self.files.len() >= limit {
@@ -77,7 +77,7 @@ impl Grants {
 
 impl Grants {
     pub(super) fn cleanup(&mut self) -> Result<(), SandboxError> {
-        let _lock = mutation::Lock::acquire()?;
+        let _lock = super::mutation_lock::Lock::acquire()?;
         let mut failure = None;
         for file in &self.files {
             if let Err(error) = mutation::update(file, &self.sid, None) {

@@ -46,6 +46,7 @@ pub(super) struct Identity {
 
 impl Identity {
     pub(super) fn create() -> Result<Self, SandboxError> {
+        let _lock = super::mutation_lock::Lock::acquire()?;
         let name = format!("kraai.{:032x}", rand::random::<u128>())
             .encode_utf16()
             .chain([0])
@@ -80,6 +81,9 @@ impl Identity {
 
 impl Drop for Identity {
     fn drop(&mut self) {
+        let Ok(_lock) = super::mutation_lock::Lock::acquire() else {
+            return;
+        };
         unsafe { DeleteAppContainerProfile(self.name.as_ptr()) };
     }
 }

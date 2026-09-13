@@ -1,5 +1,6 @@
 mod acl;
 mod identity;
+mod mutation_lock;
 pub(crate) mod private_temp;
 pub(crate) mod process;
 
