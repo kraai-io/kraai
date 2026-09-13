@@ -83,22 +83,13 @@ async fn service_restart_recovers_owned_exemptions() {
     );
     drop(lease);
     assert!(firewall::contains(&sid).expect("journaled exemption survives crash"));
-    let started = std::process::Command::new("sc.exe")
-        .args(["start", super::SERVICE])
-        .output()
-        .expect("restart service");
-    assert!(
-        started.status.success(),
-        "{}",
-        String::from_utf8_lossy(&started.stdout)
-    );
     tokio::time::timeout(super::TIMEOUT, async {
         while firewall::contains(&sid).expect("recovery status") {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("restart removes stale owned exemption");
+    .expect("automatic restart removes stale owned exemption");
     assert!(firewall::contains(&foreign.0).expect("unrelated exemption is preserved"));
     drop(foreign);
     let lease = Lease::acquire(&rand::random())

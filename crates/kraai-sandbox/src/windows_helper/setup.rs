@@ -112,6 +112,7 @@ fn directory() -> io::Result<PathBuf> {
     let result =
         unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, ptr::null_mut(), &mut value) };
     if result < 0 {
+        unsafe { CoTaskMemFree(value.cast()) };
         return Err(io::Error::other(format!(
             "cannot locate Program Files: HRESULT {result:#x}"
         )));
@@ -213,7 +214,7 @@ pub(super) fn install() -> io::Result<()> {
             return Err(io::Error::last_os_error());
         }
         let service = Service(handle);
-        if let Err(error) = start(&service) {
+        if let Err(error) = configure_recovery(&service).and_then(|()| start(&service)) {
             let mut state = SERVICE_STATUS::default();
             unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut state) };
             let _ = wait_for(&service, SERVICE_STOPPED);
@@ -227,6 +228,44 @@ pub(super) fn install() -> io::Result<()> {
         let _ = std::fs::remove_dir(&directory);
     }
     result
+}
+
+fn configure_recovery(service: &Service) -> io::Result<()> {
+    let mut action = SC_ACTION {
+        Type: SC_ACTION_RESTART,
+        Delay: 5000,
+    };
+    let recovery = SERVICE_FAILURE_ACTIONSW {
+        dwResetPeriod: 86400,
+        lpRebootMsg: ptr::null_mut(),
+        lpCommand: ptr::null_mut(),
+        cActions: 1,
+        lpsaActions: &mut action,
+    };
+    if unsafe {
+        ChangeServiceConfig2W(
+            service.0,
+            SERVICE_CONFIG_FAILURE_ACTIONS,
+            (&recovery as *const SERVICE_FAILURE_ACTIONSW).cast(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let flag = SERVICE_FAILURE_ACTIONS_FLAG {
+        fFailureActionsOnNonCrashFailures: 1,
+    };
+    if unsafe {
+        ChangeServiceConfig2W(
+            service.0,
+            SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+            (&flag as *const SERVICE_FAILURE_ACTIONS_FLAG).cast(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn start(service: &Service) -> io::Result<()> {

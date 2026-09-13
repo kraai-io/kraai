@@ -216,15 +216,17 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
 }
 
 macro_rules! capability_cases {
-    ($($name:ident: [$($capability:ident),*];)*) => {
+    ($($(#[$attribute:meta])* $name:ident: [$($capability:ident),*];)*) => {
         mod capability_matrix {
             use super::*;
             $(mod $name {
                 use super::*;
+                $(#[$attribute])*
                 #[tokio::test]
                 async fn offline() {
                     verify(&[$(SandboxCapability::$capability),*], false).await;
                 }
+                $(#[$attribute])*
                 #[tokio::test]
                 async fn online() {
                     verify(&[$(SandboxCapability::$capability,)* SandboxCapability::Network], false).await;
@@ -243,9 +245,13 @@ capability_cases! {
     workspace_read: [WorkspaceRead];
     workspace_write: [WorkspaceWrite];
     metadata_write: [MetadataWrite];
+    #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_read: [HostRead];
+    #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_read_workspace_write: [HostRead, WorkspaceWrite];
+    #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_read_metadata_write: [HostRead, MetadataWrite];
+    #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_write: [HostWrite];
 }
 
@@ -262,6 +268,10 @@ mod linked_metadata_obeys_the_same_capabilities {
         verify(&[SandboxCapability::MetadataWrite], true).await;
     }
 
+    #[cfg_attr(
+        windows,
+        ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs"
+    )]
     #[tokio::test]
     async fn host_write() {
         verify(&[SandboxCapability::HostWrite], true).await;

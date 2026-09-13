@@ -92,12 +92,15 @@ fn probe() {
             }
         }
         "network" => {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+            };
             let _listener = std::net::TcpListener::bind("0.0.0.0:0")
                 .expect("network capability allows listening");
             assert!(
                 std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
+                    .access_mode((FILE_GENERIC_READ | FILE_GENERIC_WRITE) & !FILE_APPEND_DATA)
                     .open(r"\\.\pipe\KraaiSandbox.v1")
                     .is_err(),
                 "sandbox must not configure its own network policy"
@@ -174,12 +177,34 @@ async fn workspace_write_preserves_metadata_and_explicit_metadata_write_works() 
 #[tokio::test]
 async fn rejects_unsupported_host_access_without_running() {
     let fixture = Fixture::new();
-    let result = kraai_sandbox::run(
-        fixture.plan("metadata", &[SandboxCapability::HostRead]),
-        CancellationToken::new(),
-    )
-    .await;
-    assert!(matches!(result, Err(SandboxError::SandboxUnavailable(_))));
+    for capabilities in [
+        &[SandboxCapability::HostRead][..],
+        &[
+            SandboxCapability::HostRead,
+            SandboxCapability::WorkspaceWrite,
+        ][..],
+        &[
+            SandboxCapability::HostRead,
+            SandboxCapability::MetadataWrite,
+        ][..],
+        &[SandboxCapability::HostWrite][..],
+    ] {
+        for network in [false, true] {
+            let mut capabilities = capabilities.to_vec();
+            if network {
+                capabilities.push(SandboxCapability::Network);
+            }
+            let result = kraai_sandbox::run(
+                fixture.plan("metadata", &capabilities),
+                CancellationToken::new(),
+            )
+            .await;
+            assert!(
+                matches!(result, Err(SandboxError::SandboxUnavailable(_))),
+                "unsupported capabilities {capabilities:?}"
+            );
+        }
+    }
     assert_eq!(
         std::fs::read_to_string(fixture.0.join("workspace/.git/config"))
             .expect("metadata remains unchanged"),

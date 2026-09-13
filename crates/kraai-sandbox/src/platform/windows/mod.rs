@@ -201,12 +201,30 @@ fn system_root() -> Result<PathBuf, SandboxError> {
 )]
 fn local_app_data() -> Result<PathBuf, SandboxError> {
     use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
     use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+    let mut token = std::ptr::null_mut();
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(unavailable("query the current user profile"));
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
     let mut path = std::ptr::null_mut();
-    let status =
-        unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, std::ptr::null_mut(), &mut path) };
+    let status = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, token.as_raw_handle(), &mut path)
+    };
+    drop(token);
     if status < 0 || path.is_null() {
+        unsafe { CoTaskMemFree(path.cast()) };
         return Err(SandboxError::SandboxUnavailable(format!(
             "cannot locate LocalAppData: HRESULT {status:#x}"
         )));
