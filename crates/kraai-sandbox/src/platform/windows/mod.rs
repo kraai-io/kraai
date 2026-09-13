@@ -115,6 +115,10 @@ pub(crate) fn prepare(
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("SystemRoot"));
     plan.environment
         .insert(OsString::from("SystemRoot"), system_root.into_os_string());
+    plan.environment
+        .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));
+    plan.environment
+        .insert("LOCALAPPDATA".into(), local_app_data()?.into_os_string());
     private_temp.apply_environment(&mut plan.environment);
     Ok(PreparedCommand {
         executable: plan.executable,
@@ -169,6 +173,31 @@ fn system_root() -> Result<PathBuf, SandboxError> {
     }
     buffer.truncate(length);
     local_path(&PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+#[expect(
+    unsafe_code,
+    reason = "the OS supplies the profile directory required by AppContainer process creation"
+)]
+fn local_app_data() -> Result<PathBuf, SandboxError> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+    let mut path = std::ptr::null_mut();
+    let status =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, std::ptr::null_mut(), &mut path) };
+    if status < 0 || path.is_null() {
+        return Err(SandboxError::SandboxUnavailable(format!(
+            "cannot locate LocalAppData: HRESULT {status:#x}"
+        )));
+    }
+    let mut length = 0;
+    while unsafe { *path.add(length) } != 0 {
+        length += 1;
+    }
+    let value = unsafe { OsString::from_wide(std::slice::from_raw_parts(path, length)) };
+    unsafe { CoTaskMemFree(path.cast()) };
+    Ok(PathBuf::from(value))
 }
 
 fn unavailable(operation: &str) -> SandboxError {

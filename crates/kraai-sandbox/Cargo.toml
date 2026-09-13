@@ -33,4 +33,8 @@ windows-sys = { workspace = true, features = [
   "Win32_System_Environment",
   "Win32_System_Memory",
   "Win32_System_LibraryLoader",
+  "Win32_NetworkManagement_WindowsFilteringPlatform",
+  "Win32_System_Rpc",
+  "Win32_UI_Shell",
+  "Win32_System_Com",
 ] }
