@@ -215,42 +215,55 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
     );
 }
 
-#[tokio::test]
-async fn capability_matrix() {
-    for filesystem in [
-        vec![],
-        vec![SandboxCapability::WorkspaceRead],
-        vec![SandboxCapability::WorkspaceWrite],
-        vec![SandboxCapability::MetadataWrite],
-        vec![SandboxCapability::HostRead],
-        vec![
-            SandboxCapability::HostRead,
-            SandboxCapability::WorkspaceWrite,
-        ],
-        vec![
-            SandboxCapability::HostRead,
-            SandboxCapability::MetadataWrite,
-        ],
-        vec![SandboxCapability::HostWrite],
-    ] {
-        for network in [false, true] {
-            let mut capabilities = filesystem.clone();
-            if network {
-                capabilities.push(SandboxCapability::Network);
+macro_rules! capability_cases {
+    ($($name:ident: [$($capability:ident),*];)*) => {
+        mod capability_matrix {
+            use super::*;
+            $(mod $name {
+                use super::*;
+                #[tokio::test]
+                async fn offline() {
+                    verify(&[$(SandboxCapability::$capability),*], false).await;
+                }
+                #[tokio::test]
+                async fn online() {
+                    verify(&[$(SandboxCapability::$capability,)* SandboxCapability::Network], false).await;
+                }
+            })*
+            #[tokio::test]
+            async fn unsandboxed() {
+                verify(&[SandboxCapability::NoSandbox], false).await;
             }
-            verify(&capabilities, false).await;
         }
-    }
-    verify(&[SandboxCapability::NoSandbox], false).await;
+    };
 }
 
-#[tokio::test]
-async fn linked_metadata_obeys_the_same_capabilities() {
-    for capability in [
-        SandboxCapability::WorkspaceWrite,
-        SandboxCapability::MetadataWrite,
-        SandboxCapability::HostWrite,
-    ] {
-        verify(&[capability], true).await;
+capability_cases! {
+    missing_workspace: [];
+    workspace_read: [WorkspaceRead];
+    workspace_write: [WorkspaceWrite];
+    metadata_write: [MetadataWrite];
+    host_read: [HostRead];
+    host_read_workspace_write: [HostRead, WorkspaceWrite];
+    host_read_metadata_write: [HostRead, MetadataWrite];
+    host_write: [HostWrite];
+}
+
+mod linked_metadata_obeys_the_same_capabilities {
+    use super::*;
+
+    #[tokio::test]
+    async fn workspace_write() {
+        verify(&[SandboxCapability::WorkspaceWrite], true).await;
+    }
+
+    #[tokio::test]
+    async fn metadata_write() {
+        verify(&[SandboxCapability::MetadataWrite], true).await;
+    }
+
+    #[tokio::test]
+    async fn host_write() {
+        verify(&[SandboxCapability::HostWrite], true).await;
     }
 }
