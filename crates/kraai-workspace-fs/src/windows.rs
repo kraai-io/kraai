@@ -1,3 +1,7 @@
+mod path;
+
+pub(super) use path::canonicalize;
+
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::ffi::OsStrExt;

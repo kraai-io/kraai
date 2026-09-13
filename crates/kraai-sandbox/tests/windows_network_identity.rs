@@ -19,6 +19,8 @@ use windows_sys::Win32::Security::*;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 use windows_sys::Win32::System::Threading::*;
 
+const SE_GROUP_LOGON_ID: u32 = 0xc0000000;
+
 struct Engine(HANDLE);
 
 impl Drop for Engine {
@@ -165,11 +167,52 @@ fn restricted_identity_controls_network_without_affecting_host() {
         0
     );
     let user_sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let mut groups = vec![0_u64; 1024];
+    assert_ne!(
+        unsafe {
+            GetTokenInformation(
+                base.as_raw_handle(),
+                TokenGroups,
+                groups.as_mut_ptr().cast(),
+                (groups.len() * 8) as u32,
+                &mut length,
+            )
+        },
+        0
+    );
+    let token_groups = unsafe { &*groups.as_ptr().cast::<TOKEN_GROUPS>() };
+    let groups = unsafe {
+        std::slice::from_raw_parts(
+            token_groups.Groups.as_ptr(),
+            token_groups.GroupCount as usize,
+        )
+    };
+    let mut everyone = ptr::null_mut();
+    assert_ne!(
+        unsafe { ConvertStringSidToSidW(wide("S-1-1-0").as_ptr(), &mut everyone) },
+        0
+    );
+    let everyone = Allocation(everyone);
     for offline in [false, true] {
-        let mut sids = vec![SID_AND_ATTRIBUTES {
-            Sid: user_sid,
-            Attributes: 0,
-        }];
+        let mut sids = vec![
+            SID_AND_ATTRIBUTES {
+                Sid: user_sid,
+                Attributes: 0,
+            },
+            SID_AND_ATTRIBUTES {
+                Sid: everyone.0,
+                Attributes: 0,
+            },
+        ];
+        sids.extend(
+            groups
+                .iter()
+                .filter(|group| group.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID)
+                .map(|group| SID_AND_ATTRIBUTES {
+                    Sid: group.Sid,
+                    Attributes: 0,
+                }),
+        );
         if offline {
             sids.push(SID_AND_ATTRIBUTES {
                 Sid: marker.0,

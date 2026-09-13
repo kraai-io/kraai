@@ -29,7 +29,7 @@ pub fn resolve_path(cwd: &Path, requested: &Path) -> PathBuf {
 
 pub fn normalize_allow_missing(cwd: &Path, requested: &Path) -> PathBuf {
     let absolute = resolve_path(cwd, requested);
-    if let Ok(canonical) = absolute.canonicalize() {
+    if let Ok(canonical) = canonicalize(cwd, &absolute) {
         return canonical;
     }
 
@@ -48,14 +48,28 @@ pub fn normalize_allow_missing(cwd: &Path, requested: &Path) -> PathBuf {
     normalized
 }
 
+fn canonicalize(cwd: &Path, path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    return path.canonicalize().or_else(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            windows::canonicalize(cwd, path)
+        } else {
+            Err(error)
+        }
+    });
+    #[cfg(not(windows))]
+    {
+        let _ = cwd;
+        path.canonicalize()
+    }
+}
+
 pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
     let path = resolve_path(cwd, requested);
-    let canonical = path
-        .canonicalize()
-        .map_err(|source| WorkspaceFsError::Canonicalize {
-            path: path.clone(),
-            source,
-        })?;
+    let canonical = canonicalize(cwd, &path).map_err(|source| WorkspaceFsError::Canonicalize {
+        path: path.clone(),
+        source,
+    })?;
     let metadata = canonical
         .metadata()
         .map_err(|source| WorkspaceFsError::Metadata {
@@ -150,12 +164,10 @@ pub fn create_text_file(
     let parent = requested
         .parent()
         .ok_or_else(|| WorkspaceFsError::MissingParent(requested.clone()))?;
-    let parent = parent
-        .canonicalize()
-        .map_err(|source| WorkspaceFsError::Canonicalize {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+    let parent = canonicalize(cwd, parent).map_err(|source| WorkspaceFsError::Canonicalize {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     if !parent.is_dir() {
         return Err(WorkspaceFsError::NotDirectory(parent));
     }
@@ -628,6 +640,22 @@ mod tests {
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_opened_paths_without_volume_manager_access() {
+        let root = temp_dir("windows-final-path").canonicalize().unwrap();
+        fs::create_dir(root.join("nested")).unwrap();
+        let file = root.join("résolved.txt");
+        fs::write(&file, "contents").unwrap();
+        let resolved = windows::canonicalize(&root, &root.join("nested/../résolved.txt")).unwrap();
+        assert_eq!(resolved, file.canonicalize().unwrap());
+        assert_eq!(
+            windows::canonicalize(&root.join("nested"), &file).unwrap(),
+            resolved
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
