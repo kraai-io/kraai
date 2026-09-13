@@ -112,11 +112,16 @@ fn restricted_identity_controls_network_without_affecting_host() {
             Anonymous: FWP_CONDITION_VALUE0_0 { sd: &mut blob },
         },
     };
+    let mut filter_name = wide("Kraai restricted identity network probe");
     for layer in [
         FWPM_LAYER_ALE_AUTH_CONNECT_V4,
         FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     ] {
-        let mut filter = FWPM_FILTER0 {
+        let filter = FWPM_FILTER0 {
+            displayData: FWPM_DISPLAY_DATA0 {
+                name: filter_name.as_mut_ptr(),
+                description: ptr::null_mut(),
+            },
             layerKey: layer,
             subLayerKey: FWPM_SUBLAYER_UNIVERSAL,
             numFilterConditions: 1,
@@ -128,7 +133,7 @@ fn restricted_identity_controls_network_without_affecting_host() {
             ..Default::default()
         };
         assert_eq!(
-            unsafe { FwpmFilterAdd0(engine.0, &mut filter, ptr::null_mut(), ptr::null_mut()) },
+            unsafe { FwpmFilterAdd0(engine.0, &filter, ptr::null_mut(), ptr::null_mut()) },
             0,
             "install token filter"
         );

@@ -90,6 +90,7 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
             "sandbox roots must have a valid explicit DACL",
         )));
     }
+    let mut base = without_sid(dacl, sid)?;
     let mut edited = ptr::null_mut();
     let mut copied;
     let _edited;
@@ -124,7 +125,21 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
                 ptstrName: sid.as_ptr().cast_mut().cast(),
             },
         };
-        let result = unsafe { SetEntriesInAclW(1, &entry, dacl, &mut edited) };
+        let mut entries = vec![entry];
+        if matches!(access, Access::DenyWrite) {
+            let mut read = entry;
+            read.grfAccessMode = GRANT_ACCESS;
+            read.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+            entries.push(read);
+        }
+        let result = unsafe {
+            SetEntriesInAclW(
+                entries.len() as u32,
+                entries.as_ptr(),
+                base.as_mut_ptr().cast(),
+                &mut edited,
+            )
+        };
         if result != 0 {
             return Err(code_error("add sandbox DACL entry", result));
         }
@@ -134,34 +149,9 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         }
         edited
     } else {
-        let size = unsafe { (*dacl).AclSize } as usize;
-        copied = vec![0_u32; size.div_ceil(size_of::<u32>())];
-        unsafe { ptr::copy_nonoverlapping(dacl.cast::<u8>(), copied.as_mut_ptr().cast(), size) };
+        copied = without_sid(dacl, sid)?;
         let copy = copied.as_mut_ptr().cast::<ACL>();
-        let mut changed = false;
-        for index in (0..unsafe { (*copy).AceCount } as u32).rev() {
-            let mut ace = ptr::null_mut();
-            if unsafe { GetAce(copy, index, &mut ace) } == 0 {
-                return Err(error("inspect DACL entry"));
-            }
-            let header = std::ptr::NonNull::new(ace.cast::<ACE_HEADER>())
-                .ok_or_else(|| error("validate DACL entry"))?;
-            let header = unsafe { header.as_ref() };
-            if matches!(header.AceType, 0 | 1)
-                && header.AceSize as usize >= size_of::<ACE_HEADER>() + size_of::<u32>() + 8
-            {
-                let ace_sid = unsafe { ace.cast::<u8>().add(8) }.cast();
-                if unsafe { IsValidSid(ace_sid) } == 0 {
-                    return Err(error("validate DACL entry SID"));
-                }
-                if unsafe { EqualSid(ace_sid, sid.as_ptr().cast_mut().cast()) } != 0 {
-                    if unsafe { DeleteAce(copy, index) } == 0 {
-                        return Err(error("remove sandbox DACL entry"));
-                    }
-                    changed = true;
-                }
-            }
-        }
+        let changed = unsafe { (*copy).AceCount != (*dacl).AceCount };
         if !changed {
             return Ok(());
         }
@@ -215,6 +205,36 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         }));
     }
     Ok(())
+}
+
+fn without_sid(dacl: *mut ACL, sid: &[u32]) -> Result<Vec<u32>, SandboxError> {
+    let size = unsafe { (*dacl).AclSize } as usize;
+    let mut copied = vec![0_u32; size.div_ceil(size_of::<u32>())];
+    unsafe { ptr::copy_nonoverlapping(dacl.cast::<u8>(), copied.as_mut_ptr().cast(), size) };
+    let copy = copied.as_mut_ptr().cast::<ACL>();
+    for index in (0..unsafe { (*copy).AceCount } as u32).rev() {
+        let mut ace = ptr::null_mut();
+        if unsafe { GetAce(copy, index, &mut ace) } == 0 {
+            return Err(error("inspect DACL entry"));
+        }
+        let header = std::ptr::NonNull::new(ace.cast::<ACE_HEADER>())
+            .ok_or_else(|| error("validate DACL entry"))?;
+        let header = unsafe { header.as_ref() };
+        if matches!(header.AceType, 0 | 1)
+            && header.AceSize as usize >= size_of::<ACE_HEADER>() + size_of::<u32>() + 8
+        {
+            let ace_sid = unsafe { ace.cast::<u8>().add(8) }.cast();
+            if unsafe { IsValidSid(ace_sid) } == 0 {
+                return Err(error("validate DACL entry SID"));
+            }
+            if unsafe { EqualSid(ace_sid, sid.as_ptr().cast_mut().cast()) } != 0
+                && unsafe { DeleteAce(copy, index) } == 0
+            {
+                return Err(error("remove sandbox DACL entry"));
+            }
+        }
+    }
+    Ok(copied)
 }
 
 fn error(operation: &str) -> SandboxError {

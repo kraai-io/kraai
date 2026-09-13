@@ -18,6 +18,8 @@ pub(crate) const PROTECTED_METADATA_NAMES: &[&str] =
 
 pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedCommand, SandboxError> {
     validate_plan(&plan)?;
+    #[cfg(windows)]
+    windows::apply_system_environment(&mut plan.environment)?;
     let private_temp = std::mem::take(&mut plan.private_temp).into_private_temp()?;
 
     if plan.capabilities.is_unsandboxed() {

@@ -112,10 +112,6 @@ pub(crate) fn prepare(
     }
     grants.grant(&temp_path, Access::Write)?;
     plan.environment
-        .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("SystemRoot"));
-    plan.environment
-        .insert(OsString::from("SystemRoot"), system_root.into_os_string());
-    plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));
     plan.environment
         .insert("LOCALAPPDATA".into(), local_app_data()?.into_os_string());
@@ -129,12 +125,20 @@ pub(crate) fn prepare(
         output_events: plan.output_events,
         private_temp: Some(private_temp),
         windows_sandbox: Some(Sandbox {
-            grants: grants,
+            grants,
             identity,
             capabilities,
         }),
         private_ipc_handles: plan.private_ipc_handles,
     })
+}
+
+pub(super) fn apply_system_environment(
+    environment: &mut std::collections::BTreeMap<OsString, OsString>,
+) -> Result<(), SandboxError> {
+    environment.retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("SystemRoot"));
+    environment.insert("SystemRoot".into(), system_root()?.into_os_string());
+    Ok(())
 }
 
 fn local_path(path: &Path) -> Result<PathBuf, SandboxError> {
