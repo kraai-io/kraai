@@ -192,6 +192,31 @@ async fn rejects_unsupported_host_access_without_running() {
 }
 
 #[tokio::test]
+async fn concurrent_launches_preserve_workspace_isolation() {
+    let mut launches = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        launches.spawn(async {
+            let fixture = Fixture::new();
+            let output = kraai_sandbox::run(
+                fixture.plan("readonly", &[SandboxCapability::WorkspaceRead]),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("concurrent sandbox launch");
+            assert_eq!(
+                output.termination,
+                Termination::Exited { code: Some(0) },
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        });
+    }
+    while let Some(result) = launches.join_next().await {
+        result.expect("concurrent launch task");
+    }
+}
+
+#[tokio::test]
 async fn captures_output_and_preserves_environment_values() {
     let fixture = Fixture::new();
     let mut plan = fixture.plan("arguments", &[SandboxCapability::WorkspaceRead]);
