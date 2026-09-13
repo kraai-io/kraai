@@ -8,13 +8,8 @@ pub(crate) mod linux;
 #[cfg(windows)]
 pub(crate) mod windows;
 
-mod metadata;
-
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) mod macos;
-
-pub(crate) const PROTECTED_METADATA_NAMES: &[&str] =
-    &[".git", ".jj", ".kraai", ".agents", ".codex"];
 
 pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedCommand, SandboxError> {
     validate_plan(&plan)?;

@@ -83,29 +83,8 @@ fn host_access_requires_the_corresponding_capability() {
 }
 
 #[test]
-fn metadata_paths_are_protected_even_before_creation() {
+fn workspace_write_allows_all_workspace_paths() {
     let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
-    let args = build_args(&plan, &private_temp).expect("build policy");
-    let workspace = plan
-        .workspace_root
-        .canonicalize()
-        .expect("canonical workspace");
-    for name in crate::platform::PROTECTED_METADATA_NAMES {
-        let parameters = parameters_for(&args, &workspace.join(name));
-        assert!(!parameters.is_empty());
-        for parameter in parameters {
-            assert!(source(&args).contains(&format!(
-                "(deny file-write* (require-any (literal {parameter}) (subpath {parameter})))"
-            )));
-        }
-    }
-    let parameters = parameters_for(&args, &workspace);
-    assert!(parameters.iter().any(|parameter| source(&args).contains(&format!("(deny file-write-unlink (require-all (literal {parameter}) (vnode-type DIRECTORY)))"))));
-}
-
-#[test]
-fn metadata_write_removes_metadata_restrictions() {
-    let (_root, plan, private_temp) = fixture(&[SandboxCapability::MetadataWrite]);
     let args = build_args(&plan, &private_temp).expect("build policy");
     assert!(!source(&args).contains("(deny file-write*"));
     assert!(source(&args).contains("(allow file-write* (require-any"));
@@ -130,7 +109,7 @@ fn runtime_files_are_literal_and_stay_read_only_with_host_write() {
 
 #[test]
 fn runtime_root_inside_workspace_does_not_override_workspace_write() {
-    let (_root, mut plan, private_temp) = fixture(&[SandboxCapability::MetadataWrite]);
+    let (_root, mut plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
     let runtime = plan.workspace_root.join("target");
     std::fs::create_dir(&runtime).expect("create runtime directory");
     plan.runtime_roots.push(runtime);
@@ -169,36 +148,6 @@ fn private_ipc_outside_private_temp_is_rejected() {
     let socket = plan.workspace_root.join("host.sock");
     let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind socket");
     plan.private_ipc_connect_paths.push(socket);
-    assert!(build_args(&plan, &private_temp).is_err());
-}
-
-#[test]
-fn symlinked_workspace_and_metadata_resolve_to_their_targets() {
-    let (root, mut plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
-    let target = plan.workspace_root.join("metadata-target");
-    std::fs::create_dir(&target).expect("create target");
-    std::os::unix::fs::symlink(&target, plan.workspace_root.join(".git"))
-        .expect("symlink metadata");
-    let alias = root.path().join("alias");
-    std::os::unix::fs::symlink(&plan.workspace_root, &alias).expect("symlink workspace");
-    plan.workspace_root = alias;
-    let args = build_args(&plan, &private_temp).expect("build policy");
-    let parameters = parameters_for(&args, &target.canonicalize().expect("canonical target"));
-    assert!(!parameters.is_empty());
-    assert!(
-        parameters
-            .iter()
-            .any(|parameter| source(&args).contains(&format!(
-                "(deny file-write* (require-any (literal {parameter}) (subpath {parameter})))"
-            )))
-    );
-}
-
-#[test]
-fn dangling_metadata_symlinks_fail_closed() {
-    let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
-    std::os::unix::fs::symlink("missing", plan.workspace_root.join(".git"))
-        .expect("symlink metadata");
     assert!(build_args(&plan, &private_temp).is_err());
 }
 

@@ -6,7 +6,6 @@ use kraai_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;
-use crate::platform::metadata::protected_paths;
 
 pub(super) fn build_args(
     plan: &LaunchPlan,
@@ -74,11 +73,6 @@ pub(super) fn build_args(
         }
     }
 
-    if !plan.capabilities.contains(SandboxCapability::MetadataWrite) {
-        for path in protected_paths(&workspace)? {
-            profile.deny_writes(&path)?;
-        }
-    }
     profile.protect_directory(&workspace)?;
     profile.protect_directory(&private_temp)?;
 
@@ -130,12 +124,6 @@ impl Profile {
         } else {
             format!("(literal {parameter})")
         })
-    }
-
-    fn deny_writes(&mut self, path: &Path) -> Result<(), SandboxError> {
-        let filter = self.path_filter(path, true)?;
-        self.push(&format!("(deny file-write* {filter})"));
-        self.protect_ancestors(path)
     }
 
     fn protect_ancestors(&mut self, path: &Path) -> Result<(), SandboxError> {

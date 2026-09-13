@@ -13,11 +13,7 @@ use kraai_types::SandboxCapability;
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, temp_dir};
-use crate::platform::PROTECTED_METADATA_NAMES;
 use crate::{ExecutionOutput, LaunchPlan, PrivateTempConfig, Termination, run};
-
-#[path = "git_metadata.rs"]
-mod git_metadata;
 
 struct Fixture(PathBuf);
 
@@ -153,83 +149,7 @@ async fn runtime_roots_stay_read_only_and_private_temp_is_removed() {
 }
 
 #[tokio::test]
-async fn protected_metadata_cannot_be_created_or_replaced() {
-    for shape in ["absent", "file", "directory", "symlink"] {
-        let fixture = Fixture::new("macos-metadata");
-        let workspace = fixture.workspace();
-        for name in PROTECTED_METADATA_NAMES {
-            let path = workspace.join(name);
-            match shape {
-                "file" => std::fs::write(&path, "original").expect("write metadata file"),
-                "directory" | "symlink" => {
-                    let target = if shape == "symlink" {
-                        workspace.join(format!("target-{name}"))
-                    } else {
-                        path.clone()
-                    };
-                    std::fs::create_dir(&target).expect("create metadata directory");
-                    std::fs::write(target.join("original"), "original")
-                        .expect("write metadata content");
-                    if shape == "symlink" {
-                        symlink(&target, &path).expect("link metadata");
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut plan = shell_plan(
-            &workspace,
-            r#"
-                printf safe > replacement || exit 1
-                for name in $NAMES; do
-                    if (printf changed > "$name"); then exit 2; fi
-                    if test "$SHAPE" = absent; then
-                        if mkdir "$name"; then exit 3; fi
-                        if ln -s replacement "$name"; then exit 4; fi
-                    else
-                        if rm -rf "$name"; then exit 5; fi
-                        if mv "$name" "moved-$name"; then exit 6; fi
-                    fi
-                    if mv replacement "$name"; then exit 7; fi
-                    if test "$SHAPE" = directory || test "$SHAPE" = symlink; then
-                        if (printf changed > "$name/original"); then exit 8; fi
-                        if (printf changed > "$name/new"); then exit 9; fi
-                    fi
-                    if test "$SHAPE" = symlink; then
-                        if (printf changed > "target-$name/original"); then exit 10; fi
-                        if (printf changed > "target-$name/new"); then exit 11; fi
-                    fi
-                done
-                printf protected
-            "#,
-            [SandboxCapability::WorkspaceWrite],
-        );
-        plan.environment.insert("SHAPE".into(), shape.into());
-        plan.environment
-            .insert("NAMES".into(), PROTECTED_METADATA_NAMES.join(" ").into());
-        let output = successful_run(plan).await;
-        assert_eq!(output.stdout, b"protected", "{shape}");
-        for name in PROTECTED_METADATA_NAMES {
-            let path = workspace.join(name);
-            if shape == "absent" {
-                assert!(!path.exists());
-            } else {
-                let original = if shape == "file" {
-                    path
-                } else {
-                    path.join("original")
-                };
-                assert_eq!(
-                    std::fs::read(original).expect("metadata content"),
-                    b"original"
-                );
-            }
-        }
-    }
-}
-
-#[tokio::test]
-async fn workspace_alias_preserves_write_and_metadata_boundaries() {
+async fn workspace_alias_preserves_workspace_boundaries() {
     let fixture = Fixture::new("macos-alias");
     let workspace = fixture.workspace();
     let alias = fixture.0.join("alias");
@@ -240,8 +160,8 @@ async fn workspace_alias_preserves_write_and_metadata_boundaries() {
         r#"
             printf allowed > output || exit 1
             printf allowed > "$REAL/direct" || exit 2
-            if (printf forbidden > .git/alias); then exit 3; fi
-            if (printf forbidden > "$REAL/.git/direct"); then exit 4; fi
+            printf allowed > .git/alias || exit 3
+            printf allowed > "$REAL/.git/direct" || exit 4
             if (printf forbidden > "$REAL/../outside"); then exit 5; fi
             printf alias
         "#,
@@ -253,36 +173,9 @@ async fn workspace_alias_preserves_write_and_metadata_boundaries() {
     assert_eq!(output.stdout, b"alias");
     assert!(workspace.join("output").exists());
     assert!(workspace.join("direct").exists());
-    assert!(!workspace.join(".git/alias").exists());
-    assert!(!workspace.join(".git/direct").exists());
+    assert!(workspace.join(".git/alias").exists());
+    assert!(workspace.join(".git/direct").exists());
     assert!(!fixture.0.join("outside").exists());
-}
-
-#[tokio::test]
-async fn metadata_write_capability_allows_metadata_changes() {
-    let fixture = Fixture::new("macos-metadata-write");
-    let mut plan = shell_plan(
-        &fixture.workspace(),
-        r#"
-            for name in $NAMES; do
-                mkdir "$name" || exit 1
-                printf allowed > "$name/content" || exit 2
-            done
-            printf metadata
-        "#,
-        [SandboxCapability::MetadataWrite],
-    );
-    plan.environment
-        .insert("NAMES".into(), PROTECTED_METADATA_NAMES.join(" ").into());
-    let output = successful_run(plan).await;
-    assert_eq!(output.stdout, b"metadata");
-    for name in PROTECTED_METADATA_NAMES {
-        assert_eq!(
-            std::fs::read(fixture.workspace().join(name).join("content"))
-                .expect("metadata write result"),
-            b"allowed"
-        );
-    }
 }
 
 #[tokio::test]
@@ -298,7 +191,6 @@ async fn overlapping_runtime_roots_preserve_workspace_permissions() {
                 &workspace,
                 r#"
                     if (printf build > target/debug/lock); then printf writable; else printf readonly; fi
-                    if (printf forbidden > .git/forbidden); then exit 1; fi
                     if (printf forbidden > ../forbidden); then exit 2; fi
                     exit 0
                 "#,
@@ -320,41 +212,9 @@ async fn overlapping_runtime_roots_preserve_workspace_permissions() {
                 "{overlap}, writable={writable}"
             );
             assert_eq!(build.join("lock").exists(), writable);
-            assert!(!workspace.join(".git/forbidden").exists());
             assert!(!fixture.0.join("forbidden").exists());
         }
     }
-}
-
-#[tokio::test]
-async fn metadata_symlink_target_cannot_escape_protection_by_renaming_ancestors() {
-    let fixture = Fixture::new("macos-metadata-ancestor");
-    let workspace = fixture.workspace();
-    let target = workspace.join("target/nested/metadata");
-    std::fs::create_dir_all(&target).expect("create metadata target");
-    std::fs::write(target.join("original"), "original").expect("write metadata target");
-    symlink(&target, workspace.join(".git")).expect("link metadata target");
-    let output = successful_run(shell_plan(
-        &workspace,
-        r#"
-            mkdir ordinary || exit 1
-            mv ordinary renamed || exit 2
-            if mv target moved; then exit 3; fi
-            if mv target/nested target/renamed; then exit 4; fi
-            if (printf changed > target/nested/metadata/original); then exit 5; fi
-            printf protected
-        "#,
-        [SandboxCapability::WorkspaceWrite],
-    ))
-    .await;
-    assert_eq!(output.stdout, b"protected");
-    assert!(workspace.join("renamed").is_dir());
-    assert!(!workspace.join("moved").exists());
-    assert!(!workspace.join("target/renamed").exists());
-    assert_eq!(
-        std::fs::read(target.join("original")).expect("metadata target content"),
-        b"original"
-    );
 }
 
 #[tokio::test]
@@ -479,4 +339,11 @@ fn network_probe_child() {
     let mut bytes = [0; 2];
     right.read_exact(&mut bytes).expect("read subprocess IPC");
     assert_eq!(&bytes, b"ok");
+}
+
+#[tokio::test]
+async fn sandbox_process_groups_stop_on_every_completion_path() {
+    for mode in ["exit", "timeout", "cancel", "drop"] {
+        super::process::assert_process_group_stops(mode, SandboxCapability::WorkspaceWrite).await;
+    }
 }

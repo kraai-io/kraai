@@ -70,7 +70,6 @@ impl Fixture {
             .insert("KRAAI_FIXTURE".into(), self.root.clone().into_os_string());
         for (name, capability) in [
             ("WRITE", SandboxCapability::WorkspaceWrite),
-            ("METADATA", SandboxCapability::MetadataWrite),
             ("HOST_READ", SandboxCapability::HostRead),
             ("HOST_WRITE", SandboxCapability::HostWrite),
             ("NETWORK", SandboxCapability::Network),
@@ -127,15 +126,53 @@ fn permission_probe() {
     };
     assert_eq!(
         std::fs::write(metadata, "write").is_ok(),
-        enabled("METADATA"),
+        enabled("WRITE"),
         "metadata write"
     );
     if enabled("LINKED") {
         assert_eq!(
             std::fs::write("common/config", "write").is_ok(),
-            enabled("METADATA"),
+            enabled("WRITE"),
             "common metadata write"
         );
+    }
+    for name in [".git", ".jj", ".kraai", ".agents", ".codex"] {
+        if std::path::Path::new(name).is_file() {
+            assert_eq!(
+                std::fs::write(name, "updated control file").is_ok(),
+                enabled("WRITE"),
+                "{name}: update file"
+            );
+            if !enabled("WRITE") {
+                continue;
+            }
+            std::fs::remove_file(name).expect("remove existing control file");
+        }
+        if !std::path::Path::new(name).exists() {
+            assert_eq!(
+                std::fs::write(name, "new control file").is_ok(),
+                enabled("WRITE"),
+                "{name}: create file"
+            );
+            if enabled("WRITE") {
+                std::fs::remove_file(name).expect("remove control file");
+            }
+            assert_eq!(
+                std::fs::create_dir(name).is_ok(),
+                enabled("WRITE"),
+                "{name}: create directory"
+            );
+        }
+        assert_eq!(
+            std::fs::write(std::path::Path::new(name).join("new"), "content").is_ok(),
+            enabled("WRITE"),
+            "{name}: write content"
+        );
+        if enabled("WRITE") {
+            let renamed = format!("moved-{name}");
+            std::fs::rename(name, &renamed).expect("rename control directory");
+            std::fs::remove_dir_all(renamed).expect("remove control directory");
+        }
     }
     assert!(
         std::fs::read(root.join("runtime/data")).is_ok(),
@@ -244,13 +281,10 @@ capability_cases! {
     missing_workspace: [];
     workspace_read: [WorkspaceRead];
     workspace_write: [WorkspaceWrite];
-    metadata_write: [MetadataWrite];
     #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_read: [HostRead];
     #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_read_workspace_write: [HostRead, WorkspaceWrite];
-    #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
-    host_read_metadata_write: [HostRead, MetadataWrite];
     #[cfg_attr(windows, ignore = "Windows host access is unavailable; rejection is covered by tests/windows.rs")]
     host_write: [HostWrite];
 }
@@ -261,11 +295,6 @@ mod linked_metadata_obeys_the_same_capabilities {
     #[tokio::test]
     async fn workspace_write() {
         verify(&[SandboxCapability::WorkspaceWrite], true).await;
-    }
-
-    #[tokio::test]
-    async fn metadata_write() {
-        verify(&[SandboxCapability::MetadataWrite], true).await;
     }
 
     #[cfg_attr(

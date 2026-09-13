@@ -2,9 +2,8 @@
 use std::process::Stdio;
 
 #[cfg(unix)]
-use nix::sys::signal::{Signal, killpg};
-#[cfg(unix)]
-use nix::unistd::Pid;
+#[path = "process_group.rs"]
+mod process_group;
 use tokio::io::{AsyncRead, AsyncReadExt};
 #[cfg(not(windows))]
 use tokio::process::Command;
@@ -37,10 +36,10 @@ async fn spawn_and_wait(
     let output_events = command.output_events.take();
     let mut child = spawn(command)?;
     let _private_temp = &command.private_temp;
-    #[cfg(not(windows))]
-    let process_group_id = child.id();
-    #[cfg(windows)]
-    let process_group_id = None;
+    #[cfg(unix)]
+    let mut process_group = process_group::ProcessGroup::new(child.id())?;
+    #[cfg(not(unix))]
+    let mut process_group = ();
     let stdout = child.stdout.take().ok_or_else(|| {
         SandboxError::Wait(String::from(
             "spawned process did not provide a stdout pipe",
@@ -70,14 +69,16 @@ async fn spawn_and_wait(
     let mut termination = tokio::select! {
         status = child.wait() => {
             let status = status.map_err(|error| SandboxError::Wait(error.to_string()))?;
+            #[cfg(unix)]
+            process_group.kill()?;
             Termination::Exited { code: status.code() }
         }
         () = tokio::time::sleep_until(deadline) => {
-            terminate_process_tree(&mut child, process_group_id).await?;
+            terminate_process_tree(&mut child, &mut process_group).await?;
             Termination::TimedOut
         }
         () = cancellation.cancelled() => {
-            terminate_process_tree(&mut child, process_group_id).await?;
+            terminate_process_tree(&mut child, &mut process_group).await?;
             Termination::Cancelled
         }
     };
@@ -88,12 +89,12 @@ async fn spawn_and_wait(
         tokio::select! {
             outputs = &mut outputs => outputs,
             () = tokio::time::sleep_until(deadline) => {
-                terminate_process_tree(&mut child, process_group_id).await?;
+                terminate_process_tree(&mut child, &mut process_group).await?;
                 termination = Termination::TimedOut;
                 finish_outputs(&mut outputs, &stop_output).await
             }
             () = cancellation.cancelled() => {
-                terminate_process_tree(&mut child, process_group_id).await?;
+                terminate_process_tree(&mut child, &mut process_group).await?;
                 termination = Termination::Cancelled;
                 finish_outputs(&mut outputs, &stop_output).await
             }
@@ -159,7 +160,7 @@ fn spawn(command: &mut PreparedCommand) -> Result<tokio::process::Child, Sandbox
 #[cfg(windows)]
 async fn terminate_process_tree(
     child: &mut crate::platform::windows::process::Child,
-    _process_group_id: Option<u32>,
+    _process_group: &mut (),
 ) -> Result<(), SandboxError> {
     child.terminate().await
 }
@@ -234,26 +235,11 @@ fn configure_process_tree(_process: &mut Command) -> Result<(), SandboxError> {
 #[cfg(unix)]
 async fn terminate_process_tree(
     child: &mut tokio::process::Child,
-    process_group_id: Option<u32>,
+    process_group: &mut process_group::ProcessGroup,
 ) -> Result<(), SandboxError> {
-    if let Some(process_group_id) = process_group_id {
-        let process_group_id = i32::try_from(process_group_id)
-            .map_err(|error| SandboxError::Wait(error.to_string()))?;
-        if let Err(error) = killpg(Pid::from_raw(process_group_id), Signal::SIGKILL)
-            && error != nix::errno::Errno::ESRCH
-        {
-            return Err(SandboxError::Wait(format!(
-                "unable to terminate process group: {error}"
-            )));
-        }
-    } else {
-        child
-            .kill()
-            .await
-            .map_err(|error| SandboxError::Wait(error.to_string()))?;
-    }
+    process_group.kill()?;
     child
-        .wait()
+        .kill()
         .await
         .map_err(|error| SandboxError::Wait(error.to_string()))?;
     Ok(())
@@ -262,7 +248,7 @@ async fn terminate_process_tree(
 #[cfg(not(any(unix, windows)))]
 async fn terminate_process_tree(
     child: &mut tokio::process::Child,
-    _process_group_id: Option<u32>,
+    _process_group: &mut (),
 ) -> Result<(), SandboxError> {
     child
         .kill()

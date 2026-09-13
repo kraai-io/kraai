@@ -16,7 +16,6 @@ use super::seccomp::restricted_network_seccomp_filter;
 const BWRAP_PROGRAM: &str = "bwrap";
 const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const BWRAP_SECCOMP_STDIN_FD: &str = "0";
-use crate::platform::metadata::protected_paths;
 
 type BwrapProbeCache = BTreeMap<(PathBuf, bool), Result<(), String>>;
 
@@ -216,29 +215,6 @@ pub(crate) fn build_bwrap_args(
             "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
         ] {
             push_bind(&mut args, "--ro-bind-try", Path::new(path));
-        }
-    }
-
-    if capabilities.contains(SandboxCapability::WorkspaceWrite)
-        && !capabilities.contains(SandboxCapability::MetadataWrite)
-    {
-        for protected in protected_paths(&resolved_workspace)?
-            .into_iter()
-            .filter(|path| path.starts_with(&resolved_workspace) && path.exists())
-        {
-            if std::fs::symlink_metadata(&protected)
-                .map_err(|error| {
-                    SandboxError::SandboxUnavailable(format!("unable to inspect metadata: {error}"))
-                })?
-                .file_type()
-                .is_symlink()
-            {
-                return Err(SandboxError::SandboxUnavailable(String::from(
-                    "symlinked workspace metadata requires metadata-write on Linux",
-                )));
-            }
-            push_parent_dirs(&mut args, &protected);
-            push_bind(&mut args, "--ro-bind", &protected);
         }
     }
 

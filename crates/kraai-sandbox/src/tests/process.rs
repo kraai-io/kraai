@@ -1,3 +1,6 @@
+#[path = "process/group_change.rs"]
+mod group_change;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -138,4 +141,88 @@ fn detached_pipe_holder() {
     setsid().expect("detach output holder");
     std::fs::write("detached.pid", std::process::id().to_string()).expect("record detached child");
     std::thread::sleep(Duration::from_secs(60));
+}
+
+pub(super) async fn assert_process_group_stops(mode: &str, capability: SandboxCapability) {
+    let fixture = DetachedFixture(temp_dir("process-group-lifetime"));
+    std::fs::create_dir(&fixture.0).expect("create process-group fixture");
+    let shell = super::executable("sh");
+    let mut plan = LaunchPlan::new(
+        shell.clone(),
+        fixture.0.clone(),
+        capabilities([capability]),
+        Duration::from_secs(5),
+    );
+    plan.runtime_roots
+        .push(shell.parent().expect("shell directory").to_path_buf());
+    plan.environment = std::env::vars_os().collect();
+    plan.environment.insert("MODE".into(), mode.into());
+    plan.args(["-c", r#"
+        (while ! test -e parent-finished; do sleep 0.02; done; sleep 0.2; printf escaped > escaped-child) >/dev/null 2>&1 &
+        printf '%s' "$!" > detached.pid
+        printf ready
+        if test "$MODE" != exit; then sleep 30; fi
+    "#]);
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    plan.output_events = Some(sender);
+    let cancellation = CancellationToken::new();
+    let execution = tokio::spawn(run(plan, cancellation.clone()));
+    tokio::time::timeout(Duration::from_secs(4), async {
+        let mut output = Vec::new();
+        while let Some(event) = events.recv().await {
+            output.extend(event.bytes);
+            if output.windows(5).any(|bytes| bytes == b"ready") {
+                return;
+            }
+        }
+        panic!("parent exited before spawning descendant");
+    })
+    .await
+    .expect("descendant started");
+    if mode == "cancel" {
+        cancellation.cancel();
+    }
+    if mode == "drop" {
+        execution.abort();
+        assert!(execution.await.expect_err("task aborted").is_cancelled());
+    } else {
+        let output = execution
+            .await
+            .expect("execution task")
+            .expect("run process group");
+        assert_eq!(
+            output.termination,
+            match mode {
+                "exit" => Termination::Exited { code: Some(0) },
+                "cancel" => Termination::Cancelled,
+                _ => Termination::TimedOut,
+            }
+        );
+    }
+    std::fs::write(fixture.0.join("parent-finished"), "").expect("release surviving descendant");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        !fixture.0.join("escaped-child").exists(),
+        "{mode}: descendant survived"
+    );
+}
+
+#[tokio::test]
+async fn normal_exit_kills_process_group_descendants() {
+    assert_process_group_stops("exit", SandboxCapability::NoSandbox).await;
+}
+
+#[tokio::test]
+async fn timeout_kills_process_group_descendants() {
+    assert_process_group_stops("timeout", SandboxCapability::NoSandbox).await;
+}
+
+#[tokio::test]
+async fn cancellation_kills_process_group_descendants() {
+    assert_process_group_stops("cancel", SandboxCapability::NoSandbox).await;
+}
+
+#[tokio::test]
+async fn dropping_execution_kills_process_group_descendants() {
+    assert_process_group_stops("drop", SandboxCapability::NoSandbox).await;
 }

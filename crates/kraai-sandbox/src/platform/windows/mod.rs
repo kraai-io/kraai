@@ -96,20 +96,6 @@ pub(crate) fn prepare(
             Access::Read
         },
     )?;
-    if writable && !plan.capabilities.contains(SandboxCapability::MetadataWrite) {
-        for path in super::metadata::protected_paths(&plan.workspace_root)? {
-            match path.try_exists() {
-                Ok(true) => grants.grant(&path, Access::DenyWrite)?,
-                Ok(false) => {}
-                Err(error) => {
-                    return Err(SandboxError::SandboxUnavailable(format!(
-                        "unable to inspect metadata '{}': {error}",
-                        path.display()
-                    )));
-                }
-            }
-        }
-    }
     grants.grant(&temp_path, Access::Write)?;
     plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));

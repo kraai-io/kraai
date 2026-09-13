@@ -76,10 +76,7 @@ fn probe() {
         "write" => {
             std::fs::write("created", "workspace write").expect("workspace write");
             std::fs::remove_file("input").expect("delete ordinary file");
-            assert!(std::fs::write(".git/config", "blocked").is_err());
-            assert!(std::fs::remove_file(".git/config").is_err());
-            assert!(std::fs::rename(".git", "moved-metadata").is_err());
-            assert!(std::fs::remove_dir_all(".git").is_err());
+            std::fs::write(".git/config", "authorized").expect("write repository config");
             use std::os::windows::fs::OpenOptionsExt;
             use windows_sys::Win32::Storage::FileSystem::{WRITE_DAC, WRITE_OWNER};
             for access in [WRITE_DAC, WRITE_OWNER] {
@@ -150,18 +147,12 @@ async fn isolates_host_reads_writes_network_and_private_temp() {
 }
 
 #[tokio::test]
-async fn workspace_write_preserves_metadata_and_explicit_metadata_write_works() {
+async fn workspace_write_allows_repository_changes() {
     let fixture = Fixture::new();
     successful(fixture.plan("write", &[SandboxCapability::WorkspaceWrite])).await;
     assert_eq!(
         std::fs::read_to_string(fixture.0.join("workspace/.git/config"))
-            .expect("read protected metadata"),
-        "metadata"
-    );
-    successful(fixture.plan("metadata", &[SandboxCapability::MetadataWrite])).await;
-    assert_eq!(
-        std::fs::read_to_string(fixture.0.join("workspace/.git/config"))
-            .expect("read changed metadata"),
+            .expect("read repository config"),
         "authorized"
     );
 }
@@ -174,10 +165,6 @@ async fn rejects_unsupported_host_access_without_running() {
         &[
             SandboxCapability::HostRead,
             SandboxCapability::WorkspaceWrite,
-        ][..],
-        &[
-            SandboxCapability::HostRead,
-            SandboxCapability::MetadataWrite,
         ][..],
         &[SandboxCapability::HostWrite][..],
     ] {

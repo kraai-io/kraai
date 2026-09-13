@@ -23,7 +23,6 @@ const MAX_ACL_ENTRIES: usize = 65_536;
 pub(super) enum Access {
     Read,
     Write,
-    DenyWrite,
 }
 
 #[derive(Debug)]

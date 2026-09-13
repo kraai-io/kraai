@@ -164,7 +164,7 @@ async fn check_runtime_mounts(writable: bool) {
         }
         let mut plan = shell_plan(
             &workspace,
-            "if (printf lock > target/debug/.cargo-build-lock); then printf writable; else printf readonly; fi; if (printf bad > .git/forbidden); then exit 1; fi; if (printf bad > ../forbidden); then exit 2; fi",
+            "if (printf lock > target/debug/.cargo-build-lock); then printf writable; else printf readonly; fi; if (printf bad > ../forbidden); then exit 2; fi",
             capabilities(granted),
             Duration::from_secs(5),
         );

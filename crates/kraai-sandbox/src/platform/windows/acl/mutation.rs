@@ -7,8 +7,8 @@ use windows_sys::Win32::Foundation::{
     LocalFree, RtlNtStatusToDosError, WAIT_ABANDONED, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
-    DENY_ACCESS, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, SE_FILE_OBJECT,
-    SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, SE_FILE_OBJECT, SetEntriesInAclW,
+    TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -16,9 +16,7 @@ use windows_sys::Win32::Security::{
     IsValidSid, SECURITY_DESCRIPTOR, SetSecurityDescriptorDacl,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC,
-    WRITE_OWNER,
+    DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 
@@ -100,17 +98,6 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
                 GRANT_ACCESS,
                 FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
             ),
-            Access::DenyWrite => (
-                DENY_ACCESS,
-                FILE_WRITE_DATA
-                    | FILE_APPEND_DATA
-                    | FILE_WRITE_EA
-                    | FILE_WRITE_ATTRIBUTES
-                    | FILE_DELETE_CHILD
-                    | DELETE
-                    | WRITE_DAC
-                    | WRITE_OWNER,
-            ),
         };
         let entry = EXPLICIT_ACCESS_W {
             grfAccessPermissions: mask,
@@ -124,13 +111,7 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
                 ptstrName: sid.as_ptr().cast_mut().cast(),
             },
         };
-        let mut entries = vec![entry];
-        if matches!(access, Access::DenyWrite) {
-            let mut read = entry;
-            read.grfAccessMode = GRANT_ACCESS;
-            read.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-            entries.push(read);
-        }
+        let entries = [entry];
         let result = unsafe {
             SetEntriesInAclW(
                 entries.len() as u32,

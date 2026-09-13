@@ -2,7 +2,7 @@ name: Sandbox behavior
 on:
   pull_request:
   push:
-    branches: [main, t3code/combine-pull-request-features]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
