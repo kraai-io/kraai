@@ -48,19 +48,28 @@
       ];
     };
 
+    buildRustCrateForPkgs = pkgs:
+      pkgs.buildRustCrate.override {
+        cargo = rustToolchain;
+        rustc = rustToolchain;
+      };
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
-        inherit release;
-        buildRustCrateForPkgs = pkgs:
-          pkgs.buildRustCrate.override {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
-          };
+        inherit release buildRustCrateForPkgs;
       };
 
     cargoNix = mkCargoNix true;
     cargoCheckNix = mkCargoNix false;
     nushellHost = cargoNix.workspaceMembers."kraai-nushell-runtime".build;
+    vmTestBinaries = name:
+      ((cargoCheckNix.internal.builtRustCratesWithFeatures {
+          packageId = name;
+          features = ["default"];
+          buildRustCrateForPkgsFunc = buildRustCrateForPkgs;
+          runTests = true;
+        }).crates.${
+          name
+        }).override {buildTests = true;};
 
     mkCargoCheck = {
       name,
@@ -205,6 +214,13 @@
     checks =
       workspaceTestChecks
       // cargoTestChecks
+      // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        sandbox-vm = import ./sandbox-vm.nix {
+          inherit pkgs;
+          sandboxTests = vmTestBinaries "kraai-sandbox";
+          runtimeTests = vmTestBinaries "kraai-nushell-runtime";
+        };
+      }
       // {
         clippy = mkCargoCheck {
           name = "clippy";
