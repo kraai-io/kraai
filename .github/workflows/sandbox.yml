@@ -30,5 +30,6 @@ jobs:
       - run: cargo check --locked --workspace --all-targets
       - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --no-fail-fast
       - run: cargo test --locked -p kraai-eval --lib executable_lookup_tests
+      - run: cargo test --locked -p kraai-tui app::composer::tests::editor_command
       - if: runner.os == 'Windows'
         run: ./.github/windows-standard-user.ps1

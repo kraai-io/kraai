@@ -160,6 +160,10 @@
             lib.optionals pkgs.stdenv.hostPlatform.isDarwin (
               lib.concatMap (test: ["--skip" test]) (darwinNestedSandboxTests.${name} or [])
             )
+            ++ lib.optionals (name == "kraai-nushell-runtime") [
+              "--skip"
+              "sandboxed_host_accepts_a_workspace_symlink_alias"
+            ]
             ++ lib.optionals (name == "kraai-sandbox") [
               "--skip"
               "capability_matrix"
