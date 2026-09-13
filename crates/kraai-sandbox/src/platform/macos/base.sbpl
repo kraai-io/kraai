@@ -2,7 +2,7 @@
 (deny default)
 (allow process-exec process-fork)
 (allow signal (target same-sandbox))
-(allow process-info* (target same-sandbox))
+(deny process-info*)
 (deny sysctl-read (sysctl-name-prefix "kern.procargs"))
 (allow system-socket (socket-domain AF_UNIX))
 (allow sysctl-read
