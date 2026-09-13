@@ -159,8 +159,8 @@ fn permission_probe() {
         .expect("parse network address");
     assert_eq!(
         std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
-        enabled("NETWORK"),
-        "network capability permits connecting to host services"
+        enabled("NETWORK") && (!cfg!(windows) || enabled("UNSANDBOXED")),
+        "localhost access is unavailable in Windows AppContainer"
     );
 }
 

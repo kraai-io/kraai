@@ -19,26 +19,11 @@ use identity::{Identity, Sid};
 #[derive(Debug)]
 pub(crate) struct Sandbox {
     grants: Grants,
-    network_lease: Option<crate::windows_helper::Lease>,
     identity: Identity,
     capabilities: Vec<Sid>,
 }
 
 impl Sandbox {
-    pub(crate) async fn enable_network(&mut self) -> Result<(), SandboxError> {
-        self.network_lease = Some(crate::windows_helper::Lease::acquire(&self.identity.nonce).await.map_err(|error| SandboxError::SandboxUnavailable(format!("Windows network access requires the Kraai sandbox helper; run kraai-sandbox-helper install in an administrator terminal: {error}")))?);
-        Ok(())
-    }
-
-    pub(crate) async fn release_network(&mut self) -> Result<(), SandboxError> {
-        if let Some(lease) = self.network_lease.take() {
-            lease.release().await.map_err(|error| {
-                SandboxError::Wait(format!("Windows network cleanup failed: {error}"))
-            })?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn cleanup(&mut self) -> Result<(), SandboxError> {
         self.grants.cleanup()
     }
@@ -141,7 +126,6 @@ pub(crate) fn prepare(
         private_temp: Some(private_temp),
         windows_sandbox: Some(Sandbox {
             grants,
-            network_lease: None,
             identity,
             capabilities,
         }),

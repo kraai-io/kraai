@@ -9556,13 +9556,6 @@ rec {
         crateName = "kraai-sandbox";
         version = "0.1.0";
         edition = "2024";
-        crateBin = [
-          {
-            name = "kraai-sandbox-helper";
-            path = "src/bin/kraai-sandbox-helper.rs";
-            requiredFeatures = [ ];
-          }
-        ];
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-sandbox; };
         libName = "kraai_sandbox";
         dependencies = [
@@ -9593,11 +9586,6 @@ rec {
             features = [ "fs" "net" "pipe" ];
           }
           {
-            name = "sha2";
-            packageId = "sha2 0.11.0";
-            target = { target, features }: (target."windows" or false);
-          }
-          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -9610,7 +9598,7 @@ rec {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
-            features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" "Win32_System_Services" "Win32_System_Registry" "Win32_NetworkManagement_WindowsFirewall" ];
+            features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" ];
           }
         ];
 
@@ -27506,7 +27494,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_NetworkManagement_WindowsFirewall" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_Services" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.42.2" = rec {
         crateName = "windows-targets";

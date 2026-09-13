@@ -23,14 +23,11 @@ try {
         '$env:TMP = $env:TEMP',
         'New-Item -ItemType Directory -Path $env:TEMP | Out-Null'
     )
-    foreach ($target in @('kraai_sandbox', 'windows', 'capabilities')) {
+    foreach ($target in @('windows', 'capabilities')) {
         $artifact = @($artifacts | Where-Object { $_.target.name -eq $target })
         if ($artifact.Count -ne 1) { throw "Expected one executable for $target" }
         Copy-Item $artifact[0].executable (Join-Path $directory "$target.exe")
-        $arguments = if ($target -eq 'kraai_sandbox') { 'windows_helper::tests --nocapture' }
-            elseif ($target -eq 'capabilities') { '--skip host_read --skip host_write --nocapture' }
-            else { '--nocapture' }
-        $commands += '& (Join-Path $PSScriptRoot ''' + $target + '.exe'') ' + $arguments
+        $commands += '& (Join-Path $PSScriptRoot ''' + $target + '.exe'') ' + '--nocapture'
         $commands += 'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }'
     }
     $commands += 'exit 0'
