@@ -2960,6 +2960,7 @@ dependencies = [
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-provider-openai-codex",
+ "kraai-sandbox",
  "kraai-types",
  "reqwest 0.13.4",
  "serde",
@@ -2995,6 +2996,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "ulid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3109,9 +3111,11 @@ dependencies = [
  "kraai-types",
  "libc",
  "nix 0.31.3",
+ "rand 0.10.2",
  "rustix 1.1.4",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3131,6 +3135,7 @@ dependencies = [
  "color-eyre",
  "crossbeam-channel",
  "kraai-runtime",
+ "kraai-sandbox",
  "kraai-types",
  "ratatui",
  "regex",
@@ -3159,6 +3164,7 @@ dependencies = [
  "rustix 1.1.4",
  "thiserror 2.0.20",
  "ulid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

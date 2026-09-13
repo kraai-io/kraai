@@ -12,7 +12,6 @@ kraai-command-catalog = { workspace = true }
 kraai-command-core = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
-nix = { workspace = true }
 nu-cli = { workspace = true }
 nu-cmd-lang = { workspace = true }
 nu-command = { workspace = true }
@@ -21,13 +20,23 @@ nu-engine = { workspace = true }
 nu-parser = { workspace = true }
 nu-protocol = { workspace = true }
 rand = { workspace = true }
-rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 ulid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+rustix = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+] }
 
 [[bin]]
 name = "kraai-nushell-host"

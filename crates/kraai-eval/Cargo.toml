@@ -18,6 +18,7 @@ futures = { workspace = true }
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
 kraai-provider-openai-codex = { workspace = true }
+kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

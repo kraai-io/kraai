@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::effects::{RejectStateEffects, StateEffectHandler, serve_effects};
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
-use crate::wire::{TRANSPORT_DESCRIPTOR, write_request};
+use crate::transport;
+use crate::wire::write_request;
 
 pub struct ScriptExecutionPlan {
     pub execution_id: ScriptExecutionId,
@@ -69,13 +70,19 @@ pub async fn execute(
     plan: ScriptExecutionPlan,
     cancellation: CancellationToken,
 ) -> Result<ScriptExecutionResult, RuntimeError> {
+    let workspace_root = plan.workspace_root.canonicalize().map_err(|error| {
+        RuntimeError::Sandbox(kraai_sandbox::SandboxError::MissingWorkspace(format!(
+            "unable to resolve '{}': {error}",
+            plan.workspace_root.display()
+        )))
+    })?;
     let execution_id = plan.execution_id.clone();
     let secret = rand::random::<[u8; 32]>();
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
         source: plan.source,
-        workspace_root: plan.workspace_root.clone(),
+        workspace_root: workspace_root.clone(),
         environment: plan.environment.clone(),
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
@@ -87,21 +94,15 @@ pub async fn execute(
     };
 
     let private_temp = plan.private_temp.reserve().map_err(RuntimeError::Sandbox)?;
-    let transport_path = private_temp
+    let transport_directory = private_temp
         .path()
-        .ok_or_else(|| RuntimeError::Transport(String::from("private temp was not reserved")))?
-        .join("host.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&transport_path)
-        .map_err(|error| RuntimeError::Transport(error.to_string()))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| RuntimeError::Transport(error.to_string()))?;
-    let listener = tokio::net::UnixListener::from_std(listener)
+        .ok_or_else(|| RuntimeError::Transport(String::from("private temp was not reserved")))?;
+    let mut listener = transport::Listener::bind(transport_directory)
         .map_err(|error| RuntimeError::Transport(error.to_string()))?;
 
     let mut launch = LaunchPlan::new(
         plan.host_executable,
-        plan.workspace_root,
+        workspace_root,
         plan.capabilities,
         plan.timeout,
     );
@@ -114,21 +115,17 @@ pub async fn execute(
     launch.output_events = plan.output_events;
     launch.private_temp = private_temp;
     launch.args(plan.host_arguments);
-    launch.arg("--transport").arg(&transport_path);
-    launch
-        .private_ipc_connect_descriptors
-        .push(TRANSPORT_DESCRIPTOR);
+    listener.configure_launch(&mut launch);
 
     let effect_execution_id = execution_id.clone();
     let transport_connected = Arc::new(AtomicBool::new(false));
     let connected_for_task = transport_connected.clone();
     let effect_task = tokio::spawn(async move {
-        let (transport, _) = listener
-            .accept()
+        let transport = transport::accept(listener)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
         connected_for_task.store(true, Ordering::Release);
-        let (effect_reader, mut effect_writer) = transport.into_split();
+        let (effect_reader, mut effect_writer) = tokio::io::split(transport);
         write_request(&mut effect_writer, &host_request)
             .await
             .map_err(|error| ChannelError::Request(error.to_string()))?;

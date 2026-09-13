@@ -293,11 +293,9 @@ timeout_seconds = 10
 }
 
 fn run_git(repository: &Path, args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(args)
-        .status()?;
+    let status =
+        kraai_sandbox::spawn_command(Command::new("git").arg("-C").arg(repository).args(args))?
+            .wait()?;
     if !status.success() {
         bail!("git command failed: {}", args.join(" "));
     }
@@ -305,11 +303,16 @@ fn run_git(repository: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn git_output(repository: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(args)
-        .output()?;
+    let output = kraai_sandbox::spawn_command(
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )?
+    .wait_with_output()?;
     if !output.status.success() {
         bail!("git command failed: {}", args.join(" "));
     }

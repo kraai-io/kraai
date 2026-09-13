@@ -39,6 +39,12 @@ impl PrivateTempDir {
     }
 
     pub(crate) fn apply_environment(&self, environment: &mut BTreeMap<OsString, OsString>) {
+        #[cfg(windows)]
+        environment.retain(|name, _| {
+            !["TMPDIR", "TMP", "TEMP"]
+                .iter()
+                .any(|reserved| name.to_string_lossy().eq_ignore_ascii_case(reserved))
+        });
         let value = self.path.as_os_str().to_os_string();
         for name in ["TMPDIR", "TMP", "TEMP"] {
             environment.insert(OsString::from(name), value.clone());
@@ -54,7 +60,12 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
     builder.mode(0o700).create(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    crate::platform::windows::private_temp::create(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir(path)
 }

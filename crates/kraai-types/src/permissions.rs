@@ -8,7 +8,6 @@ pub enum SandboxCapability {
     WorkspaceRead,
     HostRead,
     WorkspaceWrite,
-    MetadataWrite,
     HostWrite,
     Network,
     NoSandbox,
@@ -20,7 +19,6 @@ impl SandboxCapability {
             Self::WorkspaceRead => "workspace-read",
             Self::HostRead => "host-read",
             Self::WorkspaceWrite => "workspace-write",
-            Self::MetadataWrite => "metadata-write",
             Self::HostWrite => "host-write",
             Self::Network => "network",
             Self::NoSandbox => "no-sandbox",
@@ -44,7 +42,6 @@ impl SandboxCapabilities {
         Self(BTreeSet::from([
             SandboxCapability::WorkspaceRead,
             SandboxCapability::WorkspaceWrite,
-            SandboxCapability::MetadataWrite,
             SandboxCapability::Network,
         ]))
     }
@@ -61,13 +58,6 @@ impl SandboxCapabilities {
         if effective.contains(&SandboxCapability::HostWrite) {
             effective.extend([
                 SandboxCapability::HostRead,
-                SandboxCapability::MetadataWrite,
-                SandboxCapability::WorkspaceWrite,
-                SandboxCapability::WorkspaceRead,
-            ]);
-        }
-        if effective.contains(&SandboxCapability::MetadataWrite) {
-            effective.extend([
                 SandboxCapability::WorkspaceWrite,
                 SandboxCapability::WorkspaceRead,
             ]);
@@ -132,7 +122,6 @@ mod tests {
             SandboxCapability::HostRead,
             SandboxCapability::WorkspaceRead,
             SandboxCapability::WorkspaceWrite,
-            SandboxCapability::MetadataWrite,
             SandboxCapability::HostWrite,
         ] {
             assert!(capabilities.contains(expected));

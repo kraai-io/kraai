@@ -70,9 +70,7 @@ pub(super) fn open_external_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let command = ("cmd", vec!["/C", "start", "", target]);
 
-    std::process::Command::new(command.0)
-        .args(command.1)
-        .spawn()
+    kraai_sandbox::spawn_command(std::process::Command::new(command.0).args(command.1))
         .map_err(|err| err.to_string())
         .map(|_| ())
 }

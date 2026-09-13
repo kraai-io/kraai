@@ -1,6 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(windows)]
+mod windows;
+
+#[cfg(not(windows))]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -24,7 +29,7 @@ pub fn resolve_path(cwd: &Path, requested: &Path) -> PathBuf {
 
 pub fn normalize_allow_missing(cwd: &Path, requested: &Path) -> PathBuf {
     let absolute = resolve_path(cwd, requested);
-    if let Ok(canonical) = absolute.canonicalize() {
+    if let Ok(canonical) = canonicalize(cwd, &absolute) {
         return canonical;
     }
 
@@ -43,14 +48,28 @@ pub fn normalize_allow_missing(cwd: &Path, requested: &Path) -> PathBuf {
     normalized
 }
 
+fn canonicalize(cwd: &Path, path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    return path.canonicalize().or_else(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            windows::canonicalize(cwd, path)
+        } else {
+            Err(error)
+        }
+    });
+    #[cfg(not(windows))]
+    {
+        let _ = cwd;
+        path.canonicalize()
+    }
+}
+
 pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
     let path = resolve_path(cwd, requested);
-    let canonical = path
-        .canonicalize()
-        .map_err(|source| WorkspaceFsError::Canonicalize {
-            path: path.clone(),
-            source,
-        })?;
+    let canonical = canonicalize(cwd, &path).map_err(|source| WorkspaceFsError::Canonicalize {
+        path: path.clone(),
+        source,
+    })?;
     let metadata = canonical
         .metadata()
         .map_err(|source| WorkspaceFsError::Metadata {
@@ -125,7 +144,10 @@ pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadErro
     Ok(file)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+pub use windows::open_scoped_file;
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn open_scoped_file(_root: &Path, path: &Path) -> Result<File, ScopedReadError> {
     Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
 }
@@ -142,12 +164,10 @@ pub fn create_text_file(
     let parent = requested
         .parent()
         .ok_or_else(|| WorkspaceFsError::MissingParent(requested.clone()))?;
-    let parent = parent
-        .canonicalize()
-        .map_err(|source| WorkspaceFsError::Canonicalize {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+    let parent = canonicalize(cwd, parent).map_err(|source| WorkspaceFsError::Canonicalize {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     if !parent.is_dir() {
         return Err(WorkspaceFsError::NotDirectory(parent));
     }
@@ -380,12 +400,13 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
         match mode {
             WriteMode::Create => rename_without_replacement(&temp_path, path)?,
             WriteMode::Replace { .. } => {
-                fs::rename(&temp_path, path).map_err(|source| WorkspaceFsError::Write {
+                replace_file(&temp_path, path).map_err(|source| WorkspaceFsError::Write {
                     path: path.to_path_buf(),
                     source,
                 })?;
             }
         }
+        #[cfg(not(windows))]
         sync_directory(parent)?;
         Ok(())
     })();
@@ -395,7 +416,7 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
     result
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
     rustix::fs::renameat_with(
         rustix::fs::CWD,
@@ -410,7 +431,15 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), W
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
+    windows::rename(source, destination, false).map_err(|source| WorkspaceFsError::Write {
+        path: destination.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), WorkspaceFsError> {
     if destination.exists() {
         return Err(WorkspaceFsError::AlreadyExists(destination.to_path_buf()));
@@ -421,6 +450,17 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> Result<(), W
     })
 }
 
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    windows::rename(source, destination, true)
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<(), WorkspaceFsError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -600,6 +640,48 @@ mod tests {
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_opened_paths_without_volume_manager_access() {
+        let root = temp_dir("windows-final-path").canonicalize().unwrap();
+        fs::create_dir(root.join("nested")).unwrap();
+        let file = root.join("résolved.txt");
+        fs::write(&file, "contents").unwrap();
+        let resolved = windows::canonicalize(&root, &root.join("nested/../résolved.txt")).unwrap();
+        assert_eq!(resolved, file.canonicalize().unwrap());
+        assert_eq!(
+            windows::canonicalize(&root.join("nested"), &file).unwrap(),
+            resolved
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scoped_reads_reject_traversal_and_alternate_streams() {
+        let root = temp_dir("windows-scoped-read").canonicalize().unwrap();
+        let path = root.join("file.txt");
+        fs::write(&path, "contents").unwrap();
+        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "contents");
+        for relative in ["..\\secret.txt", "file.txt:secret", "file.txt::$DATA"] {
+            assert!(matches!(
+                read_scoped_text_file(&root, &root.join(relative)),
+                Err(ScopedReadError::OutsideRoot(_))
+            ));
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_create_preserves_a_destination_created_after_validation() {
+        let root = temp_dir("atomic-create");
+        let path = root.join("file.txt");
+        atomic_write(&path, b"original", WriteMode::Create).unwrap();
+        assert!(atomic_write(&path, b"replacement", WriteMode::Create).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "linux")]

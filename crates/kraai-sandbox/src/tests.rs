@@ -8,11 +8,21 @@ use kraai_types::{SandboxCapabilities, SandboxCapability};
 use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
 use crate::{
-    BWRAP_SECCOMP_STDIN_FD, LaunchPlan, OutputStream, SandboxError, SeccompInstruction,
-    Termination, build_bwrap_args, build_bwrap_probe_args, bwrap_probe_failure_message, find_bwrap,
-    is_likely_sandbox_denied, restricted_network_seccomp_program, run, run_bwrap_sandbox_probe,
+    BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,
+    bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
+    run_bwrap_sandbox_probe,
 };
+use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandbox_denied, run};
+
+#[cfg(target_os = "macos")]
+#[path = "tests/macos.rs"]
+mod macos;
+
+#[cfg(unix)]
+#[path = "tests/process.rs"]
+mod process;
 
 #[cfg(target_os = "linux")]
 #[path = "tests/seccomp.rs"]
@@ -221,7 +231,7 @@ async fn timeout_terminates_descendants_and_preserves_output() {
 
 #[tokio::test]
 #[cfg(unix)]
-async fn timeout_covers_output_pipes_inherited_after_parent_exit() {
+async fn normal_exit_closes_descendant_output_pipes() {
     let workspace = temp_dir("inherited-output-pipe");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let output = run(
@@ -229,13 +239,13 @@ async fn timeout_covers_output_pipes_inherited_after_parent_exit() {
             &workspace,
             "sleep 60 & printf done",
             capabilities([SandboxCapability::NoSandbox]),
-            Duration::from_millis(100),
+            Duration::from_secs(5),
         ),
         CancellationToken::new(),
     )
     .await
-    .expect("timeout is a stable process outcome");
-    assert_eq!(output.termination, Termination::TimedOut);
+    .expect("normal exit closes descendant pipes");
+    assert_eq!(output.termination, Termination::Exited { code: Some(0) });
     assert_eq!(output.stdout, b"done");
     let _ = std::fs::remove_dir_all(workspace);
 }
@@ -319,7 +329,7 @@ async fn bwrap_probe_times_out_instead_of_hanging() {
 fn bwrap_args_encode_capability_boundaries() {
     let workspace = temp_dir("args");
     let private_temp = temp_dir("args-private");
-    std::fs::create_dir_all(workspace.join(".kraai")).expect("create metadata dir");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
     std::fs::create_dir_all(&private_temp).expect("create private temp");
     let plan = shell_plan(
         &workspace,
@@ -330,14 +340,9 @@ fn bwrap_args_encode_capability_boundaries() {
         ]),
         Duration::from_secs(1),
     );
-    let args = build_bwrap_args(&plan, &private_temp);
+    let args = build_bwrap_args(&plan, &private_temp).expect("build bubblewrap args");
 
     assert!(contains_mount(&args, "--bind", &workspace));
-    assert!(contains_mount(
-        &args,
-        "--ro-bind",
-        &workspace.join(".kraai")
-    ));
     assert!(contains_mount(&args, "--bind", &private_temp));
     assert!(args.iter().any(|arg| arg == "--share-net"));
     assert!(!args.iter().any(|arg| arg == "--seccomp"));

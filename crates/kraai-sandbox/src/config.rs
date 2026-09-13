@@ -19,8 +19,12 @@ pub struct LaunchPlan {
     pub timeout: Duration,
     pub output_events: Option<UnboundedSender<OutputEvent>>,
     pub private_temp: PrivateTempConfig,
+    #[cfg(windows)]
+    pub private_ipc_handles: Vec<std::os::windows::io::OwnedHandle>,
     #[cfg(unix)]
     pub private_ipc_connect_descriptors: Vec<std::os::fd::RawFd>,
+    #[cfg(unix)]
+    pub private_ipc_connect_paths: Vec<PathBuf>,
 }
 
 impl LaunchPlan {
@@ -40,8 +44,12 @@ impl LaunchPlan {
             timeout,
             output_events: None,
             private_temp: PrivateTempConfig::default(),
+            #[cfg(windows)]
+            private_ipc_handles: Vec::new(),
             #[cfg(unix)]
             private_ipc_connect_descriptors: Vec::new(),
+            #[cfg(unix)]
+            private_ipc_connect_paths: Vec::new(),
         }
     }
 
@@ -104,7 +112,11 @@ pub(crate) struct PreparedCommand {
     pub(crate) environment: BTreeMap<OsString, OsString>,
     pub(crate) sandboxed: bool,
     pub(crate) output_events: Option<UnboundedSender<OutputEvent>>,
-    pub(crate) private_temp: crate::temp_dir::PrivateTempDir,
+    #[cfg(windows)]
+    pub(crate) windows_sandbox: Option<crate::platform::windows::Sandbox>,
+    pub(crate) private_temp: Option<crate::temp_dir::PrivateTempDir>,
+    #[cfg(windows)]
+    pub(crate) private_ipc_handles: Vec<std::os::windows::io::OwnedHandle>,
     #[cfg(target_os = "linux")]
     pub(crate) seccomp_filter: Option<std::fs::File>,
 }
@@ -120,6 +132,8 @@ impl PreparedCommand {
             workspace_root,
             mut environment,
             output_events,
+            #[cfg(windows)]
+            private_ipc_handles,
             ..
         } = plan;
         private_temp.apply_environment(&mut environment);
@@ -130,7 +144,11 @@ impl PreparedCommand {
             environment,
             sandboxed: false,
             output_events,
-            private_temp,
+            private_temp: Some(private_temp),
+            #[cfg(windows)]
+            windows_sandbox: None,
+            #[cfg(windows)]
+            private_ipc_handles,
             #[cfg(target_os = "linux")]
             seccomp_filter: None,
         }
@@ -139,4 +157,38 @@ impl PreparedCommand {
 
 pub(crate) fn path_is_absolute(path: &Path) -> bool {
     path.is_absolute()
+}
+
+#[cfg(windows)]
+impl PreparedCommand {
+    pub(crate) async fn cleanup(&mut self) -> Result<(), crate::SandboxError> {
+        let mut resources = (self.windows_sandbox.take(), self.private_temp.take());
+        tokio::task::spawn_blocking(move || {
+            let result = resources
+                .0
+                .as_mut()
+                .map_or(Ok(()), |sandbox| sandbox.cleanup());
+            drop(resources);
+            result
+        })
+        .await
+        .map_err(|error| {
+            crate::SandboxError::Wait(format!("Windows sandbox cleanup failed: {error}"))
+        })?
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PreparedCommand {
+    fn drop(&mut self) {
+        let resources = (self.windows_sandbox.take(), self.private_temp.take());
+        if resources.0.is_none() && resources.1.is_none() {
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn_blocking(move || drop(resources)));
+        } else {
+            drop(resources);
+        }
+    }
 }

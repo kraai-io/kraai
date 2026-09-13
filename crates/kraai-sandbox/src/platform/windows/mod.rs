@@ -1,0 +1,219 @@
+mod acl;
+mod identity;
+mod mutation_lock;
+pub(crate) mod private_temp;
+pub(crate) mod process;
+
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf, Prefix};
+
+use kraai_types::SandboxCapability;
+use windows_sys::Win32::Security::{SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
+
+use crate::SandboxError;
+use crate::config::{LaunchPlan, PreparedCommand};
+use crate::temp_dir::PrivateTempDir;
+
+use acl::{Access, Grants};
+use identity::{Identity, Sid};
+
+#[derive(Debug)]
+pub(crate) struct Sandbox {
+    grants: Grants,
+    identity: Identity,
+    capabilities: Vec<Sid>,
+}
+
+impl Sandbox {
+    pub(crate) fn cleanup(&mut self) -> Result<(), SandboxError> {
+        let grants = self.grants.cleanup();
+        let identity = self.identity.cleanup();
+        grants.and(identity)
+    }
+
+    pub(crate) fn security_capabilities(&self) -> (SECURITY_CAPABILITIES, Vec<SID_AND_ATTRIBUTES>) {
+        let capabilities = self
+            .capabilities
+            .iter()
+            .map(|sid| SID_AND_ATTRIBUTES {
+                Sid: sid.as_ptr(),
+                Attributes: 4,
+            })
+            .collect::<Vec<_>>();
+        (
+            SECURITY_CAPABILITIES {
+                AppContainerSid: self.identity.sid.as_ptr(),
+                Capabilities: std::ptr::null_mut(),
+                CapabilityCount: capabilities.len() as u32,
+                Reserved: 0,
+            },
+            capabilities,
+        )
+    }
+}
+
+pub(crate) fn prepare(
+    mut plan: LaunchPlan,
+    private_temp: PrivateTempDir,
+) -> Result<PreparedCommand, SandboxError> {
+    if plan.capabilities.contains(SandboxCapability::HostRead) {
+        return Err(SandboxError::SandboxUnavailable(String::from(
+            "Windows AppContainer does not support host-read or host-write; configure runtime roots and workspace capabilities instead",
+        )));
+    }
+    plan.workspace_root = local_path(&plan.workspace_root)?;
+    plan.executable = local_path(&plan.executable)?;
+    let runtime_roots = plan
+        .runtime_roots
+        .iter()
+        .map(|path| local_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let temp_path = local_path(private_temp.path())?;
+    let system_root = system_root()?;
+    let identity = Identity::create()?;
+    let mut capabilities = identity::capability("registryRead")?;
+    if plan.capabilities.contains(SandboxCapability::Network) {
+        for name in [
+            "internetClient",
+            "internetClientServer",
+            "privateNetworkClientServer",
+            "lpacCryptoServices",
+        ] {
+            capabilities.extend(identity::capability(name)?);
+        }
+    }
+    let mut grants = Grants::new(identity.sid.bytes());
+    let writable = plan
+        .capabilities
+        .contains(SandboxCapability::WorkspaceWrite);
+    for root in runtime_roots {
+        if !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root) {
+            grants.grant(&root, Access::Read)?;
+        }
+    }
+    grants.grant(
+        &plan.workspace_root,
+        if writable {
+            Access::Write
+        } else {
+            Access::Read
+        },
+    )?;
+    grants.grant(&temp_path, Access::Write)?;
+    plan.environment
+        .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));
+    plan.environment
+        .insert("LOCALAPPDATA".into(), local_app_data()?.into_os_string());
+    private_temp.apply_environment(&mut plan.environment);
+    Ok(PreparedCommand {
+        executable: plan.executable,
+        args: plan.args,
+        cwd: plan.workspace_root,
+        environment: plan.environment,
+        sandboxed: true,
+        output_events: plan.output_events,
+        private_temp: Some(private_temp),
+        windows_sandbox: Some(Sandbox {
+            grants,
+            identity,
+            capabilities,
+        }),
+        private_ipc_handles: plan.private_ipc_handles,
+    })
+}
+
+pub(super) fn apply_system_environment(
+    environment: &mut std::collections::BTreeMap<OsString, OsString>,
+) -> Result<(), SandboxError> {
+    environment.retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("SystemRoot"));
+    environment.insert("SystemRoot".into(), system_root()?.into_os_string());
+    Ok(())
+}
+
+fn local_path(path: &Path) -> Result<PathBuf, SandboxError> {
+    let canonical = path.canonicalize().map_err(|error| {
+        SandboxError::SandboxUnavailable(format!("unable to resolve '{}': {error}", path.display()))
+    })?;
+    if !matches!(canonical.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+    {
+        return Err(SandboxError::SandboxUnavailable(format!(
+            "Windows sandbox roots must be local disk paths: '{}'",
+            path.display()
+        )));
+    }
+    if canonical.components().any(|component| {
+        matches!(component, Component::Normal(name) if name.to_string_lossy().contains(':'))
+    }) {
+        return Err(SandboxError::SandboxUnavailable(format!(
+            "alternate data streams cannot be sandbox roots: '{}'", path.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+#[expect(
+    unsafe_code,
+    reason = "the Windows directory must come from the OS rather than an untrusted environment variable"
+)]
+fn system_root() -> Result<PathBuf, SandboxError> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
+
+    let mut buffer = vec![0_u16; 32768];
+    let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return Err(unavailable("locate Windows directory"));
+    }
+    buffer.truncate(length);
+    local_path(&PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+#[expect(
+    unsafe_code,
+    reason = "the OS supplies the profile directory required by AppContainer process creation"
+)]
+fn local_app_data() -> Result<PathBuf, SandboxError> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+    let mut token = std::ptr::null_mut();
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(unavailable("query the current user profile"));
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut path = std::ptr::null_mut();
+    let status = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, token.as_raw_handle(), &mut path)
+    };
+    drop(token);
+    if status < 0 || path.is_null() {
+        unsafe { CoTaskMemFree(path.cast()) };
+        return Err(SandboxError::SandboxUnavailable(format!(
+            "cannot locate LocalAppData: HRESULT {status:#x}"
+        )));
+    }
+    let mut length = 0;
+    while unsafe { *path.add(length) } != 0 {
+        length += 1;
+    }
+    let value = unsafe { OsString::from_wide(std::slice::from_raw_parts(path, length)) };
+    unsafe { CoTaskMemFree(path.cast()) };
+    Ok(PathBuf::from(value))
+}
+
+fn unavailable(operation: &str) -> SandboxError {
+    SandboxError::SandboxUnavailable(format!(
+        "unable to {operation}: {}",
+        std::io::Error::last_os_error()
+    ))
+}

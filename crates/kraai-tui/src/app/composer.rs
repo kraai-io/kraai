@@ -205,12 +205,7 @@ fn word_right(input: &str, cursor: usize) -> usize {
 }
 
 fn run_editor(editor: &str, path: &std::path::Path, mut tick: impl FnMut()) -> Result<()> {
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("kraai-editor")
-        .arg(path)
-        .spawn()?;
+    let mut child = kraai_sandbox::spawn_command(&mut editor_command(editor, path))?;
     loop {
         tick();
         if let Some(status) = child.try_wait()? {
@@ -223,6 +218,28 @@ fn run_editor(editor: &str, path: &std::path::Path, mut tick: impl FnMut()) -> R
     }
 }
 
+#[cfg(not(windows))]
+fn editor_command(editor: &str, path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("kraai-editor")
+        .arg(path);
+    command
+}
+
+#[cfg(windows)]
+fn editor_command(editor: &str, path: &std::path::Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new("cmd.exe");
+    command
+        .args(["/D", "/V:OFF", "/S", "/C"])
+        .raw_arg(format!("\"{editor} \"%KRAAI_EDITOR_FILE%\"\""))
+        .env("KRAAI_EDITOR_FILE", path);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::run_editor;
@@ -232,6 +249,7 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "test assertions follow fallible fixture setup"
     )]
+    #[cfg(not(windows))]
     fn editor_command_supports_arguments_and_quoted_paths() -> color_eyre::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("draft with spaces ' $dollar.txt");
@@ -240,6 +258,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path)?, "edited");
         assert!(run_editor("sh -c 'exit 7' editor", &path, || {}).is_err());
         assert_eq!(std::fs::read_to_string(&path)?, "edited");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "test assertions follow fallible fixture setup"
+    )]
+    fn editor_command_supports_windows_arguments_and_quoted_paths() -> color_eyre::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let editor = directory.path().join("editor with spaces.cmd");
+        let path = directory.path().join("draft & %PATH% ! caret^.txt");
+        std::fs::write(&path, "original")?;
+        std::fs::write(
+            &editor,
+            "@echo off\r\nif not \"%~1\"==\"--wait\" exit /b 9\r\n> \"%~2\" echo edited\r\n",
+        )?;
+        run_editor(&format!("\"{}\" --wait", editor.display()), &path, || {})?;
+        assert_eq!(std::fs::read_to_string(&path)?.trim(), "edited");
+        assert!(run_editor("exit /b 7", &path, || {}).is_err());
         Ok(())
     }
 

@@ -90,7 +90,6 @@ fn parse_permissions(value: &str) -> Result<SandboxCapabilities, String> {
             "workspace-read" => SandboxCapability::WorkspaceRead,
             "host-read" => SandboxCapability::HostRead,
             "workspace-write" => SandboxCapability::WorkspaceWrite,
-            "metadata-write" => SandboxCapability::MetadataWrite,
             "host-write" => SandboxCapability::HostWrite,
             "network" => SandboxCapability::Network,
             "no-sandbox" => SandboxCapability::NoSandbox,
