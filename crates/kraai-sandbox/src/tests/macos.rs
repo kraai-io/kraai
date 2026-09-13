@@ -75,6 +75,33 @@ async fn timeout_bounds_detached_output_capture() {
 }
 
 #[tokio::test]
+async fn root_enumeration_requires_host_read() {
+    let fixture = Fixture::new("macos-root-enumeration");
+    for (capability, allowed) in [
+        (SandboxCapability::WorkspaceRead, false),
+        (SandboxCapability::WorkspaceWrite, false),
+        (SandboxCapability::HostRead, true),
+        (SandboxCapability::HostWrite, true),
+    ] {
+        let output = successful_run(shell_plan(
+            &fixture.workspace(),
+            "if /bin/ls -A / >/dev/null 2>&1; then printf allowed; else printf denied; fi",
+            [capability],
+        ))
+        .await;
+        assert_eq!(
+            output.stdout,
+            if allowed {
+                b"allowed".as_slice()
+            } else {
+                b"denied".as_slice()
+            },
+            "{capability:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn capabilities_enforce_workspace_and_host_boundaries() {
     for (capability, workspace_write, host_read, host_write) in [
         (SandboxCapability::WorkspaceRead, false, false, false),

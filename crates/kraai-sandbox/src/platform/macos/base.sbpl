@@ -65,9 +65,9 @@
   (literal "/private/etc/localtime")
   (literal "/private/etc/passwd")
   (literal "/dev/random")
-  (literal "/dev/urandom")
-  (literal "/"))
+  (literal "/dev/urandom"))
 (allow file-read-metadata
+  (literal "/")
   (literal "/etc")
   (literal "/tmp")
   (literal "/var")

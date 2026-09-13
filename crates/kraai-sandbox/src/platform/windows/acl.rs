@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+    FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ,
 };
 
 use crate::SandboxError;
@@ -67,6 +67,7 @@ impl Grants {
             if self.files.len() >= limit {
                 return Err(entry_limit(path, limit));
             }
+            handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
             mutation::update(&file, &self.sid, Some(access))?;
             self.files.push(file);
             Ok(())
@@ -163,8 +164,9 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
 }
 
 fn open(path: &Path) -> Result<File, SandboxError> {
+    // Data access makes the share restrictions effective; metadata-only opens do not pin names.
     OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES)
+        .access_mode(FILE_READ_ATTRIBUTES | FILE_READ_DATA)
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
@@ -195,6 +197,66 @@ fn entry_limit(path: &Path, limit: usize) -> SandboxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert permission boundaries"
+    )]
+    fn hard_link_grants_are_rejected_before_mutation() -> Result<(), Box<dyn std::error::Error>> {
+        let identity = super::super::identity::Identity::create()?;
+        let root =
+            std::env::temp_dir().join(format!("kraai-acl-links-{:032x}", rand::random::<u128>()));
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let external = root.join("secret");
+        let link = workspace.join("link");
+        std::fs::write(&external, b"host data")?;
+        std::fs::hard_link(&external, &link)?;
+        let mut grants = Grants::new(identity.sid.bytes());
+        for access in [Access::Read, Access::Write] {
+            let result = grants.grant(&link, access);
+            assert!(
+                matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("multiple hard links"))
+            );
+            assert!(grants.files.is_empty());
+            grants.cleanup()?;
+            let result = grants.grant(&workspace, access);
+            assert!(
+                matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("multiple hard links"))
+            );
+            grants.cleanup()?;
+        }
+        std::fs::remove_file(link)?;
+        grants.grant(&workspace, Access::Write)?;
+        grants.cleanup()?;
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert permission boundaries"
+    )]
+    fn traversal_pins_prevent_ancestor_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let root =
+            std::env::temp_dir().join(format!("kraai-acl-pins-{:032x}", rand::random::<u128>()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested)?;
+        std::fs::write(nested.join("file"), b"content")?;
+        let mut visited = 0;
+        visit_tree(&root, |_| {
+            visited += 1;
+            assert!(std::fs::rename(&root, root.with_extension("moved")).is_err());
+            Ok(())
+        })?;
+        assert_eq!(visited, 3);
+        let moved = root.with_extension("moved");
+        std::fs::rename(&root, &moved)?;
+        std::fs::remove_dir_all(moved)?;
+        Ok(())
+    }
 
     #[test]
     fn retained_grants_allow_renaming_existing_directories()
