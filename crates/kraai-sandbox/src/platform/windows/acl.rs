@@ -3,6 +3,7 @@
     reason = "Windows DACL edits use pinned file handles and OS-allocated security descriptors"
 )]
 
+mod handle;
 mod mutation;
 
 use std::fs::{File, OpenOptions};
@@ -11,8 +12,7 @@ use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
-    WRITE_DAC,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
 };
 
 use crate::SandboxError;
@@ -120,7 +120,7 @@ fn visit_tree(
             return Err(entry_limit(root, MAX_ACL_ENTRIES));
         }
         entries += 1;
-        let pin = open(&path, FILE_READ_ATTRIBUTES, false)?;
+        let pin = open(&path)?;
         if is_reparse(&pin)? {
             if is_root {
                 return Err(failure(&path, "reparse points cannot be sandbox roots"));
@@ -131,7 +131,7 @@ fn visit_tree(
             .metadata()
             .map_err(|error| failure(&path, &error.to_string()))?
             .is_dir();
-        let file = open(&path, READ_CONTROL | WRITE_DAC, true)?;
+        let file = handle::open_by_id(&pin).map_err(|error| failure(&path, &error.to_string()))?;
         visit(file)?;
         if directory {
             pins.push(pin);
@@ -153,7 +153,7 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
     ancestors.reverse();
     let mut pins = Vec::new();
     for ancestor in ancestors {
-        let pin = open(ancestor, FILE_READ_ATTRIBUTES, false)?;
+        let pin = open(ancestor)?;
         if is_reparse(&pin)? {
             return Err(failure(ancestor, "reparse point in sandbox root ancestry"));
         }
@@ -162,14 +162,10 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
     Ok(pins)
 }
 
-fn open(path: &Path, access: u32, share_mutations: bool) -> Result<File, SandboxError> {
+fn open(path: &Path) -> Result<File, SandboxError> {
     OpenOptions::new()
-        .access_mode(access | FILE_READ_ATTRIBUTES)
-        .share_mode(if share_mutations {
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-        } else {
-            FILE_SHARE_READ
-        })
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .map_err(|error| failure(path, &error.to_string()))
@@ -199,6 +195,25 @@ fn entry_limit(path: &Path, limit: usize) -> SandboxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_grants_allow_renaming_existing_directories()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let identity = super::super::identity::Identity::create()?;
+        let root =
+            std::env::temp_dir().join(format!("kraai-acl-rename-{:032x}", rand::random::<u128>()));
+        let original = root.join("original");
+        let moved = root.join("moved");
+        std::fs::create_dir_all(original.join("nested"))?;
+        std::fs::write(original.join("nested/file"), b"content")?;
+        let mut grants = Grants::new(identity.sid.bytes());
+        grants.grant(&original, Access::Write)?;
+        std::fs::rename(&original, &moved)?;
+        std::fs::rename(moved.join("nested"), moved.join("renamed"))?;
+        grants.cleanup()?;
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     #[expect(
