@@ -75,20 +75,23 @@ async fn timeout_bounds_detached_output_capture() {
 }
 
 #[tokio::test]
-async fn root_enumeration_requires_host_read() {
+async fn root_access_for_startup_does_not_allow_host_subtree_reads() {
     let fixture = Fixture::new("macos-root-enumeration");
+    std::fs::write(fixture.0.join("secret"), b"host data").expect("write host secret");
     for (capability, allowed) in [
         (SandboxCapability::WorkspaceRead, false),
         (SandboxCapability::WorkspaceWrite, false),
         (SandboxCapability::HostRead, true),
         (SandboxCapability::HostWrite, true),
     ] {
-        let output = successful_run(shell_plan(
+        let mut plan = shell_plan(
             &fixture.workspace(),
-            "if /bin/ls -A / >/dev/null 2>&1; then printf allowed; else printf denied; fi",
+            "/bin/ls -A / >/dev/null || exit 1; if /bin/cat \"$SECRET\" >/dev/null 2>&1; then printf allowed; else printf denied; fi",
             [capability],
-        ))
-        .await;
+        );
+        plan.environment
+            .insert("SECRET".into(), fixture.0.join("secret").into_os_string());
+        let output = successful_run(plan).await;
         assert_eq!(
             output.stdout,
             if allowed {

@@ -164,13 +164,35 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
 }
 
 fn open(path: &Path) -> Result<File, SandboxError> {
-    // Data access makes the share restrictions effective; metadata-only opens do not pin names.
-    OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | FILE_READ_DATA)
+    let mut options = OpenOptions::new();
+    options
         .share_mode(FILE_SHARE_READ)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    match options
+        .access_mode(FILE_READ_ATTRIBUTES | FILE_READ_DATA)
         .open(path)
-        .map_err(|error| failure(path, &error.to_string()))
+    {
+        Ok(file) => Ok(file),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let file = options
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .open(path)
+                .map_err(|error| failure(path, &error.to_string()))?;
+            if file
+                .metadata()
+                .map_err(|error| failure(path, &error.to_string()))?
+                .is_dir()
+            {
+                return Err(failure(
+                    path,
+                    "directory traversal requires list access to pin its name",
+                ));
+            }
+            // Leaf objects are reopened by ID, so replacing their names cannot redirect an ACL edit.
+            Ok(file)
+        }
+        Err(error) => Err(failure(path, &error.to_string())),
+    }
 }
 
 fn is_reparse(file: &File) -> Result<bool, SandboxError> {
@@ -197,6 +219,38 @@ fn entry_limit(path: &Path, limit: usize) -> SandboxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert permission boundaries"
+    )]
+    fn acl_setup_does_not_require_file_content_access() -> Result<(), Box<dyn std::error::Error>> {
+        let identity = super::super::identity::Identity::create()?;
+        let root = std::env::temp_dir().join(format!(
+            "kraai-acl-unreadable-{:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir(&root)?;
+        let file = root.join("unreadable");
+        std::fs::write(&file, b"content")?;
+        let mut command = std::process::Command::new("icacls.exe");
+        command.arg(&file).args(["/deny", "*S-1-1-0:(RD)"]);
+        assert!(crate::spawn_command(&mut command)?.wait()?.success());
+        assert_eq!(
+            File::open(&file).err().map(|error| error.kind()),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        let mut grants = Grants::new(identity.sid.bytes());
+        for access in [Access::Read, Access::Write] {
+            grants.grant(&root, access)?;
+            assert_eq!(grants.files.len(), 2);
+            grants.cleanup()?;
+            assert!(File::open(&file).is_err());
+        }
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     #[expect(

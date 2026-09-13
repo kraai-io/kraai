@@ -65,9 +65,10 @@
   (literal "/private/etc/localtime")
   (literal "/private/etc/passwd")
   (literal "/dev/random")
-  (literal "/dev/urandom"))
+  (literal "/dev/urandom")
+  ; dyld requires root access before exec; this also exposes root dirent names.
+  (literal "/"))
 (allow file-read-metadata
-  (literal "/")
   (literal "/etc")
   (literal "/tmp")
   (literal "/var")

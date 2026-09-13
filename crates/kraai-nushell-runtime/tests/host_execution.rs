@@ -461,7 +461,11 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
     );
     execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
-    execution.runtime_roots.push(host_executable());
+    let runtime = TestWorkspace::new();
+    let host = runtime.0.join("kraai-nushell-host.exe");
+    std::fs::copy(host_executable(), &host).expect("copy host without Cargo's hard links");
+    execution.host_executable = host.clone();
+    execution.runtime_roots.push(host);
     execution.active_commands = vec![String::from("kraai-open-files")];
     execution.state_effect_handler = effects.clone();
 
