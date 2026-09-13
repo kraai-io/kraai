@@ -26,7 +26,9 @@ pub(crate) struct Sandbox {
 
 impl Sandbox {
     pub(crate) fn cleanup(&mut self) -> Result<(), SandboxError> {
-        self.grants.cleanup()
+        let grants = self.grants.cleanup();
+        let identity = self.identity.cleanup();
+        grants.and(identity)
     }
 
     pub(crate) fn security_capabilities(&self) -> (SECURITY_CAPABILITIES, Vec<SID_AND_ATTRIBUTES>) {

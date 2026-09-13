@@ -10,18 +10,16 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
-    DeleteAce, EqualSid, GetAce, GetAclInformation, InitializeSecurityDescriptor, IsValidAcl,
-    IsValidSid, SECURITY_DESCRIPTOR, SetSecurityDescriptorDacl,
+    DeleteAce, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
+    InitializeSecurityDescriptor, IsValidAcl, IsValidSid, SE_DACL_AUTO_INHERITED,
+    SE_DACL_PROTECTED, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 
 use super::Access;
-use windows_sys::Win32::Security::{
-    GetSecurityDescriptorControl, SE_DACL_AUTO_INHERITED, SE_DACL_PROTECTED,
-    SetSecurityDescriptorControl,
-};
 
 use crate::SandboxError;
 

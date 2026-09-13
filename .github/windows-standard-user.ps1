@@ -27,9 +27,6 @@ try {
         '$env:HOMEDRIVE = [IO.Path]::GetPathRoot($env:USERPROFILE).TrimEnd(''\'')',
         '$env:HOMEPATH = $env:USERPROFILE.Substring($env:HOMEDRIVE.Length)',
         'New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA, $env:APPDATA | Out-Null',
-        'Write-Host "Test identity: $($identity.Name) [$($identity.User.Value)]"',
-        'Write-Host "USERPROFILE=$env:USERPROFILE LOCALAPPDATA=$env:LOCALAPPDATA"',
-        'Write-Host "Known local application data: $([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"',
         '$env:TEMP = Join-Path $PSScriptRoot ''temp''',
         '$env:TMP = $env:TEMP',
         'New-Item -ItemType Directory -Path $env:TEMP | Out-Null'

@@ -77,14 +77,36 @@ impl Identity {
             }
         }
     }
+
+    pub(super) fn cleanup(&mut self) -> Result<(), SandboxError> {
+        self.cleanup_with(|name| {
+            let _lock = super::mutation_lock::Lock::acquire()?;
+            let result = unsafe { DeleteAppContainerProfile(name.as_ptr()) };
+            if result < 0 {
+                return Err(SandboxError::SandboxUnavailable(format!(
+                    "unable to delete AppContainer profile '{}': HRESULT {result:#x}",
+                    String::from_utf16_lossy(name.strip_suffix(&[0]).unwrap_or(name))
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    fn cleanup_with(
+        &mut self,
+        delete: impl FnOnce(&[u16]) -> Result<(), SandboxError>,
+    ) -> Result<(), SandboxError> {
+        if !self.name.is_empty() {
+            delete(&self.name)?;
+            self.name.clear();
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Identity {
     fn drop(&mut self) {
-        let Ok(_lock) = super::mutation_lock::Lock::acquire() else {
-            return;
-        };
-        unsafe { DeleteAppContainerProfile(self.name.as_ptr()) };
+        let _ = self.cleanup();
     }
 }
 
@@ -129,5 +151,38 @@ unsafe fn free_sid_array(array: *mut PSID, count: u32) {
             unsafe { LocalFree(*sid) };
         }
         unsafe { LocalFree(array.cast()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Identity;
+    use crate::SandboxError;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression test asserts cleanup state"
+    )]
+    fn failed_cleanup_preserves_profile_for_retry() -> Result<(), SandboxError> {
+        let mut identity = Identity::create()?;
+        let name = identity.name.clone();
+        let result = identity.cleanup_with(|_| {
+            Err(SandboxError::SandboxUnavailable(
+                "injected cleanup failure".into(),
+            ))
+        });
+        assert!(
+            matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message == "injected cleanup failure")
+        );
+        assert_eq!(identity.name, name);
+        identity.cleanup()?;
+        assert!(identity.name.is_empty());
+        identity.cleanup_with(|_| {
+            Err(SandboxError::SandboxUnavailable(
+                "profile deleted twice".into(),
+            ))
+        })?;
+        Ok(())
     }
 }
