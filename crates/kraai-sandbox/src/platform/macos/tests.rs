@@ -208,7 +208,9 @@ fn non_utf8_paths_are_rejected_instead_of_lossily_granted() {
 
     let (root, mut plan, private_temp) = fixture(&[SandboxCapability::WorkspaceRead]);
     let workspace = root.path().join(OsString::from_vec(vec![b'w', 0xff]));
-    std::fs::create_dir(&workspace).expect("create non-UTF-8 workspace");
+    if let Err(error) = std::fs::create_dir(&workspace) {
+        assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
+    }
     plan.workspace_root = workspace;
     assert!(build_args(&plan, &private_temp).is_err());
 }

@@ -240,6 +240,18 @@ async fn transport_descriptor_is_closed_before_external_commands_can_run() {
     assert_eq!(String::from_utf8_lossy(&result.output.stdout), "closed\n");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sandbox_runtime_roots(host: PathBuf) -> Vec<PathBuf> {
+    let mut roots = vec![host];
+    for path in ["/nix/store", "/lib", "/lib64", "/usr/lib"] {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
 #[tokio::test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn private_transport_crosses_the_sandbox_boundary() {
@@ -258,15 +270,7 @@ async fn private_transport_crosses_the_sandbox_boundary() {
     execution
         .environment
         .insert(String::from("TERM"), String::from("dumb"));
-    execution.runtime_roots.push(
-        host.parent()
-            .unwrap_or_else(|| panic!("host executable has no parent"))
-            .to_path_buf(),
-    );
-    let nix_store = PathBuf::from("/nix/store");
-    if nix_store.exists() {
-        execution.runtime_roots.push(nix_store);
-    }
+    execution.runtime_roots = sandbox_runtime_roots(host);
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
@@ -306,15 +310,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
     execution
         .environment
         .insert(String::from("TERM"), String::from("dumb"));
-    execution.runtime_roots.push(
-        host.parent()
-            .unwrap_or_else(|| panic!("host executable has no parent"))
-            .to_path_buf(),
-    );
-    let nix_store = PathBuf::from("/nix/store");
-    if nix_store.exists() {
-        execution.runtime_roots.push(nix_store);
-    }
+    execution.runtime_roots = sandbox_runtime_roots(host);
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
@@ -434,12 +430,7 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
     );
     execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
-    execution.runtime_roots.push(
-        host_executable()
-            .parent()
-            .unwrap_or_else(|| panic!("host executable has no parent"))
-            .to_path_buf(),
-    );
+    execution.runtime_roots.push(host_executable());
     execution.active_commands = vec![String::from("kraai-open-files")];
     execution.state_effect_handler = effects.clone();
 

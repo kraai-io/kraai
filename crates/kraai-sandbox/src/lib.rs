@@ -21,10 +21,10 @@ use platform::linux::{
     bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
     run_bwrap_sandbox_probe,
 };
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 use process::is_likely_sandbox_denied;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 #[expect(
     clippy::expect_used,
     clippy::indexing_slicing,
