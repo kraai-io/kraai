@@ -111,14 +111,22 @@ impl Drop for Grants {
 
 fn visit_tree(
     root: &Path,
+    visit: impl FnMut(File) -> Result<(), SandboxError>,
+) -> Result<(), SandboxError> {
+    visit_tree_with_limit(root, MAX_ACL_ENTRIES, visit)
+}
+
+fn visit_tree_with_limit(
+    root: &Path,
+    limit: usize,
     mut visit: impl FnMut(File) -> Result<(), SandboxError>,
 ) -> Result<(), SandboxError> {
     let mut pins = pin_ancestors(root)?;
     let mut pending = vec![(root.to_path_buf(), true)];
     let mut entries = 0;
     while let Some((path, is_root)) = pending.pop() {
-        if entries >= MAX_ACL_ENTRIES {
-            return Err(entry_limit(root, MAX_ACL_ENTRIES));
+        if entries >= limit {
+            return Err(entry_limit(root, limit));
         }
         entries += 1;
         let pin = open(&path)?;
@@ -139,6 +147,9 @@ fn visit_tree(
             for entry in
                 std::fs::read_dir(&path).map_err(|error| failure(&path, &error.to_string()))?
             {
+                if entries + pending.len() >= limit {
+                    return Err(entry_limit(root, limit));
+                }
                 let child = entry
                     .map_err(|error| failure(&path, &error.to_string()))?
                     .path();
@@ -219,6 +230,39 @@ fn entry_limit(path: &Path, limit: usize) -> SandboxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "regression tests assert traversal limits"
+    )]
+    fn wide_directory_stops_before_visiting_queued_children()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let _fixtures = lock_fixtures()?;
+        let root =
+            std::env::temp_dir().join(format!("kraai-acl-queue-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir(&root)?;
+        for name in ["one", "two", "three"] {
+            std::fs::write(root.join(name), b"content")?;
+        }
+        let mut visited = 0;
+        let result = visit_tree_with_limit(&root, 3, |_| {
+            visited += 1;
+            Ok(())
+        });
+        assert!(
+            matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("ACL entry limit (3) exceeded"))
+        );
+        assert_eq!(visited, 1);
+        visited = 0;
+        visit_tree_with_limit(&root, 4, |_| {
+            visited += 1;
+            Ok(())
+        })?;
+        assert_eq!(visited, 4);
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     fn lock_fixtures() -> std::io::Result<std::sync::MutexGuard<'static, ()>> {
         // Traversals pin shared ancestors, including Temp, against other fixtures' renames.
