@@ -558,3 +558,4 @@ mod approval_overflow;
 mod cost;
 mod editor_review;
 mod enhancements;
+mod host_failure;
