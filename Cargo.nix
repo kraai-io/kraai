@@ -3089,9 +3089,9 @@ rec {
       };
       "crossbeam-channel" = rec {
         crateName = "crossbeam-channel";
-        version = "0.5.16";
+        version = "0.5.17";
         edition = "2021";
-        sha256 = "17k72dh5qqkh0xvqzr27wny7gl1l7fgzlvh2xxx71jmfgz1n6lyq";
+        sha256 = "1wcy7y77hw7z5m140114iqxb90gsq062djd9zpkndisvgcrcrc4q";
         libName = "crossbeam_channel";
         dependencies = [
           {
@@ -3229,7 +3229,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.3.18";
             optional = true;
             target = { target, features }: (target."unix" or false);
           }
@@ -3321,7 +3321,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.3.18";
             optional = true;
             target = { target, features }: (target."unix" or false);
           }
@@ -4863,7 +4863,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.4";
+            packageId = "notify 9.0.0-rc.5";
           }
           {
             name = "notify-types";
@@ -4995,7 +4995,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.4";
+            packageId = "notify 9.0.0-rc.5";
           }
           {
             name = "parking_lot";
@@ -9700,7 +9700,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.4.4";
           }
           {
             name = "tempfile";
@@ -11349,11 +11349,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "fsevent-sys" "macos_fsevent" ];
       };
-      "notify 9.0.0-rc.4" = rec {
+      "notify 9.0.0-rc.5" = rec {
         crateName = "notify";
-        version = "9.0.0-rc.4";
-        edition = "2021";
-        sha256 = "03i4c6l2116slkl757v0gysacpa9cwz6jy20r0afz0fp9lfpfjxl";
+        version = "9.0.0-rc.5";
+        edition = "2024";
+        sha256 = "0j41fhgxi4x983ijcg9wxs2bash4vx8fh902n674v5m105rfns3p";
         authors = [
           "Félix Saparelli <me@passcod.name>"
           "Daniel Faust <hessijames@gmail.com>"
@@ -11372,9 +11372,20 @@ rec {
             target = { target, features }: (("linux" == target."os" or null) || ("android" == target."os" or null));
           }
           {
+            name = "inotify";
+            packageId = "inotify";
+            usesDefaultFeatures = false;
+            target = { target, features }: ("freebsd" == target."os" or null);
+          }
+          {
             name = "kqueue";
             packageId = "kqueue";
-            target = { target, features }: (("freebsd" == target."os" or null) || ("openbsd" == target."os" or null) || ("netbsd" == target."os" or null) || ("dragonfly" == target."os" or null) || ("ios" == target."os" or null));
+            target = { target, features }: (("openbsd" == target."os" or null) || ("netbsd" == target."os" or null) || ("dragonfly" == target."os" or null) || ("ios" == target."os" or null));
+          }
+          {
+            name = "kqueue";
+            packageId = "kqueue";
+            target = { target, features }: ("freebsd" == target."os" or null);
           }
           {
             name = "kqueue";
@@ -11393,13 +11404,19 @@ rec {
           {
             name = "mio";
             packageId = "mio";
-            target = { target, features }: (("freebsd" == target."os" or null) || ("openbsd" == target."os" or null) || ("netbsd" == target."os" or null) || ("dragonfly" == target."os" or null) || ("ios" == target."os" or null));
+            target = { target, features }: (("linux" == target."os" or null) || ("android" == target."os" or null));
             features = [ "os-ext" ];
           }
           {
             name = "mio";
             packageId = "mio";
-            target = { target, features }: (("linux" == target."os" or null) || ("android" == target."os" or null));
+            target = { target, features }: (("openbsd" == target."os" or null) || ("netbsd" == target."os" or null) || ("dragonfly" == target."os" or null) || ("ios" == target."os" or null));
+            features = [ "os-ext" ];
+          }
+          {
+            name = "mio";
+            packageId = "mio";
+            target = { target, features }: ("freebsd" == target."os" or null);
             features = [ "os-ext" ];
           }
           {
@@ -12566,9 +12583,9 @@ rec {
       };
       "nu-engine" = rec {
         crateName = "nu-engine";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "15wacan5k7rnl8whn70cnjygifg8izxj36w3n9fnakicm50a676s";
+        sha256 = "06sf0629gdiggr8wh0wv2w53l2q1f3d5qwv16fllzdm5kd3ldlv0";
         libName = "nu_engine";
         authors = [
           "The Nushell Project Developers"
@@ -12803,9 +12820,9 @@ rec {
       };
       "nu-parser" = rec {
         crateName = "nu-parser";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "0hlcag69cv053vlap6s9f7vizw3vrvvbsfzqz1y9l7nganrbq7vv";
+        sha256 = "160bms527bnwqjr0fx3i38fyxppyd8qwbsxj5zgbq1ra370f0wln";
         libName = "nu_parser";
         authors = [
           "The Nushell Project Developers"
@@ -19419,11 +19436,40 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
-      "signal-hook" = rec {
+      "signal-hook 0.3.18" = rec {
         crateName = "signal-hook";
         version = "0.3.18";
         edition = "2018";
         sha256 = "1qnnbq4g2vixfmlv28i1whkr0hikrf1bsc4xjy2aasj2yina30fq";
+        libName = "signal_hook";
+        authors = [
+          "Michal 'vorner' Vaner <vorner@vorner.cz>"
+          "Thomas Himmelstoss <thimm@posteo.de>"
+        ];
+        dependencies = [
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "signal-hook-registry";
+            packageId = "signal-hook-registry";
+          }
+        ];
+        features = {
+          "cc" = [ "dep:cc" ];
+          "default" = [ "channel" "iterator" ];
+          "extended-siginfo" = [ "channel" "iterator" "extended-siginfo-raw" ];
+          "extended-siginfo-raw" = [ "cc" ];
+          "iterator" = [ "channel" ];
+        };
+        resolvedDefaultFeatures = [ "channel" "default" "iterator" ];
+      };
+      "signal-hook 0.4.4" = rec {
+        crateName = "signal-hook";
+        version = "0.4.4";
+        edition = "2018";
+        sha256 = "0gdm8kmi1mcd30gkxcwagxiqiasq0fhdlvrfsnybv3chln6c585j";
         libName = "signal_hook";
         authors = [
           "Michal 'vorner' Vaner <vorner@vorner.cz>"
@@ -19472,7 +19518,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.3.18";
           }
         ];
         features = {
@@ -20333,7 +20379,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.3.18";
             target = { target, features }: (target."unix" or false);
           }
           {
@@ -20553,7 +20599,7 @@ rec {
           }
           {
             name = "signal-hook";
-            packageId = "signal-hook";
+            packageId = "signal-hook 0.3.18";
             target = { target, features }: (target."unix" or false);
           }
           {
@@ -21322,9 +21368,9 @@ rec {
       };
       "toml" = rec {
         crateName = "toml";
-        version = "1.1.4+spec-1.1.0";
+        version = "1.1.6+spec-1.1.0";
         edition = "2024";
-        sha256 = "1xanf3v10j8hdjz37mkhg80w92cw25kxwndhcp4w5pxw9czydb1s";
+        sha256 = "0sj0g89pyrkm9g5zaaqsdlclr98xf1chvi8jv9qsn4897xa041lj";
         dependencies = [
           {
             name = "indexmap";
