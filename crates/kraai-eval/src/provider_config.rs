@@ -6,6 +6,7 @@ use kraai_provider_core::{DynamicValue, ProviderManagerConfig};
 
 const CODEX_PROVIDER_TYPE: &str = "openai-codex";
 const PROXY_TOKEN_ENV: &str = "KRAAI_EVAL_CODEX_PROXY_TOKEN";
+const EVAL_AGENT_PROFILES: &str = include_str!("eval-agents.toml");
 
 #[derive(Debug, Clone)]
 pub struct KraaiProviderConfigRequest {
@@ -24,7 +25,8 @@ impl KraaiProviderConfigRequest {
     pub(crate) fn digest(&self) -> Result<String> {
         let config = self.selected_config("http://eval-proxy.invalid/backend-api")?;
         Ok(crate::cache::hash_chunks(&[
-            toml::to_string(&config)?.into_bytes()
+            toml::to_string(&config)?.into_bytes(),
+            EVAL_AGENT_PROFILES.as_bytes().to_vec(),
         ]))
     }
 
@@ -44,6 +46,7 @@ impl KraaiProviderConfigRequest {
         fs::create_dir_all(&directory)?;
         let path = directory.join("providers.toml");
         fs::write(&path, toml::to_string_pretty(&config)?)?;
+        fs::write(directory.join("agents.toml"), EVAL_AGENT_PROFILES)?;
         Ok(path)
     }
 

@@ -1,0 +1,36 @@
+id = "journal-recovery"
+prompt = """
+Repair the persistent key-value journal in this repository. It handles live updates and clean restarts, but recovery after interrupted writes or redelivered records can lose newer values or make subsequent appends unreadable. Find and fix the recovery bugs while preserving the public API, wire format, and existing public tests. You may reorganize internals and add modules or tests. The crate must build offline without dependencies.
+
+Each Delivery has an arbitrary u64 id and a Put or Delete operation. The first delivery of an id applies exactly once. A repeated id with the identical operation is a no-op, including after other updates to that key and after any number of restarts. A repeated id with a different operation returns Conflict(id). IDs need not increase and zero is valid. Empty keys and values, Unicode, and embedded NUL characters are valid strings. Deleting a missing key still records the delivery id.
+
+Journal::append returns true for a new delivery and appends one encode_record frame. An identical duplicate returns false and appends nothing. On Conflict, neither stored values nor bytes may change. Journal::open replays complete frames in byte order using the same id rules. Complete duplicate frames already on disk remain in bytes(), although they do not reapply their operations. Conflicting complete frames make open return Conflict(id).
+
+The existing format is a little-endian u32 payload length followed by that many payload bytes. A payload has a little-endian u64 id, one-byte tag, and a length-prefixed UTF-8 key. Tag 1 is Put and adds a length-prefixed UTF-8 value; tag 2 is Delete and has no value. String lengths are little-endian u32 byte counts. No extra payload bytes are allowed. All encoded input strings and payloads fit u32 lengths. Keep encode_record byte-compatible.
+
+A trailing partial length header or a header whose payload extends past EOF is an uncommitted tail. Discard that tail from both replay and bytes(), so the next append starts immediately after the last complete frame and survives another restart. Never skip a complete malformed frame: return InvalidRecord with its starting byte offset for a bad tag, invalid UTF-8, impossible string lengths, missing required fields, or surplus payload bytes. An empty journal is valid. snapshot and get expose the current map. Only observable behavior is graded, with no required internal representation or module layout.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/retain-tail.patch",
+  "mutations/reapply-duplicates.patch",
+  "mutations/forget-recovered-ids.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern journal_recovery=\"$grade_dir/target/debug/libjournal_recovery.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

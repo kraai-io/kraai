@@ -5,3 +5,5 @@ target
 crate-sources*
 .codex
 result
+.venv/
+__pycache__/

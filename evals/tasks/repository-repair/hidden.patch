@@ -1,0 +1,231 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,226 @@
++use repository_repair::{Mount, Overrides, Resolved, RouteError, Router, Settings};
++
++fn defaults() -> Settings {
++    Settings {
++        root: "/srv/default".into(),
++        index: "index.html".into(),
++        cache_seconds: 90,
++    }
++}
++
++fn mount(prefix: &str, root: &str) -> Mount {
++    Mount {
++        prefix: prefix.into(),
++        settings: Overrides {
++            root: Some(root.into()),
++            ..Overrides::default()
++        },
++    }
++}
++
++#[test]
++fn mounts_match_segments_and_choose_the_longest_prefix() {
++    let router = Router::new(
++        defaults(),
++        vec![
++            mount("/docs", "/manual"),
++            mount("/docs/api", "/api"),
++            mount("/", "/fallback"),
++        ],
++    );
++    for (target, selected, asset) in [
++        ("/docs", "/docs", "/manual/index.html"),
++        ("/docs/one", "/docs", "/manual/one"),
++        ("/docstore/one", "/", "/fallback/docstore/one"),
++        ("/docs/api/a", "/docs/api", "/api/a"),
++        ("/docs/apiculture", "/docs", "/manual/apiculture"),
++        ("/", "/", "/fallback/index.html"),
++    ] {
++        let result = router.resolve(target, &Overrides::default()).unwrap();
++        assert_eq!(
++            (result.mount.as_deref(), result.asset.as_str()),
++            (Some(selected), asset),
++            "{target}"
++        );
++    }
++    let without_root = Router::new(defaults(), vec![mount("/docs", "/manual")]);
++    let result = without_root
++        .resolve("/docstore", &Overrides::default())
++        .unwrap();
++    assert_eq!(result.mount, None);
++    assert_eq!(result.asset, "/srv/default/docstore");
++}
++
++#[test]
++fn duplicate_mounts_preserve_declaration_order_and_distinct_mounts_do_not_depend_on_order() {
++    let duplicate = Router::new(
++        defaults(),
++        vec![mount("/a", "/first"), mount("/a", "/second")],
++    );
++    assert_eq!(
++        duplicate
++            .resolve("/a/x", &Overrides::default())
++            .unwrap()
++            .asset,
++        "/first/x"
++    );
++    let mounts = vec![mount("/", "/root"), mount("/a", "/a"), mount("/a/b", "/b")];
++    let first = Router::new(defaults(), mounts.clone());
++    let second = Router::new(defaults(), mounts.into_iter().rev().collect());
++    for target in ["/", "/ab/x", "/a/x", "/a/b", "/a/b/c", "/a/bc"] {
++        assert_eq!(
++            first.resolve(target, &Overrides::default()),
++            second.resolve(target, &Overrides::default())
++        );
++    }
++}
++
++#[test]
++fn settings_inherit_independently_for_all_presence_combinations() {
++    for mount_mask in 0..8 {
++        for request_mask in 0..8 {
++            let mounted = Overrides {
++                root: (mount_mask & 1 != 0).then(|| "/mount".into()),
++                index: (mount_mask & 2 != 0).then(|| "mount.htm".into()),
++                cache_seconds: (mount_mask & 4 != 0).then_some(30),
++            };
++            let request = Overrides {
++                root: (request_mask & 1 != 0).then(|| "/request".into()),
++                index: (request_mask & 2 != 0).then(|| "request.htm".into()),
++                cache_seconds: (request_mask & 4 != 0).then_some(0),
++            };
++            let expected_root = if request_mask & 1 != 0 {
++                "/request"
++            } else if mount_mask & 1 != 0 {
++                "/mount"
++            } else {
++                "/srv/default"
++            };
++            let expected_index = if request_mask & 2 != 0 {
++                "request.htm"
++            } else if mount_mask & 2 != 0 {
++                "mount.htm"
++            } else {
++                "index.html"
++            };
++            let expected_cache = if request_mask & 4 != 0 {
++                0
++            } else if mount_mask & 4 != 0 {
++                30
++            } else {
++                90
++            };
++            let router = Router::new(
++                defaults(),
++                vec![Mount {
++                    prefix: "/docs".into(),
++                    settings: mounted,
++                }],
++            );
++            assert_eq!(
++                router.resolve("/docs/", &request),
++                Ok(Resolved {
++                    mount: Some("/docs".into()),
++                    asset: format!("{expected_root}/{expected_index}"),
++                    cache_seconds: expected_cache,
++                    query: None,
++                }),
++                "mount={mount_mask}, request={request_mask}"
++            );
++        }
++    }
++}
++
++#[test]
++fn decoded_normalized_paths_drive_selection_and_queries_are_opaque() {
++    let router = Router::new(
++        defaults(),
++        vec![mount("/docs/api", "/api"), mount("/café", "/unicode")],
++    );
++    for (target, asset) in [
++        ("//docs/./api%2Fa.txt", "/api/a.txt"),
++        ("/%64ocs/api///", "/api/index.html"),
++        ("/caf%C3%A9/file", "/unicode/file"),
++        ("/%252e%252e/file", "/srv/default/%2e%2e/file"),
++        ("/one/./two", "/srv/default/one/two"),
++        ("/one%2F", "/srv/default/one/index.html"),
++    ] {
++        assert_eq!(
++            router.resolve(target, &Overrides::default()).unwrap().asset,
++            asset,
++            "{target}"
++        );
++    }
++    let result = router
++        .resolve("/docs/api/?bad=%Q0&path=..\\#?", &Overrides::default())
++        .unwrap();
++    assert_eq!(result.query.as_deref(), Some("bad=%Q0&path=..\\#?"));
++    assert_eq!(result.asset, "/api/index.html");
++    assert_eq!(
++        router.resolve("/x?", &Overrides::default()).unwrap().query,
++        Some(String::new())
++    );
++    let root = Router::new(
++        Settings {
++            root: "/".into(),
++            ..defaults()
++        },
++        vec![],
++    );
++    assert_eq!(
++        root.resolve("/a/b", &Overrides::default()).unwrap().asset,
++        "/a/b"
++    );
++}
++
++#[test]
++fn traversal_nul_and_backslashes_are_rejected_after_decoding() {
++    let router = Router::new(defaults(), vec![mount("/docs", "/manual")]);
++    for target in [
++        "/../x",
++        "/%2e%2e/x",
++        "/.%2E/x",
++        "/docs%2f..%2fsecret",
++        "/a/%00/b",
++        "/a%5Cb",
++        "/a\\b",
++        "/a\0b",
++    ] {
++        assert_eq!(
++            router.resolve(target, &Overrides::default()),
++            Err(RouteError::UnsafePath),
++            "{target:?}"
++        );
++    }
++    assert!(
++        router
++            .resolve("/..hidden/file", &Overrides::default())
++            .is_ok()
++    );
++    assert!(router.resolve("/file..", &Overrides::default()).is_ok());
++}
++
++#[test]
++fn errors_follow_the_documented_validation_order() {
++    let router = Router::new(defaults(), vec![]);
++    for target in ["relative%Q", "/%Q#fragment", ""] {
++        assert_eq!(
++            router.resolve(target, &Overrides::default()),
++            Err(RouteError::InvalidTarget)
++        );
++    }
++    for target in ["/%", "/%1", "/%Q0", "/../%Q0", "/%FF/%Q0"] {
++        assert_eq!(
++            router.resolve(target, &Overrides::default()),
++            Err(RouteError::InvalidEscape),
++            "{target}"
++        );
++    }
++    for target in ["/%FF", "/%C3", "/../%FF", "/%00%FF"] {
++        assert_eq!(
++            router.resolve(target, &Overrides::default()),
++            Err(RouteError::InvalidUtf8),
++            "{target}"
++        );
++    }
++}

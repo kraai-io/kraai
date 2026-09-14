@@ -1,0 +1,11 @@
+diff --git a/src/store.rs b/src/store.rs
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -21,6 +21,7 @@
+     }
+
+     pub fn apply(&mut self, delivery: &Delivery) -> Result<bool, JournalError> {
++        self.update(&delivery.operation);
+         if let Some(previous) = self.seen.get(&delivery.id) {
+             return if previous == &delivery.operation {
+                 Ok(false)

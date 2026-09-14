@@ -1,0 +1,40 @@
+diff --git a/src/journal.rs b/src/journal.rs
+--- a/src/journal.rs
++++ b/src/journal.rs
+@@ -9,9 +9,9 @@
+
+ impl Journal {
+     pub fn open(bytes: &[u8]) -> Result<Self, JournalError> {
+-        let (store, _committed) = replay::recover(bytes)?;
++        let (store, committed) = replay::recover(bytes)?;
+         Ok(Self {
+-            bytes: bytes.to_vec(),
++            bytes: bytes[..committed].to_vec(),
+             store,
+         })
+     }
+diff --git a/src/replay.rs b/src/replay.rs
+--- a/src/replay.rs
++++ b/src/replay.rs
+@@ -13,7 +13,7 @@
+         };
+         let delivery =
+             codec::decode_payload(payload).ok_or(JournalError::InvalidRecord { offset })?;
+-        store.restore(&delivery);
++        store.apply(&delivery)?;
+         offset = end;
+     }
+     Ok((store, offset))
+diff --git a/src/store.rs b/src/store.rs
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -32,9 +32,4 @@
+         self.seen.insert(delivery.id, delivery.operation.clone());
+         Ok(true)
+     }
+-
+-    pub fn restore(&mut self, delivery: &Delivery) {
+-        self.update(&delivery.operation);
+-        self.seen.insert(delivery.id, delivery.operation.clone());
+-    }
+ }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -11,6 +12,8 @@ pub struct UsageMetrics {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
 }
 
 impl UsageMetrics {
@@ -19,6 +22,7 @@ impl UsageMetrics {
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
     }
 
     pub(crate) fn accumulate(&mut self, other: &Self) {
@@ -26,6 +30,9 @@ impl UsageMetrics {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(other.cache_write_tokens);
         self.cache_read_tokens = self
             .cache_read_tokens
             .saturating_add(other.cache_read_tokens);
@@ -44,6 +51,10 @@ pub struct HarnessMetrics {
     pub final_context_tokens: Option<u64>,
     #[serde(default)]
     pub usage: Option<UsageMetrics>,
+    #[serde(default)]
+    pub request_costs: BTreeMap<kraai_types::MessageId, kraai_types::RequestUsage>,
+    #[serde(default)]
+    pub request_costs_complete: bool,
 }
 
 impl HarnessMetrics {
@@ -65,7 +76,7 @@ impl HarnessMetrics {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxyMetrics {
     pub requests: u64,
     pub successful_requests: u64,
@@ -74,9 +85,15 @@ pub struct ProxyMetrics {
     pub client_disconnects: u64,
     pub duration_ms: u128,
     pub usage: UsageMetrics,
+    #[serde(default)]
+    pub unrecorded_requests: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<crate::RequestAccounting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvaluationMetrics {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyMetrics>,
@@ -86,6 +103,17 @@ pub struct EvaluationMetrics {
 
 impl EvaluationMetrics {
     pub fn usage(&self) -> Option<&UsageMetrics> {
+        if self.proxy.as_ref().is_some_and(|proxy| {
+            proxy.unrecorded_requests != 0
+                || proxy.accounting_error.is_some()
+                || proxy
+                    .accounting
+                    .as_ref()
+                    .is_some_and(|accounting| accounting.complete_context().is_none())
+        }) {
+            return None;
+        }
+
         self.proxy
             .as_ref()
             .map(|metrics| &metrics.usage)
@@ -118,6 +146,8 @@ mod tests {
                 ..ProxyMetrics::default()
             }),
             harness: Some(HarnessMetrics {
+                request_costs: BTreeMap::new(),
+                request_costs_complete: false,
                 schema_version: 1,
                 turns: None,
                 script_executions: None,
@@ -135,6 +165,55 @@ mod tests {
         )?;
 
         color_eyre::eyre::ensure!(metrics.client_disconnects == 0);
+        Ok(())
+    }
+
+    #[test]
+    fn loads_native_request_costs_keyed_by_message_id() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-native-metrics-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let path = root.join("harness-metrics.json");
+        let emitted = serde_json::json!({
+            "schema_version": 1,
+            "turns": 1,
+            "script_executions": 1,
+            "final_context_tokens": 2243,
+            "usage": {
+                "total_tokens": 2243, "input_tokens": 2108, "output_tokens": 135,
+                "reasoning_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0
+            },
+            "request_costs": {
+                "request": {
+                    "message_id": "request", "provider_id": "openai-codex",
+                    "model_id": "gpt-5.6-sol-low", "started_at": 1789315143614_u64,
+                    "subscription": true, "unpriced_attempts": 0,
+                    "usage": {
+                        "total_tokens": 2243, "input_tokens": 2108, "output_tokens": 135,
+                        "reasoning_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+                        "cost": {
+                            "amount": 11132000, "source": "models.dev/openai/gpt-5.6-sol",
+                            "priced_at": 1789315143, "upstream": null,
+                            "rates": {
+                                "input": 4000000000_u64, "output": 20000000000_u64,
+                                "cache_read": 400000000, "cache_write": 5000000000_u64,
+                                "reasoning": null
+                            }
+                        }
+                    }
+                }
+            },
+            "request_costs_complete": true
+        });
+        fs::write(&path, serde_json::to_vec(&emitted)?)?;
+        let metrics = HarnessMetrics::load(&path)?
+            .ok_or_else(|| color_eyre::eyre::eyre!("native metrics were discarded"))?;
+        color_eyre::eyre::ensure!(metrics.request_costs.len() == 1);
+        color_eyre::eyre::ensure!(metrics.request_costs_complete);
+        color_eyre::eyre::ensure!(serde_json::to_value(&metrics)? == emitted);
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }

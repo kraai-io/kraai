@@ -63,10 +63,10 @@ lint-fix:
 lint-fix-dirty:
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty -- {{ clippy-flags }}
 
-check: generate-cargo-nix format lint test
+test-harbor:
+    uv run --locked --python python3.12 --project evals/harbor python -m unittest discover -s evals/harbor/tests
 
-eval-open-close-files model provider attempt="0":
-    @evals/run-open-close-files run '{{ model }}' '{{ provider }}' --attempt '{{ attempt }}'
+check: generate-cargo-nix format lint test test-harbor
 
-eval-open-close-files-suite model provider attempts="3" start_attempt="0":
-    @evals/run-open-close-files suite '{{ model }}' '{{ provider }}' --attempts '{{ attempts }}' --start-attempt '{{ start_attempt }}'
+eval *args:
+    nix run .#kraai-eval -- {{ args }}

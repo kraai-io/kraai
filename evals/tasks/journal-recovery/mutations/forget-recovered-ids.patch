@@ -1,0 +1,12 @@
+diff --git a/src/replay.rs b/src/replay.rs
+--- a/src/replay.rs
++++ b/src/replay.rs
+@@ -16,5 +16,7 @@
+         store.apply(&delivery)?;
+         offset = end;
+     }
+-    Ok((store, offset))
++    let mut fresh = Store::default();
++    fresh.values = store.values;
++    Ok((fresh, offset))
+ }

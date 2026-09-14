@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, bail};
 use futures::{Stream, StreamExt};
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
+use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method};
 use serde::Serialize;
@@ -21,6 +22,16 @@ use tokio::sync::oneshot;
 use crate::ProxyRecord;
 use crate::metrics::{ProxyMetrics, UsageMetrics};
 
+mod headers;
+pub(crate) mod service;
+mod telemetry;
+mod usage;
+
+use headers::{forward_request_headers, response_head};
+use telemetry::{CacheState, write_event};
+use usage::usage_from_response_body;
+
+const PROXY_TRANSPORT_REVISION: u32 = 1;
 const OPENAI_UPSTREAM: &str = "https://api.openai.com";
 const CHATGPT_UPSTREAM: &str = "https://chatgpt.com";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -31,6 +42,7 @@ const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
     credentials: ProxyCredentialRequest,
+    pricing: crate::PricingOptions,
     max_requests: u64,
 }
 
@@ -42,6 +54,7 @@ enum ProxyCredentialRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelProxyIdentity {
+    transport_revision: u32,
     kind: String,
     upstream: String,
     allowed_paths: Vec<String>,
@@ -54,6 +67,7 @@ impl ModelProxyRequest {
     pub fn openai(credential_env: String, max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::OpenAiApiKey { credential_env },
+            pricing: crate::PricingOptions::default(),
             max_requests,
         }
     }
@@ -61,8 +75,18 @@ impl ModelProxyRequest {
     pub fn codex_subscription(max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::CodexSubscription,
+            pricing: crate::PricingOptions::default(),
             max_requests,
         }
+    }
+
+    pub fn with_pricing(mut self, pricing: crate::PricingOptions) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
+    pub(crate) fn pricing(&self) -> &crate::PricingOptions {
+        &self.pricing
     }
 
     pub(crate) fn is_codex_subscription(&self) -> bool {
@@ -72,6 +96,7 @@ impl ModelProxyRequest {
     pub(crate) fn identity(&self) -> Result<ModelProxyIdentity> {
         let resolved = self.resolve_credentials()?;
         Ok(ModelProxyIdentity {
+            transport_revision: PROXY_TRANSPORT_REVISION,
             kind: resolved.kind().to_string(),
             upstream: resolved.upstream().to_string(),
             allowed_paths: resolved.allowed_paths().into_iter().collect(),
@@ -82,11 +107,20 @@ impl ModelProxyRequest {
     }
 
     pub(crate) fn start(&self, log_path: PathBuf) -> Result<ModelProxy> {
+        self.start_at(
+            log_path,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+    }
+
+    fn start_at(&self, log_path: PathBuf, listen_address: SocketAddr) -> Result<ModelProxy> {
+        let pricing = self.pricing.freeze()?;
         if self.max_requests == 0 {
             bail!("model proxy max_requests must be greater than zero");
         }
         let credentials = self.resolve_credentials()?;
-        ModelProxy::start(ProxyServerConfig {
+        let mut proxy = ModelProxy::start(ProxyServerConfig {
+            listen_address,
             upstream: credentials.upstream().to_string(),
             allowed_paths: credentials.allowed_paths(),
             kind: credentials.kind().to_string(),
@@ -94,7 +128,9 @@ impl ModelProxyRequest {
             credentials,
             log_path,
             max_requests: self.max_requests,
-        })
+        })?;
+        proxy.pricing = pricing;
+        Ok(proxy)
     }
 
     fn resolve_credentials(&self) -> Result<UpstreamCredentials> {
@@ -202,14 +238,18 @@ pub(crate) struct ModelProxy {
     record: ProxyRecord,
     base_path: String,
     metrics: Arc<Mutex<ProxyMetrics>>,
+    log_path: PathBuf,
+    pricing: crate::PricingOptions,
 }
 
 impl ModelProxy {
     fn start(config: ProxyServerConfig) -> Result<Self> {
+        let log_path = config.log_path.clone();
         let token = random_token()?;
         let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
         let identity_paths = config.allowed_paths.iter().cloned().collect::<Vec<_>>();
         let record = ProxyRecord {
+            transport_revision: PROXY_TRANSPORT_REVISION,
             kind: config.kind.clone(),
             upstream: config.upstream.clone(),
             allowed_paths: identity_paths,
@@ -244,6 +284,8 @@ impl ModelProxy {
             .wrap_err("model proxy did not start")??;
         Ok(Self {
             address,
+            log_path,
+            pricing: crate::PricingOptions::default(),
             token,
             shutdown: Some(shutdown_tx),
             thread: Some(thread),
@@ -294,7 +336,34 @@ impl ModelProxy {
 
     pub(crate) fn finish(mut self) -> Result<ProxyMetrics> {
         self.shutdown_and_join();
-        self.metrics()
+        let mut metrics = self.metrics()?;
+        match self.finish_accounting(&metrics) {
+            Ok(accounting) => metrics.accounting = Some(accounting),
+            Err(error) => {
+                let message = format!("{error:#}");
+                let path = self
+                    .log_path
+                    .with_file_name("request-accounting-error.json");
+                let diagnostic = serde_json::json!({ "error": message });
+                if let Err(write_error) = fs::write(path, diagnostic.to_string()) {
+                    tracing_fallback(&write_error.to_string());
+                }
+                metrics.accounting_error = Some(message);
+            }
+        }
+        Ok(metrics)
+    }
+
+    fn finish_accounting(&self, metrics: &ProxyMetrics) -> Result<crate::RequestAccounting> {
+        let accounting = crate::analyze_requests(
+            &self.log_path,
+            metrics.requests.saturating_add(metrics.unrecorded_requests),
+            &self.pricing,
+        )?;
+        let path = self.log_path.with_file_name("request-accounting.json");
+        fs::write(&path, serde_json::to_vec_pretty(&accounting)?)
+            .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        Ok(accounting)
     }
 
     fn shutdown_and_join(&mut self) {
@@ -314,6 +383,7 @@ impl Drop for ModelProxy {
 }
 
 struct ProxyServerConfig {
+    listen_address: SocketAddr,
     upstream: String,
     credentials: UpstreamCredentials,
     allowed_paths: BTreeSet<String>,
@@ -321,16 +391,6 @@ struct ProxyServerConfig {
     base_path: String,
     log_path: PathBuf,
     max_requests: u64,
-}
-
-#[derive(Serialize)]
-struct ProxyEvent<'a> {
-    timestamp_ms: u128,
-    method: &'a str,
-    path: &'a str,
-    status: u16,
-    delivery: DownstreamDelivery,
-    duration_ms: u128,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -343,6 +403,19 @@ enum DownstreamDelivery {
 struct ForwardOutcome {
     status: u16,
     delivery: DownstreamDelivery,
+    usage: Option<UsageMetrics>,
+    response_cache_state: CacheState,
+}
+
+impl ForwardOutcome {
+    fn rejected(status: u16) -> Self {
+        Self {
+            status,
+            delivery: DownstreamDelivery::Complete,
+            usage: None,
+            response_cache_state: CacheState::default(),
+        }
+    }
 }
 
 struct RelayedResponse {
@@ -357,14 +430,13 @@ async fn run_server(
     mut shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<SocketAddr>>,
 ) -> Result<()> {
-    let listener =
-        match TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                let _ = ready.send(Err(error.into()));
-                return Ok(());
-            }
-        };
+    let listener = match TcpListener::bind(config.listen_address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let _ = ready.send(Err(error.into()));
+            return Ok(());
+        }
+    };
     let address = listener.local_addr()?;
     let log = Arc::new(Mutex::new(File::create(&config.log_path)?));
     let state = Arc::new(ProxyState {
@@ -379,6 +451,7 @@ async fn run_server(
         log,
         max_requests: config.max_requests,
         request_count: AtomicU64::new(0),
+        started_requests: AtomicU64::new(0),
         metrics,
     });
     if ready.send(Ok(address)).is_err() {
@@ -409,6 +482,15 @@ async fn run_server(
         tasks.abort_all();
     }
     while tasks.join_next().await.is_some() {}
+    let mut metrics = state
+        .metrics
+        .lock()
+        .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
+    metrics.unrecorded_requests = state
+        .started_requests
+        .load(Ordering::Relaxed)
+        .saturating_sub(metrics.requests);
+    drop(metrics);
     Ok(())
 }
 
@@ -421,6 +503,7 @@ struct ProxyState {
     log: Arc<Mutex<File>>,
     max_requests: u64,
     request_count: AtomicU64,
+    started_requests: AtomicU64,
     metrics: Arc<Mutex<ProxyMetrics>>,
 }
 
@@ -428,7 +511,7 @@ struct ParsedRequest {
     method: String,
     target: String,
     path: String,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, HeaderValue)>,
     body: Vec<u8>,
 }
 
@@ -441,6 +524,7 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Res
             return Err(error);
         }
     };
+    state.started_requests.fetch_add(1, Ordering::Relaxed);
     let outcome = forward_request(&mut stream, &state, &request).await?;
     let duration = started.elapsed();
     record_request_metrics(&state, &outcome, duration)?;
@@ -461,72 +545,55 @@ where
 {
     if !state.allowed_paths.contains(&request.path) {
         write_error(stream, 404, "Not Found").await?;
-        return Ok(ForwardOutcome {
-            status: 404,
-            delivery: DownstreamDelivery::Complete,
-        });
+        return Ok(ForwardOutcome::rejected(404));
     }
     let authorized = request
         .headers
         .iter()
         .find(|(name, _)| name == "authorization")
-        .is_some_and(|(_, value)| constant_time_eq(value, &format!("Bearer {}", state.token)));
+        .is_some_and(|(_, value)| {
+            constant_time_eq(
+                value.as_bytes(),
+                format!("Bearer {}", state.token).as_bytes(),
+            )
+        });
     if !authorized {
         write_error(stream, 401, "Unauthorized").await?;
-        return Ok(ForwardOutcome {
-            status: 401,
-            delivery: DownstreamDelivery::Complete,
-        });
+        return Ok(ForwardOutcome::rejected(401));
     }
     let method = Method::from_bytes(request.method.as_bytes())?;
     if !matches!(method, Method::GET | Method::POST) {
         write_error(stream, 405, "Method Not Allowed").await?;
-        return Ok(ForwardOutcome {
-            status: 405,
-            delivery: DownstreamDelivery::Complete,
-        });
+        return Ok(ForwardOutcome::rejected(405));
     }
     if state.request_count.fetch_add(1, Ordering::Relaxed) >= state.max_requests {
         write_error(stream, 429, "Proxy Request Limit Exceeded").await?;
-        return Ok(ForwardOutcome {
-            status: 429,
-            delivery: DownstreamDelivery::Complete,
-        });
+        return Ok(ForwardOutcome::rejected(429));
     }
     let response = match send_upstream(state, method, request).await {
         Ok(response) => response,
         Err(error) => {
             write_error(stream, 502, "Bad Gateway").await?;
             tracing_fallback(&format!("model proxy upstream request failed: {error}"));
-            return Ok(ForwardOutcome {
-                status: 502,
-                delivery: DownstreamDelivery::Complete,
-            });
+            return Ok(ForwardOutcome::rejected(502));
         }
     };
     let status = response.status();
-    let reason = status.canonical_reason().unwrap_or("Upstream Response");
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream");
+    let response_cache_state = CacheState::from_response(response.headers());
     let mut delivery = DownstreamDelivery::Complete;
     write_downstream(
         stream,
         &mut delivery,
-        format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-            status.as_u16(), reason, content_type
-        )
-        .as_bytes(),
+        &response_head(status, response.headers()),
     )
     .await?;
     let relayed = relay_response(stream, delivery, response.bytes_stream()).await?;
-    record_usage_metrics(state, &relayed.body)?;
+    let usage = record_usage_metrics(state, &relayed.body)?;
     Ok(ForwardOutcome {
         status: status.as_u16(),
         delivery: relayed.delivery,
+        usage,
+        response_cache_state,
     })
 }
 
@@ -568,9 +635,9 @@ where
     })
 }
 
-fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<()> {
+fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<Option<UsageMetrics>> {
     let Some(usage) = usage_from_response_body(body) else {
-        return Ok(());
+        return Ok(None);
     };
     let mut metrics = state
         .metrics
@@ -578,7 +645,7 @@ fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<()> {
         .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
     metrics.usage.accumulate(&usage);
     drop(metrics);
-    Ok(())
+    Ok(Some(usage))
 }
 
 async fn write_downstream<W>(
@@ -635,65 +702,6 @@ fn record_request_metrics(
     Ok(())
 }
 
-fn usage_from_response_body(body: &[u8]) -> Option<UsageMetrics> {
-    let text = std::str::from_utf8(body).ok()?;
-    let mut usage = None;
-    for line in text.lines() {
-        let payload = line.strip_prefix("data:").map(str::trim).unwrap_or(line);
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
-            continue;
-        };
-        if let Some(candidate) = usage_from_json(&value) {
-            usage = Some(candidate);
-        }
-    }
-    usage
-}
-
-fn usage_from_json(value: &serde_json::Value) -> Option<UsageMetrics> {
-    let usage = value
-        .get("response")
-        .and_then(|response| response.get("usage"))
-        .or_else(|| value.get("usage"))?;
-    let cached = nested_u64(usage, "input_tokens_details", "cached_tokens")
-        .or_else(|| nested_u64(usage, "prompt_tokens_details", "cached_tokens"))
-        .unwrap_or_default();
-    let reasoning = nested_u64(usage, "output_tokens_details", "reasoning_tokens")
-        .or_else(|| nested_u64(usage, "completion_tokens_details", "reasoning_tokens"))
-        .unwrap_or_default();
-    let raw_input = usage
-        .get("input_tokens")
-        .or_else(|| usage.get("prompt_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_default();
-    let raw_output = usage
-        .get("output_tokens")
-        .or_else(|| usage.get("completion_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_default();
-    let total = usage
-        .get("total_tokens")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| raw_input.saturating_add(raw_output));
-    (total != 0 || raw_input != 0 || raw_output != 0).then_some(UsageMetrics {
-        total_tokens: total,
-        input_tokens: raw_input.saturating_sub(cached),
-        output_tokens: raw_output.saturating_sub(reasoning),
-        reasoning_tokens: reasoning,
-        cache_read_tokens: cached,
-    })
-}
-
-fn nested_u64(value: &serde_json::Value, object: &str, field: &str) -> Option<u64> {
-    value
-        .get(object)
-        .and_then(|details| details.get(field))
-        .and_then(serde_json::Value::as_u64)
-}
-
 async fn send_upstream(
     state: &ProxyState,
     method: Method,
@@ -729,24 +737,16 @@ fn upstream_request(
     method: Method,
     request: &ParsedRequest,
 ) -> reqwest::RequestBuilder {
-    let mut builder = state.client.request(
+    let builder = state.client.request(
         method,
         format!("{}{}", state.upstream.trim_end_matches('/'), request.target),
     );
-    for (name, value) in &request.headers {
-        if matches!(
-            name.as_str(),
-            "accept"
-                | "content-type"
-                | "openai-beta"
-                | "user-agent"
-                | "session_id"
-                | "x-client-request-id"
-        ) {
-            builder = builder.header(name, value);
-        }
-    }
-    builder.body(request.body.clone())
+    forward_request_headers(
+        builder,
+        request,
+        matches!(state.credentials, UpstreamCredentials::Codex { .. }),
+    )
+    .body(request.body.clone())
 }
 
 async fn read_request(stream: &mut TcpStream) -> Result<ParsedRequest> {
@@ -762,35 +762,62 @@ async fn read_request(stream: &mut TcpStream) -> Result<ParsedRequest> {
         }
         bytes.extend_from_slice(chunk.get(..read).unwrap_or_default());
         if let Some(position) = find_header_end(&bytes) {
+            if position >= MAX_HEADER_BYTES {
+                bail!("proxy request headers exceed limit");
+            }
             break position;
         }
     };
-    let header_text = std::str::from_utf8(bytes.get(..header_end).unwrap_or_default())?;
-    let mut lines = header_text.split("\r\n");
+    let mut lines = bytes
+        .get(..header_end)
+        .unwrap_or_default()
+        .split_inclusive(|byte| *byte == b'\n')
+        .map(|line| {
+            if line.ends_with(b"\n") {
+                line.strip_suffix(b"\r\n")
+                    .ok_or_else(|| color_eyre::eyre::eyre!("invalid proxy request line ending"))
+            } else {
+                Ok(line)
+            }
+        });
     let request_line = lines
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing request line"))?;
-    let mut request_parts = request_line.split_whitespace();
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing request line"))??;
+    if !request_line.is_ascii() {
+        bail!("invalid proxy request line");
+    }
+    let request_line = std::str::from_utf8(request_line)?;
+    let mut request_parts = request_line.split(' ');
     let method = request_parts.next().unwrap_or_default().to_owned();
     let target = request_parts.next().unwrap_or_default().to_owned();
     let version = request_parts.next().unwrap_or_default();
-    if method.is_empty() || !target.starts_with('/') || version != "HTTP/1.1" {
+    if Method::from_bytes(method.as_bytes()).is_err()
+        || !target.starts_with('/')
+        || target.bytes().any(|byte| byte <= b' ' || byte == 0x7f)
+        || version != "HTTP/1.1"
+        || request_parts.next().is_some()
+    {
         bail!("invalid proxy request line");
     }
     let path = target.split('?').next().unwrap_or_default().to_owned();
     let mut headers = Vec::new();
     let mut content_length = 0_usize;
     for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            bail!("invalid proxy request header");
-        };
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim().to_owned();
+        let line = line?;
+        let separator = line
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or_else(|| color_eyre::eyre::eyre!("invalid proxy request header"))?;
+        let (name, value) = line.split_at(separator);
+        let name = HeaderName::from_bytes(name)?.as_str().to_owned();
+        let value = HeaderValue::from_bytes(trim_header_whitespace(
+            value.strip_prefix(b":").unwrap_or_default(),
+        ))?;
         if name == "transfer-encoding" {
             bail!("chunked proxy requests are not supported");
         }
         if name == "content-length" {
-            content_length = value.parse()?;
+            content_length = value.to_str()?.parse()?;
             if content_length > MAX_REQUEST_BODY_BYTES {
                 bail!("proxy request body exceeds limit");
             }
@@ -820,6 +847,16 @@ async fn read_request(stream: &mut TcpStream) -> Result<ParsedRequest> {
     })
 }
 
+fn trim_header_whitespace(mut bytes: &[u8]) -> &[u8] {
+    while let [b' ' | b'\t', rest @ ..] = bytes {
+        bytes = rest;
+    }
+    while let [rest @ .., b' ' | b'\t'] = bytes {
+        bytes = rest;
+    }
+    bytes
+}
+
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
@@ -841,38 +878,12 @@ where
     Ok(())
 }
 
-fn write_event(
-    state: &ProxyState,
-    request: &ParsedRequest,
-    outcome: &ForwardOutcome,
-    duration: Duration,
-) -> Result<()> {
-    let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let event = ProxyEvent {
-        timestamp_ms,
-        method: &request.method,
-        path: &request.path,
-        status: outcome.status,
-        delivery: outcome.delivery,
-        duration_ms: duration.as_millis(),
-    };
-    let mut log = state
-        .log
-        .lock()
-        .map_err(|error| color_eyre::eyre::eyre!("proxy log mutex poisoned: {error}"))?;
-    serde_json::to_writer(&mut *log, &event)?;
-    log.write_all(b"\n")?;
-    log.flush()?;
-    drop(log);
-    Ok(())
-}
-
-fn constant_time_eq(left: &str, right: &str) -> bool {
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let mut difference = left.len() ^ right.len();
     let max_len = left.len().max(right.len());
     for index in 0..max_len {
-        let left = left.as_bytes().get(index).copied().unwrap_or_default();
-        let right = right.as_bytes().get(index).copied().unwrap_or_default();
+        let left = left.get(index).copied().unwrap_or_default();
+        let right = right.get(index).copied().unwrap_or_default();
         difference |= usize::from(left ^ right);
     }
     difference == 0
@@ -912,410 +923,4 @@ fn tracing_fallback(message: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use color_eyre::eyre::ensure;
-    use kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions;
-
-    #[tokio::test]
-    async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() -> Result<()> {
-        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        let upstream_address = upstream.local_addr()?;
-        let upstream_task = tokio::spawn(async move {
-            let (mut stream, _) = upstream.accept().await?;
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 1024];
-                let read = stream.read(&mut chunk).await?;
-                if read == 0 {
-                    bail!("upstream client disconnected before headers");
-                }
-                request.extend_from_slice(chunk.get(..read).unwrap_or_default());
-                if find_header_end(&request).is_some() {
-                    break;
-                }
-            }
-            let request = String::from_utf8(request)?;
-            ensure!(
-                request.contains("authorization: Bearer real-secret")
-                    || request.contains("Authorization: Bearer real-secret"),
-                "proxy did not inject upstream credential"
-            );
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 27\r\nConnection: close\r\n\r\ndata: first\n\ndata: second\n\n",
-                )
-                .await?;
-            stream.shutdown().await?;
-            Ok::<_, color_eyre::Report>(())
-        });
-
-        let root =
-            std::env::temp_dir().join(format!("kraai-eval-proxy-{}", ulid::Ulid::generate()));
-        fs::create_dir(&root)?;
-        let log_path = root.join("proxy.events.jsonl");
-        let proxy = ModelProxy::start(ProxyServerConfig {
-            upstream: format!("http://{upstream_address}"),
-            credentials: UpstreamCredentials::OpenAiApiKey {
-                credential: String::from("real-secret"),
-                credential_env: String::from("TEST_API_KEY"),
-            },
-            allowed_paths: BTreeSet::from([String::from("/v1/chat/completions")]),
-            kind: String::from("openai"),
-            base_path: String::from("/v1"),
-            log_path: log_path.clone(),
-            max_requests: 1,
-        })?;
-        let client = Client::new();
-
-        let unauthorized = client
-            .post(format!("{}/chat/completions", proxy.base_url()))
-            .send()
-            .await?;
-        ensure!(
-            unauthorized.status() == 401,
-            "unauthorized request was accepted"
-        );
-
-        let forbidden = client
-            .get(format!("http://{}/v1/models", proxy.address))
-            .bearer_auth(&proxy.token)
-            .send()
-            .await?;
-        ensure!(forbidden.status() == 404, "unallowed path was forwarded");
-
-        let response = client
-            .post(format!("{}/chat/completions", proxy.base_url()))
-            .bearer_auth(&proxy.token)
-            .header("content-type", "application/json")
-            .body("{}")
-            .send()
-            .await?;
-        ensure!(response.status() == 200, "allowed request failed");
-        ensure!(
-            response.text().await? == "data: first\n\ndata: second\n\n",
-            "streamed response changed"
-        );
-        let limited = client
-            .post(format!("{}/chat/completions", proxy.base_url()))
-            .bearer_auth(&proxy.token)
-            .body("{}")
-            .send()
-            .await?;
-        ensure!(
-            limited.status() == 429,
-            "proxy request budget was not enforced"
-        );
-        let metrics_handle = Arc::clone(&proxy.metrics);
-        upstream_task.await??;
-        drop(proxy);
-        let metrics = metrics_handle
-            .lock()
-            .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?
-            .clone();
-        ensure!(
-            metrics.requests == 4,
-            "proxy request count was not captured"
-        );
-        ensure!(
-            metrics.successful_requests == 1 && metrics.failed_requests == 3,
-            "proxy status metrics were not captured"
-        );
-        let log = fs::read_to_string(log_path)?;
-        ensure!(
-            log.contains("/v1/chat/completions"),
-            "proxy request was not logged"
-        );
-        ensure!(
-            !log.contains("real-secret"),
-            "upstream credential leaked into logs"
-        );
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Result<()> {
-        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        let upstream_address = upstream.local_addr()?;
-        let (accepted_tx, accepted_rx) = oneshot::channel();
-        let upstream_task = tokio::spawn(async move {
-            let (mut stream, _) = upstream.accept().await?;
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 1024];
-                let read = stream.read(&mut chunk).await?;
-                if read == 0 {
-                    bail!("upstream client disconnected before headers");
-                }
-                request.extend_from_slice(chunk.get(..read).unwrap_or_default());
-                if find_header_end(&request).is_some() {
-                    break;
-                }
-            }
-            let _ = accepted_tx.send(());
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let body = b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n";
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            stream.write_all(body).await?;
-            stream.shutdown().await?;
-            Ok::<_, color_eyre::Report>(())
-        });
-
-        let root = std::env::temp_dir().join(format!(
-            "kraai-eval-proxy-finish-drain-{}",
-            ulid::Ulid::generate()
-        ));
-        fs::create_dir(&root)?;
-        let log_path = root.join("proxy.events.jsonl");
-        let proxy = ModelProxy::start(ProxyServerConfig {
-            upstream: format!("http://{upstream_address}"),
-            credentials: UpstreamCredentials::OpenAiApiKey {
-                credential: String::from("real-secret"),
-                credential_env: String::from("TEST_API_KEY"),
-            },
-            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
-            kind: String::from("openai"),
-            base_path: String::from("/v1"),
-            log_path: log_path.clone(),
-            max_requests: 1,
-        })?;
-        let mut downstream = std::net::TcpStream::connect(proxy.address)?;
-        downstream.write_all(
-            format!(
-                "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
-                proxy.address, proxy.token
-            )
-            .as_bytes(),
-        )?;
-        accepted_rx.await?;
-
-        let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
-        upstream_task.await??;
-        ensure!(metrics.requests == 1 && metrics.successful_requests == 1);
-        ensure!(metrics.usage.total_tokens == 30);
-        ensure!(fs::read_to_string(&log_path)?.contains("/v1/responses"));
-        drop(downstream);
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()> {
-        let root = std::env::temp_dir().join(format!(
-            "kraai-eval-proxy-disconnect-{}",
-            ulid::Ulid::generate()
-        ));
-        fs::create_dir(&root)?;
-        let log_path = root.join("proxy.events.jsonl");
-        let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
-        let state = ProxyState {
-            upstream: String::from("http://proxy-test.invalid"),
-            credentials: UpstreamCredentials::OpenAiApiKey {
-                credential: String::from("real-secret"),
-                credential_env: String::from("TEST_API_KEY"),
-            },
-            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
-            token: String::from("client-token"),
-            client: Client::builder().redirect(Policy::none()).build()?,
-            log: Arc::new(Mutex::new(File::create(&log_path)?)),
-            max_requests: 1,
-            request_count: AtomicU64::new(0),
-            metrics: Arc::clone(&metrics),
-        };
-        let request = ParsedRequest {
-            method: String::from("POST"),
-            target: String::from("/v1/responses"),
-            path: String::from("/v1/responses"),
-            headers: vec![
-                (
-                    String::from("authorization"),
-                    String::from("Bearer client-token"),
-                ),
-                (
-                    String::from("content-type"),
-                    String::from("application/json"),
-                ),
-            ],
-            body: b"{}".to_vec(),
-        };
-        let (mut downstream, downstream_peer) = tokio::io::duplex(64);
-        drop(downstream_peer);
-        let body = futures::stream::iter(vec![
-            Ok::<_, io::Error>(b"data: {\"type\":\"response.".to_vec()),
-            Ok(b"completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n".to_vec()),
-        ]);
-
-        let relayed = relay_response(&mut downstream, DownstreamDelivery::Complete, body).await?;
-        record_usage_metrics(&state, &relayed.body)?;
-        let outcome = ForwardOutcome {
-            status: 200,
-            delivery: relayed.delivery,
-        };
-        ensure!(
-            outcome.delivery == DownstreamDelivery::ClientDisconnected,
-            "closed downstream was not detected"
-        );
-        record_request_metrics(&state, &outcome, Duration::from_millis(5))?;
-        write_event(&state, &request, &outcome, Duration::from_millis(5))?;
-
-        let captured = metrics
-            .lock()
-            .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?
-            .clone();
-        ensure!(captured.requests == 1 && captured.successful_requests == 1);
-        ensure!(captured.client_disconnects == 1);
-        ensure!(captured.usage.total_tokens == 30);
-        let log = fs::read_to_string(log_path)?;
-        ensure!(log.contains("\"delivery\":\"client_disconnected\""));
-        ensure!(log.contains("\"path\":\"/v1/responses\""));
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[test]
-    fn extracts_and_normalizes_responses_usage() {
-        let body = br#"data: {"type":"response.completed","response":{"usage":{"total_tokens":165,"input_tokens":120,"output_tokens":45,"input_tokens_details":{"cached_tokens":20},"output_tokens_details":{"reasoning_tokens":5}}}}
-
-data: [DONE]
-
-"#;
-        assert_eq!(
-            usage_from_response_body(body),
-            Some(UsageMetrics {
-                total_tokens: 165,
-                input_tokens: 100,
-                output_tokens: 40,
-                reasoning_tokens: 5,
-                cache_read_tokens: 20,
-            })
-        );
-    }
-
-    #[test]
-    fn extracts_and_normalizes_chat_completions_usage() {
-        let body = br#"{"usage":{"total_tokens":75,"prompt_tokens":50,"completion_tokens":25,"prompt_tokens_details":{"cached_tokens":10},"completion_tokens_details":{"reasoning_tokens":4}}}"#;
-        assert_eq!(
-            usage_from_response_body(body),
-            Some(UsageMetrics {
-                total_tokens: 75,
-                input_tokens: 40,
-                output_tokens: 21,
-                reasoning_tokens: 4,
-                cache_read_tokens: 10,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_headers()
-    -> Result<()> {
-        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        let upstream_address = upstream.local_addr()?;
-        let upstream_task = tokio::spawn(async move {
-            let (mut stream, _) = upstream.accept().await?;
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 1024];
-                let read = stream.read(&mut chunk).await?;
-                if read == 0 {
-                    bail!("upstream client disconnected before headers");
-                }
-                request.extend_from_slice(chunk.get(..read).unwrap_or_default());
-                if find_header_end(&request).is_some() {
-                    break;
-                }
-            }
-            let request = String::from_utf8(request)?;
-            ensure!(
-                request.contains("authorization: Bearer subscription-access")
-                    || request.contains("Authorization: Bearer subscription-access"),
-                "subscription access token was not injected"
-            );
-            ensure!(
-                request.contains("chatgpt-account-id: account-123")
-                    || request.contains("ChatGPT-Account-Id: account-123"),
-                "subscription account header was not injected"
-            );
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-                )
-                .await?;
-            stream.shutdown().await?;
-            Ok::<_, color_eyre::Report>(())
-        });
-
-        let root =
-            std::env::temp_dir().join(format!("kraai-eval-codex-proxy-{}", ulid::Ulid::generate()));
-        fs::create_dir(&root)?;
-        let auth_path = root.join("auth.json");
-        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({
-            "https://api.openai.com/auth": {
-                "chatgpt_plan_type": "pro",
-                "chatgpt_account_id": "account-123"
-            }
-        }))?);
-        fs::write(
-            &auth_path,
-            serde_json::to_vec(&serde_json::json!({
-                "auth_mode": "chatgpt",
-                "tokens": {
-                    "id_token": format!("e30.{payload}.signature"),
-                    "access_token": "subscription-access",
-                    "refresh_token": "subscription-refresh",
-                    "account_id": "account-123"
-                },
-                "last_refresh": SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-                "generation": "test-generation"
-            }))?,
-        )?;
-        let controller = OpenAiCodexAuthController::new_with_options(
-            OpenAiCodexAuthControllerOptions::new(auth_path),
-        )?;
-        let log_path = root.join("proxy.events.jsonl");
-        let proxy = ModelProxy::start(ProxyServerConfig {
-            upstream: format!("http://{upstream_address}"),
-            credentials: UpstreamCredentials::Codex {
-                controller,
-                account_id: String::from("account-123"),
-            },
-            allowed_paths: codex_allowed_paths(),
-            kind: String::from("openai-codex"),
-            base_path: String::from("/backend-api"),
-            log_path: log_path.clone(),
-            max_requests: 1,
-        })?;
-        let response = Client::new()
-            .post(format!("{}/codex/responses", proxy.base_url()))
-            .bearer_auth(&proxy.token)
-            .body("{}")
-            .send()
-            .await?;
-        ensure!(response.status() == 200, "Codex proxy request failed");
-        ensure!(response.text().await? == "{}", "Codex response changed");
-        upstream_task.await??;
-        drop(proxy);
-        let log = fs::read_to_string(log_path)?;
-        ensure!(
-            !log.contains("subscription-access"),
-            "access token leaked into logs"
-        );
-        ensure!(
-            !log.contains("subscription-refresh"),
-            "refresh token leaked into logs"
-        );
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-}
+mod tests;

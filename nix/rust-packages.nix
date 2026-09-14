@@ -13,6 +13,7 @@
         ../Cargo.toml
         ../Cargo.nix
         ../crates
+        ../evals
         ../deny.toml
         ../justfile
       ];
@@ -38,7 +39,7 @@
       (member: member.name)
       (lib.filter (member: member.procMacro) workspaceMembers);
     workspaceTestInputs = {
-      "kraai-eval" = [pkgs.git];
+      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils rustToolchain];
     };
     darwinNestedSandboxTests = {
       "kraai-sandbox" = ["tests::macos::"];
@@ -144,12 +145,24 @@
       postInstall =
         (old.postInstall or "")
         + ''
-          wrapProgram "$out/bin/kraai-eval" --prefix PATH : ${lib.makeBinPath [
+          wrapProgram "$out/bin/kraai-eval" \
+            --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
+            --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
+            --prefix PATH : ${lib.makeBinPath [
+            kraai
             pkgs.bubblewrap
+            pkgs.clang
             pkgs.coreutils
             pkgs.git
             pkgs.gnutar
+            pkgs.gnused
+            pkgs.pkg-config
+            pkgs.ripgrep
             pkgs.systemd
+            pkgs.nix
+            pkgs.uv
+            pkgs.python312
+            rustToolchain
           ]}
         '';
       meta =
@@ -181,6 +194,9 @@
             ];
           testPreRun = ''
             export SSL_CERT_FILE=${lib.escapeShellArg "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"}
+            ${lib.optionalString (name == "kraai-eval") ''
+              export KRAAI_EVAL_ASSETS=${../evals}
+            ''}
           '';
         };
       in
@@ -222,6 +238,16 @@
         };
       }
       // {
+        harbor-contracts =
+          pkgs.runCommand "kraai-harbor-contracts" {
+            nativeBuildInputs = [pkgs.python3];
+          } ''
+            export PYTHONPATH=${../evals/harbor}
+            export PYTHONDONTWRITEBYTECODE=1
+            python -m unittest discover -s ${../evals/harbor/tests} -p test_contracts.py
+            touch "$out"
+          '';
+
         clippy = mkCargoCheck {
           name = "clippy";
           command = ''

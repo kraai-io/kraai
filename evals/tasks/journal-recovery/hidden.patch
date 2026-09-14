@@ -1,0 +1,233 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,228 @@
++use journal_recovery::{Delivery, Journal, JournalError, Operation, encode_record};
++use std::collections::{BTreeMap, BTreeSet};
++
++fn put(id: u64, key: &str, value: &str) -> Delivery {
++    Delivery {
++        id,
++        operation: Operation::Put {
++            key: key.into(),
++            value: value.into(),
++        },
++    }
++}
++
++fn delete(id: u64, key: &str) -> Delivery {
++    Delivery {
++        id,
++        operation: Operation::Delete { key: key.into() },
++    }
++}
++
++fn records(deliveries: &[Delivery]) -> Vec<u8> {
++    deliveries.iter().flat_map(encode_record).collect()
++}
++
++fn frame(payload: &[u8]) -> Vec<u8> {
++    let mut result = (payload.len() as u32).to_le_bytes().to_vec();
++    result.extend_from_slice(payload);
++    result
++}
++
++#[test]
++fn encoder_remains_byte_compatible_and_accepts_arbitrary_strings() {
++    assert_eq!(
++        encode_record(&put(1, "k", "v")),
++        vec![
++            19, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, b'k', 1, 0, 0, 0, b'v'
++        ]
++    );
++    assert_eq!(
++        encode_record(&delete(0, "")),
++        vec![13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0]
++    );
++    let data = records(&[
++        put(u64::MAX, "", "\0é"),
++        put(0, "雪\0", ""),
++        delete(7, "missing"),
++    ]);
++    let mut journal = Journal::open(&data).unwrap();
++    assert_eq!(journal.get(""), Some("\0é"));
++    assert_eq!(journal.get("雪\0"), Some(""));
++    assert_eq!(journal.append(put(0, "雪\0", "")), Ok(false));
++    assert_eq!(
++        journal.append(put(7, "missing", "new")),
++        Err(JournalError::Conflict(7))
++    );
++    assert_eq!(journal.bytes(), data);
++}
++
++#[test]
++fn replayed_duplicates_do_not_undo_later_puts_or_deletes() {
++    let first = put(11, "a", "old");
++    let removal = delete(12, "a");
++    let data = records(&[
++        first.clone(),
++        put(2, "a", "new"),
++        first.clone(),
++        removal.clone(),
++        put(13, "a", "latest"),
++        removal.clone(),
++        put(3, "b", "present"),
++        delete(4, "b"),
++        put(3, "b", "present"),
++    ]);
++    let mut journal = Journal::open(&data).unwrap();
++    assert_eq!(journal.get("a"), Some("latest"));
++    assert_eq!(journal.get("b"), None);
++    assert_eq!(journal.bytes(), data);
++    assert_eq!(journal.append(first), Ok(false));
++    assert_eq!(journal.append(removal), Ok(false));
++    assert_eq!(journal.bytes(), data);
++    let second = Journal::open(journal.bytes()).unwrap();
++    assert_eq!(second.snapshot(), journal.snapshot());
++}
++
++#[test]
++fn every_partial_frame_is_removed_before_an_append_and_second_restart() {
++    let prefix = records(&[put(8, "key", "old"), put(2, "other", "kept")]);
++    let tail = encode_record(&put(7, "key", "interrupted"));
++    for cut in 0..=tail.len() {
++        let mut damaged = prefix.clone();
++        damaged.extend_from_slice(&tail[..cut]);
++        let mut journal = Journal::open(&damaged).unwrap();
++        let expected = if cut == tail.len() {
++            damaged.as_slice()
++        } else {
++            prefix.as_slice()
++        };
++        assert_eq!(journal.bytes(), expected, "cut={cut}");
++        assert_eq!(
++            journal.get("key"),
++            Some(if cut == tail.len() {
++                "interrupted"
++            } else {
++                "old"
++            })
++        );
++        journal.append(put(9, "after", "restart")).unwrap();
++        let recovered = Journal::open(journal.bytes()).unwrap();
++        assert_eq!(recovered.snapshot(), journal.snapshot(), "cut={cut}");
++        assert_eq!(recovered.get("after"), Some("restart"));
++        assert_eq!(recovered.bytes(), journal.bytes());
++    }
++    let mut only_tail = Journal::open(&[255, 255, 255, 255, 1, 2]).unwrap();
++    assert_eq!(only_tail.bytes(), []);
++    only_tail.append(put(1, "fresh", "yes")).unwrap();
++    assert_eq!(
++        Journal::open(only_tail.bytes()).unwrap().get("fresh"),
++        Some("yes")
++    );
++}
++
++#[test]
++fn recovered_ids_prevent_new_writes_and_conflicts_are_atomic() {
++    let data = records(&[put(5, "k", "old"), put(1, "k", "new"), delete(0, "absent")]);
++    let mut journal = Journal::open(&data).unwrap();
++    assert_eq!(journal.append(put(5, "k", "old")), Ok(false));
++    assert_eq!(journal.append(delete(0, "absent")), Ok(false));
++    for delivery in [
++        put(5, "k", "different"),
++        put(5, "different", "old"),
++        delete(5, "k"),
++        put(0, "absent", "v"),
++    ] {
++        let before = journal.snapshot();
++        let bytes = journal.bytes().to_vec();
++        let id = delivery.id;
++        assert_eq!(journal.append(delivery), Err(JournalError::Conflict(id)));
++        assert_eq!(journal.snapshot(), before);
++        assert_eq!(journal.bytes(), bytes);
++    }
++    assert_eq!(journal.get("k"), Some("new"));
++    assert_eq!(journal.bytes(), data);
++}
++
++#[test]
++fn conflicting_complete_frames_are_errors_even_before_a_partial_tail() {
++    for conflicting in [
++        put(5, "k", "changed"),
++        delete(5, "k"),
++        put(5, "other", "old"),
++    ] {
++        let mut data = records(&[put(5, "k", "old"), put(6, "later", "v"), conflicting]);
++        data.extend_from_slice(&[1, 2]);
++        assert!(matches!(
++            Journal::open(&data),
++            Err(JournalError::Conflict(5))
++        ));
++    }
++}
++
++#[test]
++fn complete_malformed_frames_report_their_exact_start_offset() {
++    let prefix = records(&[put(1, "a", "b"), delete(2, "missing")]);
++    let valid = encode_record(&put(9, "key", "value"));
++    let payload = &valid[4..];
++    let mut bad_tag = payload.to_vec();
++    bad_tag[8] = 99;
++    let mut bad_utf8 = payload.to_vec();
++    bad_utf8[13] = 255;
++    let mut bad_length = payload.to_vec();
++    bad_length[9..13].copy_from_slice(&u32::MAX.to_le_bytes());
++    let mut surplus = payload.to_vec();
++    surplus.push(0);
++    for malformed in [
++        vec![],
++        vec![0; 8],
++        bad_tag,
++        bad_utf8,
++        bad_length,
++        surplus,
++        payload[..payload.len() - 1].to_vec(),
++    ] {
++        let mut bytes = prefix.clone();
++        bytes.extend(frame(&malformed));
++        bytes.extend_from_slice(&valid);
++        assert!(
++            matches!(Journal::open(&bytes), Err(JournalError::InvalidRecord { offset }) if offset == prefix.len())
++        );
++    }
++}
++
++#[test]
++fn repeated_faults_and_redeliveries_match_an_independent_map() {
++    let mut durable = Vec::new();
++    let mut expected = BTreeMap::new();
++    let mut seen = BTreeSet::new();
++    for step in 0..180_u64 {
++        let id = (step * 13) % 47;
++        let key = format!("key-{}", id % 7);
++        let delivery = if id % 4 == 0 {
++            delete(id, &key)
++        } else {
++            put(id, &key, &format!("value-{id}"))
++        };
++        let first = seen.insert(id);
++        if first {
++            if id % 4 == 0 {
++                expected.remove(&key);
++            } else {
++                expected.insert(key.clone(), format!("value-{id}"));
++            }
++        }
++        let mut journal = Journal::open(&durable).unwrap();
++        assert_eq!(journal.append(delivery.clone()), Ok(first), "step={step}");
++        assert_eq!(journal.snapshot(), expected, "step={step}");
++        durable = journal.bytes().to_vec();
++        if step % 3 == 0 {
++            durable.extend(encode_record(&delivery));
++        }
++        let partial = encode_record(&put(1000 + step, "uncommitted", "ignored"));
++        let cut = (step as usize * 7) % partial.len();
++        durable.extend_from_slice(&partial[..cut]);
++        let recovered = Journal::open(&durable).unwrap();
++        assert_eq!(recovered.snapshot(), expected, "step={step}");
++        assert_eq!(recovered.get("uncommitted"), None);
++        durable = recovered.bytes().to_vec();
++    }
++}

@@ -7,6 +7,7 @@ mod http_client;
 mod http_retry;
 mod manager;
 mod pricing;
+pub use pricing::{PriceQuote, Pricing};
 mod provider;
 mod registry;
 mod sse;

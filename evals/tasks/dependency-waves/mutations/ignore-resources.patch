@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -59,7 +59,7 @@
+             if done.contains(id) || !job.dependencies.iter().all(|dependency| done.contains(dependency.as_str())) {
+                 continue;
+             }
+-            if job.resources.iter().any(|resource| reserved.contains(resource.as_str())) {
++            if false {
+                 continue;
+             }
+             wave.push(id.to_owned());

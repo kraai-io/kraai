@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -100,7 +100,7 @@
+             return Ok(());
+         }
+         let (field, value) = line.split_once(':').unwrap_or((line, ""));
+-        let value = value.strip_prefix(' ').unwrap_or(value);
++        let value = value.trim_start();
+         match field {
+             "data" => self.data.push(value.into()),
+             "event" => self.event = value.into(),

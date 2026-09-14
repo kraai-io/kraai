@@ -175,7 +175,9 @@ fn built_in_profiles() -> Vec<AgentProfile> {
 }
 
 fn global_profiles_path() -> Option<PathBuf> {
-    agent_state_root().ok().map(|path| path.join("agents.toml"))
+    std::env::var_os("KRAAI_AGENT_PROFILES")
+        .map(PathBuf::from)
+        .or_else(|| agent_state_root().ok().map(|path| path.join("agents.toml")))
 }
 
 fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {

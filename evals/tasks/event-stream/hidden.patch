@@ -1,0 +1,118 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,113 @@
++use event_stream::{DecodeError, Decoder, Event};
++
++fn event(kind: &str, id: Option<&str>, data: &str) -> Event {
++    Event { event: kind.into(), id: id.map(str::to_owned), data: data.into() }
++}
++
++fn decode_chunks(bytes: &[u8], cuts: &[usize]) -> (Vec<Event>, Option<String>) {
++    let mut decoder = Decoder::new();
++    let mut output = Vec::new();
++    let mut start = 0;
++    for end in cuts.iter().copied().chain(std::iter::once(bytes.len())) {
++        output.extend(decoder.feed(&bytes[start..end]).unwrap());
++        start = end;
++    }
++    output.extend(decoder.finish().unwrap());
++    (output, decoder.last_event_id().map(str::to_owned))
++}
++
++#[test]
++fn every_pair_of_chunk_boundaries_preserves_framing_and_unicode() {
++    let bytes = "\u{feff}: hi\r\nid: α\revent: update\ndata:  λ:𐍈\r\ndata:\n\r\nid: bad\0id\ndata: next\n\nid\rdata\r\revent: ignored\n\ndata: final\n\nid: saved\n\ndata: unfinished".as_bytes();
++    let expected = (
++        vec![
++            event("update", Some("α"), " λ:𐍈\n"),
++            event("message", Some("α"), "next"),
++            event("message", Some(""), ""),
++            event("message", Some(""), "final"),
++        ],
++        Some("saved".into()),
++    );
++    for first in 0..=bytes.len() {
++        for second in first..=bytes.len() {
++            assert_eq!(decode_chunks(bytes, &[first, second]), expected, "cuts {first}/{second}");
++        }
++    }
++    let cuts: Vec<_> = (0..=bytes.len()).collect();
++    assert_eq!(decode_chunks(bytes, &cuts), expected);
++}
++
++#[test]
++fn fields_have_exact_spacing_and_reset_rules() {
++    let input = b"event: old\nevent:\nid: first\nid: second\ndata:  leading\ndata:\ndata\ndata:\ttab\nretry: 10\nData: ignored\n:comment\n\nevent: empty\n\ndata: after\n\n";
++    assert_eq!(
++        decode_chunks(input, &[]).0,
++        vec![
++            event("message", Some("second"), " leading\n\n\n\ttab"),
++            event("message", Some("second"), "after"),
++        ]
++    );
++}
++
++#[test]
++fn ids_update_on_line_end_without_dispatch_and_ignore_nul() {
++    let mut decoder = Decoder::new();
++    assert_eq!(decoder.last_event_id(), None);
++    assert_eq!(decoder.feed(b"id: pending"), Ok(vec![]));
++    assert_eq!(decoder.last_event_id(), None);
++    assert_eq!(decoder.feed(b"\rid: rejected\0\n"), Ok(vec![]));
++    assert_eq!(decoder.last_event_id(), Some("pending"));
++    assert_eq!(decoder.feed(b"id:\n\n"), Ok(vec![]));
++    assert_eq!(decoder.last_event_id(), Some(""));
++}
++
++#[test]
++fn eof_discards_unfinished_blocks_and_closes_decoder() {
++    for input in [b"data: lost".as_slice(), b"data: lost\n", b"event: lost\n", b"id: lost"] {
++        let mut decoder = Decoder::new();
++        assert_eq!(decoder.feed(input), Ok(vec![]));
++        assert_eq!(decoder.finish(), Ok(vec![]));
++        assert_eq!(decoder.feed(b""), Err(DecodeError::Finished));
++        assert_eq!(decoder.finish(), Err(DecodeError::Finished));
++    }
++    let mut decoder = Decoder::new();
++    assert_eq!(decoder.feed(b"data: complete\r\r"), Ok(vec![event("message", None, "complete")]));
++    assert_eq!(decoder.finish(), Ok(vec![]));
++}
++
++#[test]
++fn invalid_utf8_is_sticky_even_after_events_in_the_same_call() {
++    for bad in [vec![0xff], vec![0xc0, 0xaf], vec![0xed, 0xa0, 0x80], vec![0xf4, 0x90, 0x80, 0x80]] {
++        let mut decoder = Decoder::new();
++        let mut bytes = b"data: good\n\ndata: ".to_vec();
++        bytes.extend(&bad);
++        bytes.push(b'\n');
++        assert_eq!(decoder.feed(&bytes), Err(DecodeError::InvalidUtf8));
++        assert_eq!(decoder.feed(b"data: recovery\n\n"), Err(DecodeError::InvalidUtf8));
++        assert_eq!(decoder.finish(), Err(DecodeError::InvalidUtf8));
++    }
++    let mut decoder = Decoder::new();
++    assert_eq!(decoder.feed(b"data: \xe2\x82"), Ok(vec![]));
++    assert_eq!(decoder.finish(), Err(DecodeError::InvalidUtf8));
++    assert_eq!(decoder.finish(), Err(DecodeError::InvalidUtf8));
++}
++
++#[test]
++fn bom_is_only_special_at_the_stream_start() {
++    let input = "\u{feff}data: one\n\n\u{feff}data: ignored\ndata: \u{feff}kept\n\n";
++    assert_eq!(decode_chunks(input.as_bytes(), &[]).0, vec![
++        event("message", None, "one"),
++        event("message", None, "\u{feff}kept"),
++    ]);
++}
++
++#[test]
++fn large_lines_and_many_events_do_not_truncate() {
++    let data = "λ".repeat(32_768);
++    let input = format!("data: {data}\n\n{}", "data: x\n\n".repeat(1024));
++    let cuts: Vec<_> = (0..input.len()).step_by(97).collect();
++    let (events, _) = decode_chunks(input.as_bytes(), &cuts);
++    assert_eq!(events.len(), 1025);
++    assert_eq!(events[0].data, data);
++    assert!(events[1..].iter().all(|item| item == &event("message", None, "x")));
++}
