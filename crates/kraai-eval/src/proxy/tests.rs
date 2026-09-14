@@ -94,6 +94,7 @@ async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() 
     fs::create_dir(&root)?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
+        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("real-secret"),
@@ -216,6 +217,7 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
     fs::create_dir(&root)?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
+        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("real-secret"),
@@ -248,6 +250,159 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
 }
 
 #[tokio::test]
+async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> Result<()> {
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let upstream_address = upstream.local_addr()?;
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let upstream_task = tokio::spawn(async move {
+        let (mut completed, _) = upstream.accept().await?;
+        read_request(&mut completed).await?;
+        let body = br#"{"model":"model","usage":{"total_tokens":30,"input_tokens":20,"output_tokens":10}}"#;
+        completed
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await?;
+        completed.write_all(body).await?;
+        completed.shutdown().await?;
+        let (mut stalled, _) = upstream.accept().await?;
+        read_request(&mut stalled).await?;
+        let _ = accepted_tx.send(());
+        release_rx.await?;
+        drop(stalled);
+        Ok::<_, color_eyre::Report>(())
+    });
+
+    let root = std::env::temp_dir().join(format!(
+        "kraai-eval-proxy-aborted-{}",
+        ulid::Ulid::generate()
+    ));
+    fs::create_dir(&root)?;
+    let pricing_config = root.join("prices.toml");
+    fs::write(
+        &pricing_config,
+        r#"
+[[provider]]
+id = "test"
+type = "custom"
+[[model]]
+id = "model"
+provider_id = "test"
+price_input = "2"
+price_output = "8"
+"#,
+    )?;
+    let mut proxy = ModelProxy::start(ProxyServerConfig {
+        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        upstream: format!("http://{upstream_address}"),
+        credentials: UpstreamCredentials::OpenAiApiKey {
+            credential: String::from("real-secret"),
+            credential_env: String::from("TEST_API_KEY"),
+        },
+        allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+        kind: String::from("openai"),
+        base_path: String::from("/v1"),
+        log_path: root.join("proxy.events.jsonl"),
+        max_requests: 2,
+    })?;
+    proxy.pricing.config = Some(pricing_config);
+    let client = Client::new();
+    let rejected = client
+        .get(format!("http://{}/v1/models", proxy.address))
+        .send()
+        .await?;
+    ensure!(rejected.status() == 404);
+    rejected.bytes().await?;
+    let completed = client
+        .post(format!("http://{}/v1/responses", proxy.address))
+        .bearer_auth(&proxy.token)
+        .body(r#"{"model":"model"}"#)
+        .send()
+        .await?;
+    ensure!(completed.status() == 200);
+    completed.bytes().await?;
+    let mut downstream = TcpStream::connect(proxy.address).await?;
+    downstream
+        .write_all(
+            format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+                proxy.address, proxy.token
+            )
+            .as_bytes(),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), accepted_rx).await??;
+
+    let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
+    let _ = release_tx.send(());
+    upstream_task.await??;
+    ensure!(metrics.requests == 2 && metrics.successful_requests == 1);
+    ensure!(metrics.unrecorded_requests == 1);
+    let accounting = metrics
+        .accounting
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing request accounting"))?;
+    ensure!(accounting.priced_requests == 1 && accounting.context.samples == 1);
+    ensure!(accounting.unrecorded_requests == 1);
+    ensure!(accounting.complete_cost().is_none() && accounting.complete_context().is_none());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn accounting_errors_preserve_measured_proxy_metrics() -> Result<()> {
+    for analysis_error in [true, false] {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-proxy-accounting-error-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let log_path = root.join("proxy.events.jsonl");
+        let mut proxy = ModelProxy::start(ProxyServerConfig {
+            listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            upstream: String::from("http://proxy-test.invalid"),
+            credentials: UpstreamCredentials::OpenAiApiKey {
+                credential: String::from("real-secret"),
+                credential_env: String::from("TEST_API_KEY"),
+            },
+            allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+            kind: String::from("openai"),
+            base_path: String::from("/v1"),
+            log_path: log_path.clone(),
+            max_requests: 1,
+        })?;
+        let rejected = Client::new()
+            .get(format!("http://{}/v1/models", proxy.address))
+            .send()
+            .await?;
+        ensure!(rejected.status() == 404);
+        rejected.bytes().await?;
+        proxy.shutdown_and_join();
+        if analysis_error {
+            fs::write(&log_path, "invalid request event\n")?;
+        } else {
+            fs::create_dir(root.join("request-accounting.json"))?;
+        }
+
+        let metrics = proxy.finish()?;
+        ensure!(metrics.requests == 1 && metrics.failed_requests == 1);
+        ensure!(metrics.accounting.is_none() && metrics.accounting_error.is_some());
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("request-accounting-error.json"))?)?;
+        ensure!(
+            diagnostic.get("error").and_then(serde_json::Value::as_str)
+                == metrics.accounting_error.as_deref()
+        );
+        fs::remove_dir_all(root)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()> {
     let root = std::env::temp_dir().join(format!(
         "kraai-eval-proxy-disconnect-{}",
@@ -268,6 +423,7 @@ async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()>
         log: Arc::new(Mutex::new(File::create(&log_path)?)),
         max_requests: 1,
         request_count: AtomicU64::new(0),
+        started_requests: AtomicU64::new(0),
         metrics: Arc::clone(&metrics),
     };
     let request = ParsedRequest {
@@ -337,6 +493,7 @@ data: [DONE]
             output_tokens: 40,
             reasoning_tokens: 5,
             cache_read_tokens: 20,
+            cache_write_tokens: 0,
         })
     );
 }
@@ -352,6 +509,7 @@ fn extracts_and_normalizes_chat_completions_usage() {
             output_tokens: 21,
             reasoning_tokens: 4,
             cache_read_tokens: 10,
+            cache_write_tokens: 0,
         })
     );
 }
@@ -424,6 +582,7 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
     )?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
+        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::Codex {
             controller,

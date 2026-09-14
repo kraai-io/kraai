@@ -23,6 +23,7 @@ use crate::ProxyRecord;
 use crate::metrics::{ProxyMetrics, UsageMetrics};
 
 mod headers;
+pub(crate) mod service;
 mod telemetry;
 mod usage;
 
@@ -41,6 +42,7 @@ const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
     credentials: ProxyCredentialRequest,
+    pricing: crate::PricingOptions,
     max_requests: u64,
 }
 
@@ -65,6 +67,7 @@ impl ModelProxyRequest {
     pub fn openai(credential_env: String, max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::OpenAiApiKey { credential_env },
+            pricing: crate::PricingOptions::default(),
             max_requests,
         }
     }
@@ -72,8 +75,18 @@ impl ModelProxyRequest {
     pub fn codex_subscription(max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::CodexSubscription,
+            pricing: crate::PricingOptions::default(),
             max_requests,
         }
+    }
+
+    pub fn with_pricing(mut self, pricing: crate::PricingOptions) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
+    pub(crate) fn pricing(&self) -> &crate::PricingOptions {
+        &self.pricing
     }
 
     pub(crate) fn is_codex_subscription(&self) -> bool {
@@ -94,11 +107,20 @@ impl ModelProxyRequest {
     }
 
     pub(crate) fn start(&self, log_path: PathBuf) -> Result<ModelProxy> {
+        self.start_at(
+            log_path,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+    }
+
+    fn start_at(&self, log_path: PathBuf, listen_address: SocketAddr) -> Result<ModelProxy> {
+        let pricing = self.pricing.freeze()?;
         if self.max_requests == 0 {
             bail!("model proxy max_requests must be greater than zero");
         }
         let credentials = self.resolve_credentials()?;
-        ModelProxy::start(ProxyServerConfig {
+        let mut proxy = ModelProxy::start(ProxyServerConfig {
+            listen_address,
             upstream: credentials.upstream().to_string(),
             allowed_paths: credentials.allowed_paths(),
             kind: credentials.kind().to_string(),
@@ -106,7 +128,9 @@ impl ModelProxyRequest {
             credentials,
             log_path,
             max_requests: self.max_requests,
-        })
+        })?;
+        proxy.pricing = pricing;
+        Ok(proxy)
     }
 
     fn resolve_credentials(&self) -> Result<UpstreamCredentials> {
@@ -214,10 +238,13 @@ pub(crate) struct ModelProxy {
     record: ProxyRecord,
     base_path: String,
     metrics: Arc<Mutex<ProxyMetrics>>,
+    log_path: PathBuf,
+    pricing: crate::PricingOptions,
 }
 
 impl ModelProxy {
     fn start(config: ProxyServerConfig) -> Result<Self> {
+        let log_path = config.log_path.clone();
         let token = random_token()?;
         let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
         let identity_paths = config.allowed_paths.iter().cloned().collect::<Vec<_>>();
@@ -257,6 +284,8 @@ impl ModelProxy {
             .wrap_err("model proxy did not start")??;
         Ok(Self {
             address,
+            log_path,
+            pricing: crate::PricingOptions::default(),
             token,
             shutdown: Some(shutdown_tx),
             thread: Some(thread),
@@ -307,7 +336,34 @@ impl ModelProxy {
 
     pub(crate) fn finish(mut self) -> Result<ProxyMetrics> {
         self.shutdown_and_join();
-        self.metrics()
+        let mut metrics = self.metrics()?;
+        match self.finish_accounting(&metrics) {
+            Ok(accounting) => metrics.accounting = Some(accounting),
+            Err(error) => {
+                let message = format!("{error:#}");
+                let path = self
+                    .log_path
+                    .with_file_name("request-accounting-error.json");
+                let diagnostic = serde_json::json!({ "error": message });
+                if let Err(write_error) = fs::write(path, diagnostic.to_string()) {
+                    tracing_fallback(&write_error.to_string());
+                }
+                metrics.accounting_error = Some(message);
+            }
+        }
+        Ok(metrics)
+    }
+
+    fn finish_accounting(&self, metrics: &ProxyMetrics) -> Result<crate::RequestAccounting> {
+        let accounting = crate::analyze_requests(
+            &self.log_path,
+            metrics.requests.saturating_add(metrics.unrecorded_requests),
+            &self.pricing,
+        )?;
+        let path = self.log_path.with_file_name("request-accounting.json");
+        fs::write(&path, serde_json::to_vec_pretty(&accounting)?)
+            .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        Ok(accounting)
     }
 
     fn shutdown_and_join(&mut self) {
@@ -327,6 +383,7 @@ impl Drop for ModelProxy {
 }
 
 struct ProxyServerConfig {
+    listen_address: SocketAddr,
     upstream: String,
     credentials: UpstreamCredentials,
     allowed_paths: BTreeSet<String>,
@@ -373,14 +430,13 @@ async fn run_server(
     mut shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<SocketAddr>>,
 ) -> Result<()> {
-    let listener =
-        match TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                let _ = ready.send(Err(error.into()));
-                return Ok(());
-            }
-        };
+    let listener = match TcpListener::bind(config.listen_address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let _ = ready.send(Err(error.into()));
+            return Ok(());
+        }
+    };
     let address = listener.local_addr()?;
     let log = Arc::new(Mutex::new(File::create(&config.log_path)?));
     let state = Arc::new(ProxyState {
@@ -395,6 +451,7 @@ async fn run_server(
         log,
         max_requests: config.max_requests,
         request_count: AtomicU64::new(0),
+        started_requests: AtomicU64::new(0),
         metrics,
     });
     if ready.send(Ok(address)).is_err() {
@@ -425,6 +482,15 @@ async fn run_server(
         tasks.abort_all();
     }
     while tasks.join_next().await.is_some() {}
+    let mut metrics = state
+        .metrics
+        .lock()
+        .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
+    metrics.unrecorded_requests = state
+        .started_requests
+        .load(Ordering::Relaxed)
+        .saturating_sub(metrics.requests);
+    drop(metrics);
     Ok(())
 }
 
@@ -437,6 +503,7 @@ struct ProxyState {
     log: Arc<Mutex<File>>,
     max_requests: u64,
     request_count: AtomicU64,
+    started_requests: AtomicU64,
     metrics: Arc<Mutex<ProxyMetrics>>,
 }
 
@@ -457,6 +524,7 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Res
             return Err(error);
         }
     };
+    state.started_requests.fetch_add(1, Ordering::Relaxed);
     let outcome = forward_request(&mut stream, &state, &request).await?;
     let duration = started.elapsed();
     record_request_metrics(&state, &outcome, duration)?;

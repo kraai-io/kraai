@@ -192,8 +192,13 @@ mod tests {
     #[test]
     fn bundled_graders_reject_baselines_and_mutations_and_accept_references() -> Result<()> {
         let root = crate::eval_assets_directory().join("tasks");
-        for id in ["event-stream", "dependency-waves"] {
-            let prepared = PreparedValidation::new(&root.join(id).join("task.toml"))?;
+        for entry in fs::read_dir(&root)? {
+            let path = entry?.path().join("task.toml");
+            if !path.is_file() {
+                continue;
+            }
+            let id = path.display();
+            let prepared = PreparedValidation::new(&path)?;
             let result = prepared.run(grade_trusted)?;
             ensure!(
                 result.passed(),

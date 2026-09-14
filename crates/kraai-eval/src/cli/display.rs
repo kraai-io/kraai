@@ -24,22 +24,78 @@ pub(super) fn format_comparison(result: &kraai_eval::ComparisonResult) -> String
         result.right_wins,
         result.ties,
     );
+    summary.push_str("\n\nAll evaluated pairs, including failed attempts:");
+    append_efficiency(
+        &mut summary,
+        &result.total_tokens,
+        &result.runner_time_ms,
+        &result.wall_time_ms,
+        &result.usage,
+    );
+    summary.push_str(&result.request_metrics.display());
+    summary.push_str(&format!(
+        "\n\nBoth harnesses passed: {} pairs",
+        result.both_passed,
+    ));
+    let passed = &result.both_passed_efficiency;
+    append_efficiency(
+        &mut summary,
+        &passed.total_tokens,
+        &passed.runner_time_ms,
+        &passed.wall_time_ms,
+        &passed.usage,
+    );
+    summary.push_str(&passed.request_metrics.display());
+    summary.push_str(
+        "\n\nTiming is observational; shared-machine load can affect wall and runner time.",
+    );
+    for run in &result.runs {
+        summary.push_str(&format!(
+            "\n{} attempt {}: {} left, {} right; {:?}",
+            run.task_id,
+            run.attempt,
+            run.left_status.as_ref().map_or_else(
+                || String::from("launch failed"),
+                |status| format!("{status:?}")
+            ),
+            run.right_status.as_ref().map_or_else(
+                || String::from("launch failed"),
+                |status| format!("{status:?}")
+            ),
+            run.outcome,
+        ));
+    }
+    summary
+}
+
+fn append_efficiency(
+    summary: &mut String,
+    total_tokens: &kraai_eval::PairedMetric,
+    runner_time_ms: &kraai_eval::PairedMetric,
+    wall_time_ms: &kraai_eval::PairedMetric,
+    usage: &kraai_eval::PairedUsageMetrics,
+) {
     for (name, metric) in [
-        ("Tokens", &result.total_tokens),
-        ("Runner time (ms)", &result.runner_time_ms),
+        ("Total tokens", total_tokens),
+        ("Uncached input tokens", &usage.uncached_input_tokens),
+        ("Cached input tokens", &usage.cache_read_tokens),
+        ("Output tokens excluding reasoning", &usage.output_tokens),
+        ("Reasoning tokens", &usage.reasoning_tokens),
+        ("Proxy requests", &usage.proxy_requests),
+        ("Runner time (ms)", runner_time_ms),
+        ("Wall time (ms)", wall_time_ms),
     ] {
         summary.push_str(&format!(
             "\n{name}: {} left mean, {} right mean, {} measured pairs",
             metric
                 .left_mean
-                .map_or_else(|| String::from("n/a"), |value| format!("{value:.0}")),
+                .map_or_else(|| String::from("n/a"), |value| format!("{value:.1}")),
             metric
                 .right_mean
-                .map_or_else(|| String::from("n/a"), |value| format!("{value:.0}")),
+                .map_or_else(|| String::from("n/a"), |value| format!("{value:.1}")),
             metric.samples,
         ));
     }
-    summary
 }
 
 pub(super) struct ProgressDisplay {
@@ -200,6 +256,17 @@ pub(super) fn format_result_summary(result: &RunResult, cache_dir: &std::path::P
             )
         },
     );
+    let accounting = result
+        .metrics
+        .proxy
+        .as_ref()
+        .and_then(|proxy| proxy.accounting.as_ref())
+        .map_or_else(String::new, |accounting| {
+            format!(
+                "\n{}",
+                super::accounting::format_accounting(&accounting.summary())
+            )
+        });
     let failure = result
         .controller_failure
         .as_ref()
@@ -207,7 +274,7 @@ pub(super) fn format_result_summary(result: &RunResult, cache_dir: &std::path::P
             format!("\nController failure: {}: {}", failure.phase, failure.error)
         });
     format!(
-        "Result: {status}\nTask: {}\nHarness: {}\nVersion: {}\nModel: {}\nAttempt: {}\nElapsed: {}\nRunner: {} ({})\nGraders: {}\nTokens: {}{}\nArtifacts: {}",
+        "Result: {status}\nTask: {}\nHarness: {}\nVersion: {}\nModel: {}\nAttempt: {}\nElapsed: {}\nRunner: {} ({})\nGraders: {}\nTokens: {}{}{accounting}\nArtifacts: {}",
         result.task_id,
         result.harness_name,
         result.runner_version,
@@ -233,7 +300,7 @@ pub(super) fn format_suite_summary(result: &SuiteResult, cache_dir: &std::path::
         .distribution
         .mean
         .map_or_else(|| String::from("n/a"), |mean| format!("{mean:.0}"));
-    format!(
+    let mut output = format!(
         "Suite complete\nRuns: {} requested, {} evaluated\nResults: {} passed, {} failed, {} controller failures, {} launch failures\nSuccess rate: {}\nElapsed: {}\nTokens: {} total, {} mean per measured run\nArtifacts: {}",
         result.requested_runs,
         result.evaluated_runs,
@@ -246,7 +313,18 @@ pub(super) fn format_suite_summary(result: &SuiteResult, cache_dir: &std::path::
         result.total_tokens.total,
         token_mean,
         cache_dir.join(&result.artifact_path).display(),
-    )
+    );
+    for run in &result.runs {
+        if let Some(accounting) = &run.accounting {
+            output.push_str(&format!(
+                "\n{} attempt {}:\n{}",
+                run.task_id.as_deref().unwrap_or("unknown task"),
+                run.attempt,
+                super::accounting::format_accounting(accounting)
+            ));
+        }
+    }
+    output
 }
 
 fn process_succeeded(process: &kraai_eval::ProcessRecord) -> bool {

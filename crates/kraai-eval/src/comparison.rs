@@ -26,6 +26,11 @@ pub struct ComparisonResult {
     pub wall_time_ms: PairedMetric,
     pub runner_time_ms: PairedMetric,
     pub total_tokens: PairedMetric,
+    pub usage: PairedUsageMetrics,
+    #[serde(default)]
+    pub request_metrics: crate::PairedRequestMetrics,
+    pub both_passed: u64,
+    pub both_passed_efficiency: EfficiencyMetrics,
     pub runs: Vec<ComparedRun>,
 }
 
@@ -47,7 +52,7 @@ pub struct PairedMetric {
 }
 
 impl PairedMetric {
-    fn record(&mut self, left: Option<u128>, right: Option<u128>) {
+    pub(crate) fn record(&mut self, left: Option<u128>, right: Option<u128>) {
         if let (Some(left), Some(right)) = (left, right) {
             self.samples += 1;
             self.left_total += left;
@@ -55,6 +60,89 @@ impl PairedMetric {
             self.left_mean = Some(self.left_total as f64 / self.samples as f64);
             self.right_mean = Some(self.right_total as f64 / self.samples as f64);
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PairedUsageMetrics {
+    pub uncached_input_tokens: PairedMetric,
+    pub cache_read_tokens: PairedMetric,
+    pub output_tokens: PairedMetric,
+    pub reasoning_tokens: PairedMetric,
+    pub proxy_requests: PairedMetric,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EfficiencyMetrics {
+    pub wall_time_ms: PairedMetric,
+    pub runner_time_ms: PairedMetric,
+    pub total_tokens: PairedMetric,
+    pub usage: PairedUsageMetrics,
+    #[serde(default)]
+    pub request_metrics: crate::PairedRequestMetrics,
+}
+
+impl EfficiencyMetrics {
+    fn record(&mut self, left: &RunResult, right: &RunResult) {
+        self.request_metrics.record(
+            left.metrics
+                .proxy
+                .as_ref()
+                .and_then(|metrics| metrics.accounting.as_ref()),
+            right
+                .metrics
+                .proxy
+                .as_ref()
+                .and_then(|metrics| metrics.accounting.as_ref()),
+        );
+        self.wall_time_ms
+            .record(Some(left.duration_ms), Some(right.duration_ms));
+        self.runner_time_ms.record(
+            left.runner.as_ref().map(|runner| runner.duration_ms),
+            right.runner.as_ref().map(|runner| runner.duration_ms),
+        );
+        if let (Some(left), Some(right)) = (left.metrics.usage(), right.metrics.usage()) {
+            for (metric, left, right) in [
+                (
+                    &mut self.total_tokens,
+                    left.total_tokens,
+                    right.total_tokens,
+                ),
+                (
+                    &mut self.usage.uncached_input_tokens,
+                    left.input_tokens,
+                    right.input_tokens,
+                ),
+                (
+                    &mut self.usage.cache_read_tokens,
+                    left.cache_read_tokens,
+                    right.cache_read_tokens,
+                ),
+                (
+                    &mut self.usage.output_tokens,
+                    left.output_tokens,
+                    right.output_tokens,
+                ),
+                (
+                    &mut self.usage.reasoning_tokens,
+                    left.reasoning_tokens,
+                    right.reasoning_tokens,
+                ),
+            ] {
+                metric.record(Some(u128::from(left)), Some(u128::from(right)));
+            }
+        }
+        self.usage.proxy_requests.record(
+            left.metrics
+                .proxy
+                .as_ref()
+                .map(|metrics| u128::from(metrics.requests)),
+            right
+                .metrics
+                .proxy
+                .as_ref()
+                .map(|metrics| u128::from(metrics.requests)),
+        );
     }
 }
 
@@ -134,8 +222,13 @@ fn compare_suites(
         wall_time_ms: PairedMetric::default(),
         runner_time_ms: PairedMetric::default(),
         total_tokens: PairedMetric::default(),
+        usage: PairedUsageMetrics::default(),
+        request_metrics: crate::PairedRequestMetrics::default(),
+        both_passed: 0,
+        both_passed_efficiency: EfficiencyMetrics::default(),
         runs: Vec::new(),
     };
+    let mut efficiency = EfficiencyMetrics::default();
     let left_runs = load_runs(left, left_cache).wrap_err("load left suite")?;
     let mut right_runs = load_runs(right, right_cache).wrap_err("load right suite")?;
     for key in left_runs.keys() {
@@ -169,26 +262,15 @@ fn compare_suites(
                     && right.status != RunStatus::ControllerFailed =>
             {
                 comparison.evaluated_pairs += 1;
-                comparison
-                    .wall_time_ms
-                    .record(Some(left.duration_ms), Some(right.duration_ms));
-                comparison.runner_time_ms.record(
-                    left.runner.as_ref().map(|runner| runner.duration_ms),
-                    right.runner.as_ref().map(|runner| runner.duration_ms),
-                );
-                comparison.total_tokens.record(
-                    left.metrics
-                        .usage()
-                        .map(|usage| u128::from(usage.total_tokens)),
-                    right
-                        .metrics
-                        .usage()
-                        .map(|usage| u128::from(usage.total_tokens)),
-                );
+                efficiency.record(left, right);
                 let left_passed = left.status == RunStatus::Passed;
                 let right_passed = right.status == RunStatus::Passed;
                 comparison.left_passed += u64::from(left_passed);
                 comparison.right_passed += u64::from(right_passed);
+                if left_passed && right_passed {
+                    comparison.both_passed += 1;
+                    comparison.both_passed_efficiency.record(left, right);
+                }
                 match (left_passed, right_passed) {
                     (true, false) => {
                         comparison.left_wins += 1;
@@ -217,6 +299,11 @@ fn compare_suites(
             outcome,
         });
     }
+    comparison.wall_time_ms = efficiency.wall_time_ms;
+    comparison.runner_time_ms = efficiency.runner_time_ms;
+    comparison.total_tokens = efficiency.total_tokens;
+    comparison.usage = efficiency.usage;
+    comparison.request_metrics = efficiency.request_metrics;
     if comparison.evaluated_pairs != 0 {
         comparison.left_success_rate =
             Some(comparison.left_passed as f64 / comparison.evaluated_pairs as f64);
@@ -297,10 +384,7 @@ fn load_runs(suite: SuiteResult, cache: &Path) -> Result<BTreeMap<RunKey, Loaded
             })?;
             validate_relative_path(artifact)?;
             let path = cache.join(artifact).join("result.json");
-            let result: RunResult = serde_json::from_slice(
-                &fs::read(&path).wrap_err_with(|| format!("read run result {}", path.display()))?,
-            )
-            .wrap_err_with(|| format!("parse run result {}", path.display()))?;
+            let result = crate::load_run_result(&path)?;
             ensure!(
                 result.schema_version == 6,
                 "unsupported run result schema version {}",

@@ -38,6 +38,8 @@
               rust-analyzer
 
               just
+              uv
+              python312
 
               ripgrep
               pkg-config

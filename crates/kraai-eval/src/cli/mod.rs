@@ -1,4 +1,7 @@
+mod accounting;
+mod benchmark;
 mod display;
+mod proxy;
 mod tasks;
 
 use std::fs;
@@ -8,7 +11,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, bail};
 use kraai_eval::{
-    HarnessProfile, KraaiProviderConfigRequest, ProgressReporter, RunRequest, RunResult, RunStatus,
+    HarnessProfile, KraaiProviderConfigRequest, ProgressReporter, RunRequest, RunStatus,
     SuiteRequest, SuiteResult,
 };
 use serde::Serialize;
@@ -18,7 +21,7 @@ use display::{ProgressDisplay, format_comparison, format_result_summary, format_
 #[derive(Debug, Parser)]
 #[command(
     about = "Run and compare agent evaluations with executable hidden graders",
-    after_help = "Examples:\n  kraai-eval list\n  kraai-eval show event-stream\n  kraai-eval check\n  kraai-eval run --model MODEL --attempts 3\n  kraai-eval run TASK --model MODEL --harness agent.toml\n  kraai-eval compare LEFT/summary.json RIGHT/summary.json"
+    after_help = "Examples:\n  kraai-eval list\n  kraai-eval show repository-repair\n  kraai-eval check\n  kraai-eval run --model MODEL --attempts 3\n  kraai-eval run TASK --model MODEL --harness agent.toml\n  kraai-eval compare LEFT/summary.json RIGHT/summary.json\n  kraai-eval benchmark terminal-bench --model MODEL --task-name gpt2-codegolf\n  kraai-eval benchmark swe-bench --oracle --full-dataset --dry-run\n  kraai-eval benchmark-compare LEFT_JOB RIGHT_JOB"
 )]
 struct Cli {
     #[arg(
@@ -47,12 +50,30 @@ enum Command {
     Run(Box<RunArgs>),
     #[command(about = "Display a saved run result.json or suite summary.json")]
     Report { path: PathBuf },
+    #[command(
+        about = "Calculate context sizes and estimated API costs from saved requests without calling a model"
+    )]
+    Account(accounting::AccountingArgs),
     #[command(about = "Compare paired attempts with matching tasks, graders, models and budgets")]
     Compare { left: PathBuf, right: PathBuf },
+    #[command(
+        about = "Run pinned public suites with Harbor: terminal-bench, swe-bench, or DATASET@VERSION"
+    )]
+    Benchmark(Box<benchmark::BenchmarkArgs>),
+    #[command(
+        about = "Compare complete Harbor jobs with matching pinned tasks, model settings and budgets"
+    )]
+    BenchmarkCompare { left: PathBuf, right: PathBuf },
+    #[command(
+        about = "Run a credential proxy until stdin closes; writes private readiness and public metrics files"
+    )]
+    Proxy(proxy::ProxyArgs),
 }
 
 #[derive(Debug, Args)]
 struct RunArgs {
+    #[command(flatten)]
+    pricing: accounting::PricingArgs,
     tasks: Vec<String>,
     #[arg(long, help = "Model identifier, also recorded in result comparisons")]
     model: String,
@@ -163,7 +184,18 @@ pub(super) fn run() -> Result<ExitCode> {
                 ExitCode::FAILURE
             });
         }
+        Command::Account(args) => accounting::execute(args, cli.json)?,
         Command::Run(args) => return execute(*args, &directory, cli.json),
+        Command::Benchmark(args) => return benchmark::execute(*args, cli.json),
+        Command::Proxy(args) => return proxy::execute(args),
+        Command::BenchmarkCompare { left, right } => {
+            let comparison = kraai_eval::compare_harbor_jobs(&left, &right)?;
+            if cli.json {
+                print_json(&comparison)?;
+            } else {
+                println!("{}", kraai_eval::format_harbor_comparison(&comparison));
+            }
+        }
         Command::Report { path } => return report(&path, cli.json),
         Command::Compare { left, right } => {
             let comparison = kraai_eval::compare(&left, &right)?;
@@ -193,6 +225,7 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
         );
     }
     let harness = profile.resolve(&args.model, args.runner.as_deref())?;
+    let pricing = args.pricing.options()?;
     let end_attempt = args
         .start_attempt
         .checked_add(args.attempts)
@@ -246,7 +279,9 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
                 attempt,
                 cache_dir: output_root.clone(),
                 reuse_result: args.resume,
-                model_proxy: profile.model_proxy(),
+                model_proxy: profile
+                    .model_proxy()
+                    .map(|proxy| proxy.with_pricing(pricing.clone())),
                 kraai_provider_config: provider_config.clone(),
                 progress: Some(progress.clone()),
             });
@@ -290,7 +325,20 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
 fn report(path: &Path, json: bool) -> Result<ExitCode> {
     let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
     if value.get("suite_id").is_some() {
-        let result: SuiteResult = serde_json::from_value(value)?;
+        let mut result: SuiteResult = serde_json::from_value(value)?;
+        let root = report_cache_root(path, &result.artifact_path)?;
+        for run in &mut result.runs {
+            if let Some(artifact) = &run.artifact_path {
+                ensure_safe_artifact(artifact)?;
+                let saved = kraai_eval::load_run_result(&root.join(artifact).join("result.json"))?;
+                run.accounting = saved
+                    .metrics
+                    .proxy
+                    .as_ref()
+                    .and_then(|proxy| proxy.accounting.as_ref())
+                    .map(kraai_eval::RequestAccounting::summary);
+            }
+        }
         if json {
             print_json(&result)?;
         } else {
@@ -301,7 +349,7 @@ fn report(path: &Path, json: bool) -> Result<ExitCode> {
         }
         Ok(suite_exit_code(&result))
     } else {
-        let result: RunResult = serde_json::from_value(value)?;
+        let result = kraai_eval::load_run_result(path)?;
         if json {
             print_json(&result)?;
         } else {
@@ -344,6 +392,17 @@ fn suite_exit_code(result: &SuiteResult) -> ExitCode {
 
 fn print_json(value: &impl Serialize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn ensure_safe_artifact(path: &Path) -> Result<()> {
+    color_eyre::eyre::ensure!(
+        !path.is_absolute()
+            && path
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "invalid run artifact path"
+    );
     Ok(())
 }
 

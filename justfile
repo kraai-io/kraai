@@ -63,7 +63,10 @@ lint-fix:
 lint-fix-dirty:
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty -- {{ clippy-flags }}
 
-check: generate-cargo-nix format lint test
+test-harbor:
+    uv run --locked --python python3.12 --project evals/harbor python -m unittest discover -s evals/harbor/tests
+
+check: generate-cargo-nix format lint test test-harbor
 
 eval *args:
     nix run .#kraai-eval -- {{ args }}

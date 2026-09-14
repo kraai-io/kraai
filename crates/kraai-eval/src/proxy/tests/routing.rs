@@ -110,6 +110,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
     });
 
     let proxy = ModelProxy::start(ProxyServerConfig {
+        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("upstream-secret"),
@@ -188,6 +189,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
                 output_tokens: 225,
                 reasoning_tokens: 45,
                 cache_read_tokens: 8192,
+                cache_write_tokens: 0,
             },
         "stream usage was not counted once per final response"
     );
@@ -223,6 +225,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
                 output_tokens: 100,
                 reasoning_tokens: 20,
                 cache_read_tokens: 4096,
+                cache_write_tokens: 0,
             }
         } else {
             UsageMetrics {
@@ -231,6 +234,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
                 output_tokens: 125,
                 reasoning_tokens: 25,
                 cache_read_tokens: 4096,
+                cache_write_tokens: 0,
             }
         };
         ensure!(

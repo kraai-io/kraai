@@ -8998,6 +8998,11 @@ rec {
             packageId = "base64 0.23.1";
           }
           {
+            name = "chrono";
+            packageId = "chrono";
+            features = [ "serde" ];
+          }
+          {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];

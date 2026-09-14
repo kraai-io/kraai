@@ -138,15 +138,22 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         task.runner.network.clone()
     };
     set_progress(request, "running harness");
+    let mut runner_environment = proxy.as_ref().map_or_else(
+        std::collections::BTreeMap::new,
+        proxy::ModelProxy::environment,
+    );
+    if request.kraai_provider_config.is_some() {
+        runner_environment.insert(
+            String::from("KRAAI_AGENT_PROFILES"),
+            String::from("/workspace/.kraai-eval/agents.toml"),
+        );
+    }
     let runner_outcome = run_sandboxed(SandboxRequest {
         command: runner_command.clone(),
         workspace: agent_workspace.clone(),
         timeout: Duration::from_secs(task.runner.timeout_seconds),
         network: runner_network.clone(),
-        environment: proxy.as_ref().map_or_else(
-            std::collections::BTreeMap::new,
-            proxy::ModelProxy::environment,
-        ),
+        environment: runner_environment,
         extra_programs: rust_environment
             .map(|environment| environment.programs.clone())
             .unwrap_or_default(),

@@ -68,6 +68,9 @@ struct ProxyEvent<'a> {
     duration_ms: u128,
     usage: &'a Option<UsageMetrics>,
     routing_hint_derived: bool,
+    model: Option<&'a str>,
+    reasoning_effort: Option<&'a str>,
+    service_tier: Option<&'a str>,
     request_cache_state: CacheState,
     response_cache_state: &'a CacheState,
 }
@@ -79,6 +82,12 @@ pub(super) fn write_event(
     duration: Duration,
 ) -> Result<()> {
     let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let body = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
+    let field = |name| {
+        body.as_ref()
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_str)
+    };
     let derived_hint = missing_routing_hint(
         request,
         matches!(state.credentials, UpstreamCredentials::Codex { .. }),
@@ -92,6 +101,12 @@ pub(super) fn write_event(
         duration_ms: duration.as_millis(),
         usage: &outcome.usage,
         routing_hint_derived: derived_hint.is_some(),
+        model: field("model"),
+        reasoning_effort: body
+            .as_ref()
+            .and_then(|value| value.pointer("/reasoning/effort"))
+            .and_then(serde_json::Value::as_str),
+        service_tier: field("service_tier"),
         request_cache_state: CacheState::from_request(request, derived_hint.as_ref()),
         response_cache_state: &outcome.response_cache_state,
     };

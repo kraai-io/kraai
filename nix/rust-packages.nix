@@ -147,6 +147,7 @@
         + ''
           wrapProgram "$out/bin/kraai-eval" \
             --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
+            --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
             --prefix PATH : ${lib.makeBinPath [
             kraai
             pkgs.bubblewrap
@@ -158,6 +159,9 @@
             pkgs.pkg-config
             pkgs.ripgrep
             pkgs.systemd
+            pkgs.nix
+            pkgs.uv
+            pkgs.python312
             rustToolchain
           ]}
         '';
@@ -234,6 +238,16 @@
         };
       }
       // {
+        harbor-contracts =
+          pkgs.runCommand "kraai-harbor-contracts" {
+            nativeBuildInputs = [pkgs.python3];
+          } ''
+            export PYTHONPATH=${../evals/harbor}
+            export PYTHONDONTWRITEBYTECODE=1
+            python -m unittest discover -s ${../evals/harbor/tests} -p test_contracts.py
+            touch "$out"
+          '';
+
         clippy = mkCargoCheck {
           name = "clippy";
           command = ''

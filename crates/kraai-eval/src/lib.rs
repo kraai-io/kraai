@@ -1,11 +1,14 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::all)]
 
+mod accounting;
+mod benchmark;
 mod cache;
 mod cargo_dependencies;
 mod command;
 mod comparison;
 mod execution;
+mod harbor;
 mod harness;
 mod manifest;
 mod metrics;
@@ -16,16 +19,23 @@ mod suite;
 mod validation;
 mod workspace;
 
-pub use cache::{ExperimentIdentity, ResultStore, RunCoordinates};
-pub use comparison::{
-    ComparedRun, ComparisonResult, ComparisonSuite, PairOutcome, PairedMetric, compare,
-    compare_with_cache_roots,
+pub use accounting::{
+    AccountingSummary, ContextMetrics, PairedRequestMetrics, PricingOptions, RequestAccounting,
+    analyze_requests, load_accounting,
 };
+pub use benchmark::{BenchmarkSpec, docker_proxy_host, prepare_benchmark_spec, runner_store_root};
+pub use cache::{ExperimentIdentity, ResultStore, RunCoordinates, load_run_result};
+pub use comparison::{
+    ComparedRun, ComparisonResult, ComparisonSuite, EfficiencyMetrics, PairOutcome, PairedMetric,
+    PairedUsageMetrics, compare, compare_with_cache_roots,
+};
+pub use harbor::{HarborComparisonResult, compare_harbor_jobs, format_harbor_comparison};
 pub use harness::{HarnessProfile, ProxyKind, ResolvedHarness};
 pub use manifest::{CommandSpec, NetworkPolicy, TaskManifest};
 pub use metrics::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, UsageMetrics};
 pub use provider_config::KraaiProviderConfigRequest;
 pub use proxy::ModelProxyRequest;
+pub use proxy::service::{ProxyServiceRequest, serve_model_proxy};
 pub use suite::{SuiteRequest, SuiteResult, run_suite};
 pub use validation::{MutationValidation, TaskValidation, validate_task};
 
@@ -310,7 +320,12 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
             experiment_id: &experiment_id,
         },
     );
-    if let Some(result) = store.load_result()? {
+    let pricing = request
+        .model_proxy
+        .as_ref()
+        .map(ModelProxyRequest::pricing)
+        .filter(|pricing| request.reuse_result && pricing.config.is_some());
+    if let Some(result) = store.load_result_with_pricing(pricing)? {
         if request.reuse_result {
             return Ok(result);
         }

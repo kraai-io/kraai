@@ -62,6 +62,8 @@ pub struct SuiteRunResult {
     pub artifact_path: Option<PathBuf>,
     pub duration_ms: Option<u128>,
     pub usage: Option<UsageMetrics>,
+    #[serde(default)]
+    pub accounting: Option<crate::AccountingSummary>,
     pub error: Option<String>,
 }
 
@@ -110,6 +112,12 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
                 artifact_path: Some(result.artifact_path),
                 duration_ms: Some(result.duration_ms),
                 usage: result.metrics.usage().cloned(),
+                accounting: result
+                    .metrics
+                    .proxy
+                    .as_ref()
+                    .and_then(|proxy| proxy.accounting.as_ref())
+                    .map(crate::RequestAccounting::summary),
                 error: result.controller_failure.map(|failure| failure.error),
             }),
             Err(error) => runs.push(SuiteRunResult {
@@ -122,6 +130,7 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
                 artifact_path: None,
                 duration_ms: None,
                 usage: None,
+                accounting: None,
                 error: Some(format!("{error:#}")),
             }),
         }

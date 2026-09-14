@@ -1,0 +1,12 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling==1.28.0"]
+
+[project]
+dependencies = ["harbor==0.22.0"]
+name = "kraai-harbor"
+requires-python = ">=3.12"
+version = "0.1.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kraai_harbor"]

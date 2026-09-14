@@ -49,6 +49,7 @@ fn usage_from_json(value: &serde_json::Value) -> Option<UsageMetrics> {
         output_tokens: raw_output.saturating_sub(reasoning),
         reasoning_tokens: reasoning,
         cache_read_tokens: cached,
+        cache_write_tokens: 0,
     })
 }
 

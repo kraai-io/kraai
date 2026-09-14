@@ -1,0 +1,15 @@
+diff --git a/src/journal.rs b/src/journal.rs
+--- a/src/journal.rs
++++ b/src/journal.rs
+@@ -9,9 +9,9 @@
+
+ impl Journal {
+     pub fn open(bytes: &[u8]) -> Result<Self, JournalError> {
+-        let (store, committed) = replay::recover(bytes)?;
++        let (store, _committed) = replay::recover(bytes)?;
+         Ok(Self {
+-            bytes: bytes[..committed].to_vec(),
++            bytes: bytes.to_vec(),
+             store,
+         })
+     }

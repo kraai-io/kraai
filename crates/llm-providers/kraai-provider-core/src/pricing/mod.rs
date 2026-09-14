@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::{StreamExt, stream::BoxStream};
-use kraai_types::{ModelId, ProviderId, RequestCost};
+use kraai_types::{ModelId, ProviderId, RequestCost, TokenRates, TokenUsage};
 
 use crate::{ProviderManagerConfig, ProviderStreamEvent};
 use catalog::Catalog;
@@ -37,16 +37,25 @@ impl Pricing {
         })
     }
 
-    pub async fn start(&self) {
-        if !self
-            .configs
+    fn uses_catalog(&self) -> bool {
+        self.configs
             .values()
             .any(|config| config.api.is_some() || config.provider.is_some())
-        {
+    }
+
+    pub async fn refresh(&self) {
+        if !self.uses_catalog() {
             return;
         }
         self.catalog.load().await;
         self.catalog.refresh().await;
+    }
+
+    pub async fn start(&self) {
+        if !self.uses_catalog() {
+            return;
+        }
+        self.refresh().await;
         let catalog = Arc::downgrade(&self.catalog);
         tokio::spawn(async move {
             loop {
@@ -66,16 +75,13 @@ impl Pricing {
             .is_some_and(|config| config.subscription)
     }
 
-    pub async fn apply(
+    pub async fn quote(
         &self,
         provider: &ProviderId,
         model: &ModelId,
         pricing_model: &ModelId,
-        stream: BoxStream<'static, color_eyre::Result<ProviderStreamEvent>>,
-    ) -> BoxStream<'static, color_eyre::Result<ProviderStreamEvent>> {
-        let Some(config) = self.configs.get(provider) else {
-            return stream;
-        };
+    ) -> Option<PriceQuote> {
+        let config = self.configs.get(provider)?;
         let configured = config
             .models
             .get(model)
@@ -92,38 +98,69 @@ impl Pricing {
         } else {
             None
         };
+        match configured {
+            Some(rates) => Some(PriceQuote::Configured(rates)),
+            None => catalog_pricing.map(|(cost, source, timestamp)| PriceQuote::Catalog {
+                cost,
+                source,
+                timestamp,
+            }),
+        }
+    }
+
+    pub async fn apply(
+        &self,
+        provider: &ProviderId,
+        model: &ModelId,
+        pricing_model: &ModelId,
+        stream: BoxStream<'static, color_eyre::Result<ProviderStreamEvent>>,
+    ) -> BoxStream<'static, color_eyre::Result<ProviderStreamEvent>> {
+        let quote = self.quote(provider, model, pricing_model).await;
         stream
             .map(move |event| match event {
                 Ok(ProviderStreamEvent::Usage(mut usage)) => {
                     if usage.cost.is_none() {
-                        let pricing = match &configured {
-                            Some(rates) => Some((rates.clone(), String::from("configured"), now())),
-                            None => {
-                                catalog_pricing
-                                    .as_ref()
-                                    .and_then(|(cost, source, timestamp)| {
-                                        catalog::parse_rates(cost, &usage)
-                                            .map(|rates| (rates, source.clone(), *timestamp))
-                                    })
-                            }
-                        };
-                        if let Some((rates, source, priced_at)) = pricing
-                            && let Some(amount) = rates.estimate(&usage)
-                        {
-                            usage.cost = Some(RequestCost {
-                                amount,
-                                source,
-                                rates: Some(rates),
-                                priced_at,
-                                upstream: None,
-                            });
-                        }
+                        usage.cost = quote.as_ref().and_then(|quote| quote.estimate(&usage));
                     }
                     Ok(ProviderStreamEvent::Usage(usage))
                 }
                 other => other,
             })
             .boxed()
+    }
+}
+
+#[derive(Clone)]
+pub enum PriceQuote {
+    Configured(TokenRates),
+    Catalog {
+        cost: serde_json::Value,
+        source: String,
+        timestamp: u64,
+    },
+}
+
+impl PriceQuote {
+    pub fn estimate(&self, usage: &TokenUsage) -> Option<RequestCost> {
+        let (rates, source, priced_at) = match self {
+            Self::Configured(rates) => (rates.clone(), String::from("configured"), now()),
+            Self::Catalog {
+                cost,
+                source,
+                timestamp,
+            } => (
+                catalog::parse_rates(cost, usage)?,
+                source.clone(),
+                *timestamp,
+            ),
+        };
+        Some(RequestCost {
+            amount: rates.estimate(usage)?,
+            source,
+            rates: Some(rates),
+            priced_at,
+            upstream: None,
+        })
     }
 }
 

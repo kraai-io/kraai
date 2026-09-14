@@ -1,0 +1,34 @@
+id = "repository-repair"
+prompt = """
+Repair the asset router in this repository. Existing simple requests work, but production reports describe sibling URLs being captured by a mount, inherited settings disappearing when one request setting changes, and escaped traversal paths reaching the asset lookup. Find and fix the causes while preserving the public API and existing public tests. You may reorganize internals and add modules or tests. The crate must build offline without dependencies.
+
+Router::resolve returns a Resolved value with the selected mount prefix, asset path, effective cache_seconds, and untouched query string. Split the target at the first question mark; query is None when absent and Some("") for an empty query. The raw path must start with slash and contain no literal hash, otherwise return InvalidTarget. Next decode percent escapes exactly once, rejecting malformed escapes as InvalidEscape and invalid decoded UTF-8 as InvalidUtf8. Then reject any decoded NUL, backslash, or complete '..' segment as UnsafePath. Collapse repeated slashes and remove '.' segments. Percent-encoded slashes participate in this normalization; escaped percent signs are not decoded a second time. Queries never participate in path validation or decoding. Validate in the order described.
+
+Select the longest mount prefix that matches the normalized path at a segment boundary. Root '/' matches every path. For equal prefixes, the earlier declared mount wins. An unmatched path uses the defaults with no selected mount. Resolve each setting independently: a request's Some value overrides the mount's Some value, which overrides the default. An explicit cache_seconds of zero must be preserved.
+
+Strip the selected mount prefix from the normalized path, or use the whole normalized path when no mount matches. Join the remaining segments beneath the effective root with exactly one separating slash. Append the effective index when the remaining path is empty or the decoded path ended with slash. Return the normalized asset path and preserve the query byte-for-byte. Mount prefixes and setting values supplied by callers are valid: prefixes and roots are normalized absolute paths with no trailing slash except '/'. The index is a nonempty filename containing no slash, backslash, or NUL, and is neither '.' nor '..'. Only observable results are graded, with no required internal algorithm or module layout.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/prefix-boundaries.patch",
+  "mutations/replace-inheritance.patch",
+  "mutations/validate-before-decoding.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern repository_repair=\"$grade_dir/target/debug/librepository_repair.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

@@ -1,0 +1,38 @@
+diff --git a/src/config.rs b/src/config.rs
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -13,22 +13,20 @@
+ }
+
+ pub(crate) fn resolve(defaults: &Settings, mount: &Overrides, request: &Overrides) -> Settings {
++    let selected = if request == &Overrides::default() {
++        mount
++    } else {
++        request
++    };
+     Settings {
+-        root: request
++        root: selected
+             .root
+-            .as_ref()
+-            .or(mount.root.as_ref())
+-            .unwrap_or(&defaults.root)
+-            .clone(),
+-        index: request
++            .clone()
++            .unwrap_or_else(|| defaults.root.clone()),
++        index: selected
+             .index
+-            .as_ref()
+-            .or(mount.index.as_ref())
+-            .unwrap_or(&defaults.index)
+-            .clone(),
+-        cache_seconds: request
+-            .cache_seconds
+-            .or(mount.cache_seconds)
+-            .unwrap_or(defaults.cache_seconds),
++            .clone()
++            .unwrap_or_else(|| defaults.index.clone()),
++        cache_seconds: selected.cache_seconds.unwrap_or(defaults.cache_seconds),
+     }
+ }

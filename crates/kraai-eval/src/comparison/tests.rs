@@ -1,8 +1,8 @@
 use super::*;
 use crate::suite::{Distribution, TokenSummary};
 use crate::{
-    EvaluationMetrics, HarnessMetrics, NetworkPolicy, ProcessRecord, ProxyRecord, SandboxRecord,
-    UsageMetrics,
+    EvaluationMetrics, HarnessMetrics, NetworkPolicy, ProcessRecord, ProxyMetrics, ProxyRecord,
+    SandboxRecord, UsageMetrics,
 };
 
 struct TestCache(PathBuf);
@@ -27,6 +27,7 @@ impl TestCache {
             fs::create_dir_all(&directory)?;
             fs::write(directory.join("result.json"), serde_json::to_vec(result)?)?;
             runs.push(SuiteRunResult {
+                accounting: None,
                 task_id: Some(result.task_id.clone()),
                 attempt: result.attempt,
                 status: Some(result.status.clone()),
@@ -38,6 +39,7 @@ impl TestCache {
             });
         }
         runs.extend(launches.iter().map(|attempt| SuiteRunResult {
+            accounting: None,
             task_id: Some(String::from("sample-task")),
             attempt: *attempt,
             status: None,
@@ -131,6 +133,8 @@ fn run(harness: &str, attempt: u64, status: RunStatus) -> RunResult {
         metrics: EvaluationMetrics {
             proxy: None,
             harness: Some(HarnessMetrics {
+                request_costs: Default::default(),
+                request_costs_complete: false,
                 schema_version: 1,
                 turns: None,
                 script_executions: None,
@@ -202,6 +206,9 @@ fn compares_paired_outcomes_and_excludes_infrastructure_failures() -> Result<()>
             && comparison.runner_time_ms.right_mean == Some(90.0)
     );
     ensure!(comparison.total_tokens.samples == 2 && comparison.total_tokens.left_total == 84);
+    ensure!(comparison.both_passed == 1);
+    ensure!(comparison.both_passed_efficiency.wall_time_ms.samples == 1);
+    ensure!(comparison.both_passed_efficiency.total_tokens.samples == 0);
     ensure!(
         comparison
             .runs
@@ -226,6 +233,177 @@ fn all_invalid_pairs_have_no_success_rate_or_metric_samples() -> Result<()> {
     ensure!(comparison.invalid_pairs == 1 && comparison.evaluated_pairs == 0);
     ensure!(comparison.left_success_rate.is_none() && comparison.right_success_rate.is_none());
     ensure!(comparison.wall_time_ms.samples == 0 && comparison.total_tokens.left_mean.is_none());
+    ensure!(comparison.both_passed == 0);
+    ensure!(
+        comparison
+            .both_passed_efficiency
+            .total_tokens
+            .left_mean
+            .is_none()
+    );
+    Ok(())
+}
+
+fn set_usage(result: &mut RunResult, usage: UsageMetrics, requests: Option<u64>) {
+    result.metrics = EvaluationMetrics {
+        proxy: requests.map(|requests| ProxyMetrics {
+            requests,
+            usage: usage.clone(),
+            ..ProxyMetrics::default()
+        }),
+        harness: Some(HarnessMetrics {
+            request_costs: Default::default(),
+            request_costs_complete: false,
+            schema_version: 1,
+            turns: None,
+            script_executions: None,
+            final_context_tokens: None,
+            usage: Some(usage),
+        }),
+    };
+}
+
+#[test]
+fn efficiency_on_completed_solutions_excludes_cheap_failures() -> Result<()> {
+    let cache = TestCache::new()?;
+    let mut left_passed = run("left", 0, RunStatus::Passed);
+    set_usage(
+        &mut left_passed,
+        UsageMetrics {
+            total_tokens: 107,
+            input_tokens: 80,
+            cache_read_tokens: 20,
+            cache_write_tokens: 0,
+            output_tokens: 5,
+            reasoning_tokens: 2,
+        },
+        Some(4),
+    );
+    let mut right_passed = run("right", 0, RunStatus::Passed);
+    set_usage(
+        &mut right_passed,
+        UsageMetrics {
+            total_tokens: 100,
+            input_tokens: 50,
+            cache_read_tokens: 40,
+            cache_write_tokens: 0,
+            output_tokens: 7,
+            reasoning_tokens: 3,
+        },
+        Some(6),
+    );
+    let mut left_failed = run("left", 1, RunStatus::RunnerFailed);
+    set_usage(
+        &mut left_failed,
+        UsageMetrics {
+            total_tokens: 2,
+            input_tokens: 1,
+            output_tokens: 1,
+            ..UsageMetrics::default()
+        },
+        Some(1),
+    );
+    left_failed.duration_ms = 8;
+    if let Some(runner) = &mut left_failed.runner {
+        runner.duration_ms = 5;
+    }
+    let mut right_expensive = run("right", 1, RunStatus::Passed);
+    set_usage(
+        &mut right_expensive,
+        UsageMetrics {
+            total_tokens: 1_000,
+            input_tokens: 900,
+            cache_read_tokens: 90,
+            cache_write_tokens: 0,
+            output_tokens: 9,
+            reasoning_tokens: 1,
+        },
+        Some(10),
+    );
+    let left = cache.write_suite("left", &[left_passed, left_failed], &[])?;
+    let right = cache.write_suite("right", &[right_passed, right_expensive], &[])?;
+    let comparison = compare(&left, &right)?;
+
+    ensure!(comparison.evaluated_pairs == 2 && comparison.both_passed == 1);
+    ensure!(comparison.left_passed == 1 && comparison.right_passed == 2);
+    ensure!(comparison.total_tokens.left_total == 109);
+    ensure!(comparison.total_tokens.right_total == 1_100);
+    ensure!(comparison.usage.uncached_input_tokens.left_total == 81);
+    ensure!(comparison.usage.cache_read_tokens.right_total == 130);
+    ensure!(comparison.usage.output_tokens.left_total == 6);
+    ensure!(comparison.usage.reasoning_tokens.right_total == 4);
+    ensure!(comparison.usage.proxy_requests.left_total == 5);
+    ensure!(comparison.usage.proxy_requests.right_total == 16);
+    ensure!(comparison.wall_time_ms.left_total == 108);
+    ensure!(comparison.runner_time_ms.left_total == 95);
+    let passed = &comparison.both_passed_efficiency;
+    ensure!(passed.total_tokens.samples == 1);
+    ensure!(passed.total_tokens.left_total == 107 && passed.total_tokens.right_total == 100);
+    ensure!(passed.usage.uncached_input_tokens.left_total == 80);
+    ensure!(passed.usage.cache_read_tokens.right_total == 40);
+    ensure!(passed.usage.output_tokens.left_total == 5);
+    ensure!(passed.usage.reasoning_tokens.right_total == 3);
+    ensure!(passed.usage.proxy_requests.left_total == 4);
+    ensure!(passed.usage.proxy_requests.right_total == 6);
+    ensure!(passed.wall_time_ms.left_total == 100);
+    ensure!(passed.runner_time_ms.left_total == 90);
+    Ok(())
+}
+
+#[test]
+fn efficiency_distinguishes_missing_metrics_from_measured_zero() -> Result<()> {
+    let cache = TestCache::new()?;
+    let mut left_zero = run("left", 0, RunStatus::Passed);
+    set_usage(&mut left_zero, UsageMetrics::default(), Some(0));
+    let mut right_measured = run("right", 0, RunStatus::Passed);
+    set_usage(
+        &mut right_measured,
+        UsageMetrics {
+            total_tokens: 1,
+            input_tokens: 1,
+            ..UsageMetrics::default()
+        },
+        Some(3),
+    );
+    let mut left_missing = run("left", 1, RunStatus::Passed);
+    left_missing.metrics = EvaluationMetrics::default();
+    let right_unpaired = run("right", 1, RunStatus::Passed);
+    let mut left_no_proxy = run("left", 2, RunStatus::Passed);
+    set_usage(&mut left_no_proxy, UsageMetrics::default(), None);
+    left_no_proxy.runner = None;
+    let mut right_no_proxy = run("right", 2, RunStatus::Passed);
+    set_usage(&mut right_no_proxy, UsageMetrics::default(), Some(0));
+    let left = cache.write_suite("left", &[left_zero, left_missing, left_no_proxy], &[])?;
+    let right = cache.write_suite(
+        "right",
+        &[right_measured, right_unpaired, right_no_proxy],
+        &[],
+    )?;
+    let comparison = compare(&left, &right)?;
+
+    ensure!(comparison.evaluated_pairs == 3 && comparison.both_passed == 3);
+    ensure!(comparison.total_tokens.samples == 2);
+    ensure!(comparison.total_tokens.left_mean == Some(0.0));
+    ensure!(comparison.total_tokens.right_total == 1);
+    ensure!(comparison.usage.uncached_input_tokens.samples == 2);
+    ensure!(comparison.usage.cache_read_tokens.samples == 2);
+    ensure!(comparison.usage.cache_read_tokens.left_mean == Some(0.0));
+    ensure!(comparison.usage.output_tokens.samples == 2);
+    ensure!(comparison.usage.reasoning_tokens.samples == 2);
+    ensure!(comparison.usage.proxy_requests.samples == 1);
+    ensure!(comparison.usage.proxy_requests.left_mean == Some(0.0));
+    ensure!(comparison.usage.proxy_requests.right_mean == Some(3.0));
+    ensure!(comparison.wall_time_ms.samples == 3);
+    ensure!(comparison.runner_time_ms.samples == 2);
+    ensure!(comparison.both_passed_efficiency.total_tokens.samples == 2);
+    ensure!(
+        comparison
+            .both_passed_efficiency
+            .usage
+            .proxy_requests
+            .samples
+            == 1
+    );
     Ok(())
 }
 

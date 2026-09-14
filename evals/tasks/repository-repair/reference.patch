@@ -1,0 +1,80 @@
+diff --git a/src/config.rs b/src/config.rs
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -13,20 +13,22 @@
+ }
+
+ pub(crate) fn resolve(defaults: &Settings, mount: &Overrides, request: &Overrides) -> Settings {
+-    let selected = if request == &Overrides::default() {
+-        mount
+-    } else {
+-        request
+-    };
+     Settings {
+-        root: selected
++        root: request
+             .root
+-            .clone()
+-            .unwrap_or_else(|| defaults.root.clone()),
+-        index: selected
++            .as_ref()
++            .or(mount.root.as_ref())
++            .unwrap_or(&defaults.root)
++            .clone(),
++        index: request
+             .index
+-            .clone()
+-            .unwrap_or_else(|| defaults.index.clone()),
+-        cache_seconds: selected.cache_seconds.unwrap_or(defaults.cache_seconds),
++            .as_ref()
++            .or(mount.index.as_ref())
++            .unwrap_or(&defaults.index)
++            .clone(),
++        cache_seconds: request
++            .cache_seconds
++            .or(mount.cache_seconds)
++            .unwrap_or(defaults.cache_seconds),
+     }
+ }
+diff --git a/src/mounts.rs b/src/mounts.rs
+--- a/src/mounts.rs
++++ b/src/mounts.rs
+@@ -9,9 +9,12 @@
+ pub(crate) fn select<'a>(mounts: &'a [Mount], path: &str) -> Option<&'a Mount> {
+     let mut best: Option<&Mount> = None;
+     for mount in mounts {
+-        if path.starts_with(&mount.prefix)
+-            && best.is_none_or(|current| mount.prefix.len() > current.prefix.len())
+-        {
++        let matches = mount.prefix == "/"
++            || path == mount.prefix
++            || path
++                .strip_prefix(&mount.prefix)
++                .is_some_and(|rest| rest.starts_with('/'));
++        if matches && best.is_none_or(|current| mount.prefix.len() > current.prefix.len()) {
+             best = Some(mount);
+         }
+     }
+diff --git a/src/path.rs b/src/path.rs
+--- a/src/path.rs
++++ b/src/path.rs
+@@ -30,9 +30,6 @@
+     if !raw_path.starts_with('/') || raw_path.contains('#') {
+         return Err(RouteError::InvalidTarget);
+     }
+-    if raw_path.split('/').any(|segment| segment == "..") || raw_path.contains(['\0', '\\']) {
+-        return Err(RouteError::UnsafePath);
+-    }
+     let bytes = raw_path.as_bytes();
+     let mut decoded = Vec::with_capacity(bytes.len());
+     let mut offset = 0;
+@@ -51,6 +48,9 @@
+         }
+     }
+     let decoded = String::from_utf8(decoded).map_err(|_| RouteError::InvalidUtf8)?;
++    if decoded.split('/').any(|segment| segment == "..") || decoded.contains(['\0', '\\']) {
++        return Err(RouteError::UnsafePath);
++    }
+     let directory = decoded.ends_with('/');
+     let segments: Vec<_> = decoded
+         .split('/')

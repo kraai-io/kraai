@@ -1,0 +1,23 @@
+diff --git a/src/path.rs b/src/path.rs
+--- a/src/path.rs
++++ b/src/path.rs
+@@ -30,6 +30,9 @@
+     if !raw_path.starts_with('/') || raw_path.contains('#') {
+         return Err(RouteError::InvalidTarget);
+     }
++    if raw_path.split('/').any(|segment| segment == "..") || raw_path.contains(['\0', '\\']) {
++        return Err(RouteError::UnsafePath);
++    }
+     let bytes = raw_path.as_bytes();
+     let mut decoded = Vec::with_capacity(bytes.len());
+     let mut offset = 0;
+@@ -48,9 +51,6 @@
+         }
+     }
+     let decoded = String::from_utf8(decoded).map_err(|_| RouteError::InvalidUtf8)?;
+-    if decoded.split('/').any(|segment| segment == "..") || decoded.contains(['\0', '\\']) {
+-        return Err(RouteError::UnsafePath);
+-    }
+     let directory = decoded.ends_with('/');
+     let segments: Vec<_> = decoded
+         .split('/')
