@@ -203,7 +203,16 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
             .open(&stdout_path)?;
         command.stdout(stdout);
     }
-    let status = command.status().wrap_err("launch Harbor; use the repository's nix develop environment for uv, and a running Docker engine with Compose")?;
+    let status = command.status().wrap_err("launch Harbor; use the repository's nix develop environment for uv, and a running Docker engine with Compose");
+    if let Err(error) = &status
+        && json
+    {
+        super::print_json(&serde_json::json!({
+            "job_dir": job_dir, "exit_code": null, "stdout_log": stdout_path,
+            "error": format!("{error:#}"),
+        }))?;
+    }
+    let status = status?;
     if json {
         super::print_json(
             &serde_json::json!({"job_dir": job_dir, "exit_code": status.code(), "stdout_log": stdout_path}),
