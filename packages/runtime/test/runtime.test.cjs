@@ -95,3 +95,22 @@ test('streams a reply from a local provider and persists the conversation', { ti
   events.close();
   unwrap(await runtime.shutdown());
 });
+
+test('native methods reject invalid and wrong-class receivers', { timeout: 30000 }, async t => {
+  const runtime = createRuntime({ storage_root: fixture(t) });
+  t.after(() => runtime.shutdown());
+  const events = runtime.subscribe();
+  t.after(() => events.close());
+  for (const [instance, wrongClass, syncMethod, asyncMethod] of [
+    [runtime, events, 'startupStatus', 'listSessions'],
+    [events, runtime, 'close', 'next'],
+  ]) {
+    for (const receiver of [null, undefined, {}, Object.create(Object.getPrototypeOf(instance)), wrongClass]) {
+      assert.throws(() => instance[syncMethod].call(receiver));
+      await assert.rejects(async () => instance[asyncMethod].call(receiver));
+    }
+  }
+  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  events.close();
+  assert.deepEqual(await events.next(), { type: 'closed' });
+});

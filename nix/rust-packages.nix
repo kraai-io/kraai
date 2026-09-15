@@ -237,7 +237,7 @@
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         node = mkCargoCheck {
           name = "node";
-          nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils];
+          nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils pkgs.bubblewrap];
           command = ''
             ${pkgs.just}/bin/just check-node
           '';
