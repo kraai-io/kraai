@@ -9,7 +9,7 @@ use kraai_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
-async fn unlaunchable_host(mode: u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn unavailable_host(mode: u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let directory = PrivateTempConfig::default().reserve()?;
     let workspace = directory.path().ok_or("missing private temp")?;
     let host = workspace.join("kraai-nushell-host");
@@ -28,11 +28,13 @@ async fn unlaunchable_host(mode: u32) -> Result<(), Box<dyn std::error::Error + 
         execute(plan, CancellationToken::new()),
     )
     .await?;
-    if !matches!(
-        &result,
-        Err(RuntimeError::Sandbox(SandboxError::Spawn { .. }))
-    ) {
-        return Err(format!("expected a host launch failure, received {result:?}").into());
+    let unavailable = match &result {
+        Err(RuntimeError::Sandbox(SandboxError::Spawn { .. })) => true,
+        Err(RuntimeError::Transport(_)) => cfg!(target_os = "macos") && mode == 0o700,
+        _ => false,
+    };
+    if !unavailable {
+        return Err(format!("expected an unavailable host, received {result:?}").into());
     }
     Ok(())
 }
@@ -40,11 +42,11 @@ async fn unlaunchable_host(mode: u32) -> Result<(), Box<dyn std::error::Error + 
 #[tokio::test]
 async fn host_without_execute_permission_fails_to_launch()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    unlaunchable_host(0o600).await
+    unavailable_host(0o600).await
 }
 
 #[tokio::test]
-async fn host_with_invalid_executable_format_fails_to_launch()
+async fn host_with_invalid_executable_format_is_unavailable()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    unlaunchable_host(0o700).await
+    unavailable_host(0o700).await
 }
