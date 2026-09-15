@@ -2,6 +2,7 @@ mod builder;
 mod config;
 mod core;
 mod dispatch;
+mod nushell_host;
 mod queue;
 mod request_usage;
 mod script_execution;

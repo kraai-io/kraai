@@ -48,6 +48,13 @@ test:
 clean:
     cargo clean
 
+build:
+    cargo build --locked -p kraai-tui -p kraai-nushell-runtime --bins
+
+[positional-arguments]
+run *args: build
+    cargo run --locked -p kraai-tui -- "$@"
+
 dev:
     cargo watch -w crates -c
 

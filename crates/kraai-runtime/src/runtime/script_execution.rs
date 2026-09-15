@@ -21,6 +21,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
 use super::core::RuntimeCore;
+use super::nushell_host::resolve_nushell_host;
 
 #[derive(Clone)]
 pub(crate) struct EffectiveScriptRequest {
@@ -48,11 +49,6 @@ pub(crate) struct CompletedScriptExecution {
 pub(crate) struct PendingScriptApproval {
     pub(crate) request: EffectiveScriptRequest,
     pub(crate) additions: Vec<SandboxCapability>,
-}
-
-struct NushellHost {
-    executable: PathBuf,
-    arguments: Vec<std::ffi::OsString>,
 }
 
 impl CompletedScriptExecution {
@@ -109,7 +105,7 @@ impl RuntimeCore {
                     .finish(
                         &execution_id,
                         ScriptExecutionCompletion {
-                            status: ScriptExecutionStatus::FailedToStart,
+                            status: ScriptExecutionStatus::HostUnavailable,
                             exit_code: None,
                             sandbox_denied: false,
                             error: Some(error.to_string()),
@@ -135,6 +131,7 @@ impl RuntimeCore {
             output_rx,
         ));
 
+        let host_path = host.executable.display().to_string();
         let mut plan = ScriptExecutionPlan::new(
             execution_id.clone(),
             host.executable,
@@ -171,6 +168,12 @@ impl RuntimeCore {
         let completion = match execution {
             Ok(result) => completion_from_output(result.output, output_persistence_error),
             Err(error) => {
+                let error = match error {
+                    RuntimeError::Transport(message) => RuntimeError::Transport(format!(
+                        "Nushell host at {host_path} failed its handshake: {message}. Rebuild both binaries with `just build`"
+                    )),
+                    error => error,
+                };
                 let output = self.execution_store.read_output(&execution_id).await?;
                 completion_from_runtime_error(error, output, output_persistence_error)
             }
@@ -334,16 +337,17 @@ fn completion_from_runtime_error(
         RuntimeError::Sandbox(SandboxError::SandboxUnavailable(_)) => {
             ScriptExecutionStatus::SandboxUnavailable
         }
-        RuntimeError::Transport(_)
-        | RuntimeError::Sandbox(
+        RuntimeError::Transport(_) | RuntimeError::Sandbox(SandboxError::Spawn { .. }) => {
+            ScriptExecutionStatus::HostUnavailable
+        }
+        RuntimeError::Sandbox(
             SandboxError::ExecutableMustBeAbsolute
             | SandboxError::ExecutableNotVisible(_)
             | SandboxError::InvalidTimeout
             | SandboxError::WorkspaceReadRequired
             | SandboxError::MissingWorkspace(_)
             | SandboxError::InvalidRuntimeRoot(_)
-            | SandboxError::PrivateTemp(_)
-            | SandboxError::Spawn { .. },
+            | SandboxError::PrivateTemp(_),
         ) => ScriptExecutionStatus::FailedToStart,
         RuntimeError::RequestChannel(_)
         | RuntimeError::ChannelTask(_)
@@ -365,58 +369,6 @@ fn completion_from_runtime_error(
     }
 }
 
-fn resolve_nushell_host(use_current_executable: bool) -> Result<NushellHost> {
-    let current_executable = std::env::current_exe()
-        .context("Failed to locate the running Kraai executable")?
-        .canonicalize()
-        .context("Failed to canonicalize the running Kraai executable")?;
-    resolve_nushell_host_from(current_executable, use_current_executable)
-}
-
-fn resolve_nushell_host_from(
-    current_executable: PathBuf,
-    use_current_executable: bool,
-) -> Result<NushellHost> {
-    let directory = current_executable.parent().ok_or_else(|| {
-        eyre!(
-            "Kraai executable has no parent directory: {}",
-            current_executable.display()
-        )
-    })?;
-    let host = directory.join("kraai-nushell-host");
-    if let Ok(executable) = canonical_executable(&host) {
-        return Ok(NushellHost {
-            executable,
-            arguments: Vec::new(),
-        });
-    }
-    if use_current_executable {
-        return Ok(NushellHost {
-            executable: current_executable,
-            arguments: vec![kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT.into()],
-        });
-    }
-    canonical_executable(&host)
-        .map(|executable| NushellHost {
-            executable,
-            arguments: Vec::new(),
-        })
-        .with_context(|| {
-            format!(
-                "Unable to locate the packaged Nushell host beside Kraai at {}",
-                host.display()
-            )
-        })
-}
-
-fn canonical_executable(path: &Path) -> Result<PathBuf> {
-    let canonical = path.canonicalize()?;
-    if !canonical.is_file() {
-        return Err(eyre!("Nushell host is not a file: {}", canonical.display()));
-    }
-    Ok(canonical)
-}
-
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -426,6 +378,31 @@ mod tests {
     use super::*;
     use kraai_types::{CommandInvocationId, ContextStateDelta};
     use ulid::Ulid;
+
+    #[test]
+    fn incompatible_host_is_an_application_failure() {
+        for error in [
+            RuntimeError::Transport(String::from("incompatible host protocol")),
+            RuntimeError::Sandbox(SandboxError::Spawn {
+                executable: String::from("kraai-nushell-host"),
+                message: String::from("Permission denied"),
+            }),
+            RuntimeError::Sandbox(SandboxError::Spawn {
+                executable: String::from("kraai-nushell-host"),
+                message: String::from("Exec format error"),
+            }),
+        ] {
+            let completion = completion_from_runtime_error(
+                error,
+                PersistedScriptOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                },
+                None,
+            );
+            assert_eq!(completion.status, ScriptExecutionStatus::HostUnavailable);
+        }
+    }
 
     fn open_request(path: &str) -> StateEffectRequest {
         StateEffectRequest {
@@ -438,44 +415,6 @@ mod tests {
                 payload: serde_json::json!({ "path": path }),
             }],
         }
-    }
-
-    #[test]
-    fn nushell_host_prefers_packaged_sibling_and_can_fall_back_to_frontend() -> Result<()> {
-        let directory =
-            std::env::temp_dir().join(format!("kraai-host-resolution-{}", ulid::Ulid::generate()));
-        std::fs::create_dir_all(&directory)?;
-        let frontend = directory.join("kraai");
-        std::fs::write(&frontend, [])?;
-        let frontend = frontend.canonicalize()?;
-
-        let fallback = resolve_nushell_host_from(frontend.clone(), true)?;
-        if fallback.executable != frontend {
-            return Err(eyre!("frontend fallback selected the wrong executable"));
-        }
-        if fallback.arguments
-            != [std::ffi::OsString::from(
-                kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT,
-            )]
-        {
-            return Err(eyre!(
-                "frontend fallback omitted the internal host argument"
-            ));
-        }
-        if resolve_nushell_host_from(frontend.clone(), false).is_ok() {
-            return Err(eyre!("frontend fallback was enabled without opt-in"));
-        }
-
-        let packaged = directory.join("kraai-nushell-host");
-        std::fs::write(&packaged, [])?;
-        let packaged = packaged.canonicalize()?;
-        let resolved = resolve_nushell_host_from(frontend, true)?;
-        if resolved.executable != packaged || !resolved.arguments.is_empty() {
-            return Err(eyre!("packaged host was not preferred over the fallback"));
-        }
-
-        std::fs::remove_dir_all(directory)?;
-        Ok(())
     }
 
     #[test]

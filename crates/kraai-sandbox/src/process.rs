@@ -16,12 +16,21 @@ use crate::output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 use crate::platform::prepare_command;
 
 pub async fn run(
-    plan: LaunchPlan,
+    mut plan: LaunchPlan,
     cancellation: CancellationToken,
 ) -> Result<ExecutionOutput, SandboxError> {
     let timeout = plan.timeout;
+    let process_spawned = plan.process_spawned.take();
+    let execution_started = plan.execution_started.take();
     let mut command = prepare_command(plan).await?;
-    let output = spawn_and_wait(&mut command, timeout, cancellation).await;
+    let output = spawn_and_wait(
+        &mut command,
+        timeout,
+        cancellation,
+        process_spawned,
+        execution_started,
+    )
+    .await;
     #[cfg(windows)]
     command.cleanup().await?;
     output
@@ -31,10 +40,15 @@ async fn spawn_and_wait(
     command: &mut PreparedCommand,
     timeout: std::time::Duration,
     cancellation: CancellationToken,
+    process_spawned: Option<tokio::sync::oneshot::Sender<tokio::time::Instant>>,
+    execution_started: Option<tokio::sync::oneshot::Receiver<tokio::time::Instant>>,
 ) -> Result<ExecutionOutput, SandboxError> {
     let sandboxed = command.sandboxed;
     let output_events = command.output_events.take();
     let mut child = spawn(command)?;
+    if let Some(process_spawned) = process_spawned {
+        let _ = process_spawned.send(tokio::time::Instant::now());
+    }
     let _private_temp = &command.private_temp;
     #[cfg(unix)]
     let mut process_group = process_group::ProcessGroup::new(child.id())?;
@@ -65,7 +79,18 @@ async fn spawn_and_wait(
         stop_output.clone(),
     ));
 
-    let deadline = tokio::time::Instant::now() + timeout;
+    let timeout_start = tokio::time::Instant::now();
+    let deadline = async move {
+        let started = match execution_started {
+            Some(started) => match started.await {
+                Ok(started) => started,
+                Err(_closed) => return std::future::pending::<()>().await,
+            },
+            None => timeout_start,
+        };
+        tokio::time::sleep_until(started + timeout).await;
+    };
+    tokio::pin!(deadline);
     let mut termination = tokio::select! {
         status = child.wait() => {
             let status = status.map_err(|error| SandboxError::Wait(error.to_string()))?;
@@ -73,7 +98,7 @@ async fn spawn_and_wait(
             process_group.kill()?;
             Termination::Exited { code: status.code() }
         }
-        () = tokio::time::sleep_until(deadline) => {
+        () = &mut deadline => {
             terminate_process_tree(&mut child, &mut process_group).await?;
             Termination::TimedOut
         }
@@ -88,7 +113,7 @@ async fn spawn_and_wait(
     let outputs = if matches!(termination, Termination::Exited { .. }) {
         tokio::select! {
             outputs = &mut outputs => outputs,
-            () = tokio::time::sleep_until(deadline) => {
+            () = &mut deadline => {
                 terminate_process_tree(&mut child, &mut process_group).await?;
                 termination = Termination::TimedOut;
                 finish_outputs(&mut outputs, &stop_output).await

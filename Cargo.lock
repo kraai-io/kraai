@@ -3754,9 +3754,9 @@ dependencies = [
 
 [[package]]
 name = "nu-cli"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebeede2934496641c5be2f1e252baa4683884341f88f7b7856de8717105ba0c9"
+checksum = "fd226bb503d9171584770c79a3f6af6926ba7c864eb8a3b0e46844905b1235f9"
 dependencies = [
  "chrono",
  "crossterm 0.29.0",
@@ -3790,9 +3790,9 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-base"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dc9a7c47724c2998e055b0926e69da2433a92e0786ad26d4bf03ddd7ee35cbb"
+checksum = "0fdd0693b2fdb2f05f69b7ce71f8b8aeb847ee5f96464d1d62b2c2353c2e12f1"
 dependencies = [
  "indexmap",
  "miette 7.6.0",
@@ -3804,9 +3804,9 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-lang"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f95affce4375ffe33c54e75484dbf7bb7978e1d8074b8fed3b8805723046a484"
+checksum = "3aa84663d0431c1bdac3ecada9ac79632cbe185108118744465d46258ccb3119"
 dependencies = [
  "itertools 0.15.0",
  "nu-cmd-base",
@@ -3821,9 +3821,9 @@ dependencies = [
 
 [[package]]
 name = "nu-color-config"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7911f27fc9dae1f6aa37e1d59ca29df1a7b12ab17add0df3b2c692f4abed6af2"
+checksum = "8f14bc08631933f365bf937d8c2c944d2c43825bbc1fc462cc9b86173a1a8615"
 dependencies = [
  "nu-ansi-term",
  "nu-engine",
@@ -3834,9 +3834,9 @@ dependencies = [
 
 [[package]]
 name = "nu-command"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78e4443342d952f2e1369e6f8ea38becb5a747b62b4c6f98f7922c853f5e8cc2"
+checksum = "80f4b14ed27ecebd6116468167cc87bd31d0ef2b7cbdbfb3f8ed8e00ca9ce2b6"
 dependencies = [
  "aegis-password-generator",
  "alphanumeric-sort",
@@ -4023,9 +4023,9 @@ dependencies = [
 
 [[package]]
 name = "nu-heavy-utils"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "201bf5d9ec64e83debf67b62053b9e73fe246dbdac3e720c08f0faa36766e249"
+checksum = "6e1a3c5c13eeed59cafa28a24af3c024fd9b066391b01bd04a92683767117d59"
 dependencies = [
  "base64 0.23.1",
  "better_default",
@@ -4043,9 +4043,9 @@ dependencies = [
 
 [[package]]
 name = "nu-json"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef5a3a9110b983a9dc36df11a454de17aa11e465de80fd362b2fe16c70712fce"
+checksum = "2a485d679b51c81753d81e6c9fc68e4d2d349b1e3e5cf7674362196d25cc352f"
 dependencies = [
  "linked-hash-map",
  "nu-protocol",
@@ -4163,9 +4163,9 @@ dependencies = [
 
 [[package]]
 name = "nu-table"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9caada73d44f9780d38522406bea0d0b190d1d68b09d407fd5e8553ea6ef5ca2"
+checksum = "0ad52a2ae6f376e7f27f54cc2d575b2ac0eff3aa3bb444a4f590531a8ccff299"
 dependencies = [
  "fancy-regex 0.19.0",
  "nu-ansi-term",
@@ -4313,9 +4313,9 @@ checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
 
 [[package]]
 name = "nuon"
-version = "0.115.0"
+version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01c21387971903e406fea2d5bfa118cff71a3035577bf47c30da47e4ee5f091b"
+checksum = "e3a8c3c6f1034438b31e83b5596b325e1ccc728428faa8464fff0c6e105f13f2"
 dependencies = [
  "nu-engine",
  "nu-parser",
@@ -5278,9 +5278,9 @@ dependencies = [
 
 [[package]]
 name = "reedline"
-version = "0.50.0"
+version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "753088c970c4e63f91114d0dbef96c84fbaf3fde8943877f4254d33e97ce2193"
+checksum = "d010acf9ed312cbc737e5f9064c375a7093975b0c25568337f0c24148f46540d"
 dependencies = [
  "chrono",
  "crossterm 0.29.0",

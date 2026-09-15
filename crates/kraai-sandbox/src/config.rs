@@ -18,6 +18,8 @@ pub struct LaunchPlan {
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
     pub output_events: Option<UnboundedSender<OutputEvent>>,
+    pub process_spawned: Option<tokio::sync::oneshot::Sender<tokio::time::Instant>>,
+    pub execution_started: Option<tokio::sync::oneshot::Receiver<tokio::time::Instant>>,
     pub private_temp: PrivateTempConfig,
     #[cfg(windows)]
     pub private_ipc_handles: Vec<std::os::windows::io::OwnedHandle>,
@@ -43,6 +45,8 @@ impl LaunchPlan {
             capabilities,
             timeout,
             output_events: None,
+            process_spawned: None,
+            execution_started: None,
             private_temp: PrivateTempConfig::default(),
             #[cfg(windows)]
             private_ipc_handles: Vec::new(),

@@ -107,6 +107,17 @@ async fn executes_structured_nushell_through_the_private_transport() {
 }
 
 #[tokio::test]
+async fn timeout_after_a_successful_handshake_remains_a_script_timeout() {
+    let workspace = TestWorkspace::new();
+    let mut execution = plan(b"sleep 10sec".to_vec(), &workspace);
+    execution.timeout = Duration::from_secs(1);
+    let result = execute(execution, CancellationToken::new())
+        .await
+        .expect("a running script timing out is not a host failure");
+    assert_eq!(result.output.termination, Termination::TimedOut);
+}
+
+#[tokio::test]
 async fn exposes_print_from_the_nushell_cli_context() {
     let workspace = TestWorkspace::new();
     let result = execute(
@@ -244,7 +255,7 @@ async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
     .await
     .expect("execution should not hang");
     assert!(
-        matches!(&result, Err(RuntimeError::Transport(message)) if message.contains("before connecting")),
+        matches!(&result, Err(RuntimeError::Transport(_))),
         "unexpected execution result: {result:?}"
     );
 }

@@ -19,6 +19,18 @@ use super::streaming::StreamJobKind;
 use crate::api::{Event, PendingScriptInfo};
 use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
+fn host_failure(completed: &CompletedScriptExecution) -> color_eyre::Report {
+    eyre!(
+        completed
+            .record
+            .error
+            .clone()
+            .unwrap_or_else(|| String::from(
+                "Nushell host is unavailable; rebuild both binaries with `just build`"
+            ))
+    )
+}
+
 impl RuntimeCore {
     pub(crate) async fn recover_script_executions(&self) -> Result<()> {
         let records = self.execution_store.list_all().await?;
@@ -66,6 +78,11 @@ impl RuntimeCore {
 
             let tip = self.agent_manager.read().await.get_tip(&session_id).await?;
             if tip.as_ref() == Some(&result_message_id) {
+                if completed.record.status == Some(ScriptExecutionStatus::HostUnavailable) {
+                    self.fail_script_turn(&session_id, &host_failure(&completed))
+                        .await;
+                    continue;
+                }
                 self.agent_manager
                     .write()
                     .await
@@ -496,7 +513,7 @@ impl RuntimeCore {
         Ok(CompletedScriptExecution { record, output })
     }
 
-    async fn finalize_script_turn(
+    pub(super) async fn finalize_script_turn(
         &self,
         session_id: &str,
         completed: CompletedScriptExecution,
@@ -529,7 +546,10 @@ impl RuntimeCore {
                 status: status.as_str().to_string(),
             },
         );
-        if status == ScriptExecutionStatus::Cancelled {
+        if status == ScriptExecutionStatus::HostUnavailable {
+            self.fail_script_turn(session_id, &host_failure(&completed))
+                .await;
+        } else if status == ScriptExecutionStatus::Cancelled {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
             drop(agent);

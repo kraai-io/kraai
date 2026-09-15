@@ -116,15 +116,20 @@ pub async fn execute(
     launch.private_temp = private_temp;
     launch.args(plan.host_arguments);
     listener.configure_launch(&mut launch);
+    let (spawned_tx, spawned_rx) = tokio::sync::oneshot::channel();
+    launch.process_spawned = Some(spawned_tx);
+    let (execution_tx, execution_rx) = tokio::sync::oneshot::channel();
+    launch.execution_started = Some(execution_rx);
 
     let effect_execution_id = execution_id.clone();
     let transport_connected = Arc::new(AtomicBool::new(false));
     let connected_for_task = transport_connected.clone();
-    let effect_task = tokio::spawn(async move {
-        let transport = transport::accept(listener)
+    let mut effect_task = tokio::spawn(async move {
+        let transport = transport::accept(listener, spawned_rx)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
         connected_for_task.store(true, Ordering::Release);
+        let _ = execution_tx.send(tokio::time::Instant::now());
         let (effect_reader, mut effect_writer) = tokio::io::split(transport);
         write_request(&mut effect_writer, &host_request)
             .await
@@ -139,37 +144,53 @@ pub async fn execute(
         .await
         .map_err(|error| ChannelError::Effects(error.to_string()))
     });
-    let output = kraai_sandbox::run(launch, cancellation).await;
+    let host_cancellation = cancellation.child_token();
+    let output = kraai_sandbox::run(launch, host_cancellation.clone());
+    tokio::pin!(output);
+    let (output, channel) = tokio::select! {
+        biased;
+        result = &mut effect_task => {
+            let result = channel_result(result);
+            if result.is_err() {
+                host_cancellation.cancel();
+            }
+            (output.await, Some(result))
+        }
+        output = &mut output => (output, None),
+    };
 
     match output {
-        Ok(output) => {
-            if matches!(
+        Ok(mut output) => {
+            let channel = if let Some(channel) = channel {
+                channel
+            } else if matches!(
                 output.termination,
                 kraai_sandbox::Termination::Exited { .. }
             ) {
-                if !transport_connected.load(Ordering::Acquire) {
+                if !transport_connected.load(Ordering::Acquire) && !effect_task.is_finished() {
                     effect_task.abort();
-                    return Err(RuntimeError::Transport(String::from(
+                    Err(RuntimeError::Transport(String::from(
                         "Nushell host exited before connecting to the private transport",
-                    )));
-                }
-                match effect_task
-                    .await
-                    .map_err(|error| RuntimeError::ChannelTask(error.to_string()))?
-                {
-                    Ok(()) => {}
-                    Err(ChannelError::Accept(message)) => {
-                        return Err(RuntimeError::Transport(message));
-                    }
-                    Err(ChannelError::Request(message)) => {
-                        return Err(RuntimeError::RequestChannel(message));
-                    }
-                    Err(ChannelError::Effects(message)) => {
-                        return Err(RuntimeError::EffectChannel(message));
+                    )))
+                } else {
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => {
+                            effect_task.abort();
+                            Ok(())
+                        }
+                        result = &mut effect_task => channel_result(result),
                     }
                 }
             } else {
                 effect_task.abort();
+                Ok(())
+            };
+            if cancellation.is_cancelled() {
+                output.termination = kraai_sandbox::Termination::Cancelled;
+                output.sandbox_denied = false;
+            } else if output.termination != kraai_sandbox::Termination::TimedOut {
+                channel?;
             }
             Ok(ScriptExecutionResult {
                 execution_id,
@@ -181,6 +202,18 @@ pub async fn execute(
             Err(RuntimeError::Sandbox(error))
         }
     }
+}
+
+fn channel_result(
+    result: Result<Result<(), ChannelError>, tokio::task::JoinError>,
+) -> Result<(), RuntimeError> {
+    result
+        .map_err(|error| RuntimeError::ChannelTask(error.to_string()))?
+        .map_err(|error| match error {
+            ChannelError::Accept(message) => RuntimeError::Transport(message),
+            ChannelError::Request(message) => RuntimeError::RequestChannel(message),
+            ChannelError::Effects(message) => RuntimeError::EffectChannel(message),
+        })
 }
 
 enum ChannelError {

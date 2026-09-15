@@ -11,6 +11,7 @@ pub enum ScriptExecutionStatus {
     Cancelled,
     SandboxUnavailable,
     FailedToStart,
+    HostUnavailable,
     RuntimeError,
 }
 
@@ -24,6 +25,7 @@ impl ScriptExecutionStatus {
             Self::Cancelled => "cancelled",
             Self::SandboxUnavailable => "sandbox-unavailable",
             Self::FailedToStart => "failed-to-start",
+            Self::HostUnavailable => "host-unavailable",
             Self::RuntimeError => "runtime-error",
         }
     }
@@ -66,9 +68,10 @@ mod tests {
             ScriptExecutionStatus::Cancelled,
             ScriptExecutionStatus::SandboxUnavailable,
             ScriptExecutionStatus::FailedToStart,
+            ScriptExecutionStatus::HostUnavailable,
             ScriptExecutionStatus::RuntimeError,
         ];
         assert_eq!(phases.len(), 4);
-        assert_eq!(statuses.len(), 8);
+        assert_eq!(statuses.len(), 9);
     }
 }

@@ -11592,9 +11592,9 @@ rec {
       };
       "nu-cli" = rec {
         crateName = "nu-cli";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "1jd0bc81g1yyarw7p3zq851qi0s6m8mja7igpv2l2rj96hlxxvpb";
+        sha256 = "1y9m29dr0i38wjqa7f2fhrybl9k9mzva6y8cfy21a5yr0fsnn8px";
         libName = "nu_cli";
         authors = [
           "The Nushell Project Developers"
@@ -11754,9 +11754,9 @@ rec {
       };
       "nu-cmd-base" = rec {
         crateName = "nu-cmd-base";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "1fswwdzdsggh9dnx4skqw293lhx2kpk2c2av0n79khi4fz2agj9d";
+        sha256 = "1w8j5qy3bhmjc8flsilnbzp4gf5fp3w73kmpd5gz1cpxna9hdp8g";
         libName = "nu_cmd_base";
         authors = [
           "The Nushell Project Developers"
@@ -11795,9 +11795,9 @@ rec {
       };
       "nu-cmd-lang" = rec {
         crateName = "nu-cmd-lang";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "11548qq741c87gnqyjq7v3hphydvyzdq8m77ahyf7zvm8g7gynpr";
+        sha256 = "069irf62aijx8r28f488a4cbwb33g6nakbgcqgd1n723s1ilda1s";
         libName = "nu_cmd_lang";
         authors = [
           "The Nushell Project Developers"
@@ -11864,9 +11864,9 @@ rec {
       };
       "nu-color-config" = rec {
         crateName = "nu-color-config";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "1wkaxnmz94n6nbrhvpbsn4mb39zikni9rmg16ymgdqfsr5zz44br";
+        sha256 = "05c638x1g1lvriic87xwbf146b2djhn8qzckpxjz6cqrcc4bq54g";
         libName = "nu_color_config";
         authors = [
           "The Nushell Project Developers"
@@ -11901,9 +11901,9 @@ rec {
       };
       "nu-command" = rec {
         crateName = "nu-command";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "1hlcbqzqab4jyyc6yk1bnr3sgdgcifiqwvwy6vhz4lnr88rl9r3q";
+        sha256 = "1dp2kk5013pdz2rvzgbw5gpx0cdxhz66g0a62rhvvkkys97b3x40";
         libName = "nu_command";
         authors = [
           "The Nushell Project Developers"
@@ -12686,9 +12686,9 @@ rec {
       };
       "nu-heavy-utils" = rec {
         crateName = "nu-heavy-utils";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "0jg2crks7yph10674gmcpmnj9zkkkqxhaqkvyvmkvs34xkcza6r0";
+        sha256 = "0nbx25kkfs4j9b81pc4icc39pz94q3rlm8i8zb55kvgf2df3q6kf";
         libName = "nu_heavy_utils";
         authors = [
           "The Nushell Project Developers"
@@ -12766,9 +12766,9 @@ rec {
       };
       "nu-json" = rec {
         crateName = "nu-json";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "1kigf5q6rq9g5cvgv06ycpj13ahpvraa84fz6vfak0xr228klnpg";
+        sha256 = "0brmrhjns6b28dkzfp1y3sdk8badiv39yv0yv19igj2ikdkmsj1a";
         libName = "nu_json";
         authors = [
           "The Nushell Project Developers"
@@ -13224,9 +13224,9 @@ rec {
       };
       "nu-table" = rec {
         crateName = "nu-table";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "18jwxyk3wmg8smzl17dhd0fhs68b1pm6nh12hp9q15sgsirxmalw";
+        sha256 = "16gjry61llwhynj49d1vmbryzh1abdbjvk2lgzrffxpkwqm2mm8a";
         libName = "nu_table";
         authors = [
           "The Nushell Project Developers"
@@ -13651,9 +13651,9 @@ rec {
       };
       "nuon" = rec {
         crateName = "nuon";
-        version = "0.115.0";
+        version = "0.115.1";
         edition = "2024";
-        sha256 = "06q9bzpf8iys61yg8ysp6lq1mxyg32hvzmd2zq3f80qrjy3i7hh1";
+        sha256 = "1whkbw86w37z9x3aiyi8hircq72y69mmkdc33srkhi03y73c7a73";
         authors = [
           "The Nushell Project Developers"
         ];
@@ -16949,9 +16949,9 @@ rec {
       };
       "reedline" = rec {
         crateName = "reedline";
-        version = "0.50.0";
+        version = "0.51.0";
         edition = "2021";
-        sha256 = "14r1rsbkxlsl89zqfhw9vqzszyw4dkwvw3ad268kzrn4f34qhc3m";
+        sha256 = "03al8s7i890cgwrnhmf2n1skj2d7fp1n942zgrrvqb1ixpwsq46h";
         authors = [
           "The Nushell Project Developers"
         ];

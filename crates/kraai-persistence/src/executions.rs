@@ -413,6 +413,7 @@ fn require_completion_transition(
             ScriptExecutionPhase::Prepared | ScriptExecutionPhase::AwaitingApproval
         ),
         ScriptExecutionStatus::FailedToStart
+        | ScriptExecutionStatus::HostUnavailable
         | ScriptExecutionStatus::SandboxUnavailable
         | ScriptExecutionStatus::RuntimeError => {
             matches!(
