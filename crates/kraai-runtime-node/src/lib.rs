@@ -43,6 +43,11 @@ impl Runtime {
             builder = builder.script_runtime_roots(roots.into_iter().map(Into::into).collect());
         }
         if let Some(path) = options.storage_root {
+            if !std::path::Path::new(&path).is_absolute() {
+                return Err(napi::Error::from_reason(
+                    "storage_root must be a non-empty absolute path",
+                ));
+            }
             builder = builder.storage_root(path.into());
         }
         if let Some(path) = options.provider_config_path {

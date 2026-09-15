@@ -55,3 +55,22 @@ test('host roots cover Nix, conventional Linux, and static executables', async (
   assert.deepEqual(hostRuntimeRoots('No interpreter'), []);
   assert.throws(() => hostRuntimeRoots(headers('/custom/loader')), /Unsupported host dynamic loader/);
 });
+
+test('undefined options preserve defaults without mutating the caller', () => {
+  const createRuntime = packageFactory(['/nix/store']);
+  for (const input of [
+    { nushell_host_path: undefined },
+    { script_runtime_roots: undefined },
+    { nushell_host_path: undefined, script_runtime_roots: undefined },
+  ]) {
+    const options = createRuntime(Object.freeze(input));
+    assert.equal(options.nushell_host_path, '/package/dist/bundled-host');
+    assert.deepEqual(Array.from(options.script_runtime_roots), ['/nix/store']);
+  }
+  const custom = createRuntime({ nushell_host_path: '/custom/host', script_runtime_roots: undefined });
+  assert.deepEqual(Array.from(custom.script_runtime_roots), []);
+  const defaults = createRuntime({ storage_root: undefined, provider_config_path: undefined });
+  assert.equal(defaults.storage_root, null);
+  assert.equal(defaults.provider_config_path, null);
+  assert.equal(createRuntime({ script_runtime_roots: null }).script_runtime_roots, null);
+});

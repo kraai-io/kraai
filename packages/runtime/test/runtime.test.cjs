@@ -114,3 +114,14 @@ test('native methods reject invalid and wrong-class receivers', { timeout: 30000
   events.close();
   assert.deepEqual(await events.next(), { type: 'closed' });
 });
+
+test('storage roots must be absolute and may be created at startup', { timeout: 30000 }, async t => {
+  for (const storage_root of ['', '.', 'relative', '../relative']) {
+    assert.throws(() => createRuntime({ storage_root }), /storage_root must be a non-empty absolute path/);
+  }
+  const storage_root = join(fixture(t), 'new-storage');
+  const runtime = createRuntime({ storage_root });
+  t.after(() => runtime.shutdown());
+  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.listSessions()), []);
+});
