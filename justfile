@@ -75,8 +75,8 @@ test-harbor:
 build-node:
     node packages/runtime/scripts/build.mjs
 
+[script('bash')]
 check-node:
-    #!/usr/bin/env bash
     set -euo pipefail
     if [[ "$(uname -s)" != Linux ]]; then exit 0; fi
     "{{ just_executable() }}" build-node

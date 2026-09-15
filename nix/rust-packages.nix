@@ -238,6 +238,7 @@
         node = mkCargoCheck {
           name = "node";
           nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils pkgs.bubblewrap];
+          env.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           command = ''
             ${pkgs.just}/bin/just check-node
           '';
