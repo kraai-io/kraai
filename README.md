@@ -45,6 +45,23 @@ recovery. A failed script does not roll back commands that already completed.
 The details live in [Script protocol](docs/script-protocol.md) and
 [File context and token cost](docs/file-context.md).
 
+### Windows filesystem requirements
+
+Windows sandboxing requires persistent ACLs and reopening files by ID on every
+workspace, runtime root receiving sandbox access, and private temporary directory.
+These are reported by the Windows
+[volume capability flags](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getvolumeinformationw).
+Use a filesystem supporting both features, such as NTFS. exFAT does not provide
+the required persistent ACLs. Unsupported filesystems cause startup to fail;
+Kraai does not fall back to unsandboxed execution. UNC sandbox roots remain
+unsupported.
+
+The workspace comes from the session's persisted `workspace_dir`, not the location
+of `kraai.exe`. Moving the executable alone does not change an existing session's
+workspace. Move the workspace to a supported filesystem and update the session's
+workspace through `RuntimeHandle::set_workspace_dir`, or start a new session from the new
+directory. Startup errors identify the configured workspace and affected path.
+
 ## Development
 
 From a checkout, enter the development environment and run the terminal app:

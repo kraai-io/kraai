@@ -13,6 +13,10 @@ use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 
 pub(crate) fn create(path: &Path) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("temporary directory has no parent"))?;
+    super::filesystem::check_private_temp(parent).map_err(std::io::Error::other)?;
     let path = path
         .as_os_str()
         .encode_wide()

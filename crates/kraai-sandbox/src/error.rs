@@ -39,3 +39,16 @@ impl std::fmt::Display for SandboxError {
 }
 
 impl std::error::Error for SandboxError {}
+
+impl SandboxError {
+    pub fn with_workspace_root(self, workspace: &std::path::Path) -> Self {
+        let message = match self {
+            Self::SandboxUnavailable(message) | Self::PrivateTemp(message) => message,
+            error => error.to_string(),
+        };
+        Self::SandboxUnavailable(format!(
+            "{message}; configured session workspace root: '{}'",
+            workspace.display()
+        ))
+    }
+}

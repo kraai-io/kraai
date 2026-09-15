@@ -6,6 +6,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn restored_session_supplies_script_workspace_independently_of_executable() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace = data_dir.join("configured-workspace");
+    tokio::fs::create_dir_all(&workspace).await?;
+    let session_id = manager
+        .create_session_with(Some(workspace.clone()), None)
+        .await?;
+    manager.session_states.clear();
+    assert!(manager.prepare_session(&session_id).await?);
+    manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("probe"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    let context = manager.script_turn_context(&session_id)?;
+    assert_eq!(context.workspace_dir, workspace);
+    assert!(!std::env::current_exe()?.starts_with(&context.workspace_dir));
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_session_returns_usable_session_id() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 

@@ -8,6 +8,10 @@ pub(crate) mod linux;
 #[cfg(windows)]
 pub(crate) mod windows;
 
+#[cfg(all(test, not(windows)))]
+#[path = "windows/filesystem.rs"]
+mod windows_filesystem;
+
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) mod macos;
 
@@ -15,7 +19,11 @@ pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedComm
     validate_plan(&plan)?;
     #[cfg(windows)]
     windows::apply_system_environment(&mut plan.environment)?;
-    let private_temp = std::mem::take(&mut plan.private_temp).into_private_temp()?;
+    let private_temp = std::mem::take(&mut plan.private_temp).into_private_temp();
+    #[cfg(windows)]
+    let private_temp =
+        private_temp.map_err(|error| error.with_workspace_root(&plan.workspace_root));
+    let private_temp = private_temp?;
 
     if plan.capabilities.is_unsandboxed() {
         return Ok(PreparedCommand::unsandboxed(plan, private_temp));

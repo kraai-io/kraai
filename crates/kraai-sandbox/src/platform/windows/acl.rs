@@ -68,7 +68,8 @@ impl Grants {
                 return Err(entry_limit(path, limit));
             }
             handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
-            mutation::update(&file, &self.sid, Some(access))?;
+            mutation::update(&file, &self.sid, Some(access))
+                .map_err(|error| failure(path, &error.to_string()))?;
             self.files.push(file);
             Ok(())
         })

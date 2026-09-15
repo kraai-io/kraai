@@ -22,7 +22,7 @@ pub(super) fn ensure_single_link(file: &File) -> io::Result<()> {
         )
     } == 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(api_error("GetFileInformationByHandleEx(FileStandardInfo)"));
     }
     if !info.Directory && info.NumberOfLinks != 1 {
         return Err(io::Error::other(
@@ -43,7 +43,7 @@ pub(super) fn open_by_id(pin: &File) -> io::Result<File> {
         )
     } == 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(api_error("GetFileInformationByHandleEx(FileIdInfo)"));
     }
     let id = FILE_ID_DESCRIPTOR {
         dwSize: size_of::<FILE_ID_DESCRIPTOR>() as u32,
@@ -65,7 +65,12 @@ pub(super) fn open_by_id(pin: &File) -> io::Result<File> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
+        return Err(api_error("OpenFileById(ExtendedFileIdType)"));
     }
     Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+fn api_error(api: &str) -> io::Error {
+    let error = io::Error::last_os_error();
+    io::Error::new(error.kind(), format!("{api}: {error}"))
 }

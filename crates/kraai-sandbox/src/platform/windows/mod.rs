@@ -1,4 +1,5 @@
 mod acl;
+mod filesystem;
 mod identity;
 mod mutation_lock;
 pub(crate) mod private_temp;
@@ -53,6 +54,14 @@ impl Sandbox {
 }
 
 pub(crate) fn prepare(
+    plan: LaunchPlan,
+    private_temp: PrivateTempDir,
+) -> Result<PreparedCommand, SandboxError> {
+    let workspace = plan.workspace_root.clone();
+    prepare_inner(plan, private_temp).map_err(|error| error.with_workspace_root(&workspace))
+}
+
+fn prepare_inner(
     mut plan: LaunchPlan,
     private_temp: PrivateTempDir,
 ) -> Result<PreparedCommand, SandboxError> {
@@ -63,13 +72,16 @@ pub(crate) fn prepare(
     }
     plan.workspace_root = local_path(&plan.workspace_root)?;
     plan.executable = local_path(&plan.executable)?;
-    let runtime_roots = plan
+    let mut runtime_roots = plan
         .runtime_roots
         .iter()
         .map(|path| local_path(path))
         .collect::<Result<Vec<_>, _>>()?;
     let temp_path = local_path(private_temp.path())?;
     let system_root = system_root()?;
+    runtime_roots
+        .retain(|root| !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root));
+    filesystem::check_roots(&plan.workspace_root, &runtime_roots, &temp_path)?;
     let identity = Identity::create()?;
     let mut capabilities = identity::capability("registryRead")?;
     if plan.capabilities.contains(SandboxCapability::Network) {
@@ -87,9 +99,7 @@ pub(crate) fn prepare(
         .capabilities
         .contains(SandboxCapability::WorkspaceWrite);
     for root in runtime_roots {
-        if !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root) {
-            grants.grant(&root, Access::Read)?;
-        }
+        grants.grant(&root, Access::Read)?;
     }
     grants.grant(
         &plan.workspace_root,
