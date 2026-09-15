@@ -34,7 +34,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session_id);
     manager
-        .set_session_profile(&session_id, "coding".into())
+        .set_session_profile(&session_id, "plan".into())
         .await?;
 
     let snapshot = reader.load().await?;
@@ -55,7 +55,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
     assert_ne!(captured.status, MessageStatus::Complete);
     assert_eq!(
         snapshot.profiles.selected_profile_id.as_deref(),
-        Some("plan")
+        Some("coding")
     );
     assert!(snapshot.profiles.profile_locked);
     assert!(snapshot.context_usage.is_none());

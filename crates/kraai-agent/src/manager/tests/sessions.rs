@@ -38,7 +38,7 @@ async fn create_session_returns_usable_session_id() -> Result<()> {
     let sessions = manager.list_sessions().await?;
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, session_id);
-    assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("plan"));
+    assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("coding"));
     assert_eq!(manager.get_tip(&session_id).await?, None);
 
     cleanup_dir(data_dir).await;
@@ -97,7 +97,7 @@ capabilities = []
     );
 
     let (_, catalog_b) = manager.list_agent_profiles_for_workspace(Some(&workspace_b));
-    assert_eq!(catalog_b.selected_profile_id.as_deref(), Some("plan"));
+    assert_eq!(catalog_b.selected_profile_id.as_deref(), Some("coding"));
     let session_b = manager
         .create_session_with(Some(workspace_b.clone()), None)
         .await?;

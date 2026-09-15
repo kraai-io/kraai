@@ -40,7 +40,7 @@ pub use snapshot::{SessionSnapshotData, SessionSnapshotReader};
 )]
 mod tests;
 
-const DEFAULT_AGENT_PROFILE_ID: &str = "plan";
+const DEFAULT_AGENT_PROFILE_ID: &str = "coding";
 const AGENTS_MD_FILE_NAME: &str = "AGENTS.md";
 const SESSION_TITLE_MAX_CHARS: usize = 60;
 
