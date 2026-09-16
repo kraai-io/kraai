@@ -435,6 +435,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         session_store,
         context_state_store,
         Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+        data_dir.clone(),
     );
 
     let session_id = manager.create_session().await?;

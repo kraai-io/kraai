@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::DynamicValue;
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldValueKind {
     String,
@@ -11,6 +13,8 @@ pub enum FieldValueKind {
     Url,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldDefinition {
     pub key: String,
@@ -22,6 +26,8 @@ pub struct FieldDefinition {
     pub default_value: Option<DynamicValue>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderDefinition {
     pub type_id: String,

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{MessageId, ModelId, ProviderId, TokenUsage};
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usd(pub u64);
 
@@ -22,6 +24,8 @@ impl std::fmt::Display for Usd {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenRates {
     pub input: Usd,
@@ -55,6 +59,8 @@ impl TokenRates {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestCost {
     pub amount: Usd,
@@ -64,6 +70,8 @@ pub struct RequestCost {
     pub upstream: Option<Usd>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestUsage {
     pub message_id: MessageId,
@@ -76,6 +84,8 @@ pub struct RequestUsage {
     pub usage: Option<TokenUsage>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostSummary {
     pub amount: Usd,

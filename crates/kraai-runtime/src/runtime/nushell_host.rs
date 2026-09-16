@@ -7,7 +7,16 @@ pub(super) struct NushellHost {
     pub(super) arguments: Vec<std::ffi::OsString>,
 }
 
-pub(super) fn resolve_nushell_host(use_current_executable: bool) -> Result<NushellHost> {
+pub(super) fn resolve_nushell_host(
+    explicit_path: Option<&Path>,
+    use_current_executable: bool,
+) -> Result<NushellHost> {
+    if let Some(path) = explicit_path {
+        return Ok(NushellHost {
+            executable: canonical_executable(path)?,
+            arguments: Vec::new(),
+        });
+    }
     let current_executable = std::env::current_exe()
         .context("Failed to locate the running Kraai executable")?
         .canonicalize()
@@ -102,6 +111,16 @@ mod tests {
         let resolved = resolve_nushell_host_from(frontend, true)?;
         if resolved.executable != packaged || !resolved.arguments.is_empty() {
             return Err(eyre!("packaged host was not preferred over the fallback"));
+        }
+
+        let explicit = directory.join("custom-host");
+        std::fs::write(&explicit, [])?;
+        let resolved = resolve_nushell_host(Some(&explicit), false)?;
+        if resolved.executable != explicit.canonicalize()? || !resolved.arguments.is_empty() {
+            return Err(eyre!("explicit host was not selected"));
+        }
+        if resolve_nushell_host(Some(&directory.join("missing-host")), true).is_ok() {
+            return Err(eyre!("invalid explicit host silently fell back"));
         }
 
         std::fs::remove_dir_all(directory)?;

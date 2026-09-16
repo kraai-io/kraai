@@ -34,3 +34,14 @@ ulid.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 serde.workspace = true
+
+[features]
+typescript = [
+  "dep:ts-rs",
+  "kraai-types/typescript",
+  "kraai-provider-core/typescript",
+]
+
+[dependencies.ts-rs]
+optional = true
+workspace = true

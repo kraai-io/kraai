@@ -72,8 +72,18 @@ lint-fix-dirty:
 
 test-harbor:
     uv run --locked --python python3.12 --project evals/harbor python -m unittest discover -s evals/harbor/tests
+build-node:
+    node packages/runtime/scripts/build.mjs
 
-check: generate-cargo-nix format lint test test-harbor
+[script('bash')]
+check-node test_script="test":
+    set -euo pipefail
+    "{{ just_executable() }}" build-node
+    cd packages/runtime
+    npm run typecheck
+    npm run "{{ test_script }}"
+
+check: generate-cargo-nix format lint test test-harbor check-node
 
 eval *args:
     nix run .#kraai-eval -- {{ args }}

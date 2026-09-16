@@ -138,6 +138,7 @@ pub struct AgentManager {
     usage_store: Arc<kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
+    storage_root: PathBuf,
     user_agents_path: Option<PathBuf>,
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,

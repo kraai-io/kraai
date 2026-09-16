@@ -1,0 +1,35 @@
+{
+  "name": "@kraai/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "index.cjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./index.cjs"
+    }
+  },
+  "files": [
+    "index.cjs",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext test/types.ts",
+    "test:portable": "node scripts/test.mjs --skip-sandbox"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
