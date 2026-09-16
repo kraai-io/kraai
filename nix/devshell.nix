@@ -42,13 +42,13 @@
               python312
               nodejs
               typescript
-              binutils
 
               ripgrep
               pkg-config
               openssl
             ]
-            ++ lib.optionals stdenv.hostPlatform.isLinux [bubblewrap];
+            ++ lib.optionals stdenv.hostPlatform.isLinux [bubblewrap binutils]
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [darwin.cctools];
         };
     };
   };

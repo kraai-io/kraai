@@ -1,22 +1,30 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
-const { join } = require('node:path');
+const { join, toNamespacedPath } = require('node:path');
 const { test } = require('node:test');
 const { localProvider, unwrap } = require('./fixtures.cjs');
 const { createRuntime } = require('..');
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'kraai-node-test-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  return directory;
+  return {
+    directory,
+    create(options = {}) {
+      const runtime = createRuntime({ storage_root: directory, ...options });
+      t.after(async () => {
+        await runtime.shutdown();
+        rmSync(directory, { recursive: true, force: true });
+      });
+      return runtime;
+    },
+  };
 }
 
 test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: 30000 }, async (t) => {
-  const directory = fixture(t);
+  const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "plan"\n');
-  const runtime = createRuntime({ storage_root: directory });
-  t.after(() => runtime.shutdown());
+  const runtime = create();
   assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
   const settings = unwrap(await runtime.getSettings());
   assert.deepEqual(settings, { providers: [], models: [] });
@@ -25,7 +33,7 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
   const id = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: 'isolated' }));
   const snapshot = unwrap(await runtime.getSessionSnapshot(id));
   assert.equal(snapshot.session.id, id);
-  assert.equal(snapshot.session.workspace_dir, directory);
+  assert.equal(snapshot.session.workspace_dir, toNamespacedPath(realpathSync.native(directory)));
   assert.equal(snapshot.activity, 'idle');
   assert.equal(snapshot.profiles.selected_profile_id, 'isolated');
   assert.ok(snapshot.profiles.profiles.some(profile => profile.id === 'isolated'));
@@ -50,21 +58,19 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
 });
 
 test('startup failures remain observable and can be shut down', { timeout: 30000 }, async (t) => {
-  const directory = fixture(t);
+  const { directory, create } = fixture(t);
   const config = join(directory, 'broken.toml');
   writeFileSync(config, 'not valid toml [');
-  const runtime = createRuntime({ storage_root: directory, provider_config_path: config });
-  t.after(() => runtime.shutdown());
+  const runtime = create({ provider_config_path: config });
   const status = unwrap(await runtime.waitForStartup());
   assert.equal(typeof status.Failed, 'string');
   unwrap(await runtime.shutdown());
 });
 
 test('streams a reply from a local provider and persists the conversation', { timeout: 30000 }, async (t) => {
-  const directory = fixture(t);
+  const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Hello from Rust']);
-  const runtime = createRuntime({ storage_root: directory });
-  t.after(() => runtime.shutdown());
+  const runtime = create();
   assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
   unwrap(await runtime.saveSettings(provider.settings));
   const session = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: null }));
@@ -97,8 +103,8 @@ test('streams a reply from a local provider and persists the conversation', { ti
 });
 
 test('native methods reject invalid and wrong-class receivers', { timeout: 30000 }, async t => {
-  const runtime = createRuntime({ storage_root: fixture(t) });
-  t.after(() => runtime.shutdown());
+  const { create } = fixture(t);
+  const runtime = create();
   const events = runtime.subscribe();
   t.after(() => events.close());
   for (const [instance, wrongClass, syncMethod, asyncMethod] of [
@@ -119,9 +125,9 @@ test('storage roots must be absolute and may be created at startup', { timeout: 
   for (const storage_root of ['', '.', 'relative', '../relative']) {
     assert.throws(() => createRuntime({ storage_root }), /storage_root must be a non-empty absolute path/);
   }
-  const storage_root = join(fixture(t), 'new-storage');
-  const runtime = createRuntime({ storage_root });
-  t.after(() => runtime.shutdown());
+  const { directory, create } = fixture(t);
+  const storage_root = join(directory, 'new-storage');
+  const runtime = create({ storage_root });
   assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
   assert.deepEqual(unwrap(await runtime.listSessions()), []);
 });

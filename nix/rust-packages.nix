@@ -235,14 +235,6 @@
       workspaceTestChecks
       // cargoTestChecks
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-        node = mkCargoCheck {
-          name = "node";
-          nativeBuildInputs = [pkgs.nodejs pkgs.typescript pkgs.binutils pkgs.bubblewrap];
-          env.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-          command = ''
-            ${pkgs.just}/bin/just check-node
-          '';
-        };
         sandbox-vm = import ./sandbox-vm.nix {
           inherit pkgs;
           sandboxTests = vmTestBinaries "kraai-sandbox";
@@ -250,6 +242,17 @@
         };
       }
       // {
+        node = mkCargoCheck {
+          name = "node";
+          nativeBuildInputs =
+            [pkgs.nodejs pkgs.typescript]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.binutils pkgs.bubblewrap]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [pkgs.darwin.cctools];
+          env.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          command = ''
+            ${pkgs.just}/bin/just check-node ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "test:portable"}
+          '';
+        };
         harbor-contracts =
           pkgs.runCommand "kraai-harbor-contracts" {
             nativeBuildInputs = [pkgs.python3];

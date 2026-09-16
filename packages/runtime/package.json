@@ -19,12 +19,15 @@
     "node": ">=22"
   },
   "os": [
-    "linux"
+    "linux",
+    "darwin",
+    "win32"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.cjs",
-    "typecheck": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext test/types.ts"
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext test/types.ts",
+    "test:portable": "node scripts/test.mjs --skip-sandbox"
   },
   "devDependencies": {
     "typescript": "5.9.3"

@@ -76,13 +76,12 @@ build-node:
     node packages/runtime/scripts/build.mjs
 
 [script('bash')]
-check-node:
+check-node test_script="test":
     set -euo pipefail
-    if [[ "$(uname -s)" != Linux ]]; then exit 0; fi
     "{{ just_executable() }}" build-node
     cd packages/runtime
     npm run typecheck
-    npm test
+    npm run "{{ test_script }}"
 
 check: generate-cargo-nix format lint test test-harbor check-node
 
