@@ -81,15 +81,15 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         }),
     );
 
-    let mut manager = AgentManager::new(
+    let manager = AgentManager::new(
         providers,
         PathBuf::from("/tmp/default-workspace"),
         message_store,
         session_store,
         context_state_store,
         Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+        data_dir.clone(),
     );
-    manager.user_agents_path = Some(data_dir.join(AGENTS_MD_FILE_NAME));
     (manager, data_dir)
 }
 

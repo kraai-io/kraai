@@ -55,6 +55,8 @@ pub enum ChatRole {
     ToolCallResult,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantPhase {
@@ -62,6 +64,8 @@ pub enum AssistantPhase {
     FinalAnswer,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantItem {
@@ -76,6 +80,8 @@ pub enum AssistantItem {
     },
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConversationItem {
@@ -135,6 +141,8 @@ fn render_assistant_items(items: &[AssistantItem]) -> String {
     rendered
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -157,6 +165,8 @@ impl Message {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageStatus {
     Complete,
@@ -164,6 +174,8 @@ pub enum MessageStatus {
     Cancelled,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     #[serde(default)]
@@ -192,6 +204,8 @@ impl TokenUsage {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageGeneration {
     pub provider_id: ProviderId,
@@ -202,6 +216,8 @@ pub struct MessageGeneration {
     pub usage: Option<TokenUsage>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentProfileSource {
     BuiltIn,
@@ -219,6 +235,8 @@ impl AgentProfileSource {
     }
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfileSummary {
     pub id: String,
@@ -233,6 +251,8 @@ pub struct AgentProfileSummary {
     pub source: AgentProfileSource,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfileWarning {
     pub source: AgentProfileSource,
@@ -240,6 +260,8 @@ pub struct AgentProfileWarning {
     pub message: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentProfilesState {
     pub profiles: Vec<AgentProfileSummary>,
@@ -273,6 +295,9 @@ pub struct StateEffectAck {
 macro_rules! define_id {
     ($name:ident, $validator:path) => {
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+        #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+        #[cfg_attr(feature = "typescript", ts(type = "string"))]
         pub struct $name(pub Arc<str>);
 
         impl $name {

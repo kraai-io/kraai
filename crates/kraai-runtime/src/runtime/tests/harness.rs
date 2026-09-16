@@ -354,6 +354,7 @@ path = \"inherit\"\n",
             session_store,
             context_state_store.clone(),
             Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+            data_dir.clone(),
         )));
 
         let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
@@ -391,6 +392,8 @@ path = \"inherit\"\n",
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),
             use_current_executable_as_nushell_host: false,
+            nushell_host_path: None,
+            script_runtime_roots: None,
             startup_tx,
         };
 

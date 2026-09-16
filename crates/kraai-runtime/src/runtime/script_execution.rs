@@ -97,7 +97,10 @@ impl RuntimeCore {
         cancellation: CancellationToken,
     ) -> Result<CompletedScriptExecution> {
         let execution_id = request.id.clone();
-        let host = match resolve_nushell_host(self.use_current_executable_as_nushell_host) {
+        let host = match resolve_nushell_host(
+            self.nushell_host_path.as_deref(),
+            self.use_current_executable_as_nushell_host,
+        ) {
             Ok(host) => host,
             Err(error) => {
                 let record = self

@@ -27,11 +27,18 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
         with:
           cache-on-failure: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: cargo check --locked --workspace --all-targets
       - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --no-fail-fast
       - run: cargo test --locked -p kraai-eval --lib executable_lookup_tests
       - run: cargo test --locked -p kraai-tui app::composer::tests::editor_command
+      - run: npm ci --prefix packages/runtime
+      - run: npm run build --prefix packages/runtime
+      - run: npm run typecheck --prefix packages/runtime
+      - run: npm test --prefix packages/runtime
       - if: runner.os == 'Windows'
         run: ./.github/windows-standard-user.ps1

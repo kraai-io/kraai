@@ -109,6 +109,29 @@ mod tests {
     #[test]
     fn transport_descriptor_replaces_an_inherited_collision()
     -> Result<(), Box<dyn std::error::Error>> {
+        const CHILD: &str = "KRAAI_TRANSPORT_DESCRIPTOR_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "transport::unix::tests::transport_descriptor_replaces_an_inherited_collision",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()?;
+            if !output.status.success() {
+                return Err(std::io::Error::other(format!(
+                    "isolated descriptor test failed: {}\nstdout: {}\nstderr: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ))
+                .into());
+            }
+            return Ok(());
+        }
+
         let socket = transport_socket()?;
         let occupied = std::fs::File::open("/dev/null")?;
         let target = occupied.into_raw_fd();
