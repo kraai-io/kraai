@@ -9444,12 +9444,12 @@ rec {
             packageId = "color-eyre";
           }
           {
-            name = "directories";
-            packageId = "directories";
-          }
-          {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
           }
           {
             name = "kraai-provider-core";
@@ -9792,6 +9792,10 @@ rec {
           {
             name = "crossbeam-channel";
             packageId = "crossbeam-channel";
+          }
+          {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
           }
           {
             name = "kraai-runtime";
