@@ -8431,6 +8431,7 @@ rec {
         features = {
           "invocation" = [ "dep:java-locator" "dep:libloading" ];
         };
+        resolvedDefaultFeatures = [ "default" ];
       };
       "jni-macros" = rec {
         crateName = "jni-macros";
@@ -9443,12 +9444,12 @@ rec {
             packageId = "color-eyre";
           }
           {
-            name = "directories";
-            packageId = "directories";
-          }
-          {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
           }
           {
             name = "kraai-provider-core";
@@ -9793,6 +9794,10 @@ rec {
             packageId = "crossbeam-channel";
           }
           {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
+          }
+          {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
           }
@@ -9846,6 +9851,11 @@ rec {
           {
             name = "unicode-width";
             packageId = "unicode-width 0.2.2";
+          }
+          {
+            name = "webbrowser";
+            packageId = "webbrowser";
+            target = { target, features }: (target."windows" or false);
           }
         ];
 
@@ -11491,6 +11501,17 @@ rec {
           "std" = [ "num-traits/std" "matrixmultiply/std" ];
         };
         resolvedDefaultFeatures = [ "approx" "default" "matrixmultiply-threading" "rayon" "serde" "std" ];
+      };
+      "ndk-context" = rec {
+        crateName = "ndk-context";
+        version = "0.1.1";
+        edition = "2021";
+        sha256 = "12sai3dqsblsvfd1l1zab0z6xsnlha3xsfl7kagdnmj3an3jvc17";
+        libName = "ndk_context";
+        authors = [
+          "The Rust Windowing contributors"
+        ];
+
       };
       "neo_frizbee" = rec {
         crateName = "neo_frizbee";
@@ -14458,7 +14479,7 @@ rec {
           "objc2-uniform-type-identifiers" = [ "dep:objc2-uniform-type-identifiers" ];
           "std" = [ "alloc" ];
         };
-        resolvedDefaultFeatures = [ "NSImage" "NSPasteboard" "NSPasteboardItem" "alloc" "bitflags" "objc2-core-graphics" "std" ];
+        resolvedDefaultFeatures = [ "NSImage" "NSPasteboard" "NSPasteboardItem" "NSRunningApplication" "NSWorkspace" "alloc" "bitflags" "objc2-core-graphics" "std" ];
       };
       "objc2-core-foundation" = rec {
         crateName = "objc2-core-foundation";
@@ -14765,7 +14786,7 @@ rec {
           "std" = [ "alloc" ];
           "unstable-mutation-return-null" = [ "NSNull" ];
         };
-        resolvedDefaultFeatures = [ "NSArray" "NSBundle" "NSCoder" "NSData" "NSDictionary" "NSEnumerator" "NSError" "NSFileWrapper" "NSGeometry" "NSItemProvider" "NSLocale" "NSObject" "NSSet" "NSString" "NSURL" "NSValue" "alloc" "bitflags" "objc2-core-foundation" "std" ];
+        resolvedDefaultFeatures = [ "NSAppleEventDescriptor" "NSArray" "NSBundle" "NSCoder" "NSData" "NSDate" "NSDictionary" "NSEnumerator" "NSError" "NSFileManager" "NSFileWrapper" "NSGeometry" "NSItemProvider" "NSLocale" "NSNotification" "NSObject" "NSSet" "NSString" "NSURL" "NSValue" "alloc" "bitflags" "objc2-core-foundation" "std" ];
       };
       "objc2-io-kit" = rec {
         crateName = "objc2-io-kit";
@@ -25163,6 +25184,78 @@ rec {
         ];
         features = {
           "serde" = [ "dep:serde" ];
+        };
+      };
+      "webbrowser" = rec {
+        crateName = "webbrowser";
+        version = "1.2.4";
+        edition = "2021";
+        sha256 = "151gb2nnp2hbn7898hh0q1vffly811lw4brnpi6j26l2f3kmphv2";
+        authors = [
+          "Amod Malviya @amodm"
+        ];
+        dependencies = [
+          {
+            name = "jni";
+            packageId = "jni 0.22.4";
+            target = { target, features }: ("android" == target."os" or null);
+          }
+          {
+            name = "log";
+            packageId = "log";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "ndk-context";
+            packageId = "ndk-context";
+            target = { target, features }: ("android" == target."os" or null);
+          }
+          {
+            name = "objc2";
+            packageId = "objc2";
+            target = { target, features }: (("ios" == target."os" or null) || ("tvos" == target."os" or null) || ("visionos" == target."os" or null));
+          }
+          {
+            name = "objc2";
+            packageId = "objc2";
+            target = { target, features }: ("macos" == target."os" or null);
+          }
+          {
+            name = "objc2-app-kit";
+            packageId = "objc2-app-kit";
+            usesDefaultFeatures = false;
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "std" "NSWorkspace" "NSRunningApplication" ];
+          }
+          {
+            name = "objc2-foundation";
+            packageId = "objc2-foundation";
+            usesDefaultFeatures = false;
+            target = { target, features }: (("ios" == target."os" or null) || ("tvos" == target."os" or null) || ("visionos" == target."os" or null));
+            features = [ "std" "NSDictionary" "NSString" "NSURL" ];
+          }
+          {
+            name = "objc2-foundation";
+            packageId = "objc2-foundation";
+            usesDefaultFeatures = false;
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "std" "NSArray" "NSDictionary" "NSError" "NSString" "NSURL" ];
+          }
+          {
+            name = "url";
+            packageId = "url";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
+          }
+          {
+            name = "web-sys";
+            packageId = "web-sys";
+            target = { target, features }: (builtins.elem "wasm" target."family");
+            features = [ "Window" ];
+          }
+        ];
+        features = {
+          "wasm-console" = [ "web-sys/console" ];
         };
       };
       "webpki-root-certs" = rec {

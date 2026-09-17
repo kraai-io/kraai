@@ -62,15 +62,19 @@ pub(super) fn pending_auth_target(status: &ProviderAuthStatus) -> Option<&str> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 pub(super) fn open_external_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let command = ("open", vec![target]);
     #[cfg(target_os = "linux")]
     let command = ("xdg-open", vec![target]);
-    #[cfg(target_os = "windows")]
-    let command = ("cmd", vec!["/C", "start", "", target]);
 
     kraai_sandbox::spawn_command(std::process::Command::new(command.0).args(command.1))
         .map_err(|err| err.to_string())
         .map(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn open_external_target(target: &str) -> Result<(), String> {
+    webbrowser::open(target).map_err(|err| err.to_string())
 }

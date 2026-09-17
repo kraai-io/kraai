@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Context, ContextCompat, Result};
+use color_eyre::eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,14 +47,9 @@ fn preference_path_for_current_workspace() -> Result<PathBuf> {
     let workspace_dir = std::env::current_dir()
         .and_then(|path| path.canonicalize())
         .or_else(|_| std::env::current_dir())?;
-    Ok(kraai_root()?
+    Ok(kraai_persistence::agent_state_root()?
         .join("workspaces")
         .join(format!("{}.json", hex_path(&workspace_dir))))
-}
-
-fn kraai_root() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("Failed to determine home directory")?;
-    Ok(PathBuf::from(home).join(".kraai"))
 }
 
 fn hex_path(path: &Path) -> String {
@@ -63,4 +58,47 @@ fn hex_path(path: &Path) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "regression test failures must report their setup error"
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_use_session_storage_root_without_home() {
+        const CHILD: &str = "KRAAI_TEST_PREFERENCES_WITHOUT_HOME";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(std::env::var_os("HOME").is_none());
+            let workspace = std::env::current_dir()
+                .expect("current directory")
+                .canonicalize()
+                .expect("canonical workspace");
+            let expected = kraai_persistence::agent_state_root()
+                .expect("session storage root")
+                .join("workspaces")
+                .join(format!("{}.json", hex_path(&workspace)));
+            assert_eq!(
+                preference_path_for_current_workspace().expect("preferences path"),
+                expected
+            );
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "app::workspace_preferences::tests::preferences_use_session_storage_root_without_home", "--nocapture"])
+            .env_remove("HOME")
+            .env(CHILD, "1")
+            .output()
+            .expect("run regression test without HOME");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

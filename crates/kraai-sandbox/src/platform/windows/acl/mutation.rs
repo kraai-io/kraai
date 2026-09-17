@@ -46,7 +46,7 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         )
     };
     if result != 0 {
-        return Err(code_error("read DACL", result));
+        return Err(code_error("read DACL (GetSecurityInfo)", result));
     }
     let _descriptor = Allocation(descriptor);
     if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
@@ -144,9 +144,10 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         )
     };
     if status < 0 {
-        return Err(code_error("apply sandbox DACL", unsafe {
-            RtlNtStatusToDosError(status)
-        }));
+        return Err(code_error(
+            &format!("apply sandbox DACL (NtSetSecurityObject, NTSTATUS {status:#x})"),
+            unsafe { RtlNtStatusToDosError(status) },
+        ));
     }
     Ok(())
 }

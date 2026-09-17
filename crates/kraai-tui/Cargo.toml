@@ -16,6 +16,7 @@ base64 = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 crossbeam-channel = { workspace = true }
+kraai-persistence = { workspace = true }
 kraai-runtime = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
@@ -29,3 +30,6 @@ tokio = { workspace = true }
 tracing.workspace = true
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+webbrowser = { workspace = true }

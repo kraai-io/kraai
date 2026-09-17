@@ -1040,11 +1040,9 @@ fn normalize_plan_type(plan_type: &str) -> String {
 }
 
 fn auth_path() -> io::Result<PathBuf> {
-    let home = directories::BaseDirs::new()
-        .ok_or_else(|| io::Error::other("Failed to locate home directory"))?
-        .home_dir()
-        .to_path_buf();
-    Ok(home.join(".kraai/provider-state/openai-codex/auth.json"))
+    let root = kraai_persistence::agent_state_root()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(root.join("provider-state/openai-codex/auth.json"))
 }
 
 fn load_auth_file(path: &Path) -> io::Result<Option<StoredAuth>> {
@@ -1439,7 +1437,12 @@ mod tests {
     #[test]
     fn auth_path_uses_agent_provider_state_root() {
         let path = auth_path().unwrap();
-        assert!(path.ends_with(".kraai/provider-state/openai-codex/auth.json"));
+        assert_eq!(
+            path,
+            kraai_persistence::agent_state_root()
+                .unwrap()
+                .join("provider-state/openai-codex/auth.json")
+        );
     }
 
     #[tokio::test]

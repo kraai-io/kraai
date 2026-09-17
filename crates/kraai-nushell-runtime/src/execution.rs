@@ -93,7 +93,10 @@ pub async fn execute(
                 .contains(kraai_types::SandboxCapability::Network),
     };
 
-    let private_temp = plan.private_temp.reserve().map_err(RuntimeError::Sandbox)?;
+    let private_temp = plan.private_temp.reserve();
+    #[cfg(windows)]
+    let private_temp = private_temp.map_err(|error| error.with_workspace_root(&workspace_root));
+    let private_temp = private_temp.map_err(RuntimeError::Sandbox)?;
     let transport_directory = private_temp
         .path()
         .ok_or_else(|| RuntimeError::Transport(String::from("private temp was not reserved")))?;
