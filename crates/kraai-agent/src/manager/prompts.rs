@@ -55,20 +55,20 @@ impl AgentManager {
         workspace_dir: &Path,
         transport: ScriptToolTransport,
     ) -> Result<TurnSystemPrompt> {
-        let mut sections = Vec::new();
-
         let transport_prompt = match transport {
             ScriptToolTransport::TextEnvelope => TEXT_ENVELOPE_PROMPT,
             ScriptToolTransport::NativeCustom => NATIVE_CUSTOM_TOOL_PROMPT,
         };
-        let prefix = [SCRIPT_EXECUTION_PROMPT, transport_prompt].join("\n\n");
+        let mut prefix_sections = vec![SCRIPT_EXECUTION_PROMPT, transport_prompt];
         if !profile.system_prompt.is_empty() {
-            sections.push(profile.system_prompt.clone());
+            prefix_sections.push(&profile.system_prompt);
         }
         let command_prompt = render_command_prompt(&profile.commands)?;
         if !command_prompt.is_empty() {
-            sections.push(command_prompt);
+            prefix_sections.push(&command_prompt);
         }
+        let prefix = prefix_sections.join("\n\n");
+        let mut sections = vec![prefix];
 
         if let Some(path) = &self.user_agents_path
             && let Some(prompt) = load_agents_md_prompt(path, "User").await?
@@ -93,35 +93,20 @@ impl AgentManager {
             session_id,
         )
         .await?;
-        if !context_state.prompt.is_empty() {
-            sections.push(context_state.prompt);
-        }
-
-        let system_prompt = sections.join("\n\n");
+        let prefix = sections.join("\n\n");
+        let suffix = context_state.prompt;
         #[cfg(debug_assertions)]
-        {
-            if system_prompt.is_empty() {
-                tracing::info!(
-                    session_id = session_id,
-                    profile_id = %profile.id,
-                    "Compiled turn system prompt is empty"
-                );
-            } else {
-                tracing::info!(
-                    session_id = session_id,
-                    profile_id = %profile.id,
-                    "Compiled turn system prompt:\n{}",
-                    system_prompt
-                );
-            }
-        }
-
-        #[cfg(not(debug_assertions))]
-        let _ = (session_id, profile, &system_prompt);
+        tracing::info!(
+            session_id = session_id,
+            profile_id = %profile.id,
+            "Compiled turn prompt prefix:\n{}\n\nSuffix:\n{}",
+            prefix,
+            suffix
+        );
 
         Ok(TurnSystemPrompt {
             prefix,
-            suffix: system_prompt,
+            suffix,
             context_notifications: skills
                 .warnings
                 .into_iter()
