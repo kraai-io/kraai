@@ -43,7 +43,7 @@
       (member: member.name)
       (lib.filter (member: member.procMacro) workspaceMembers);
     workspaceTestInputs = {
-      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils rustToolchain];
+      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils pkgs.findutils rustToolchain];
     };
     darwinNestedSandboxTests = {
       "kraai-sandbox" = ["tests::macos::"];
@@ -157,6 +157,7 @@
             pkgs.bubblewrap
             pkgs.clang
             pkgs.coreutils
+            pkgs.findutils
             pkgs.git
             pkgs.gnutar
             pkgs.gnused

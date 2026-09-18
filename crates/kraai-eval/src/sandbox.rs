@@ -76,6 +76,8 @@ pub(crate) fn rust_environment() -> Result<RustEnvironment> {
         required_program("rg")?,
         required_program("sed")?,
         required_program("ls")?,
+        required_program("find")?,
+        required_program("xargs")?,
     ];
     if let Some(pkg_config) = find_program("pkg-config") {
         programs.push(pkg_config);
@@ -442,14 +444,21 @@ mod tests {
             command: vec![
                 git.to_string_lossy().into_owned(),
                 String::from("-c"),
-                String::from("alias.eval-shell=!/bin/sh -c 'printf shell-ready'"),
+                String::from(
+                    "alias.eval-shell=!/bin/sh -c 'find . -maxdepth 0 -print0 | xargs -0 printf %s'",
+                ),
                 String::from("eval-shell"),
             ],
             workspace: workspace.clone(),
             timeout: Duration::from_secs(5),
             network: NetworkPolicy::Disabled,
             environment: BTreeMap::new(),
-            extra_programs: Vec::new(),
+            extra_programs: ["find", "xargs", "ls"]
+                .into_iter()
+                .map(|name| {
+                    find_program(name).ok_or_else(|| color_eyre::eyre::eyre!("missing {name}"))
+                })
+                .collect::<Result<Vec<_>>>()?,
             cargo_home: None,
             metrics_output: None,
             script_executions_dir: None,
@@ -457,7 +466,7 @@ mod tests {
         })?;
         fs::remove_dir_all(workspace)?;
         ensure!(
-            outcome.success() && outcome.stdout == b"shell-ready",
+            outcome.success() && outcome.stdout == b".",
             "native runner could not use host shell alias: {}",
             String::from_utf8_lossy(&outcome.stderr)
         );

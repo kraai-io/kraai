@@ -44,6 +44,7 @@
               typescript
 
               ripgrep
+              findutils
               pkg-config
               openssl
             ]
