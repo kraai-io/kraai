@@ -28,6 +28,33 @@ mod tests {
     use kraai_types::{AssistantItem, AssistantPhase, ToolCallId};
 
     #[test]
+    fn system_prefix_and_suffix_stay_around_history() {
+        let messages = normalize_chat_messages(vec![
+            ConversationItem::System {
+                text: "Static".into(),
+            },
+            ConversationItem::User {
+                text: "Task".into(),
+            },
+            ConversationItem::System {
+                text: "Dynamic".into(),
+            },
+        ]);
+        let roles_and_text: Vec<_> = messages
+            .iter()
+            .map(|message| (message.role.as_str(), message.content.as_str()))
+            .collect();
+        assert_eq!(
+            roles_and_text,
+            vec![
+                ("system", "Static"),
+                ("user", "Task"),
+                ("system", "Dynamic")
+            ]
+        );
+    }
+
+    #[test]
     fn native_history_is_rendered_as_text_envelope() {
         let normalized = normalize_chat_messages(vec![ConversationItem::Assistant {
             items: vec![

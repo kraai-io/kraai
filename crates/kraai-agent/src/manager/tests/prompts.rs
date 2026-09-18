@@ -164,19 +164,24 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     let system_prompt = request_system_prompt(&request);
     assert!(!system_prompt.contains("Workspace Instructions"));
     assert!(!system_prompt.contains(AGENTS_MD_FILE_NAME));
-    let protocol_offset = system_prompt
-        .find("# Script Execution")
-        .expect("script execution protocol");
-    let first_tool_offset = system_prompt
-        .find("# Kraai Commands")
-        .expect("command definitions");
-    assert!(protocol_offset < first_tool_offset);
-    assert!(system_prompt.contains("one `<tool_call>` block containing the complete script input"));
-    assert!(system_prompt.contains("end the response immediately after it"));
-    assert!(system_prompt.contains(
+    let Some(ConversationItem::System { text: prefix }) = request.provider_request.messages.first()
+    else {
+        return Err(eyre!("missing static prefix"));
+    };
+    assert!(prefix.contains("# Script Execution"));
+    assert!(!prefix.contains("# Kraai Commands"));
+    assert!(system_prompt.contains("# Kraai Commands"));
+    assert!(!system_prompt.contains("# Script Execution"));
+    assert!(matches!(
+        request.provider_request.messages.get(1),
+        Some(ConversationItem::User { .. })
+    ));
+    assert!(prefix.contains("one `<tool_call>` block containing the complete script input"));
+    assert!(prefix.contains("end the response immediately after it"));
+    assert!(prefix.contains(
         "convert their output to text with `lines` before applying row-oriented filters"
     ));
-    assert!(system_prompt.contains(
+    assert!(prefix.contains(
         "Do not leave a byte stream as the final pipeline value because Nushell renders it as an unhelpful hex dump"
     ));
     assert!(system_prompt.contains(
@@ -404,6 +409,11 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
 
     let system_prompt = request_system_prompt(&request);
     assert!(system_prompt.contains("1|current"));
+    assert!(matches!(
+        request.provider_request.messages.first(),
+        Some(ConversationItem::System { text })
+            if text.contains("# Script Execution") && !text.contains("1|current")
+    ));
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;

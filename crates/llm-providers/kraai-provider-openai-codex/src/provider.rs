@@ -348,8 +348,8 @@ impl OpenAiCodexProvider {
         let has_script_tool = !tools.is_empty();
         let request = ResponsesRequest {
             model: resolved_model.api_model,
-            instructions: String::new(),
-            input: normalized,
+            instructions: normalized.instructions,
+            input: normalized.input,
             reasoning: resolved_model.reasoning,
             tools,
             tool_choice: has_script_tool.then_some("auto"),

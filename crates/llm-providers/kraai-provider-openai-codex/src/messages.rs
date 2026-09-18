@@ -43,7 +43,19 @@ pub struct ResponsesCustomToolCallOutput {
     output: String,
 }
 
-pub fn normalize_conversation(messages: Vec<ConversationItem>) -> Vec<ResponsesRequestItem> {
+pub struct NormalizedResponsesInput {
+    pub instructions: String,
+    pub input: Vec<ResponsesRequestItem>,
+}
+
+pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResponsesInput {
+    let mut messages = messages.into_iter().peekable();
+    let mut instructions = Vec::new();
+    while matches!(messages.peek(), Some(ConversationItem::System { .. })) {
+        if let Some(ConversationItem::System { text }) = messages.next() {
+            instructions.push(text);
+        }
+    }
     let mut input = Vec::new();
 
     for message in messages {
@@ -102,7 +114,10 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> Vec<ResponsesR
         }
     }
 
-    input
+    NormalizedResponsesInput {
+        instructions: instructions.join("\n\n"),
+        input,
+    }
 }
 
 fn text_message(
@@ -170,14 +185,10 @@ mod tests {
             },
         ]);
 
+        assert_eq!(normalized.instructions, " System\n");
         assert_eq!(
-            serde_json::to_value(normalized).expect("serialized input"),
+            serde_json::to_value(normalized.input).expect("serialized input"),
             json!([
-                {
-                    "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": " System\n"}]
-                },
                 {
                     "type": "message",
                     "role": "user",

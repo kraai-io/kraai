@@ -24,33 +24,30 @@ ls
 const NATIVE_CUSTOM_TOOL_PROMPT: &str = r#"Invoke Nushell only by calling the `kraai_nushell` tool. Send the complete script input as the tool's plaintext input. Do not wrap it in XML or JSON."#;
 
 pub(super) struct TurnSystemPrompt {
-    pub(super) content: String,
+    pub(super) prefix: String,
+    pub(super) suffix: String,
     pub(super) context_notifications: Vec<String>,
 }
 
-impl AgentManager {
-    pub(super) fn build_system_prompt(
-        &self,
-        profile: &AgentProfile,
-        transport: ScriptToolTransport,
-    ) -> Result<String> {
-        let command_prompt = render_command_prompt(&profile.commands)?;
-        let transport_prompt = match transport {
-            ScriptToolTransport::TextEnvelope => TEXT_ENVELOPE_PROMPT,
-            ScriptToolTransport::NativeCustom => NATIVE_CUSTOM_TOOL_PROMPT,
-        };
-        let mut execution_sections = vec![SCRIPT_EXECUTION_PROMPT, transport_prompt];
-        if !command_prompt.is_empty() {
-            execution_sections.push(&command_prompt);
+impl TurnSystemPrompt {
+    pub(super) fn wrap_history(
+        &mut self,
+        history: impl IntoIterator<Item = ConversationItem>,
+    ) -> Vec<ConversationItem> {
+        let mut messages = vec![ConversationItem::System {
+            text: std::mem::take(&mut self.prefix),
+        }];
+        messages.extend(history);
+        if !self.suffix.is_empty() {
+            messages.push(ConversationItem::System {
+                text: std::mem::take(&mut self.suffix),
+            });
         }
-        let execution_prompt = execution_sections.join("\n\n");
-        if profile.system_prompt.is_empty() {
-            Ok(execution_prompt)
-        } else {
-            Ok(format!("{}\n\n{}", profile.system_prompt, execution_prompt))
-        }
+        messages
     }
+}
 
+impl AgentManager {
     pub(super) async fn build_turn_system_prompt(
         &self,
         session_id: &str,
@@ -60,9 +57,17 @@ impl AgentManager {
     ) -> Result<TurnSystemPrompt> {
         let mut sections = Vec::new();
 
-        let base_system_prompt = self.build_system_prompt(profile, transport)?;
-        if !base_system_prompt.is_empty() {
-            sections.push(base_system_prompt);
+        let transport_prompt = match transport {
+            ScriptToolTransport::TextEnvelope => TEXT_ENVELOPE_PROMPT,
+            ScriptToolTransport::NativeCustom => NATIVE_CUSTOM_TOOL_PROMPT,
+        };
+        let prefix = [SCRIPT_EXECUTION_PROMPT, transport_prompt].join("\n\n");
+        if !profile.system_prompt.is_empty() {
+            sections.push(profile.system_prompt.clone());
+        }
+        let command_prompt = render_command_prompt(&profile.commands)?;
+        if !command_prompt.is_empty() {
+            sections.push(command_prompt);
         }
 
         if let Some(path) = &self.user_agents_path
@@ -115,7 +120,8 @@ impl AgentManager {
         let _ = (session_id, profile, &system_prompt);
 
         Ok(TurnSystemPrompt {
-            content: system_prompt,
+            prefix,
+            suffix: system_prompt,
             context_notifications: skills
                 .warnings
                 .into_iter()
