@@ -1,8 +1,6 @@
 use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
 use serde::Serialize;
 
-const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex, a coding agent.";
-
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ResponsesRequestItem {
@@ -45,22 +43,18 @@ pub struct ResponsesCustomToolCallOutput {
     output: String,
 }
 
-pub struct NormalizedResponsesInput {
-    pub instructions: String,
-    pub input: Vec<ResponsesRequestItem>,
-}
-
-pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResponsesInput {
-    let mut instructions = Vec::new();
+pub fn normalize_conversation(messages: Vec<ConversationItem>) -> Vec<ResponsesRequestItem> {
     let mut input = Vec::new();
 
     for message in messages {
         match message {
             ConversationItem::System { text } => {
-                let text = text.trim();
-                if !text.is_empty() {
-                    instructions.push(text.to_string());
-                }
+                input.push(ResponsesRequestItem::Message(text_message(
+                    "developer",
+                    "input_text",
+                    text,
+                    None,
+                )));
             }
             ConversationItem::User { text } => {
                 input.push(ResponsesRequestItem::Message(text_message(
@@ -108,14 +102,7 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResp
         }
     }
 
-    NormalizedResponsesInput {
-        instructions: if instructions.is_empty() {
-            DEFAULT_CODEX_INSTRUCTIONS.to_string()
-        } else {
-            instructions.join("\n\n")
-        },
-        input,
-    }
+    input
 }
 
 fn text_message(
@@ -156,7 +143,10 @@ mod tests {
     fn normalizes_typed_cross_provider_history() {
         let normalized = normalize_conversation(vec![
             ConversationItem::System {
-                text: "System".to_string(),
+                text: " System\n".to_string(),
+            },
+            ConversationItem::User {
+                text: "Task".to_string(),
             },
             ConversationItem::Assistant {
                 items: vec![
@@ -175,12 +165,24 @@ mod tests {
                 call_id: ToolCallId::new("call-1"),
                 output: "result".to_string(),
             },
+            ConversationItem::System {
+                text: "Current pinned files".to_string(),
+            },
         ]);
 
-        assert_eq!(normalized.instructions, "System");
         assert_eq!(
-            serde_json::to_value(normalized.input).expect("serialized input"),
+            serde_json::to_value(normalized).expect("serialized input"),
             json!([
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": " System\n"}]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Task"}]
+                },
                 {
                     "type": "message",
                     "role": "assistant",
@@ -197,6 +199,11 @@ mod tests {
                     "type": "custom_tool_call_output",
                     "call_id": "call-1",
                     "output": "result"
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Current pinned files"}]
                 }
             ])
         );
