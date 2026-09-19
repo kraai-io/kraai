@@ -9913,6 +9913,14 @@ rec {
             features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_IO" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null));
+            features = [ "process" "signal" "fs" ];
+          }
+        ];
 
       };
       "lab" = rec {

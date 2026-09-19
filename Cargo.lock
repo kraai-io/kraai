@@ -3197,6 +3197,7 @@ dependencies = [
 name = "kraai-workspace-fs"
 version = "0.1.0"
 dependencies = [
+ "nix 0.31.3",
  "rustix 1.1.4",
  "thiserror 2.0.20",
  "ulid",

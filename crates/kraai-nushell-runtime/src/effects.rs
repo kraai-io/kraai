@@ -370,13 +370,14 @@ mod tests {
         AuthenticatedFrame, EffectProtocolError, signed_frame, verify_frame,
         write_authenticated_async, write_authenticated_sync,
     };
+    use hmac::{Hmac, KeyInit, Mac};
     use kraai_types::{CommandInvocationId, ScriptExecutionId, StateEffectAck};
 
     #[test]
     fn authenticated_frames_reject_payload_execution_and_mac_tampering()
     -> Result<(), Box<dyn std::error::Error>> {
         let execution_id = ScriptExecutionId::new("execution");
-        let secret = [7_u8; 32];
+        let secret = rand::random::<[u8; 32]>();
         let payload = StateEffectAck {
             invocation_id: CommandInvocationId::new("invocation"),
             error: None,
@@ -397,7 +398,7 @@ mod tests {
             Err(EffectProtocolError::ExecutionId)
         ));
         assert!(matches!(
-            verify_frame(&frame, &execution_id, &[8_u8; 32]),
+            verify_frame(&frame, &execution_id, &secret.map(|byte| byte ^ 1)),
             Err(EffectProtocolError::Authentication(_))
         ));
         Ok(())
@@ -407,21 +408,27 @@ mod tests {
     async fn authenticated_writers_preserve_frame_bytes() -> Result<(), Box<dyn std::error::Error>>
     {
         let execution_id = ScriptExecutionId::new("execution");
+        let secret = rand::random::<[u8; 32]>();
         let payload = StateEffectAck {
             invocation_id: CommandInvocationId::new("invocation"),
             error: None,
         };
-        let frame = br#"{"execution_id":"execution","sequence":1,"payload":{"invocation_id":"invocation","error":null},"mac":[97,69,121,21,214,136,243,129,2,186,88,33,136,240,189,213,126,150,174,226,52,163,138,16,28,253,197,250,131,65,66,241]}"#;
+        let mut hmac = Hmac::<sha2::Sha256>::new_from_slice(&secret)?;
+        hmac.update(br#"{"execution_id":"execution","sequence":1,"payload":{"invocation_id":"invocation","error":null}}"#);
+        let mac: [u8; 32] = hmac.finalize().into_bytes().into();
+        let frame = format!(
+            r#"{{"execution_id":"execution","sequence":1,"payload":{{"invocation_id":"invocation","error":null}},"mac":{}}}"#,
+            serde_json::to_string(&mac)?,
+        );
         let mut expected = u32::try_from(frame.len())?.to_be_bytes().to_vec();
-        expected.extend_from_slice(frame);
+        expected.extend_from_slice(frame.as_bytes());
 
         let mut synchronous = Vec::new();
-        write_authenticated_sync(&mut synchronous, &execution_id, 1, &payload, &[7_u8; 32])?;
+        write_authenticated_sync(&mut synchronous, &execution_id, 1, &payload, &secret)?;
         assert_eq!(synchronous, expected);
 
         let mut asynchronous = Vec::new();
-        write_authenticated_async(&mut asynchronous, &execution_id, 1, &payload, &[7_u8; 32])
-            .await?;
+        write_authenticated_async(&mut asynchronous, &execution_id, 1, &payload, &secret).await?;
         assert_eq!(asynchronous, expected);
         Ok(())
     }

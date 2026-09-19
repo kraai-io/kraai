@@ -549,7 +549,7 @@ mod tests {
         fs::write(&path, "initial").unwrap();
         assert_eq!(read_regular_text_file(&path).unwrap(), "initial");
         fs::remove_file(&path).unwrap();
-        rustix::fs::mkfifoat(rustix::fs::CWD, &path, rustix::fs::Mode::RWXU).unwrap();
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRWXU).unwrap();
         let fifo = path.clone();
         let (send, receive) = std::sync::mpsc::channel();
         let reader = std::thread::spawn(move || {
@@ -723,7 +723,7 @@ mod tests {
                 fs::remove_file(&path).unwrap();
                 path.clone()
             };
-            rustix::fs::mkfifoat(rustix::fs::CWD, &fifo, rustix::fs::Mode::RWXU).unwrap();
+            nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
             let (send, receive) = std::sync::mpsc::channel();
             let reader = std::thread::spawn(move || {
                 send.send(open_scoped_file(&root, &path)).unwrap();
