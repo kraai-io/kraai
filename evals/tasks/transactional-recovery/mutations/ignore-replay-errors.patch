@@ -1,0 +1,12 @@
+diff --git a/src/replay.rs b/src/replay.rs
+--- a/src/replay.rs
++++ b/src/replay.rs
+@@ -11,7 +11,7 @@
+         let end = start + len;
+         let tx =
+             codec::decode_payload(&bytes[start..end]).ok_or(Error::InvalidRecord { offset })?;
+-        state.apply(&tx)?;
++        let _ = state.apply(&tx);
+         offset = end;
+     }
+     Ok((state, offset))

@@ -1,0 +1,37 @@
+diff --git a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -11,6 +11,16 @@
+ 
+ impl State {
+     pub fn apply(&mut self, tx: &Transaction) -> Result<Commit, Error> {
++        for check in &tx.checks {
++            let actual = self.versions.get(&check.key).copied();
++            if actual != check.version {
++                return Err(Error::Stale {
++                    key: check.key.clone(),
++                    expected: check.version,
++                    actual,
++                });
++            }
++        }
+         if let Some((previous, revision)) = self.receipts.get(&tx.id) {
+             return if previous == tx {
+                 Ok(Commit {
+@@ -20,16 +30,6 @@
+             } else {
+                 Err(Error::IdConflict(tx.id))
+             };
+-        }
+-        for check in &tx.checks {
+-            let actual = self.versions.get(&check.key).copied();
+-            if actual != check.version {
+-                return Err(Error::Stale {
+-                    key: check.key.clone(),
+-                    expected: check.version,
+-                    actual,
+-                });
+-            }
+         }
+         let revision = self.revision + 1;
+         for write in &tx.writes {

@@ -1,0 +1,15 @@
+diff --git a/src/journal.rs b/src/journal.rs
+--- a/src/journal.rs
++++ b/src/journal.rs
+@@ -10,9 +10,9 @@
+ impl Journal {
+     pub fn open(checkpoint: Option<&Checkpoint>, bytes: &[u8]) -> Result<Self, Error> {
+         let state = checkpoint.map(|c| c.state.clone()).unwrap_or_default();
+-        let (state, committed) = replay::recover(state, bytes)?;
++        let (state, _committed) = replay::recover(state, bytes)?;
+         Ok(Self {
+-            bytes: bytes[..committed].to_vec(),
++            bytes: bytes.to_vec(),
+             state,
+         })
+     }

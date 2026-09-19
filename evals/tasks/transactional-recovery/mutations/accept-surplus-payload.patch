@@ -1,0 +1,12 @@
+diff --git a/src/codec.rs b/src/codec.rs
+--- a/src/codec.rs
++++ b/src/codec.rs
+@@ -81,7 +81,5 @@
+             _ => return None,
+         });
+     }
+-    input
+-        .is_empty()
+-        .then_some(Transaction { id, checks, writes })
++    Some(Transaction { id, checks, writes })
+ }

@@ -1,0 +1,16 @@
+diff --git a/src/journal.rs b/src/journal.rs
+--- a/src/journal.rs
++++ b/src/journal.rs
+@@ -26,9 +26,9 @@
+     }
+ 
+     pub fn checkpoint(&self) -> Checkpoint {
+-        Checkpoint {
+-            state: self.state.clone(),
+-        }
++        let mut state = self.state.clone();
++        state.receipts.clear();
++        Checkpoint { state }
+     }
+ 
+     pub fn get(&self, key: &str) -> Option<&str> {

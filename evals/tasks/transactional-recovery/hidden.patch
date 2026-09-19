@@ -1,0 +1,455 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,450 @@
++use std::collections::BTreeMap;
++use transactional_recovery::{
++    Check, Commit, Error, Journal, Transaction, Write, encode_transaction,
++};
++
++fn put(key: &str, value: &str) -> Write {
++    Write::Put {
++        key: key.into(),
++        value: value.into(),
++    }
++}
++fn delete(key: &str) -> Write {
++    Write::Delete { key: key.into() }
++}
++fn check(key: &str, version: Option<u64>) -> Check {
++    Check {
++        key: key.into(),
++        version,
++    }
++}
++fn tx(id: u64, checks: Vec<Check>, writes: Vec<Write>) -> Transaction {
++    Transaction { id, checks, writes }
++}
++fn empty() -> Journal {
++    Journal::open(None, &[]).unwrap()
++}
++fn frame(payload: &[u8]) -> Vec<u8> {
++    let mut bytes = (payload.len() as u32).to_le_bytes().to_vec();
++    bytes.extend_from_slice(payload);
++    bytes
++}
++
++#[test]
++fn checks_see_one_pretransaction_snapshot_and_errors_are_atomic() {
++    let mut j = empty();
++    j.commit(tx(1, vec![], vec![put("x", "old"), put("y", "old")]))
++        .unwrap();
++    let before = j.checkpoint();
++    let bytes = j.bytes().to_vec();
++    let bad = tx(
++        2,
++        vec![check("x", Some(1)), check("y", None), check("z", Some(9))],
++        vec![put("x", "wrong"), delete("y")],
++    );
++    assert_eq!(
++        j.commit(bad),
++        Err(Error::Stale {
++            key: "y".into(),
++            expected: None,
++            actual: Some(1)
++        })
++    );
++    assert_eq!(j.checkpoint(), before);
++    assert_eq!(j.bytes(), bytes);
++    let good = tx(
++        2,
++        vec![check("x", Some(1)), check("x", Some(1))],
++        vec![delete("x"), put("x", "new"), delete("y"), put("z", "last")],
++    );
++    assert_eq!(
++        j.commit(good).unwrap(),
++        Commit {
++            revision: 2,
++            applied: true
++        }
++    );
++    assert_eq!(j.get("x"), Some("new"));
++    assert_eq!(j.get("y"), None);
++    assert_eq!(j.version("y"), Some(2));
++    assert_eq!(j.version("z"), Some(2));
++    assert_eq!(j.revision(), 2);
++}
++
++#[test]
++fn duplicate_receipts_precede_checks_and_preserve_original_revision() {
++    let mut j = empty();
++    let first = tx(u64::MAX, vec![check("x", None)], vec![put("x", "first")]);
++    j.commit(first.clone()).unwrap();
++    j.commit(tx(0, vec![], vec![put("x", "newer")])).unwrap();
++    let bytes = j.bytes().to_vec();
++    assert_eq!(
++        j.commit(first.clone()).unwrap(),
++        Commit {
++            revision: 1,
++            applied: false
++        }
++    );
++    assert_eq!(j.get("x"), Some("newer"));
++    assert_eq!(j.bytes(), bytes);
++    let mut conflicting = first.clone();
++    conflicting.checks.push(check("missing", Some(7)));
++    assert_eq!(j.commit(conflicting), Err(Error::IdConflict(u64::MAX)));
++    assert_eq!(j.revision(), 2);
++    let checkpoint = j.checkpoint();
++    let mut restored = Journal::open(Some(&checkpoint), &[]).unwrap();
++    assert_eq!(
++        restored.commit(first).unwrap(),
++        Commit {
++            revision: 1,
++            applied: false
++        }
++    );
++    assert!(restored.bytes().is_empty());
++    assert_eq!(restored.snapshot(), j.snapshot());
++}
++
++#[test]
++fn deletion_has_a_version_even_for_never_present_keys() {
++    let mut j = empty();
++    j.commit(tx(10, vec![], vec![delete("absent")])).unwrap();
++    assert_eq!(j.get("absent"), None);
++    assert_eq!(j.version("absent"), Some(1));
++    assert_eq!(j.version("never"), None);
++    let stale = tx(11, vec![check("absent", None)], vec![put("absent", "bad")]);
++    assert!(matches!(
++        j.commit(stale),
++        Err(Error::Stale {
++            actual: Some(1),
++            ..
++        })
++    ));
++    let checkpoint = j.checkpoint();
++    let mut restored = Journal::open(Some(&checkpoint), &[]).unwrap();
++    assert_eq!(restored.version("absent"), Some(1));
++    restored
++        .commit(tx(
++            11,
++            vec![check("absent", Some(1))],
++            vec![put("absent", "reborn")],
++        ))
++        .unwrap();
++    assert_eq!(restored.version("absent"), Some(2));
++    let restarted = Journal::open(Some(&checkpoint), restored.bytes()).unwrap();
++    assert_eq!(restarted.checkpoint(), restored.checkpoint());
++}
++
++#[test]
++fn empty_commits_count_and_structural_equality_is_exact() {
++    let mut j = empty();
++    let a = tx(0, vec![], vec![]);
++    assert_eq!(j.commit(a.clone()).unwrap().revision, 1);
++    assert_eq!(
++        j.commit(a).unwrap(),
++        Commit {
++            revision: 1,
++            applied: false
++        }
++    );
++    let b = tx(1, vec![check("a", None), check("b", None)], vec![]);
++    j.commit(b.clone()).unwrap();
++    let mut reordered = b.clone();
++    reordered.checks.reverse();
++    assert_eq!(j.commit(reordered), Err(Error::IdConflict(1)));
++    let mut duplicated = b;
++    duplicated.checks.push(check("a", None));
++    assert_eq!(j.commit(duplicated), Err(Error::IdConflict(1)));
++    let c = tx(2, vec![], vec![put("a", "a"), put("b", "b")]);
++    j.commit(c.clone()).unwrap();
++    let mut reordered = c;
++    reordered.writes.reverse();
++    assert_eq!(j.commit(reordered), Err(Error::IdConflict(2)));
++    assert_eq!(j.revision(), 3);
++}
++
++#[test]
++fn checkpoints_are_independent_and_tail_can_repeat_checkpoint_receipts() {
++    let mut j = empty();
++    let first = tx(3, vec![check("x", None)], vec![put("x", "v1")]);
++    j.commit(first.clone()).unwrap();
++    let checkpoint = j.checkpoint();
++    j.commit(tx(4, vec![], vec![put("x", "v2")])).unwrap();
++    let fresh = Journal::open(Some(&checkpoint), &[]).unwrap();
++    assert_eq!(fresh.get("x"), Some("v1"));
++    assert_eq!(fresh.revision(), 1);
++    let later = tx(
++        5,
++        vec![check("x", Some(1))],
++        vec![delete("x"), put("y", "next")],
++    );
++    let mut tail = encode_transaction(&first);
++    tail.extend(encode_transaction(&later));
++    tail.extend(encode_transaction(&first));
++    let restored = Journal::open(Some(&checkpoint), &tail).unwrap();
++    assert_eq!(restored.get("x"), None);
++    assert_eq!(restored.version("x"), Some(2));
++    assert_eq!(restored.get("y"), Some("next"));
++    assert_eq!(restored.revision(), 2);
++    assert_eq!(restored.bytes(), tail);
++    let checkpoint2 = restored.checkpoint();
++    let mut third = Journal::open(Some(&checkpoint2), &[]).unwrap();
++    assert_eq!(third.commit(first).unwrap().revision, 1);
++    assert_eq!(third.commit(later).unwrap().revision, 2);
++    assert!(third.bytes().is_empty());
++}
++
++#[test]
++fn every_torn_transaction_is_discarded_as_a_whole_before_next_append() {
++    let first = tx(1, vec![], vec![put("seed", "one")]);
++    let second = tx(
++        2,
++        vec![check("seed", Some(1))],
++        vec![put("seed", "two"), put("é\0", "😀\\'\""), delete("missing")],
++    );
++    let mut seed = empty();
++    seed.commit(first.clone()).unwrap();
++    let checkpoint = seed.checkpoint();
++    let second_bytes = encode_transaction(&second);
++    for checkpointed in [false, true] {
++        let prefix = if checkpointed {
++            vec![]
++        } else {
++            encode_transaction(&first)
++        };
++        for cut in 0..second_bytes.len() {
++            let mut torn = prefix.clone();
++            torn.extend_from_slice(&second_bytes[..cut]);
++            let cp = checkpointed.then_some(&checkpoint);
++            let mut j = Journal::open(cp, &torn).unwrap();
++            assert_eq!(j.revision(), 1, "cut={cut}");
++            assert_eq!(j.bytes(), prefix);
++            assert_eq!(j.get("seed"), Some("one"));
++            assert_eq!(j.version("missing"), None);
++            j.commit(second.clone()).unwrap();
++            let again = Journal::open(cp, j.bytes()).unwrap();
++            assert_eq!(again.checkpoint(), j.checkpoint());
++            assert_eq!(again.get("é\0"), Some("😀\\'\""));
++        }
++    }
++}
++
++#[test]
++fn replay_conflicts_and_stale_checks_are_not_ignored() {
++    let first = tx(9, vec![], vec![put("x", "one")]);
++    let mut log = encode_transaction(&first);
++    log.extend(encode_transaction(&tx(9, vec![check("x", None)], vec![])));
++    assert!(matches!(
++        Journal::open(None, &log),
++        Err(Error::IdConflict(9))
++    ));
++    let mut log = encode_transaction(&first);
++    log.extend(encode_transaction(&tx(
++        10,
++        vec![check("x", None)],
++        vec![put("x", "wrong")],
++    )));
++    assert!(
++        matches!(Journal::open(None, &log), Err(Error::Stale { key, expected: None, actual: Some(1) }) if key == "x")
++    );
++}
++
++#[test]
++fn strict_decoder_checks_complete_frames_and_reports_frame_start() {
++    let good = encode_transaction(&tx(1, vec![], vec![]));
++    let mut malformed = vec![vec![], vec![0; 7], vec![0; 15]];
++    let mut extra = good[4..].to_vec();
++    extra.push(0);
++    malformed.push(extra);
++    let mut counts = good[4..].to_vec();
++    counts[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
++    malformed.push(counts);
++    let mut counts = good[4..].to_vec();
++    counts[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
++    malformed.push(counts);
++    let checked = encode_transaction(&tx(2, vec![check("", None)], vec![]));
++    let mut bad = checked[4..].to_vec();
++    bad[16] = 2;
++    malformed.push(bad);
++    let mut bad = checked[4..].to_vec();
++    bad[16] = 1;
++    malformed.push(bad);
++    let deletion = encode_transaction(&tx(3, vec![], vec![delete("x")]));
++    let mut bad = deletion[4..].to_vec();
++    bad[16] = 9;
++    malformed.push(bad);
++    let mut bad = deletion[4..].to_vec();
++    bad[21] = 255;
++    malformed.push(bad);
++    let mut bad = deletion[4..].to_vec();
++    bad[17..21].copy_from_slice(&u32::MAX.to_le_bytes());
++    malformed.push(bad);
++    let insertion = encode_transaction(&tx(4, vec![], vec![put("x", "y")]));
++    let payload = &insertion[4..];
++    for cut in 0..payload.len() {
++        malformed.push(payload[..cut].to_vec());
++    }
++    for payload in malformed {
++        for prefix in [vec![], good.clone()] {
++            let offset = prefix.len();
++            let mut bytes = prefix;
++            bytes.extend(frame(&payload));
++            bytes.extend_from_slice(&[0, 0]);
++            assert!(
++                matches!(Journal::open(None, &bytes), Err(Error::InvalidRecord { offset: got }) if got == offset),
++                "payload={payload:?}"
++            );
++        }
++    }
++    let mut incomplete = good.clone();
++    incomplete.extend(u32::MAX.to_le_bytes());
++    incomplete.extend([255, 255]);
++    assert_eq!(Journal::open(None, &incomplete).unwrap().bytes(), good);
++}
++
++#[test]
++fn encoding_is_byte_compatible() {
++    let transaction = tx(
++        0x0102,
++        vec![check("é", Some(7)), check("", None)],
++        vec![put("a", "\0"), delete("\\'")],
++    );
++    let mut payload = 0x0102u64.to_le_bytes().to_vec();
++    payload.extend(2u32.to_le_bytes());
++    payload.extend([2, 0, 0, 0, 0xc3, 0xa9, 1]);
++    payload.extend(7u64.to_le_bytes());
++    payload.extend([0, 0, 0, 0, 0]);
++    payload.extend(2u32.to_le_bytes());
++    payload.extend([1, 1, 0, 0, 0, b'a', 1, 0, 0, 0, 0]);
++    payload.extend([2, 2, 0, 0, 0, b'\\', b'\'']);
++    assert_eq!(encode_transaction(&transaction), frame(&payload));
++}
++
++#[derive(Clone, Default)]
++struct Model {
++    revision: u64,
++    cells: BTreeMap<String, (Option<String>, u64)>,
++    receipts: Vec<(Transaction, u64)>,
++}
++impl Model {
++    fn apply(&mut self, t: &Transaction) -> Result<Commit, Error> {
++        if let Some((old, revision)) = self.receipts.iter().find(|(old, _)| old.id == t.id) {
++            return if old == t {
++                Ok(Commit {
++                    revision: *revision,
++                    applied: false,
++                })
++            } else {
++                Err(Error::IdConflict(t.id))
++            };
++        }
++        for c in &t.checks {
++            let actual = self.cells.get(&c.key).map(|c| c.1);
++            if actual != c.version {
++                return Err(Error::Stale {
++                    key: c.key.clone(),
++                    expected: c.version,
++                    actual,
++                });
++            }
++        }
++        self.revision += 1;
++        for w in &t.writes {
++            let (k, v) = match w {
++                Write::Put { key, value } => (key, Some(value.clone())),
++                Write::Delete { key } => (key, None),
++            };
++            self.cells.insert(k.clone(), (v, self.revision));
++        }
++        self.receipts.push((t.clone(), self.revision));
++        Ok(Commit {
++            revision: self.revision,
++            applied: true,
++        })
++    }
++}
++fn random(seed: &mut u64) -> u64 {
++    *seed = seed
++        .wrapping_mul(6364136223846793005)
++        .wrapping_add(1442695040888963407);
++    *seed >> 24
++}
++
++#[test]
++fn generated_histories_match_independent_model_through_restarts_and_checkpoints() {
++    let keys = ["", "a", "β", "\0", "quotes'\\"];
++    for initial_seed in 1..=12 {
++        let mut seed = initial_seed;
++        let mut model = Model::default();
++        let mut journal = empty();
++        let mut checkpoint = None;
++        let mut tail = Vec::new();
++        for step in 0..160 {
++            let key = keys[random(&mut seed) as usize % keys.len()];
++            let mut transaction = tx(random(&mut seed) % 50, vec![], vec![]);
++            if random(&mut seed) % 3 == 0 && !model.receipts.is_empty() {
++                transaction = model.receipts[random(&mut seed) as usize % model.receipts.len()]
++                    .0
++                    .clone();
++                if random(&mut seed) % 4 == 0 {
++                    transaction.writes.push(delete(key));
++                }
++            } else {
++                for _ in 0..random(&mut seed) % 3 {
++                    let k = keys[random(&mut seed) as usize % keys.len()];
++                    let version = if random(&mut seed) % 3 == 0 {
++                        Some(random(&mut seed) % 20)
++                    } else {
++                        model.cells.get(k).map(|c| c.1)
++                    };
++                    transaction.checks.push(check(k, version));
++                }
++                for _ in 0..random(&mut seed) % 4 {
++                    let k = keys[random(&mut seed) as usize % keys.len()];
++                    transaction.writes.push(if random(&mut seed) % 3 == 0 {
++                        delete(k)
++                    } else {
++                        put(k, &format!("{step}:é\0'\\"))
++                    });
++                }
++            }
++            let expected = model.apply(&transaction);
++            assert_eq!(
++                journal.commit(transaction.clone()),
++                expected,
++                "seed={initial_seed} step={step}"
++            );
++            if matches!(expected, Ok(Commit { applied: true, .. })) {
++                tail.extend(encode_transaction(&transaction));
++            }
++            assert_eq!(journal.bytes(), tail);
++            assert_eq!(journal.revision(), model.revision);
++            let values: BTreeMap<_, _> = model
++                .cells
++                .iter()
++                .filter_map(|(k, (v, _))| v.as_ref().map(|v| (k.clone(), v.clone())))
++                .collect();
++            assert_eq!(journal.snapshot(), values);
++            for key in keys {
++                assert_eq!(journal.version(key), model.cells.get(key).map(|c| c.1));
++                assert_eq!(journal.get(key), values.get(key).map(String::as_str));
++            }
++            if step % 11 == 0 {
++                let mut torn = tail.clone();
++                torn.extend_from_slice(&[255, 255, 255]);
++                journal = Journal::open(checkpoint.as_ref(), &torn).unwrap();
++                assert_eq!(journal.bytes(), tail);
++            }
++            if step % 23 == 0 {
++                checkpoint = Some(journal.checkpoint());
++                journal = Journal::open(checkpoint.as_ref(), &[]).unwrap();
++                tail.clear();
++            }
++        }
++        assert_eq!(
++            Journal::open(checkpoint.as_ref(), &tail)
++                .unwrap()
++                .checkpoint(),
++            journal.checkpoint()
++        );
++    }
++}

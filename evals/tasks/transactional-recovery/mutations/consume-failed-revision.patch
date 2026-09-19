@@ -1,0 +1,20 @@
+diff --git a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -21,6 +21,7 @@
+                 Err(Error::IdConflict(tx.id))
+             };
+         }
++        self.revision += 1;
+         for check in &tx.checks {
+             let actual = self.versions.get(&check.key).copied();
+             if actual != check.version {
+@@ -31,7 +32,7 @@
+                 });
+             }
+         }
+-        let revision = self.revision + 1;
++        let revision = self.revision;
+         for write in &tx.writes {
+             let key = match write {
+                 Write::Put { key, value } => {
