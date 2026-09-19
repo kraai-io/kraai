@@ -51,20 +51,38 @@ pub(super) fn missing_routing_hint(
     request: &ParsedRequest,
     codex_subscription: bool,
 ) -> Option<HeaderValue> {
-    if !codex_subscription
-        || request.method != "POST"
-        || !matches!(
-            request.path.as_str(),
-            "/codex/responses" | "/backend-api/codex/responses"
-        )
-        || request
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("x-codex-routing-hint"))
-    {
+    if !needs_routing_hint(request, codex_subscription) {
         return None;
     }
     let body: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+    routing_hint_from_body(&body)
+}
+
+pub(super) fn missing_routing_hint_from_body(
+    request: &ParsedRequest,
+    codex_subscription: bool,
+    body: Option<&serde_json::Value>,
+) -> Option<HeaderValue> {
+    if !needs_routing_hint(request, codex_subscription) {
+        return None;
+    }
+    routing_hint_from_body(body?)
+}
+
+fn needs_routing_hint(request: &ParsedRequest, codex_subscription: bool) -> bool {
+    codex_subscription
+        && request.method == "POST"
+        && matches!(
+            request.path.as_str(),
+            "/codex/responses" | "/backend-api/codex/responses"
+        )
+        && !request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-codex-routing-hint"))
+}
+
+fn routing_hint_from_body(body: &serde_json::Value) -> Option<HeaderValue> {
     let model = body.get("model")?.as_str()?;
     if model.trim().is_empty() {
         return None;
@@ -246,7 +264,51 @@ mod tests {
             r#"{"model":"model","service_tier":1}"#,
             r#"{"model":"model","service_tier":""}"#,
         ] {
-            assert!(missing_routing_hint(&request(body.as_bytes()), true).is_none());
+            let request = request(body.as_bytes());
+            let parsed = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
+            assert!(missing_routing_hint(&request, true).is_none());
+            assert!(missing_routing_hint_from_body(&request, true, parsed.as_ref()).is_none());
+        }
+    }
+
+    #[test]
+    fn parsed_routing_hints_preserve_field_selection_and_scope() {
+        for body in [
+            r#"{"model":"model"}"#,
+            r#"{"model":"old","model":"model","service_tier":"priority"}"#,
+            r#"{"model":"model","service_tier":null}"#,
+            r#"{"model":"model","service_tier":" priority "}"#,
+            r#"{"model":"模型"}"#,
+            r#"{"model":"model","service_tier":false}"#,
+            r#"{"model":"model"} trailing"#,
+        ] {
+            let mut request = request(body.as_bytes());
+            let parsed = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
+            for codex in [false, true] {
+                for method in ["GET", "POST"] {
+                    request.method = method.to_owned();
+                    for path in [
+                        "/v1/responses",
+                        "/codex/responses",
+                        "/backend-api/codex/responses",
+                    ] {
+                        request.path = path.to_owned();
+                        for supplied in [false, true] {
+                            request.headers.clear();
+                            if supplied {
+                                request.headers.push((
+                                    String::from("X-Codex-Routing-Hint"),
+                                    HeaderValue::from_static("model=supplied"),
+                                ));
+                            }
+                            assert_eq!(
+                                missing_routing_hint_from_body(&request, codex, parsed.as_ref()),
+                                missing_routing_hint(&request, codex)
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

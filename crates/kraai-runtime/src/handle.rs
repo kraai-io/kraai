@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_provider_core::ProviderDefinition;
 use kraai_types::{MessageId, ModelId, ProviderId, ScriptExecutionId};
@@ -14,7 +13,9 @@ use crate::{
 };
 
 mod events;
+mod lifecycle;
 pub(crate) use events::RuntimeEventSender;
+pub(crate) use lifecycle::RuntimeLifecycle;
 
 /// Internal commands sent to the runtime
 pub(crate) enum Command {
@@ -145,44 +146,6 @@ pub(crate) enum Command {
     },
 }
 
-pub(crate) struct RuntimeLifecycle {
-    shutdown_tx: tokio::sync::watch::Sender<bool>,
-    shutdown_started: AtomicBool,
-    thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl RuntimeLifecycle {
-    pub(crate) fn new(shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
-        Self {
-            shutdown_tx,
-            shutdown_started: AtomicBool::new(false),
-            thread: std::sync::Mutex::new(None),
-            task: std::sync::Mutex::new(None),
-        }
-    }
-
-    pub(crate) fn set_thread(&self, thread: std::thread::JoinHandle<()>) {
-        if let Ok(mut slot) = self.thread.lock() {
-            *slot = Some(thread);
-        }
-    }
-
-    pub(crate) fn set_task(&self, task: tokio::task::JoinHandle<()>) {
-        if let Ok(mut slot) = self.task.lock() {
-            *slot = Some(task);
-        }
-    }
-}
-
-impl Drop for RuntimeLifecycle {
-    fn drop(&mut self) {
-        if !self.shutdown_started.swap(true, Ordering::SeqCst) {
-            self.shutdown_tx.send_replace(true);
-        }
-    }
-}
-
 /// Handle to the runtime for sending commands
 ///
 /// This is cheaply cloneable and can be passed around to different parts
@@ -232,44 +195,10 @@ impl RuntimeHandle {
 
     /// Stop the runtime and wait for its host task or background thread.
     pub async fn shutdown(&self) -> RuntimeResult<()> {
-        let should_signal = self
-            .lifecycle
-            .as_ref()
-            .is_none_or(|lifecycle| !lifecycle.shutdown_started.swap(true, Ordering::SeqCst));
-        if should_signal {
-            let (tx, rx) = oneshot::channel();
-            if self
-                .command_tx
-                .send(Command::Shutdown { response: Some(tx) })
-                .await
-                .is_ok()
-            {
-                rx.await.map_err(|_| Self::response_channel_closed())??;
-            }
+        match &self.lifecycle {
+            Some(lifecycle) => lifecycle.shutdown(&self.command_tx).await,
+            None => lifecycle::request_shutdown(&self.command_tx).await,
         }
-
-        let thread = self.lifecycle.as_ref().and_then(|lifecycle| {
-            lifecycle
-                .thread
-                .lock()
-                .ok()
-                .and_then(|mut thread| thread.take())
-        });
-        if let Some(thread) = thread {
-            tokio::task::spawn_blocking(move || thread.join())
-                .await
-                .map_err(RuntimeError::internal)?
-                .map_err(|_panic| RuntimeError::internal("runtime background thread panicked"))?;
-        }
-        let task = self
-            .lifecycle
-            .as_ref()
-            .and_then(|lifecycle| lifecycle.task.lock().ok().and_then(|mut task| task.take()));
-        if let Some(task) = task {
-            task.await
-                .map_err(|error| RuntimeError::internal(format!("runtime task failed: {error}")))?;
-        }
-        Ok(())
     }
 
     /// List available models from all providers

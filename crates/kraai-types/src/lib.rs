@@ -1,14 +1,18 @@
 #![forbid(unsafe_code)]
 
+mod command;
 mod cost;
+mod effect;
 mod error;
 mod permissions;
 mod policy;
 mod profile;
 mod script;
 
+pub use command::{CommandExample, CommandMetadata};
 pub use cost::{CostSummary, RequestCost, RequestUsage, TokenRates, Usd};
 
+pub use effect::{ContextStateDelta, OpenedFilesOperation, StateEffectAck, StateEffectRequest};
 pub use error::{DomainError, DomainErrorKind};
 pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
 pub use policy::{
@@ -127,16 +131,20 @@ impl ConversationItem {
 fn render_assistant_items(items: &[AssistantItem]) -> String {
     let mut rendered = String::new();
     for item in items {
-        let next = match item {
-            AssistantItem::Text { text, .. } => text.clone(),
-            AssistantItem::ScriptCall { input, .. } => {
-                format!("<tool_call>\n{input}\n</tool_call>")
-            }
-        };
-        if !rendered.is_empty() && !next.is_empty() {
+        if matches!(item, AssistantItem::Text { text, .. } if text.is_empty()) {
+            continue;
+        }
+        if !rendered.is_empty() {
             rendered.push_str("\n\n");
         }
-        rendered.push_str(&next);
+        match item {
+            AssistantItem::Text { text, .. } => rendered.push_str(text),
+            AssistantItem::ScriptCall { input, .. } => {
+                rendered.push_str("<tool_call>\n");
+                rendered.push_str(input);
+                rendered.push_str("\n</tool_call>");
+            }
+        }
     }
     rendered
 }
@@ -270,27 +278,6 @@ pub struct AgentProfilesState {
     pub profile_locked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextStateDelta {
-    pub namespace: String,
-    pub operation: String,
-    pub payload: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateEffectRequest {
-    pub sequence: u64,
-    pub invocation_id: CommandInvocationId,
-    pub command_id: String,
-    pub deltas: Vec<ContextStateDelta>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateEffectAck {
-    pub invocation_id: CommandInvocationId,
-    pub error: Option<String>,
-}
-
 /// Wrapper that gives type safety while keeping Arc<str> benefits
 macro_rules! define_id {
     ($name:ident, $validator:path) => {
@@ -355,6 +342,43 @@ define_id!(ModelId, validate_id);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assistant_rendering_preserves_empty_items_whitespace_and_tool_envelopes() {
+        let text = |text: &str| AssistantItem::Text {
+            phase: AssistantPhase::Commentary,
+            text: text.to_string(),
+        };
+        let script = |input: &str| AssistantItem::ScriptCall {
+            call_id: ToolCallId::new("call"),
+            name: String::from("kraai_nushell"),
+            input: input.to_string(),
+        };
+        for (items, expected) in [
+            (Vec::new(), ""),
+            (vec![text(""), text("")], ""),
+            (vec![text(""), text(" "), text(""), text("é")], " \n\né"),
+            (
+                vec![text(""), script(""), text("")],
+                "<tool_call>\n\n</tool_call>",
+            ),
+            (
+                vec![
+                    text("é\n"),
+                    text(""),
+                    script("echo hi"),
+                    script("ls"),
+                    text(""),
+                ],
+                "é\n\n\n<tool_call>\necho hi\n</tool_call>\n\n<tool_call>\nls\n</tool_call>",
+            ),
+        ] {
+            assert_eq!(
+                ConversationItem::Assistant { items }.display_text(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn persisted_ids_reject_path_syntax() {

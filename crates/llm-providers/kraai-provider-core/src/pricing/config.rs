@@ -5,7 +5,7 @@ use kraai_types::{ModelId, TokenRates, Usd};
 
 use crate::{
     DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, ModelConfig, ProviderConfig,
-    ValidationError,
+    ProviderPricingPolicy, ValidationError,
 };
 
 const RATE_FIELDS: [&str; 5] = [
@@ -25,9 +25,13 @@ pub(super) struct PricingConfig {
 }
 
 impl PricingConfig {
-    pub fn new(provider: &ProviderConfig, models: &[ModelConfig]) -> Result<Self> {
+    pub fn new<'a>(
+        provider: &ProviderConfig,
+        models: impl IntoIterator<Item = &'a ModelConfig>,
+        policy: ProviderPricingPolicy,
+    ) -> Result<Self> {
         let models = models
-            .iter()
+            .into_iter()
             .filter(|model| model.provider_id == provider.id)
             .filter_map(|model| match rates(&model.config) {
                 Ok(Some(rates)) => Some(Ok((model.id.clone(), rates))),
@@ -35,14 +39,7 @@ impl PricingConfig {
                 Err(error) => Some(Err(error)),
             })
             .collect::<Result<_>>()?;
-        let api = provider
-            .config
-            .get("base_url")
-            .and_then(DynamicValue::as_str)
-            .map(|value| value.trim().to_string())
-            .or_else(|| {
-                (provider.type_id == "openai").then(|| String::from("https://api.openai.com/v1"))
-            });
+        let catalog = (policy.catalog)(&provider.config);
         let catalog_provider = provider
             .config
             .get("pricing_provider")
@@ -50,16 +47,11 @@ impl PricingConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(String::from)
-            .or_else(|| {
-                (provider.type_id == "openai-codex"
-                    || api.as_deref().map(|url| url.trim_end_matches('/'))
-                        == Some("https://api.openai.com/v1"))
-                .then(|| String::from("openai"))
-            });
+            .or(catalog.provider);
         Ok(Self {
             provider: catalog_provider,
-            api,
-            subscription: provider.type_id == "openai-codex",
+            api: catalog.api,
+            subscription: policy.subscription,
             models,
         })
     }
@@ -133,44 +125,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn standard_openai_endpoint_is_mapped_but_custom_endpoints_are_not() -> Result<()> {
+    fn explicit_catalog_provider_overrides_factory_policy() -> Result<()> {
         let mut provider = ProviderConfig {
             id: kraai_types::ProviderId::new("custom-name"),
-            type_id: "openai".into(),
+            type_id: "custom-factory".into(),
             config: DynamicConfig::new(),
         };
+        let policy = ProviderPricingPolicy {
+            subscription: false,
+            catalog: |config| crate::ProviderPricingCatalog {
+                provider: Some(String::from("factory-catalog")),
+                ..crate::ProviderPricingCatalog::from_config(config)
+            },
+        };
         assert_eq!(
-            PricingConfig::new(&provider, &[])?.provider.as_deref(),
-            Some("openai")
+            PricingConfig::new(&provider, &[], policy)?
+                .provider
+                .as_deref(),
+            Some("factory-catalog")
         );
         provider.config.insert(
             "base_url".into(),
             DynamicValue::from("https://proxy.test/v1"),
         );
-        assert!(PricingConfig::new(&provider, &[])?.provider.is_none());
+        assert_eq!(
+            PricingConfig::new(&provider, &[], policy)?.api.as_deref(),
+            Some("https://proxy.test/v1")
+        );
+        provider.config.insert(
+            "pricing_provider".into(),
+            DynamicValue::from("  reseller  "),
+        );
+        assert_eq!(
+            PricingConfig::new(&provider, &[], policy)?
+                .provider
+                .as_deref(),
+            Some("reseller")
+        );
         provider
             .config
-            .insert("pricing_provider".into(), DynamicValue::from("reseller"));
+            .insert("pricing_provider".into(), DynamicValue::from("  "));
         assert_eq!(
-            PricingConfig::new(&provider, &[])?.provider.as_deref(),
-            Some("reseller")
+            PricingConfig::new(&provider, &[], policy)?
+                .provider
+                .as_deref(),
+            Some("factory-catalog")
         );
         Ok(())
     }
 
     #[test]
-    fn subscription_uses_openai_prices_with_custom_backend() -> Result<()> {
+    fn subscription_is_controlled_by_policy_not_provider_type() -> Result<()> {
         let provider = ProviderConfig {
             id: kraai_types::ProviderId::new("subscription"),
-            type_id: "openai-codex".into(),
-            config: DynamicConfig::from([(
-                "base_url".into(),
-                DynamicValue::from("https://chatgpt.com/backend-api"),
-            )]),
+            type_id: "custom-factory".into(),
+            config: DynamicConfig::new(),
         };
-        let config = PricingConfig::new(&provider, &[])?;
-        assert_eq!(config.provider.as_deref(), Some("openai"));
-        assert!(config.subscription);
+        for subscription in [false, true] {
+            let config = PricingConfig::new(
+                &provider,
+                &[],
+                ProviderPricingPolicy {
+                    subscription,
+                    ..ProviderPricingPolicy::default()
+                },
+            )?;
+            assert_eq!(config.subscription, subscription);
+        }
         Ok(())
     }
 

@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_types::{ConversationItem, Message, MessageGeneration, MessageId, MessageStatus};
 use ulid::Ulid;
 
+use crate::keyed_locks::KeyedLocks;
 use crate::{MessageStore, SessionStore};
 
 fn current_unix_timestamp() -> u64 {
@@ -17,6 +19,7 @@ fn current_unix_timestamp() -> u64 {
 pub struct ConversationStore {
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
+    idempotent_appends: Arc<KeyedLocks<MessageId>>,
 }
 
 impl ConversationStore {
@@ -24,6 +27,7 @@ impl ConversationStore {
         Self {
             message_store,
             session_store,
+            idempotent_appends: Arc::new(KeyedLocks::default()),
         }
     }
 
@@ -77,10 +81,7 @@ impl ConversationStore {
                     request.session_id
                 ));
             }
-            Err(error) => {
-                self.delete_unreferenced_message(&message_id).await;
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         }
 
         Ok(AppendedMessage {
@@ -97,6 +98,7 @@ impl ConversationStore {
         message_id: MessageId,
         request: AppendMessageRequest,
     ) -> Result<IdempotentAppendOutcome> {
+        let _guard = self.idempotent_appends.lock(&message_id).await;
         let Some(existing) = self.message_store.get(&message_id).await? else {
             let appended = self.append_new_message(message_id, request).await?;
             return Ok(IdempotentAppendOutcome {
@@ -154,9 +156,15 @@ impl ConversationStore {
         mut cursor: Option<MessageId>,
         target: &MessageId,
     ) -> Result<bool> {
+        let mut visited = HashSet::new();
         while let Some(id) = cursor {
             if &id == target {
                 return Ok(true);
+            }
+            if !visited.insert(id.clone()) {
+                return Err(eyre!(
+                    "Corrupt message parent graph: cycle repeats message {id}"
+                ));
             }
             let Some(message) = self.message_store.get(&id).await? else {
                 return Err(eyre!("History references missing message {id}"));
@@ -279,7 +287,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::Barrier;
+    use tokio::sync::{Barrier, Notify};
 
     fn test_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -321,6 +329,7 @@ mod tests {
     struct FailOnSaveSessionStore {
         inner: Arc<dyn SessionStore>,
         should_fail: Arc<AtomicBool>,
+        commit_before_failure: bool,
     }
 
     struct FailOnDeleteMessageStore {
@@ -331,6 +340,48 @@ mod tests {
     struct BarrierOnSaveMessageStore {
         inner: Arc<dyn MessageStore>,
         barrier: Arc<Barrier>,
+    }
+
+    struct PauseBeforeFirstSaveMessageStore {
+        inner: Arc<dyn MessageStore>,
+        pause_next_save: AtomicBool,
+        entered: Arc<Notify>,
+        resume: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl MessageStore for PauseBeforeFirstSaveMessageStore {
+        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, message: &Message) -> Result<()> {
+            if self.pause_next_save.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.resume.notified().await;
+            }
+            self.inner.save(message).await
+        }
+
+        async fn unload(&self, id: &MessageId) {
+            self.inner.unload(id).await;
+        }
+
+        async fn delete(&self, id: &MessageId) -> Result<()> {
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &MessageId) -> Result<bool> {
+            self.inner.exists(id).await
+        }
+
+        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_all_on_disk().await
+        }
+
+        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_hot().await
+        }
     }
 
     #[async_trait::async_trait]
@@ -345,6 +396,9 @@ mod tests {
 
         async fn save(&self, session: &SessionMeta) -> Result<()> {
             if self.should_fail.load(Ordering::SeqCst) {
+                if self.commit_before_failure {
+                    self.inner.save(session).await?;
+                }
                 return Err(eyre!("intentional session save failure for {}", session.id));
             }
             self.inner.save(session).await
@@ -356,6 +410,11 @@ mod tests {
             expected_tip: Option<&MessageId>,
         ) -> Result<bool> {
             if self.should_fail.load(Ordering::SeqCst) {
+                if self.commit_before_failure {
+                    self.inner
+                        .save_if_tip_matches(session, expected_tip)
+                        .await?;
+                }
                 return Err(eyre!("intentional session save failure for {}", session.id));
             }
             self.inner.save_if_tip_matches(session, expected_tip).await
@@ -558,7 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_message_session_save_failure_deletes_new_message() {
+    async fn append_message_session_save_failure_retains_new_message_for_recovery() {
         let data_dir = test_dir("append-message-save-failure");
         tokio::fs::create_dir_all(&data_dir).await.unwrap();
 
@@ -574,6 +633,7 @@ mod tests {
         let failing_session_store: Arc<dyn SessionStore> = Arc::new(FailOnSaveSessionStore {
             inner: base_session_store.clone(),
             should_fail,
+            commit_before_failure: false,
         });
         let conversation_store =
             ConversationStore::new(message_store.clone(), failing_session_store);
@@ -594,7 +654,7 @@ mod tests {
                 .to_string()
                 .contains("intentional session save failure")
         );
-        assert!(message_store.list_all_on_disk().await.unwrap().is_empty());
+        assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
         assert_eq!(
             base_session_store
                 .get("session")
@@ -606,6 +666,63 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_dir_all(&data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn append_message_preserves_linked_message_after_committed_save_error() {
+        with_test_store(
+            "append-message-committed-error",
+            |message_store, session_store, data_dir| async move {
+                session_store
+                    .save(&untitled_session("session", None, 1))
+                    .await
+                    .unwrap();
+                let failing_store = Arc::new(FailOnSaveSessionStore {
+                    inner: session_store.clone(),
+                    should_fail: Arc::new(AtomicBool::new(true)),
+                    commit_before_failure: true,
+                });
+                let conversations = ConversationStore::new(message_store.clone(), failing_store);
+
+                let error = conversations
+                    .append_message(append_request(
+                        "session",
+                        ChatRole::User,
+                        "committed",
+                        MessageStatus::Complete,
+                        None,
+                    ))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    error
+                        .to_string()
+                        .contains("intentional session save failure")
+                );
+                let reopened = FileSessionStore::new(&data_dir, message_store.clone());
+                reopened.load().await.unwrap();
+                let tip_id = reopened
+                    .get("session")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .tip_id
+                    .unwrap();
+                assert!(message_store.exists(&tip_id).await.unwrap());
+                assert_eq!(
+                    message_store
+                        .get(&tip_id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .content
+                        .text(),
+                    Some("committed")
+                );
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -662,6 +779,109 @@ mod tests {
                 let tip = stored_session.tip_id.unwrap();
                 assert!(message_store.exists(&tip).await.unwrap());
                 assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_idempotent_appends_share_one_linked_message() {
+        with_test_store(
+            "concurrent-idempotent-appends",
+            |message_store, session_store, _| async move {
+                session_store
+                    .save(&untitled_session("session", None, 1))
+                    .await
+                    .unwrap();
+                let entered = Arc::new(Notify::new());
+                let resume = Arc::new(Notify::new());
+                let synchronized_messages: Arc<dyn MessageStore> =
+                    Arc::new(PauseBeforeFirstSaveMessageStore {
+                        inner: message_store.clone(),
+                        pause_next_save: AtomicBool::new(true),
+                        entered: entered.clone(),
+                        resume: resume.clone(),
+                    });
+                let conversations =
+                    ConversationStore::new(synchronized_messages, session_store.clone());
+                let retry_conversations = conversations.clone();
+                let message_id = MessageId::new(Ulid::generate());
+                let request = || {
+                    append_request(
+                        "session",
+                        ChatRole::ToolCallResult,
+                        "result",
+                        MessageStatus::Complete,
+                        None,
+                    )
+                };
+                let mut first = std::pin::pin!(
+                    conversations.append_message_idempotent(message_id.clone(), request())
+                );
+                tokio::select! {
+                    result = first.as_mut() => panic!("Append finished before saving: {result:?}"),
+                    _ = entered.notified() => {}
+                }
+                let mut second = std::pin::pin!(
+                    retry_conversations.append_message_idempotent(message_id.clone(), request())
+                );
+                assert!(
+                    second
+                        .as_mut()
+                        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                        .is_pending()
+                );
+                resume.notify_one();
+
+                let (first, second) = tokio::join!(first, second);
+                assert!(first.unwrap().linked_now);
+                assert!(!second.unwrap().linked_now);
+                assert_eq!(
+                    session_store.get("session").await.unwrap().unwrap().tip_id,
+                    Some(message_id.clone())
+                );
+                assert!(message_store.exists(&message_id).await.unwrap());
+                assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn idempotent_history_search_rejects_parent_cycles() {
+        with_test_store(
+            "idempotent-history-cycle",
+            |message_store, session_store, _| async move {
+                let first_id = MessageId::new("cycle-first");
+                let second_id = MessageId::new("cycle-second");
+                for (id, parent_id) in [
+                    (first_id.clone(), second_id.clone()),
+                    (second_id, first_id.clone()),
+                ] {
+                    message_store
+                        .save(&Message {
+                            id,
+                            parent_id: Some(parent_id),
+                            content: ConversationItem::User {
+                                text: String::from("cycle"),
+                            },
+                            status: MessageStatus::Complete,
+                            agent_profile_id: None,
+                            generation: None,
+                        })
+                        .await
+                        .unwrap();
+                }
+                let conversations = ConversationStore::new(message_store, session_store);
+                let error = conversations
+                    .message_is_in_history(Some(first_id), &MessageId::new("missing"))
+                    .await
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("cycle repeats message cycle-first")
+                );
             },
         )
         .await;

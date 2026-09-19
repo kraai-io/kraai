@@ -102,6 +102,7 @@ fn test_harness() -> TestHarness {
             ci_metrics_context_pending: false,
             startup_options: StartupOptions::default(),
             startup_message_sent: false,
+            startup_sync: super::StartupSync::Complete,
             ci_error: None,
             stream_event_content: HashMap::new(),
             state: AppState::default(),
@@ -559,3 +560,6 @@ mod cost;
 mod editor_review;
 mod enhancements;
 mod host_failure;
+
+#[path = "tests/startup.rs"]
+mod startup;

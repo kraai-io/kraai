@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use color_eyre::eyre::{Result, eyre};
 use tokio::sync::oneshot;
 
-use super::config::{canonicalize_workspace_dir, map_openai_codex_auth_status};
+use super::config::canonicalize_workspace_dir;
 use super::core::RuntimeCore;
 use crate::api::{
     AgentProfileCatalog, Model, RuntimeError, RuntimeResult, Session, SessionActivity,
@@ -114,7 +114,8 @@ impl RuntimeCore {
             Command::GetSettings { response } => {
                 respond(
                     response,
-                    read_settings_document(&self.provider_config_path, &self.provider_registry),
+                    read_settings_document(&self.provider_config_path, &self.provider_registry)
+                        .await,
                 );
             }
             Command::ListAgentProfiles {
@@ -123,7 +124,7 @@ impl RuntimeCore {
             } => {
                 let profiles = self
                     .agent_manager
-                    .write()
+                    .read()
                     .await
                     .list_agent_profiles(&session_id)
                     .await;
@@ -133,12 +134,13 @@ impl RuntimeCore {
                 workspace_dir,
                 response,
             } => {
-                let result = async {
+                let agent_manager = self.agent_manager.clone();
+                let result = tokio::task::spawn_blocking(move || {
                     let workspace_dir = workspace_dir
                         .as_deref()
                         .map(canonicalize_workspace_dir)
                         .transpose()?;
-                    let agent = self.agent_manager.read().await;
+                    let agent = agent_manager.blocking_read();
                     let (workspace_dir, profiles) =
                         agent.list_agent_profiles_for_workspace(workspace_dir.as_deref());
                     drop(agent);
@@ -152,8 +154,9 @@ impl RuntimeCore {
                         profiles: profiles.profiles,
                         warnings: profiles.warnings,
                     })
-                }
-                .await;
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.into()));
                 respond(response, result);
             }
             Command::SetSessionProfile {
@@ -231,15 +234,10 @@ impl RuntimeCore {
                     let agent = self.agent_manager.read().await;
                     let sessions = agent.list_sessions().await?;
                     let streaming_sessions = agent.streaming_session_ids().await;
-                    let profile_locked_sessions = sessions
-                        .iter()
-                        .filter(|session| agent.is_profile_locked(&session.id))
-                        .map(|session| session.id.clone())
-                        .collect::<std::collections::HashSet<_>>();
                     let sessions = sessions
                         .into_iter()
                         .map(|session| Session {
-                            profile_locked: profile_locked_sessions.contains(&session.id),
+                            profile_locked: agent.is_profile_locked(&session.id),
                             waiting_for_approval: pending_approvals.contains(&session.id),
                             is_streaming: streaming_sessions.contains(&session.id),
                             is_running: agent.is_turn_active(&session.id),
@@ -428,9 +426,7 @@ impl RuntimeCore {
                 let _ = response.send(result);
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
-                let _ = response.send(Ok(map_openai_codex_auth_status(
-                    self.openai_codex_auth.get_status().await,
-                )));
+                let _ = response.send(Ok(self.openai_codex_auth.get_status().await));
             }
             Command::StartOpenAiCodexBrowserLogin { response } => {
                 let result = self.openai_codex_auth.start_browser_login().await;

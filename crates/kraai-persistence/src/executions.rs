@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, eyre};
@@ -11,9 +9,9 @@ use kraai_types::{
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
+use crate::keyed_locks::KeyedLocks;
 use crate::{atomic_write, sync_parent_directory};
 
 const RECORD_FILE: &str = "record.json";
@@ -114,27 +112,15 @@ pub trait ScriptExecutionStore: Send + Sync {
 
 pub struct FileScriptExecutionStore {
     executions_dir: PathBuf,
-    execution_locks: RwLock<HashMap<ScriptExecutionId, Arc<Mutex<()>>>>,
+    execution_locks: KeyedLocks<ScriptExecutionId>,
 }
 
 impl FileScriptExecutionStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             executions_dir: data_dir.join("executions"),
-            execution_locks: RwLock::new(HashMap::new()),
+            execution_locks: KeyedLocks::default(),
         }
-    }
-
-    async fn execution_lock(&self, id: &ScriptExecutionId) -> Arc<Mutex<()>> {
-        if let Some(lock) = self.execution_locks.read().await.get(id).cloned() {
-            return lock;
-        }
-        self.execution_locks
-            .write()
-            .await
-            .entry(id.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
     }
 
     fn execution_dir(&self, id: &ScriptExecutionId) -> Result<PathBuf> {
@@ -171,8 +157,7 @@ impl FileScriptExecutionStore {
         expected: &[ScriptExecutionPhase],
         target: ScriptExecutionPhase,
     ) -> Result<ScriptExecutionRecord> {
-        let lock = self.execution_lock(id).await;
-        let _guard = lock.lock().await;
+        let _guard = self.execution_locks.lock(id).await;
         let mut record = self.load_record(id).await?;
         require_phase(&record, expected)?;
         record.phase = target;
@@ -189,8 +174,7 @@ impl FileScriptExecutionStore {
 #[async_trait::async_trait]
 impl ScriptExecutionStore for FileScriptExecutionStore {
     async fn create(&self, execution: NewScriptExecution) -> Result<ScriptExecutionRecord> {
-        let lock = self.execution_lock(&execution.id).await;
-        let _guard = lock.lock().await;
+        let _guard = self.execution_locks.lock(&execution.id).await;
         fs::create_dir_all(&self.executions_dir)
             .await
             .with_context(|| {
@@ -296,6 +280,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
     }
 
     async fn read_output(&self, id: &ScriptExecutionId) -> Result<PersistedScriptOutput> {
+        let _guard = self.execution_locks.lock(id).await;
         let execution_dir = self.execution_dir(id)?;
         let stdout_path = execution_dir.join(STDOUT_FILE);
         let stderr_path = execution_dir.join(STDERR_FILE);
@@ -337,8 +322,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         if bytes.is_empty() {
             return Ok(());
         }
-        let lock = self.execution_lock(id).await;
-        let _guard = lock.lock().await;
+        let _guard = self.execution_locks.lock(id).await;
         let record = self.load_record(id).await?;
         require_phase(&record, &[ScriptExecutionPhase::Running])?;
         let file_name = match stream {
@@ -371,8 +355,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         id: &ScriptExecutionId,
         completion: ScriptExecutionCompletion,
     ) -> Result<ScriptExecutionRecord> {
-        let lock = self.execution_lock(id).await;
-        let _guard = lock.lock().await;
+        let _guard = self.execution_locks.lock(id).await;
         let mut record = self.load_record(id).await?;
         require_completion_transition(record.phase, completion.status, id)?;
 
@@ -540,6 +523,35 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(data_dir).await;
+    }
+
+    #[tokio::test]
+    async fn output_reads_wait_for_both_streams_to_finish_replacement() {
+        let data_dir = test_dir("output-read-lock");
+        let id = ScriptExecutionId::new(Ulid::generate());
+        let store = FileScriptExecutionStore::new(&data_dir);
+        store.create(execution(&id)).await.unwrap();
+        let execution_dir = store.execution_dir(&id).unwrap();
+        let guard = store.execution_locks.lock(&id).await;
+        atomic_write(&execution_dir.join(STDOUT_FILE), b"final stdout")
+            .await
+            .unwrap();
+
+        let mut output = Box::pin(store.read_output(&id));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), output.as_mut())
+                .await
+                .is_err()
+        );
+
+        atomic_write(&execution_dir.join(STDERR_FILE), b"final stderr")
+            .await
+            .unwrap();
+        drop(guard);
+        let output = output.await.unwrap();
+        assert_eq!(output.stdout, b"final stdout");
+        assert_eq!(output.stderr, b"final stderr");
+        fs::remove_dir_all(data_dir).await.unwrap();
     }
 
     #[tokio::test]

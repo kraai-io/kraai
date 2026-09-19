@@ -7,14 +7,20 @@ impl AppState {
             usize::from(!self.menu_search.is_empty() && !self.filtered_sessions().is_empty());
     }
 
-    pub(super) fn filtered_models(&self) -> Vec<(String, Model)> {
+    pub(super) fn filtered_models(&self) -> Vec<(&str, &Model)> {
         let query = self.menu_search.to_lowercase();
-        flatten_models_map(&self.models_by_provider)
+        let mut providers: Vec<_> = self.models_by_provider.iter().collect();
+        providers.sort_by_key(|(provider, _)| *provider);
+        providers
             .into_iter()
+            .flat_map(|(provider, models)| {
+                models.iter().map(move |model| (provider.as_str(), model))
+            })
             .filter(|(provider, model)| {
-                format!("{provider} {} {}", model.id, model.name)
-                    .to_lowercase()
-                    .contains(&query)
+                query.is_empty()
+                    || format!("{provider} {} {}", model.id, model.name)
+                        .to_lowercase()
+                        .contains(&query)
             })
             .collect()
     }

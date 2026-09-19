@@ -126,6 +126,7 @@ pub(super) struct UsageModelKey {
 }
 
 pub(super) enum RuntimeRequest {
+    FinishStartupSync,
     ListModels,
     GetAgentProfileCatalog,
     ListProviderDefinitions,
@@ -191,6 +192,7 @@ pub(super) enum RuntimeRequest {
 }
 
 pub(super) enum RuntimeResponse {
+    StartupSyncComplete,
     Models(RuntimeResult<HashMap<String, Vec<Model>>>),
     AgentProfileCatalog(RuntimeResult<AgentProfileCatalog>),
     ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),

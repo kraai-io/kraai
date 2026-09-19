@@ -28,7 +28,8 @@ mod lifecycle;
 mod menu_search;
 mod providers_flow;
 mod runtime_bridge;
-mod runtime_handlers;
+mod runtime_events;
+mod runtime_responses;
 mod session_commands;
 mod settings;
 mod settings_flow;
@@ -43,8 +44,8 @@ use self::auth::{
 };
 use self::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
 use self::settings::{
-    clear_field_value, default_values, field_value_display, flatten_models_map, is_boolean_field,
-    merge_values, next_provider_id, parse_field_input, provider_definition_rank, set_field_value,
+    clear_field_value, default_values, field_value_display, is_boolean_field, merge_values,
+    next_provider_id, parse_field_input, provider_definition_rank, set_field_value,
 };
 use self::state::{AppState, build_tip_chain};
 pub use self::types::StartupOptions;
@@ -78,6 +79,13 @@ enum RuntimeRequestDelivery {
     Disconnected,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupSync {
+    WaitingForRuntime,
+    Synchronizing,
+    Complete,
+}
+
 pub struct App {
     event_rx: Receiver<RuntimeEventBridgeMessage>,
     runtime_tx: Sender<RuntimeRequest>,
@@ -90,6 +98,7 @@ pub struct App {
     ci_metrics_context_pending: bool,
     startup_options: StartupOptions,
     startup_message_sent: bool,
+    startup_sync: StartupSync,
     ci_error: Option<String>,
     stream_event_content: HashMap<MessageId, String>,
     state: AppState,

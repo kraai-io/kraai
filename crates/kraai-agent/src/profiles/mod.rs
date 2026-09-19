@@ -283,7 +283,6 @@ fn resolve_external_profile(
             inherited_profiles
                 .iter()
                 .find(|profile| profile.id == *base_id)
-                .cloned()
                 .ok_or_else(|| {
                     profile_warning(
                         source,

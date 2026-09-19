@@ -1,4 +1,4 @@
-use kraai_types::{AssistantItem, ConversationItem};
+use kraai_types::ConversationItem;
 
 use crate::wire::RequestMessage;
 
@@ -9,8 +9,8 @@ pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMe
             let (role, content) = match message {
                 ConversationItem::System { text } => ("system", text),
                 ConversationItem::User { text } => ("user", text),
-                ConversationItem::Assistant { items } => {
-                    ("assistant", render_assistant_items(&items))
+                message @ ConversationItem::Assistant { .. } => {
+                    ("assistant", message.display_text())
                 }
                 ConversationItem::ScriptResult { output, .. } => ("user", output),
             };
@@ -22,24 +22,10 @@ pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMe
         .collect()
 }
 
-fn render_assistant_items(items: &[AssistantItem]) -> String {
-    items
-        .iter()
-        .map(|item| match item {
-            AssistantItem::Text { text, .. } => text.clone(),
-            AssistantItem::ScriptCall { input, .. } => {
-                format!("<tool_call>\n{input}\n</tool_call>")
-            }
-        })
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kraai_types::{AssistantPhase, ToolCallId};
+    use kraai_types::{AssistantItem, AssistantPhase, ToolCallId};
 
     #[test]
     fn native_history_is_rendered_as_text_envelope() {

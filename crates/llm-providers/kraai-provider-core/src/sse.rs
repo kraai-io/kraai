@@ -33,7 +33,14 @@ where
     let mut event_lines: Vec<String> = Vec::new();
     let mut event_bytes = 0_usize;
 
-    while let Some(chunk) = bytes_stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            _ = tx.closed() => return,
+            chunk = bytes_stream.next() => chunk,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
@@ -44,8 +51,12 @@ where
 
         buffer.extend_from_slice(chunk.as_ref());
 
-        while let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
-            if position > MAX_SSE_EVENT_BYTES {
+        let mut consumed = 0;
+        for line in buffer.split_inclusive(|byte| *byte == b'\n') {
+            if !line.ends_with(b"\n") {
+                break;
+            }
+            if line.len() - 1 > MAX_SSE_EVENT_BYTES {
                 let _ = tx
                     .send(Err(eyre!(
                         "SSE line exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"
@@ -53,8 +64,8 @@ where
                     .await;
                 return;
             }
-            let line = buffer.drain(..=position).collect::<Vec<_>>();
-            match process_line(&tx, line, &mut event_lines, &mut event_bytes).await {
+            consumed += line.len();
+            match process_line(&tx, line.to_vec(), &mut event_lines, &mut event_bytes).await {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {
@@ -63,6 +74,7 @@ where
                 }
             }
         }
+        drop(buffer.drain(..consumed));
 
         if buffer.len() > MAX_SSE_EVENT_BYTES {
             let _ = tx
@@ -158,7 +170,67 @@ async fn flush_event(
 mod tests {
     use super::*;
     use futures::stream;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::Poll;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn dropping_receiver_releases_pending_transport() -> Result<()> {
+        struct DropSignal(Arc<AtomicBool>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let signal = DropSignal(Arc::clone(&dropped));
+        let source = stream::poll_fn(move |_| {
+            let _ = &signal;
+            Poll::<Option<std::result::Result<Vec<u8>, reqwest::Error>>>::Pending
+        });
+        let (tx, rx) = mpsc::channel(4);
+        let forwarding = forward_sse_events(source, tx);
+        tokio::pin!(forwarding);
+
+        assert!(futures::poll!(&mut forwarding).is_pending());
+        assert!(!dropped.load(Ordering::Acquire));
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(1), forwarding).await?;
+
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coalesced_and_fragmented_short_lines_emit_the_same_events() -> Result<()> {
+        let mut payload = String::from(": keepalive\r\n");
+        let mut expected = Vec::new();
+        for index in 0..128 {
+            payload.push_str(&format!("data: {index}\r\ndata: continuation\r\n\r\n"));
+            expected.push(SseEvent::Data(format!("{index}\ncontinuation")));
+        }
+        payload.push_str("data: café");
+        expected.push(SseEvent::Data(String::from("café")));
+
+        for chunk_size in [1, 7, payload.len()] {
+            let (tx, mut rx) = mpsc::channel(expected.len());
+            let chunks = payload
+                .as_bytes()
+                .chunks(chunk_size)
+                .map(|chunk| Ok::<_, reqwest::Error>(chunk.to_vec()));
+            forward_sse_events(stream::iter(chunks), tx).await;
+
+            let mut actual = Vec::new();
+            while let Some(event) = rx.recv().await {
+                actual.push(event?);
+            }
+            assert_eq!(actual, expected, "chunk size {chunk_size}");
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn emits_final_event_without_trailing_newline() -> Result<()> {

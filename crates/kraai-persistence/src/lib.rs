@@ -2,21 +2,30 @@
 
 use color_eyre::eyre::{Context, ContextCompat, Result, eyre};
 use directories::BaseDirs;
-use kraai_types::{Message, MessageId};
+use kraai_types::MessageId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
-use ulid::Ulid;
 
+mod atomic_file;
 mod context;
 mod executions;
+mod keyed_locks;
+mod messages;
+mod preferences;
 mod turns;
 mod usage;
-pub use usage::RequestUsageStore;
+pub use atomic_file::atomic_write;
+pub(crate) use atomic_file::sync_parent_directory;
+#[cfg(test)]
+use atomic_file::temp_write_path;
+use atomic_file::{AtomicWriteOutcome, atomic_write_with_outcome};
+pub use messages::{FileMessageStore, MessageStore};
+pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};
+pub use usage::{FileRequestUsageStore, RequestUsageStore};
 
 pub use context::{
     ContextStateEvent, ContextStateEventSource, ContextStateMutation, ContextStateStore,
@@ -43,36 +52,20 @@ pub struct SessionMeta {
     pub selected_profile_id: Option<String>,
 }
 
-/// Trait for storing and retrieving messages
-#[async_trait::async_trait]
-pub trait MessageStore: Send + Sync {
-    /// Get a message by ID (checks hot cache first, then cold storage)
-    async fn get(&self, id: &MessageId) -> Result<Option<Message>>;
-
-    /// Save a message (writes to cold storage immediately, adds to hot cache)
-    async fn save(&self, message: &Message) -> Result<()>;
-
-    /// Remove a message from hot cache (keeps cold storage)
-    async fn unload(&self, id: &MessageId);
-
-    /// Delete a message from both hot cache and cold storage
-    async fn delete(&self, id: &MessageId) -> Result<()>;
-
-    /// Check if message exists in cold storage
-    async fn exists(&self, id: &MessageId) -> Result<bool>;
-
-    /// List all message IDs that exist on disk
-    async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>>;
-
-    /// List all message IDs currently in hot cache
-    async fn list_hot(&self) -> Result<HashSet<MessageId>>;
-}
-
 /// Trait for storing and retrieving sessions
 #[async_trait::async_trait]
 pub trait SessionStore: Send + Sync {
     /// List all sessions
     async fn list(&self) -> Result<Vec<SessionMeta>>;
+
+    async fn list_ids(&self) -> Result<HashSet<String>> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .map(|session| session.id)
+            .collect())
+    }
 
     /// Get a session by ID
     async fn get(&self, id: &str) -> Result<Option<SessionMeta>>;
@@ -89,262 +82,6 @@ pub trait SessionStore: Send + Sync {
 
     /// Delete a session
     async fn delete(&self, id: &str) -> Result<()>;
-}
-
-/// File-based message store with hot cache and cold storage
-pub struct FileMessageStore {
-    /// Hot cache for frequently accessed messages
-    hot: RwLock<HashMap<MessageId, Message>>,
-    /// Base directory for cold storage
-    cold_dir: PathBuf,
-}
-
-impl FileMessageStore {
-    pub fn new(data_dir: &Path) -> Self {
-        let cold_dir = data_dir.join("messages");
-        Self {
-            hot: RwLock::new(HashMap::new()),
-            cold_dir,
-        }
-    }
-
-    fn message_path(&self, id: &MessageId) -> Result<PathBuf> {
-        let raw = id.as_str();
-        if MessageId::try_new(raw).is_err()
-            || Path::new(raw).is_absolute()
-            || raw.contains(['/', '\\', ':'])
-        {
-            return Err(eyre!("Unsafe message id for persisted path: {raw:?}"));
-        }
-
-        let path = self.cold_dir.join(format!("{raw}.json"));
-        if path.parent() != Some(self.cold_dir.as_path()) {
-            return Err(eyre!("Message path escaped storage directory: {path:?}"));
-        }
-        Ok(path)
-    }
-
-    /// Ensure the messages directory exists
-    async fn ensure_dir(&self) -> Result<()> {
-        fs::create_dir_all(&self.cold_dir)
-            .await
-            .with_context(|| format!("Failed to create messages directory: {:?}", self.cold_dir))?;
-        Ok(())
-    }
-}
-
-/// Atomically replace `path` and make the acknowledged write crash-durable.
-///
-/// Unix persists both the file contents and containing directory entry. Other
-/// platforms persist the file contents before replacement but may not expose a
-/// portable directory-sync operation.
-#[cfg(not(windows))]
-pub(crate) async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
-    fs::create_dir_all(parent)
-        .await
-        .with_context(|| format!("Failed to create directory: {parent:?}"))?;
-
-    let temp_path = temp_write_path(path);
-    let write_result = async {
-        let mut temp_file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .await
-            .with_context(|| format!("Failed to create temp file: {temp_path:?}"))?;
-        temp_file
-            .write_all(content)
-            .await
-            .with_context(|| format!("Failed to write temp file: {temp_path:?}"))?;
-        temp_file
-            .flush()
-            .await
-            .with_context(|| format!("Failed to flush temp file: {temp_path:?}"))?;
-        temp_file
-            .sync_all()
-            .await
-            .with_context(|| format!("Failed to sync temp file: {temp_path:?}"))?;
-        drop(temp_file);
-
-        fs::rename(&temp_path, path)
-            .await
-            .with_context(|| format!("Failed to rename temp file to: {path:?}"))?;
-        sync_parent_directory(parent).await?;
-        Ok(())
-    }
-    .await;
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp_path).await;
-    }
-    write_result
-}
-
-#[cfg(windows)]
-pub(crate) async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-    use std::io::Write;
-
-    let path = path.to_path_buf();
-    let content = content.to_vec();
-    tokio::task::spawn_blocking(move || {
-        let parent = path
-            .parent()
-            .ok_or_else(|| eyre!("Cannot atomically write path without a parent: {path:?}"))?;
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {parent:?}"))?;
-        let mut file = atomic_write_file::AtomicWriteFile::open(&path)
-            .with_context(|| format!("Failed to create atomic file for: {path:?}"))?;
-        file.write_all(&content)
-            .with_context(|| format!("Failed to write atomic file for: {path:?}"))?;
-        file.commit()
-            .with_context(|| format!("Failed to replace file atomically: {path:?}"))?;
-        Ok(())
-    })
-    .await
-    .map_err(|error| eyre!("Atomic write task failed: {error}"))?
-}
-
-#[cfg(unix)]
-async fn sync_parent_directory(parent: &Path) -> Result<()> {
-    let parent = parent.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        std::fs::File::open(&parent)
-            .and_then(|directory| directory.sync_all())
-            .with_context(|| format!("Failed to sync parent directory: {parent:?}"))
-    })
-    .await
-    .map_err(|error| eyre!("Parent directory sync task failed: {error}"))??;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-async fn sync_parent_directory(_parent: &Path) -> Result<()> {
-    Ok(())
-}
-
-fn temp_write_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("state"));
-    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::generate()))
-}
-
-#[async_trait::async_trait]
-impl MessageStore for FileMessageStore {
-    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-        // Check hot cache first
-        {
-            let hot = self.hot.read().await;
-            if let Some(msg) = hot.get(id) {
-                return Ok(Some(msg.clone()));
-            }
-        }
-
-        // Check cold storage
-        let path = self.message_path(id)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let content = fs::read_to_string(&path)
-            .await
-            .with_context(|| format!("Failed to read message file: {:?}", path))?;
-
-        let msg: Message = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse message file: {:?}", path))?;
-
-        // Add to hot cache
-        {
-            let mut hot = self.hot.write().await;
-            hot.insert(id.clone(), msg.clone());
-        }
-
-        Ok(Some(msg))
-    }
-
-    async fn save(&self, message: &Message) -> Result<()> {
-        self.ensure_dir().await?;
-
-        let path = self.message_path(&message.id)?;
-        let content = serde_json::to_string_pretty(message)
-            .with_context(|| format!("Failed to serialize message: {}", message.id))?;
-
-        atomic_write(&path, content.as_bytes())
-            .await
-            .with_context(|| format!("Failed to write message file: {path:?}"))?;
-
-        // Add to hot cache
-        {
-            let mut hot = self.hot.write().await;
-            hot.insert(message.id.clone(), message.clone());
-        }
-
-        Ok(())
-    }
-
-    async fn unload(&self, id: &MessageId) {
-        let mut hot = self.hot.write().await;
-        hot.remove(id);
-    }
-
-    async fn delete(&self, id: &MessageId) -> Result<()> {
-        // Remove from hot cache
-        {
-            let mut hot = self.hot.write().await;
-            hot.remove(id);
-        }
-
-        // Remove from cold storage
-        let path = self.message_path(id)?;
-        if path.exists() {
-            fs::remove_file(&path)
-                .await
-                .with_context(|| format!("Failed to delete message file: {:?}", path))?;
-        }
-
-        Ok(())
-    }
-
-    async fn exists(&self, id: &MessageId) -> Result<bool> {
-        let path = self.message_path(id)?;
-        Ok(path.exists())
-    }
-
-    async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-        let hot = self.hot.read().await;
-        Ok(hot.keys().cloned().collect())
-    }
-
-    async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-        let mut ids = HashSet::new();
-
-        if !self.cold_dir.exists() {
-            return Ok(ids);
-        }
-
-        let mut entries = fs::read_dir(&self.cold_dir)
-            .await
-            .with_context(|| format!("Failed to read messages directory: {:?}", self.cold_dir))?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false)
-                && let Some(stem) = path.file_stem()
-                && let Some(id_str) = stem.to_str()
-            {
-                let id = MessageId::try_new(id_str).map_err(|error| {
-                    eyre!("Invalid message filename in storage {path:?}: {error}")
-                })?;
-                ids.insert(id);
-            }
-        }
-
-        Ok(ids)
-    }
 }
 
 /// File-based session store
@@ -371,7 +108,7 @@ impl FileSessionStore {
     }
 
     /// Load sessions from disk (should be called on startup)
-    pub async fn load(&self) -> Result<()> {
+    async fn load(&self) -> Result<()> {
         if !self.sessions_path.exists() {
             return Ok(());
         }
@@ -391,29 +128,51 @@ impl FileSessionStore {
     }
 
     /// Persist sessions to disk (internal version that takes sessions map)
-    async fn persist_sessions(sessions: &HashMap<String, SessionMeta>, path: &Path) -> Result<()> {
+    async fn persist_sessions(
+        sessions: &HashMap<String, SessionMeta>,
+        path: &Path,
+    ) -> Result<AtomicWriteOutcome> {
         let content = serde_json::to_string_pretty(sessions)
             .with_context(|| "Failed to serialize sessions")?;
 
-        atomic_write(path, content.as_bytes()).await
+        atomic_write_with_outcome(path, content.as_bytes()).await
+    }
+
+    async fn publish_sessions(
+        &self,
+        next_sessions: HashMap<String, SessionMeta>,
+        outcome: AtomicWriteOutcome,
+    ) -> Result<()> {
+        let mut sessions = self.sessions.write().await;
+        *sessions = next_sessions;
+        drop(sessions);
+        outcome.into_result()
     }
 
     /// Collect all message IDs in a session's tree (from tip to root)
     async fn collect_tree_messages(&self, tip_id: &MessageId) -> Result<HashSet<MessageId>> {
+        self.collect_tree_messages_until(tip_id, &HashSet::new())
+            .await
+    }
+
+    async fn collect_tree_messages_until(
+        &self,
+        tip_id: &MessageId,
+        known: &HashSet<MessageId>,
+    ) -> Result<HashSet<MessageId>> {
         let mut messages = HashSet::new();
         let mut current = Some(tip_id.clone());
 
         while let Some(id) = current {
+            if known.contains(&id) {
+                break;
+            }
             if !messages.insert(id.clone()) {
                 return Err(eyre!(
                     "Corrupt message parent graph: cycle repeats message {id}"
                 ));
             }
-            if let Some(msg) = self.message_store.get(&id).await? {
-                current = msg.parent_id;
-            } else {
-                break;
-            }
+            current = self.message_store.read_parent_id(&id).await?;
         }
 
         Ok(messages)
@@ -421,23 +180,33 @@ impl FileSessionStore {
 
     /// Collect all message IDs referenced by all sessions
     async fn collect_all_referenced_messages(&self) -> Result<HashSet<MessageId>> {
-        let sessions: Vec<SessionMeta> = self.sessions.read().await.values().cloned().collect();
+        let session_tips: Vec<_> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .filter_map(|session| {
+                session
+                    .tip_id
+                    .as_ref()
+                    .map(|tip| (session.id.clone(), tip.clone()))
+            })
+            .collect();
         let mut all_messages = HashSet::new();
 
-        for session in sessions {
-            if let Some(tip_id) = &session.tip_id {
-                let tree = self.collect_tree_messages(tip_id).await.with_context(|| {
-                    format!("Failed to traverse messages for session {}", session.id)
-                })?;
-                all_messages.extend(tree);
-            }
+        for (session_id, tip_id) in session_tips {
+            let tree = self
+                .collect_tree_messages_until(&tip_id, &all_messages)
+                .await
+                .with_context(|| format!("Failed to traverse messages for session {session_id}"))?;
+            all_messages.extend(tree);
         }
 
         Ok(all_messages)
     }
 
     /// Garbage collect orphaned messages after deleting a session
-    pub async fn gc_orphaned_messages(&self, deleted_tree: HashSet<MessageId>) -> Result<()> {
+    async fn gc_orphaned_messages(&self, deleted_tree: HashSet<MessageId>) -> Result<()> {
         let still_referenced = self.collect_all_referenced_messages().await?;
 
         let mut deleted_messages: Vec<_> = deleted_tree.into_iter().collect();
@@ -478,6 +247,16 @@ impl SessionStore for FileSessionStore {
         Ok(list)
     }
 
+    async fn list_ids(&self) -> Result<HashSet<String>> {
+        Ok(self
+            .sessions
+            .read()
+            .await
+            .values()
+            .map(|session| session.id.clone())
+            .collect())
+    }
+
     async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
         let sessions = self.sessions.read().await;
         Ok(sessions.get(id).cloned())
@@ -489,12 +268,8 @@ impl SessionStore for FileSessionStore {
         let mut next_sessions = self.sessions.read().await.clone();
         next_sessions.insert(session.id.clone(), session.clone());
 
-        Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
-
-        let mut sessions = self.sessions.write().await;
-        *sessions = next_sessions;
-        drop(sessions);
-        Ok(())
+        let outcome = Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
+        self.publish_sessions(next_sessions, outcome).await
     }
 
     async fn save_if_tip_matches(
@@ -504,20 +279,19 @@ impl SessionStore for FileSessionStore {
     ) -> Result<bool> {
         let _write_guard = self.write_guard.lock().await;
 
-        let mut next_sessions = self.sessions.read().await.clone();
-        let Some(current) = next_sessions.get(&session.id) else {
+        let sessions = self.sessions.read().await;
+        let Some(current) = sessions.get(&session.id) else {
             return Ok(false);
         };
         if current.tip_id.as_ref() != expected_tip {
             return Ok(false);
         }
+        let mut next_sessions = sessions.clone();
+        drop(sessions);
         next_sessions.insert(session.id.clone(), session.clone());
 
-        Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
-
-        let mut sessions = self.sessions.write().await;
-        *sessions = next_sessions;
-        drop(sessions);
+        let outcome = Self::persist_sessions(&next_sessions, &self.sessions_path).await?;
+        self.publish_sessions(next_sessions, outcome).await?;
         Ok(true)
     }
 
@@ -529,7 +303,6 @@ impl SessionStore for FileSessionStore {
         let mut sessions_without_deleted = current_sessions;
         sessions_without_deleted.remove(id);
 
-        // Collect tree messages outside of lock (does I/O)
         let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
             Some(
                 self.collect_tree_messages(&tip_id)
@@ -540,16 +313,11 @@ impl SessionStore for FileSessionStore {
             None
         };
 
-        // Persist without holding any lock
-        Self::persist_sessions(&sessions_without_deleted, &self.sessions_path).await?;
+        let outcome =
+            Self::persist_sessions(&sessions_without_deleted, &self.sessions_path).await?;
+        self.publish_sessions(sessions_without_deleted, outcome)
+            .await?;
 
-        // Update in-memory map
-        {
-            let mut sessions = self.sessions.write().await;
-            *sessions = sessions_without_deleted;
-        }
-
-        // GC orphaned messages (no lock held)
         if let Some(tree) = tree_to_delete {
             self.gc_orphaned_messages(tree).await?;
         }
@@ -571,7 +339,7 @@ pub fn get_data_dir() -> Result<PathBuf> {
 
 impl FileSessionStore {
     /// Clean up orphaned messages (messages on disk not referenced by any session)
-    pub async fn cleanup_orphans(&self) -> Result<usize> {
+    async fn cleanup_orphans(&self) -> Result<usize> {
         let on_disk = self.message_store.list_all_on_disk().await?;
         let referenced = self.collect_all_referenced_messages().await?;
 
@@ -640,9 +408,48 @@ pub async fn init_at(
 )]
 mod tests {
     use super::*;
-    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, MessageStatus};
+    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, Message, MessageStatus};
     use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use ulid::Ulid;
+
+    struct CountingMessageStore {
+        inner: Arc<dyn MessageStore>,
+        reads: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl MessageStore for CountingMessageStore {
+        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.get(id).await
+        }
+
+        async fn save(&self, message: &Message) -> Result<()> {
+            self.inner.save(message).await
+        }
+
+        async fn unload(&self, id: &MessageId) {
+            self.inner.unload(id).await;
+        }
+
+        async fn delete(&self, id: &MessageId) -> Result<()> {
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &MessageId) -> Result<bool> {
+            self.inner.exists(id).await
+        }
+
+        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_all_on_disk().await
+        }
+
+        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
+            self.inner.list_hot().await
+        }
+    }
 
     #[test]
     fn session_temp_write_paths_are_unique_and_adjacent_to_destination() {
@@ -788,6 +595,32 @@ mod tests {
         let _ = fs::remove_dir_all(&data_dir).await;
     }
 
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn replaced_sessions_publish_before_returning_durability_error() {
+        with_test_store(
+            "session-durability-error",
+            |_message_store, session_store, _data_dir| async move {
+                let replacement = session("replacement", None, 2);
+                let next_sessions = HashMap::from([(replacement.id.clone(), replacement)]);
+
+                let error = session_store
+                    .publish_sessions(
+                        next_sessions,
+                        AtomicWriteOutcome::ReplacedButNotSynced(eyre!(
+                            "injected parent sync failure"
+                        )),
+                    )
+                    .await
+                    .unwrap_err();
+
+                assert_eq!(error.to_string(), "injected parent sync failure");
+                assert!(session_store.get("replacement").await.unwrap().is_some());
+            },
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn message_store_rejects_ids_that_could_escape_storage() {
         with_test_store(
@@ -909,6 +742,69 @@ mod tests {
                 assert!(message_store.exists(&b_tip.id).await.unwrap());
                 assert!(message_store.exists(&shared.id).await.unwrap());
                 assert!(message_store.exists(&root.id).await.unwrap());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn startup_garbage_collection_leaves_history_out_of_hot_cache() {
+        with_test_store(
+            "startup-cold-history",
+            |message_store, session_store, data_dir| async move {
+                let root = message("root", None, "root");
+                let tip = message("tip", Some(&root.id), "tip");
+                let orphan = message("orphan", None, "orphan");
+                for message in [&root, &tip, &orphan] {
+                    message_store.save(message).await.unwrap();
+                }
+                session_store
+                    .save(&session("session", Some(&tip.id), 1))
+                    .await
+                    .unwrap();
+
+                let (reopened_messages, _, _, _) = init_at(&data_dir).await.unwrap();
+
+                assert!(reopened_messages.list_hot().await.unwrap().is_empty());
+                assert_eq!(
+                    reopened_messages.list_all_on_disk().await.unwrap(),
+                    HashSet::from([root.id, tip.id])
+                );
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn garbage_collection_reads_shared_ancestry_once() {
+        with_test_store(
+            "shared-history-reads",
+            |message_store, _session_store, data_dir| async move {
+                let root = message("root", None, "root");
+                let shared = message("shared", Some(&root.id), "shared");
+                let first_tip = message("first", Some(&shared.id), "first");
+                let second_tip = message("second", Some(&shared.id), "second");
+                for message in [&root, &shared, &first_tip, &second_tip] {
+                    message_store.save(message).await.unwrap();
+                }
+                let messages = Arc::new(CountingMessageStore {
+                    inner: message_store,
+                    reads: AtomicUsize::new(0),
+                });
+                let sessions = FileSessionStore::new(&data_dir, messages.clone());
+                sessions
+                    .save(&session("first", Some(&first_tip.id), 1))
+                    .await
+                    .unwrap();
+                sessions
+                    .save(&session("second", Some(&second_tip.id), 2))
+                    .await
+                    .unwrap();
+
+                let referenced = sessions.collect_all_referenced_messages().await.unwrap();
+
+                assert_eq!(referenced.len(), 4);
+                assert_eq!(messages.reads.load(Ordering::Relaxed), 4);
             },
         )
         .await;

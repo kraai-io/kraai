@@ -353,16 +353,21 @@ path = \"inherit\"\n",
             message_store,
             session_store,
             context_state_store.clone(),
-            Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+            Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
             data_dir.clone(),
         )));
 
-        let openai_codex_auth = match kraai_provider_openai_codex::OpenAiCodexAuthController::new()
-        {
-            Ok(controller) => Arc::new(controller),
-            Err(error) if is_missing_system_ca_error(&error) => return None,
-            Err(error) => panic!("unexpected OpenAI auth controller init error: {error}"),
-        };
+        let auth_path = kraai_persistence::agent_state_root()
+            .expect("locate application state")
+            .join("provider-state/openai-codex/auth.json");
+        let openai_codex_auth =
+            match kraai_provider_openai_codex::OpenAiCodexAuthController::new_with_options(
+                kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions::new(auth_path),
+            ) {
+                Ok(controller) => Arc::new(controller),
+                Err(error) if is_missing_system_ca_error(&error) => return None,
+                Err(error) => panic!("unexpected OpenAI auth controller init error: {error}"),
+            };
         let events = EventCollector::default();
         let (command_tx, mut command_rx) = mpsc::channel(32);
         let event_tx = RuntimeEventSender::new(1024);
@@ -385,10 +390,12 @@ path = \"inherit\"\n",
             provider_registry: build_provider_registry(openai_codex_auth.clone())
                 .expect("provider registry"),
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            stream_tasks: Default::default(),
             active_script_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(HashMap::new())),
             queued_messages: Arc::new(Mutex::new(HashMap::new())),
             session_state_barrier: Arc::new(RwLock::new(())),
+            stopping: Arc::default(),
             openai_codex_auth,
             provider_config_path: data_dir.join("providers.toml"),
             use_current_executable_as_nushell_host: false,

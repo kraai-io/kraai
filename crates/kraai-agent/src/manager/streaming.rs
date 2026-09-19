@@ -482,14 +482,13 @@ impl AgentManager {
         let Some(mut state) = state else {
             return Ok(None);
         };
-        let original_state = state.clone();
-
-        state.message.status = MessageStatus::Complete;
+        let original_status = std::mem::replace(&mut state.message.status, MessageStatus::Complete);
         if let Err(error) = self.message_store.save(&state.message).await {
+            state.message.status = original_status;
             self.streaming_messages
                 .write()
                 .await
-                .insert(message_id.clone(), original_state);
+                .insert(message_id.clone(), state);
             return Err(error);
         }
         Ok(Some(state.session_id))
@@ -500,8 +499,6 @@ impl AgentManager {
         let Some(state) = state else {
             return Ok(None);
         };
-        let original_state = state.clone();
-
         if let Err(error) = self
             .conversation_store
             .restore_tip_title_and_delete_message(
@@ -515,7 +512,7 @@ impl AgentManager {
             self.streaming_messages
                 .write()
                 .await
-                .insert(message_id.clone(), original_state);
+                .insert(message_id.clone(), state);
             return Err(error);
         }
         Ok(Some(state.session_id))
@@ -529,7 +526,7 @@ impl AgentManager {
         let Some(mut state) = state else {
             return Ok(None);
         };
-        let original_state = state.clone();
+        let original_status = state.message.status.clone();
 
         let persisted = state
             .message
@@ -550,10 +547,11 @@ impl AgentManager {
                 .await
         };
         if let Err(error) = persist_result {
+            state.message.status = original_status;
             self.streaming_messages
                 .write()
                 .await
-                .insert(message_id.clone(), original_state);
+                .insert(message_id.clone(), state);
             return Err(error);
         }
 

@@ -31,10 +31,10 @@ pub(crate) fn prepare(
     }
     let cargo = rust.cargo.canonicalize()?;
     let key = hash_chunks(&[
-        CACHE_SCHEMA.to_vec(),
-        task_sha256.as_bytes().to_vec(),
-        cargo.to_string_lossy().as_bytes().to_vec(),
-        fs::read(&lockfile)?,
+        CACHE_SCHEMA,
+        task_sha256.as_bytes(),
+        cargo.to_string_lossy().as_bytes(),
+        &fs::read(&lockfile)?,
     ]);
     let dependencies_root = cache_root.join("dependencies");
     let final_dir = dependencies_root.join(&key);
@@ -51,8 +51,7 @@ pub(crate) fn prepare(
     let staging = dependencies_root
         .join("tmp")
         .join(ulid::Ulid::generate().to_string());
-    let staging_home = staging.join("cargo-home");
-    fs::create_dir_all(&staging_home)?;
+    let staging_home = create_staging_home(&staging)?;
     let result = fetch(&cargo, &manifest, &staging_home, rust).and_then(|()| {
         fs::write(staging.join("complete"), format!("{key}\n"))?;
         match fs::rename(&staging, &final_dir) {
@@ -74,6 +73,13 @@ pub(crate) fn prepare(
         key,
         reused,
     })
+}
+
+fn create_staging_home(staging: &Path) -> std::io::Result<PathBuf> {
+    fs::create_dir(staging)?;
+    let home = staging.join("cargo-home");
+    fs::create_dir(&home)?;
+    Ok(home)
 }
 
 fn is_complete(directory: &Path, expected_key: &str) -> bool {
@@ -153,6 +159,27 @@ mod tests {
     use color_eyre::eyre::ensure;
 
     use super::*;
+
+    #[test]
+    fn staging_collision_preserves_existing_directory() -> Result<()> {
+        let staging = std::env::temp_dir().join(format!(
+            "kraai-eval-cargo-staging-collision-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&staging)?;
+        let sentinel = staging.join("foreign-data");
+        fs::write(&sentinel, "preserve")?;
+
+        let error = create_staging_home(&staging)
+            .err()
+            .ok_or_else(|| color_eyre::eyre::eyre!("reused an existing staging directory"))?;
+        ensure!(error.kind() == std::io::ErrorKind::AlreadyExists);
+        ensure!(fs::read_to_string(&sentinel)? == "preserve");
+        ensure!(!staging.join("cargo-home").exists());
+
+        fs::remove_dir_all(staging)?;
+        Ok(())
+    }
 
     #[test]
     fn fetches_outside_task_with_isolated_cache_and_reuses_completed_bundle() -> Result<()> {

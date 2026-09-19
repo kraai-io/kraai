@@ -6,8 +6,9 @@ mod error;
 mod http_client;
 mod http_retry;
 mod manager;
+mod model_metadata;
 mod pricing;
-pub use pricing::{PriceQuote, Pricing};
+pub use pricing::{PriceQuote, Pricing, ProviderPricingCatalog, ProviderPricingPolicy};
 mod provider;
 mod registry;
 mod sse;
@@ -29,6 +30,7 @@ pub use http_retry::{
     ProviderRetryObserver, send_with_retry,
 };
 pub use manager::ProviderManager;
+pub use model_metadata::ConfiguredModelMetadata;
 pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition, ScriptToolTransport};
 pub use registry::{ProviderFactory, ProviderRegistry};
 pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};

@@ -82,6 +82,50 @@ impl StateEffectHandler for RecordingEffects {
     }
 }
 
+struct StalledEffects {
+    entered: CancellationToken,
+    dropped: CancellationToken,
+}
+
+impl StateEffectHandler for StalledEffects {
+    fn apply<'a>(
+        &'a self,
+        _request: &'a StateEffectRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            let _dropped = self.dropped.clone().drop_guard();
+            self.entered.cancel();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn dropping_execution_cancels_an_in_progress_state_effect()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let workspace = TestWorkspace::new();
+    std::fs::write(workspace.0.join("fixture.txt"), "fixture")?;
+    let entered = CancellationToken::new();
+    let dropped = CancellationToken::new();
+    let mut plan = plan(b"kraai-open-files fixture.txt".to_vec(), &workspace);
+    plan.active_commands.push(String::from("kraai-open-files"));
+    plan.state_effect_handler = Arc::new(StalledEffects {
+        entered: entered.clone(),
+        dropped: dropped.clone(),
+    });
+    let mut execution = Box::pin(execute(plan, CancellationToken::new()));
+    tokio::select! {
+        result = &mut execution => {
+            return Err(format!("execution stopped before entering the state effect: {result:?}").into());
+        }
+        entered = tokio::time::timeout(Duration::from_secs(5), entered.cancelled()) => entered?,
+    }
+
+    drop(execution);
+    tokio::time::timeout(Duration::from_secs(5), dropped.cancelled()).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn executes_structured_nushell_through_the_private_transport() {
     let workspace = TestWorkspace::new();

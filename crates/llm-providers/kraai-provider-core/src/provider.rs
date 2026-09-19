@@ -17,6 +17,13 @@ pub trait Provider: Send + Sync {
 
     async fn list_models(&self) -> Vec<Model>;
 
+    async fn get_model(&self, model_id: &ModelId) -> Option<Model> {
+        self.list_models()
+            .await
+            .into_iter()
+            .find(|model| model.id == *model_id)
+    }
+
     async fn cache_models(&self) -> Result<()>;
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
@@ -56,4 +63,30 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use color_eyre::eyre::{ensure, eyre};
+
+    #[tokio::test]
+    async fn default_model_lookup_preserves_listed_metadata_and_missing_ids() -> Result<()> {
+        let provider = crate::test_support::MockProvider::new("fixture");
+        let listed = provider
+            .list_models()
+            .await
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("fixture model missing"))?;
+        let found = provider
+            .get_model(&listed.id)
+            .await
+            .ok_or_else(|| eyre!("model lookup missed listed model"))?;
+        ensure!(found.id == listed.id);
+        ensure!(found.name == listed.name);
+        ensure!(found.max_context == listed.max_context);
+        ensure!(provider.get_model(&ModelId::new("unknown")).await.is_none());
+        Ok(())
+    }
 }

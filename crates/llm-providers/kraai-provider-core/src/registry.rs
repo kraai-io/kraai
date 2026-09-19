@@ -4,6 +4,7 @@ use std::sync::Arc;
 use color_eyre::Result;
 use kraai_types::ProviderId;
 
+use crate::ProviderPricingPolicy;
 use crate::config::DynamicConfig;
 use crate::definition::{ProviderDefinition, ValidationError};
 use crate::error::ProviderError;
@@ -11,11 +12,12 @@ use crate::provider::Provider;
 
 #[derive(Default, Clone)]
 pub struct ProviderRegistry {
-    factories: BTreeMap<String, Arc<FactoryEntry>>,
+    factories: Arc<BTreeMap<String, Arc<FactoryEntry>>>,
 }
 
 struct FactoryEntry {
     definition: ProviderDefinition,
+    pricing_policy: ProviderPricingPolicy,
     create: Arc<ProviderFactoryFn>,
     validate_provider_config: Arc<ValidateConfigFn>,
     validate_model_config: Arc<ValidateConfigFn>,
@@ -29,6 +31,8 @@ pub trait ProviderFactory {
     const TYPE_ID: &'static str;
 
     fn definition() -> ProviderDefinition;
+
+    fn pricing_policy() -> ProviderPricingPolicy;
 
     fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>>;
 
@@ -49,6 +53,7 @@ impl ProviderRegistry {
         self.register_dynamic_factory(
             F::TYPE_ID,
             definition,
+            F::pricing_policy(),
             |id, config| {
                 F::create(id, config)
                     .map_err(|error| ProviderError::ConfigParseError(error.to_string()))
@@ -62,6 +67,7 @@ impl ProviderRegistry {
         &mut self,
         type_id: impl Into<String>,
         mut definition: ProviderDefinition,
+        pricing_policy: ProviderPricingPolicy,
         create: C,
         validate_provider_config: VP,
         validate_model_config: VM,
@@ -80,7 +86,7 @@ impl ProviderRegistry {
         }
 
         definition.type_id = key.clone();
-        if key != "openai-codex" {
+        if !pricing_policy.subscription {
             definition
                 .provider_fields
                 .extend(crate::pricing::pricing_fields(false));
@@ -91,12 +97,13 @@ impl ProviderRegistry {
 
         let entry = FactoryEntry {
             definition,
+            pricing_policy,
             create: Arc::new(create),
             validate_provider_config: Arc::new(validate_provider_config),
             validate_model_config: Arc::new(validate_model_config),
         };
 
-        self.factories.insert(key, Arc::new(entry));
+        Arc::make_mut(&mut self.factories).insert(key, Arc::new(entry));
         Ok(())
     }
 
@@ -115,6 +122,12 @@ impl ProviderRegistry {
         self.factories
             .get(type_id)
             .map(|entry| entry.definition.clone())
+    }
+
+    pub fn pricing_policy(&self, type_id: &str) -> Option<ProviderPricingPolicy> {
+        self.factories
+            .get(type_id)
+            .map(|entry| entry.pricing_policy)
     }
 
     pub fn validate_provider_config(
@@ -182,10 +195,14 @@ mod tests {
     #[test]
     fn pricing_fields_are_only_exposed_for_metered_providers() -> Result<()> {
         let mut registry = ProviderRegistry::default();
-        for type_id in ["openai-codex", "openai"] {
+        for (type_id, subscription) in [("flat-rate", true), ("metered", false)] {
             registry.register_dynamic_factory(
                 type_id,
                 simple_provider_definition("Provider", "Provider", false, type_id),
+                ProviderPricingPolicy {
+                    subscription,
+                    ..ProviderPricingPolicy::default()
+                },
                 |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
                 |_| Vec::new(),
                 |_| Vec::new(),
@@ -198,14 +215,14 @@ mod tests {
                     .provider_fields
                     .iter()
                     .any(|field| field.key == "pricing_provider"),
-                type_id == "openai"
+                !subscription
             );
             assert_eq!(
                 definition
                     .model_fields
                     .iter()
                     .any(|field| field.key.starts_with("price_")),
-                type_id == "openai"
+                !subscription
             );
         }
         Ok(())
@@ -227,6 +244,42 @@ mod tests {
     }
 
     #[test]
+    fn cloned_registries_isolate_registration_and_rejected_duplicates() -> Result<()> {
+        let mut registry = ProviderRegistry::default();
+        registry.register_factory::<MockFactory>()?;
+        let definitions = registry.list_definitions();
+        let mut snapshot = registry.clone();
+
+        assert!(matches!(
+            snapshot.register_factory::<MockFactory>(),
+            Err(ProviderError::FactoryAlreadyRegistered(type_id)) if type_id == "mock"
+        ));
+        assert_eq!(registry.list_definitions(), definitions);
+        assert_eq!(snapshot.list_definitions(), definitions);
+
+        for (target, type_id) in [(&mut registry, "original"), (&mut snapshot, "snapshot")] {
+            target.register_dynamic_factory(
+                type_id,
+                simple_provider_definition(type_id, type_id, false, type_id),
+                ProviderPricingPolicy::default(),
+                |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )?;
+        }
+        assert!(registry.has_factory("original"));
+        assert!(!registry.has_factory("snapshot"));
+        assert!(snapshot.has_factory("snapshot"));
+        assert!(!snapshot.has_factory("original"));
+        for target in [&registry, &snapshot] {
+            let provider =
+                target.create_provider("mock", ProviderId::new("shared"), DynamicConfig::new())?;
+            assert_eq!(provider.get_provider_id(), ProviderId::new("shared"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_dynamic_registry_registration() -> Result<()> {
         let mut registry = ProviderRegistry::default();
         let create_count = Arc::new(AtomicUsize::new(0));
@@ -240,6 +293,7 @@ mod tests {
                 true,
                 "dynamic-mock",
             ),
+            ProviderPricingPolicy::default(),
             move |id, _config| {
                 create_count_for_factory.fetch_add(1, Ordering::SeqCst);
                 Ok(Box::new(MockProvider::new(id.as_str())))
@@ -264,6 +318,7 @@ mod tests {
         registry.register_dynamic_factory(
             "duplicate",
             simple_provider_definition("Duplicate", "duplicate", false, "duplicate"),
+            ProviderPricingPolicy::default(),
             |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
             |_| Vec::new(),
             |_| Vec::new(),
@@ -272,6 +327,7 @@ mod tests {
         let result = registry.register_dynamic_factory(
             "duplicate",
             simple_provider_definition("Duplicate", "duplicate", false, "duplicate"),
+            ProviderPricingPolicy::default(),
             |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
             |_| Vec::new(),
             |_| Vec::new(),

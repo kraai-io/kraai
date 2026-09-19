@@ -8809,11 +8809,6 @@ rec {
             packageId = "async-trait";
           }
           {
-            name = "chrono";
-            packageId = "chrono";
-            features = [ "serde" ];
-          }
-          {
             name = "color-eyre";
             packageId = "color-eyre";
           }
@@ -8886,20 +8881,8 @@ rec {
         libName = "kraai_command_catalog";
         dependencies = [
           {
-            name = "kraai-command-close-files";
-            packageId = "kraai-command-close-files";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-command-edit-file";
-            packageId = "kraai-command-edit-file";
-          }
-          {
-            name = "kraai-command-open-files";
-            packageId = "kraai-command-open-files";
+            name = "kraai-types";
+            packageId = "kraai-types";
           }
         ];
 
@@ -8911,6 +8894,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-close-files; };
         libName = "kraai_command_close_files";
         dependencies = [
+          {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
+          }
           {
             name = "kraai-command-core";
             packageId = "kraai-command-core";
@@ -8930,10 +8917,6 @@ rec {
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
           }
         ];
 
@@ -8964,12 +8947,12 @@ rec {
         libName = "kraai_command_edit_file";
         dependencies = [
           {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
           }
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-command-core";
+            packageId = "kraai-command-core";
           }
           {
             name = "kraai-workspace-fs";
@@ -8994,6 +8977,10 @@ rec {
         libName = "kraai_command_open_files";
         dependencies = [
           {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
+          }
+          {
             name = "kraai-command-core";
             packageId = "kraai-command-core";
           }
@@ -9012,10 +8999,6 @@ rec {
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
           }
         ];
 
@@ -9063,6 +9046,10 @@ rec {
           {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-provider-openai-chat-completions";
+            packageId = "kraai-provider-openai-chat-completions";
           }
           {
             name = "kraai-provider-openai-codex";
@@ -9137,12 +9124,20 @@ rec {
             packageId = "hmac";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-command-close-files";
+            packageId = "kraai-command-close-files";
           }
           {
             name = "kraai-command-core";
             packageId = "kraai-command-core";
+          }
+          {
+            name = "kraai-command-edit-file";
+            packageId = "kraai-command-edit-file";
+          }
+          {
+            name = "kraai-command-open-files";
+            packageId = "kraai-command-open-files";
           }
           {
             name = "kraai-sandbox";
@@ -9173,14 +9168,6 @@ rec {
           {
             name = "nu-config";
             packageId = "nu-config";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-parser";
-            packageId = "nu-parser";
           }
           {
             name = "nu-protocol";
@@ -9217,6 +9204,7 @@ rec {
           {
             name = "tokio-util";
             packageId = "tokio-util";
+            features = [ "rt" ];
           }
           {
             name = "ulid";
@@ -9227,6 +9215,12 @@ rec {
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Pipes" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
           }
         ];
 
@@ -9266,10 +9260,6 @@ rec {
           {
             name = "serde_json";
             packageId = "serde_json";
-          }
-          {
-            name = "thiserror";
-            packageId = "thiserror 2.0.20";
           }
           {
             name = "tokio";
@@ -9350,8 +9340,9 @@ rec {
             features = [ "full" ];
           }
           {
-            name = "toml";
-            packageId = "toml";
+            name = "tokio-util";
+            packageId = "tokio-util";
+            features = [ "rt" ];
           }
           {
             name = "tracing";
@@ -9448,10 +9439,6 @@ rec {
             packageId = "futures";
           }
           {
-            name = "kraai-persistence";
-            packageId = "kraai-persistence";
-          }
-          {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
           }
@@ -9487,8 +9474,19 @@ rec {
             features = [ "full" ];
           }
           {
+            name = "tokio-util";
+            packageId = "tokio-util";
+            features = [ "rt" ];
+          }
+          {
             name = "tracing";
             packageId = "tracing";
+          }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
           }
           {
             name = "url";
@@ -9505,7 +9503,10 @@ rec {
             packageId = "ulid";
           }
         ];
-
+        features = {
+          "typescript" = [ "dep:ts-rs" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
       };
       "kraai-runtime" = rec {
         crateName = "kraai-runtime";
@@ -9519,16 +9520,16 @@ rec {
             packageId = "color-eyre";
           }
           {
-            name = "directories";
-            packageId = "directories";
-          }
-          {
             name = "futures";
             packageId = "futures";
           }
           {
             name = "kraai-agent";
             packageId = "kraai-agent";
+          }
+          {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
           }
           {
             name = "kraai-nushell-runtime";
@@ -9583,6 +9584,7 @@ rec {
           {
             name = "tokio-util";
             packageId = "tokio-util";
+            features = [ "rt" ];
           }
           {
             name = "toml";
@@ -9624,7 +9626,7 @@ rec {
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" ];
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" "kraai-provider-openai-codex/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
@@ -9817,11 +9819,6 @@ rec {
           {
             name = "regex";
             packageId = "regex";
-          }
-          {
-            name = "serde";
-            packageId = "serde";
-            features = [ "derive" ];
           }
           {
             name = "serde_json";
@@ -21769,6 +21766,11 @@ rec {
             packageId = "futures-sink";
           }
           {
+            name = "futures-util";
+            packageId = "futures-util";
+            optional = true;
+          }
+          {
             name = "libc";
             packageId = "libc";
             optional = true;
@@ -21808,7 +21810,7 @@ rec {
           "time" = [ "tokio/time" "slab" ];
           "tracing" = [ "dep:tracing" ];
         };
-        resolvedDefaultFeatures = [ "codec" "default" "io" "libc" ];
+        resolvedDefaultFeatures = [ "codec" "default" "futures-util" "io" "libc" "rt" ];
       };
       "toml" = rec {
         crateName = "toml";

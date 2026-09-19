@@ -4,15 +4,16 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::Result;
 
+use crate::provider_config::PreparedKraaiProviderConfig;
 use crate::sandbox::{self, SandboxRequest, run_sandboxed};
 use crate::workspace::{
     self, capture_submission, commit_fixture, materialize_base, replay_submission,
 };
 use crate::{
-    EvaluationMetrics, EventLog, ExperimentIdentity, HarnessMetrics, KraaiProviderConfigRequest,
-    NetworkPolicy, RunRequest, RunResult, RunStatus, SandboxRecord, TaskManifest, apply_patch,
-    cargo_dependencies, expand_runner_command, manifest, outcome_json, process_record, proxy,
-    resource_limits, set_progress, unix_timestamp_ms, write_process_logs,
+    EvaluationMetrics, EventLog, ExperimentIdentity, HarnessMetrics, NetworkPolicy, RunRequest,
+    RunResult, RunStatus, SandboxRecord, TaskManifest, apply_patch, cargo_dependencies,
+    expand_runner_command, manifest, outcome_json, process_record, proxy, resource_limits,
+    set_progress, unix_timestamp_ms, write_process_logs,
 };
 
 pub(crate) struct Execution<'a> {
@@ -23,6 +24,7 @@ pub(crate) struct Execution<'a> {
     pub run_root: &'a Path,
     pub experiment_id: &'a str,
     pub identity: &'a ExperimentIdentity,
+    pub provider_config: Option<&'a PreparedKraaiProviderConfig>,
     pub rust_environment: Option<&'a sandbox::RustEnvironment>,
     pub artifact_path: &'a Path,
     pub artifact_dir: &'a Path,
@@ -39,6 +41,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         run_root,
         experiment_id,
         identity,
+        provider_config,
         rust_environment,
         artifact_path,
         artifact_dir,
@@ -92,7 +95,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         .map(|config| config.start(artifact_dir.join("proxy.events.jsonl")))
         .transpose()?;
     let proxy_url = proxy.as_ref().map(proxy::ModelProxy::base_url);
-    let provider_config_relative = if let Some(config) = &request.kraai_provider_config {
+    let provider_config_relative = if let Some(config) = provider_config {
         let proxy_url = proxy_url.as_deref().ok_or_else(|| {
             color_eyre::eyre::eyre!("provider config requires an active model proxy")
         })?;
@@ -111,18 +114,14 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
     let provider_config_path = provider_config_relative
         .as_ref()
         .map(|path| agent_workspace.join(path));
-    let provider_id = request
-        .kraai_provider_config
-        .as_ref()
-        .map(KraaiProviderConfigRequest::selected_provider_id)
-        .transpose()?;
+    let provider_id = provider_config.map(PreparedKraaiProviderConfig::selected_provider_id);
     let runner_command = expand_runner_command(
         request,
         task,
         &agent_workspace,
         proxy_url.as_deref(),
         provider_config_path.as_deref(),
-        provider_id.as_deref(),
+        provider_id,
     )?;
     let harness_metrics_path = artifact_dir.join("harness-metrics.json");
     File::create(&harness_metrics_path)?;
@@ -142,7 +141,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         std::collections::BTreeMap::new,
         proxy::ModelProxy::environment,
     );
-    if request.kraai_provider_config.is_some() {
+    if provider_config.is_some() {
         runner_environment.insert(
             String::from("KRAAI_AGENT_PROFILES"),
             String::from("/workspace/.kraai-eval/agents.toml"),

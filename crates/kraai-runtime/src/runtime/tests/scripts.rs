@@ -5,13 +5,13 @@ use kraai_types::{
     TokenUsage,
 };
 
-use super::super::streaming::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
+use super::super::stream_driver::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
 #[test]
 fn interrupted_recovery_status_matches_the_last_phase() {
-    use super::super::scripts::interrupted_execution_outcome;
+    use super::super::script_recovery::interrupted_execution_outcome;
 
     for (phase, expected) in [
         (

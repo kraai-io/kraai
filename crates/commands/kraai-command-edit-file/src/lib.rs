@@ -2,10 +2,9 @@
 
 use std::path::Path;
 
-use kraai_command_core::declare_kraai_command;
+use kraai_command_core::{command_error, declare_kraai_command};
 use kraai_workspace_fs::{ExactTextEdit, create_text_file, edit_text_file};
 use nu_engine::CallExt;
-use nu_protocol::shell_error::generic::GenericError;
 use nu_protocol::{
     Category, IntoPipelineData, ShellError, Signature, Span, SyntaxShape, Type, Value, record,
 };
@@ -13,22 +12,7 @@ use nu_protocol::{
 declare_kraai_command! {
     /// Applies deterministic, exact text edits or creates one text file.
     pub struct EditFileCommand;
-    id: "kraai-edit-file";
-    name: "kraai-edit-file";
-    description: "Create a text file or atomically apply exact line-ranged replacements. Prefer this command over ad hoc file rewriting. For an existing file, make the smallest targeted edits that express the change instead of replacing the whole file. Each range is inclusive, must exist in the current file, and its old_text must exactly match that range; include multiple edit records in one call when useful.";
-    signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
-    examples: [
-        {
-            description: "Replace one exact source line",
-            timeout: "10sec",
-            script: "kraai-edit-file src/lib.rs [{start_line: 10, end_line: 10, old_text: 'let enabled = false;', new_text: 'let enabled = true;'}]",
-        },
-        {
-            description: "Create a new text file without replacing an existing path",
-            timeout: "10sec",
-            script: "kraai-edit-file src/new.rs --create --contents 'pub const READY: bool = true;\n'",
-        },
-    ];
+    metadata: kraai_command_catalog::EDIT_FILE;
     signature: Signature::build("kraai-edit-file")
         .required("path", SyntaxShape::String, "Text file path to edit or create.")
         .optional(
@@ -181,10 +165,4 @@ fn positive_line(
                 span,
             )
         })
-}
-
-fn command_error(title: impl Into<String>, message: impl Into<String>, span: Span) -> ShellError {
-    let title: String = title.into();
-    let message: String = message.into();
-    ShellError::Generic(GenericError::new(title, message, span))
 }

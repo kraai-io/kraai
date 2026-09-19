@@ -249,10 +249,18 @@ impl RuntimeBuilder {
         if host_options.initialize_tracing {
             Self::init_tracing(&storage_root)?;
         }
+        let data_dir = storage_root.join("data");
+        let auth_options = OpenAiCodexAuthControllerOptions::new(
+            storage_root.join("provider-state/openai-codex/auth.json"),
+        );
+        let (persistence, auth) = tokio::join!(
+            kraai_persistence::init_at(&data_dir),
+            tokio::task::spawn_blocking(move || {
+                OpenAiCodexAuthController::new_with_options(auth_options)
+            }),
+        );
         let (message_store, session_store, execution_store, context_state_store) =
-            kraai_persistence::init_at(&storage_root.join("data"))
-                .await
-                .wrap_err("Failed to initialize persistence layer")?;
+            persistence.wrap_err("Failed to initialize persistence layer")?;
 
         let providers = ProviderManager::new();
         let default_workspace_dir = std::env::current_dir()
@@ -260,10 +268,8 @@ impl RuntimeBuilder {
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
         let openai_codex_auth = Arc::new(
-            OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
-                storage_root.join("provider-state/openai-codex/auth.json"),
-            ))
-            .wrap_err("Failed to initialize OpenAI auth")?,
+            auth.wrap_err("OpenAI auth initialization task failed")?
+                .wrap_err("Failed to initialize OpenAI auth")?,
         );
         let registry = build_provider_registry(openai_codex_auth.clone())?;
         let provider_config_path = host_options
@@ -276,7 +282,7 @@ impl RuntimeBuilder {
             message_store,
             session_store,
             context_state_store.clone(),
-            Arc::new(kraai_persistence::RequestUsageStore::new(
+            Arc::new(kraai_persistence::FileRequestUsageStore::new(
                 &storage_root.join("data"),
             )),
             storage_root.clone(),
@@ -292,10 +298,12 @@ impl RuntimeBuilder {
             context_state_store,
             provider_registry: registry,
             active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            stream_tasks: Default::default(),
             active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
             queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
             session_state_barrier: Arc::new(RwLock::new(())),
+            stopping: Arc::default(),
             openai_codex_auth,
             provider_config_path,
             nushell_host_path: host_options.nushell_host_path,
@@ -378,6 +386,7 @@ pub(crate) fn build_provider_registry(
         .register_dynamic_factory(
             OpenAiCodexFactory::TYPE_ID,
             OpenAiCodexFactory::definition(),
+            OpenAiCodexFactory::pricing_policy(),
             move |id, config| {
                 openai_codex_factory.create(id, config).map_err(|error| {
                     kraai_provider_core::ProviderError::ConfigParseError(error.to_string())

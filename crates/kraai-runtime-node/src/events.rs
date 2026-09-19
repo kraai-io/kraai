@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use kraai_runtime::RuntimeEvent;
 use napi_derive::napi;
 use serde::Serialize;
@@ -17,8 +19,20 @@ pub(crate) enum EventRead {
 
 #[napi]
 pub struct EventSubscription {
-    receiver: Mutex<broadcast::Receiver<RuntimeEvent>>,
+    receiver: Mutex<Option<broadcast::Receiver<RuntimeEvent>>>,
+    reading: AtomicBool,
     closed: CancellationToken,
+}
+
+struct PendingRead<'a>(&'a EventSubscription);
+
+impl Drop for PendingRead<'_> {
+    fn drop(&mut self) {
+        if self.0.closed.is_cancelled() {
+            self.0.release_receiver();
+        }
+        self.0.reading.store(false, Ordering::Release);
+    }
 }
 
 impl EventSubscription {
@@ -27,26 +41,45 @@ impl EventSubscription {
         closed: CancellationToken,
     ) -> Self {
         Self {
-            receiver: Mutex::new(receiver),
+            receiver: Mutex::new(Some(receiver)),
+            reading: AtomicBool::new(false),
             closed,
         }
     }
 
     async fn read(&self) -> napi::Result<EventRead> {
-        let mut receiver = self.receiver.try_lock().map_err(|error| {
-            napi::Error::from_reason(format!("only one pending next() is allowed: {error}"))
-        })?;
+        self.reading
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_reading| {
+                napi::Error::from_reason(
+                    "only one pending next() is allowed: operation would block",
+                )
+            })?;
+        let _pending_read = PendingRead(self);
+        let mut receiver = self.receiver.lock().await;
+        let Some(events) = receiver.as_mut() else {
+            return Ok(EventRead::Closed);
+        };
         let event = tokio::select! {
             biased;
             () = self.closed.cancelled() => EventRead::Closed,
-            event = receiver.recv() => match event {
+            event = events.recv() => match event {
                 Ok(value) => EventRead::Event { value },
                 Err(broadcast::error::RecvError::Lagged(skipped)) => EventRead::Lagged { skipped },
                 Err(broadcast::error::RecvError::Closed) => EventRead::Closed,
             },
         };
+        if matches!(event, EventRead::Closed) {
+            drop(receiver.take());
+        }
         drop(receiver);
         Ok(event)
+    }
+
+    fn release_receiver(&self) {
+        if let Ok(mut receiver) = self.receiver.try_lock() {
+            drop(receiver.take());
+        }
     }
 }
 
@@ -60,6 +93,7 @@ impl EventSubscription {
     #[napi]
     pub fn close(&self) {
         self.closed.cancel();
+        self.release_receiver();
     }
 }
 
@@ -75,6 +109,8 @@ impl Drop for EventSubscription {
     reason = "tests assert after fallible async reads"
 )]
 mod tests {
+    use std::task::{Context, Waker};
+
     use super::*;
 
     #[tokio::test]
@@ -117,6 +153,101 @@ mod tests {
         assert!(subscription.read().await.is_err());
         closed.cancel();
         assert!(matches!(pending.await?, EventRead::Closed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn close_releases_receiver_without_a_pending_read() -> napi::Result<()> {
+        let (sender, receiver) = broadcast::channel(2);
+        let subscription = EventSubscription::new(receiver, CancellationToken::new());
+        assert_eq!(sender.receiver_count(), 1);
+        subscription.close();
+        assert_eq!(sender.receiver_count(), 0);
+        assert!(matches!(subscription.read().await?, EventRead::Closed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn close_wakes_pending_read_without_allowing_a_second_reader() -> napi::Result<()> {
+        let (sender, receiver) = broadcast::channel(2);
+        let subscription = EventSubscription::new(receiver, CancellationToken::new());
+        let mut pending = Box::pin(subscription.read());
+        assert!(
+            pending
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+
+        subscription.close();
+        let error =
+            subscription.read().await.err().ok_or_else(|| {
+                napi::Error::from_reason("concurrent read was accepted after close")
+            })?;
+        assert_eq!(
+            error.reason,
+            "only one pending next() is allowed: operation would block"
+        );
+        assert!(matches!(pending.await?, EventRead::Closed));
+        assert_eq!(sender.receiver_count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn abandoned_reads_release_the_permit_and_closed_receiver() -> napi::Result<()> {
+        for close in [false, true] {
+            let (sender, receiver) = broadcast::channel(2);
+            let subscription = EventSubscription::new(receiver, CancellationToken::new());
+            let mut pending = Box::pin(subscription.read());
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            if close {
+                subscription.close();
+            }
+            drop(pending);
+
+            assert_eq!(sender.receiver_count(), usize::from(!close));
+            if close {
+                assert!(matches!(subscription.read().await?, EventRead::Closed));
+            } else {
+                sender
+                    .send(RuntimeEvent {
+                        sequence: 1,
+                        event: kraai_runtime::Event::ConfigLoaded,
+                    })
+                    .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+                assert!(matches!(
+                    subscription.read().await?,
+                    EventRead::Event {
+                        value: RuntimeEvent { sequence: 1, .. }
+                    }
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn close_mutex_contention_is_not_a_second_pending_read() -> napi::Result<()> {
+        let (sender, receiver) = broadcast::channel(2);
+        let subscription = EventSubscription::new(receiver, CancellationToken::new());
+        let receiver_guard = subscription.receiver.lock().await;
+        subscription.close();
+        let mut pending = Box::pin(subscription.read());
+        assert!(
+            pending
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        drop(receiver_guard);
+
+        assert!(matches!(pending.await?, EventRead::Closed));
+        assert_eq!(sender.receiver_count(), 0);
         Ok(())
     }
 }

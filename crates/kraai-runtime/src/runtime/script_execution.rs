@@ -14,8 +14,9 @@ use kraai_persistence::{
 use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
 use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
 use kraai_types::{
-    MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, StateEffectRequest, ToolCallId,
+    MessageId, OpenedFilesOperation, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
+    ScriptExecutionStatus, ScriptOutputStream, ScriptProfileSnapshot, StateEffectRequest,
+    ToolCallId,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
@@ -235,16 +236,14 @@ fn authorize_context_mutations(
         .deltas
         .iter()
         .map(|delta| {
-            if delta.namespace != "opened_files" {
+            if delta.namespace != OpenedFilesOperation::NAMESPACE {
                 return Err(format!(
                     "command '{}' requested unsupported context namespace '{}'",
                     request.command_id, delta.namespace
                 ));
             }
             let path = delta
-                .payload
-                .get("path")
-                .and_then(serde_json::Value::as_str)
+                .opened_file_path()
                 .map(PathBuf::from)
                 .ok_or_else(|| String::from("opened-files mutation requires a string path"))?;
             if !path.is_absolute() {
@@ -253,8 +252,13 @@ fn authorize_context_mutations(
                     path.display()
                 ));
             }
-            match (request.command_id.as_str(), delta.operation.as_str()) {
-                ("kraai-open-files", "open") => {
+            match (
+                request.command_id.as_str(),
+                OpenedFilesOperation::parse(&delta.operation),
+            ) {
+                (command_id, Some(OpenedFilesOperation::Open))
+                    if command_id == kraai_command_catalog::OPEN_FILES.id =>
+                {
                     let scope = if path.starts_with(workspace_root) {
                         PinnedFileScope::Workspace {
                             root: workspace_root.to_path_buf(),
@@ -269,7 +273,9 @@ fn authorize_context_mutations(
                     };
                     Ok(ContextStateMutation::PinFile { path, scope })
                 }
-                ("kraai-close-files", "close") => {
+                (command_id, Some(OpenedFilesOperation::Close))
+                    if command_id == kraai_command_catalog::CLOSE_FILES.id =>
+                {
                     Ok(ContextStateMutation::UnpinFile { path, reason: None })
                 }
                 _ => Err(format!(
@@ -457,5 +463,86 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn context_effect_errors_preserve_validation_order() {
+        for (namespace, payload, expected) in [
+            (
+                "unknown",
+                serde_json::json!({ "path": false }),
+                "command 'wrong-command' requested unsupported context namespace 'unknown'",
+            ),
+            (
+                "opened_files",
+                serde_json::json!({ "path": false }),
+                "opened-files mutation requires a string path",
+            ),
+            (
+                "opened_files",
+                serde_json::json!({ "path": "relative" }),
+                "opened-files mutation path must be absolute: relative",
+            ),
+            (
+                "opened_files",
+                serde_json::json!({ "path": "/host/file" }),
+                "command 'wrong-command' cannot apply opened-files operation 'unknown'",
+            ),
+        ] {
+            let request = StateEffectRequest {
+                command_id: String::from("wrong-command"),
+                deltas: vec![ContextStateDelta {
+                    namespace: String::from(namespace),
+                    operation: String::from("unknown"),
+                    payload,
+                }],
+                ..open_request("/workspace/file")
+            };
+            assert_eq!(
+                authorize_context_mutations(
+                    &request,
+                    Path::new("/workspace"),
+                    &SandboxCapabilities::workspace_read(),
+                )
+                .unwrap_err(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn close_file_effects_keep_extra_payload_fields_and_require_the_matching_command() {
+        let delta = ContextStateDelta {
+            namespace: String::from("opened_files"),
+            operation: String::from("close"),
+            payload: serde_json::json!({ "path": "/host/file", "extra": true }),
+        };
+        let mut request = StateEffectRequest {
+            command_id: String::from("kraai-close-files"),
+            deltas: vec![delta],
+            ..open_request("/workspace/file")
+        };
+        let mutations = authorize_context_mutations(
+            &request,
+            Path::new("/workspace"),
+            &SandboxCapabilities::workspace_read(),
+        )
+        .unwrap();
+        assert!(matches!(
+            mutations.first(),
+            Some(ContextStateMutation::UnpinFile { path, reason: None })
+                if path == Path::new("/host/file")
+        ));
+
+        request.command_id = String::from("kraai-open-files");
+        assert_eq!(
+            authorize_context_mutations(
+                &request,
+                Path::new("/workspace"),
+                &SandboxCapabilities::workspace_read(),
+            )
+            .unwrap_err(),
+            "command 'kraai-open-files' cannot apply opened-files operation 'close'",
+        );
     }
 }

@@ -1,14 +1,14 @@
 #![forbid(unsafe_code)]
 
+mod builtins;
+
 use std::collections::HashSet;
 
-use kraai_command_core::{CommandContext, CommandMetadata, CommandRegistry, CommandRegistryError};
+use kraai_types::CommandMetadata;
 
-static COMMANDS: [&CommandMetadata; 3] = [
-    &kraai_command_open_files::OpenFilesCommand::METADATA,
-    &kraai_command_close_files::CloseFilesCommand::METADATA,
-    &kraai_command_edit_file::EditFileCommand::METADATA,
-];
+pub use builtins::{CLOSE_FILES, EDIT_FILE, OPEN_FILES};
+
+static COMMANDS: [&CommandMetadata; 3] = [&OPEN_FILES, &CLOSE_FILES, &EDIT_FILE];
 
 pub fn command_metadata(command_id: &str) -> Option<&'static CommandMetadata> {
     COMMANDS
@@ -23,13 +23,6 @@ pub fn command_ids() -> impl Iterator<Item = &'static str> {
 
 pub fn command_id_set() -> HashSet<String> {
     command_ids().map(String::from).collect()
-}
-
-pub fn command_registry(context: CommandContext) -> Result<CommandRegistry, CommandRegistryError> {
-    let open_files = kraai_command_open_files::OpenFilesCommand::registration(context.clone())?;
-    let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
-    let edit_file = kraai_command_edit_file::EditFileCommand::registration(context)?;
-    CommandRegistry::new([open_files, close_files, edit_file])
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ impl AgentManager {
         message_store: Arc<dyn MessageStore>,
         session_store: Arc<dyn SessionStore>,
         context_state_store: Arc<dyn ContextStateStore>,
-        usage_store: Arc<kraai_persistence::RequestUsageStore>,
+        usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
         storage_root: PathBuf,
     ) -> Self {
         let conversation_store =
@@ -211,7 +211,11 @@ impl AgentManager {
         if let Some(tip_id) = &session.tip_id {
             let mut current = Some(tip_id.clone());
             while let Some(id) = current {
-                keep_ids.insert(id.clone());
+                if !keep_ids.insert(id.clone()) {
+                    return Err(eyre!(
+                        "Corrupt message parent graph: cycle repeats message {id}"
+                    ));
+                }
                 if let Some(msg) = self.message_store.get(&id).await? {
                     current = msg.parent_id;
                 } else {
@@ -230,6 +234,10 @@ impl AgentManager {
 
     pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
         self.session_store.list().await
+    }
+
+    pub async fn list_session_ids(&self) -> Result<HashSet<String>> {
+        self.session_store.list_ids().await
     }
 
     pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
@@ -291,7 +299,7 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn list_agent_profiles(&mut self, session_id: &str) -> Result<AgentProfilesState> {
+    pub async fn list_agent_profiles(&self, session_id: &str) -> Result<AgentProfilesState> {
         let session = self.require_session(session_id).await?;
         let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
         let profile_locked = self.is_profile_locked(session_id);

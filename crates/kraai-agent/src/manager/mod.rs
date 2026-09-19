@@ -122,7 +122,7 @@ impl SessionRuntimeState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct StreamingMessageState {
     session_id: String,
     previous_tip: Option<MessageId>,
@@ -135,7 +135,7 @@ struct StreamingMessageState {
 }
 
 pub struct AgentManager {
-    usage_store: Arc<kraai_persistence::RequestUsageStore>,
+    usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
     storage_root: PathBuf,

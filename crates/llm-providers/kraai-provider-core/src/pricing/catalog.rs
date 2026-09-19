@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -36,12 +37,16 @@ pub(super) struct Catalog {
 impl Catalog {
     pub async fn load(&self) {
         let Some(path) = cache_path() else { return };
-        if let Ok(metadata) = tokio::fs::metadata(&path).await
-            && metadata.len() <= MAX_BYTES as u64
-            && let Ok(bytes) = tokio::fs::read(path).await
-            && let Ok(snapshot) = serde_json::from_slice::<Snapshot>(&bytes)
+        if let Ok(Some(snapshot)) = tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::open(path).ok()?;
+            if file.metadata().ok()?.len() > MAX_BYTES as u64 {
+                return None;
+            }
+            read_cached_snapshot(file)
+        })
+        .await
         {
-            *self.snapshot.write().await = snapshot;
+            self.replace_snapshot(snapshot).await;
         }
     }
 
@@ -82,16 +87,20 @@ impl Catalog {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let providers: BTreeMap<String, CatalogProvider> = serde_json::from_slice(&bytes)?;
-        if providers.is_empty() {
-            return Err(color_eyre::eyre::eyre!("Pricing catalog is empty"));
-        }
-        let snapshot = Snapshot {
-            fetched_at: super::now(),
-            providers,
-        };
-        let bytes = serde_json::to_vec(&snapshot)?;
-        *self.snapshot.write().await = snapshot;
+        let (snapshot, bytes) = tokio::task::spawn_blocking(move || {
+            let providers: BTreeMap<String, CatalogProvider> = serde_json::from_slice(&bytes)?;
+            if providers.is_empty() {
+                return Err(color_eyre::eyre::eyre!("Pricing catalog is empty"));
+            }
+            let snapshot = Snapshot {
+                fetched_at: super::now(),
+                providers,
+            };
+            let encoded = serde_json::to_vec(&snapshot)?;
+            Ok((snapshot, encoded))
+        })
+        .await??;
+        self.replace_snapshot(snapshot).await;
         if let Some(path) = cache_path() {
             tokio::task::spawn_blocking(move || -> color_eyre::Result<()> {
                 use std::io::Write;
@@ -106,6 +115,13 @@ impl Catalog {
             .await??;
         }
         Ok(())
+    }
+
+    async fn replace_snapshot(&self, snapshot: Snapshot) {
+        let mut current = self.snapshot.write().await;
+        let previous = std::mem::replace(&mut *current, snapshot);
+        drop(current);
+        drop(previous);
     }
 
     pub async fn lookup(
@@ -138,6 +154,18 @@ impl Catalog {
             snapshot.fetched_at,
         ))
     }
+}
+
+fn read_cached_snapshot(reader: impl Read) -> Option<Snapshot> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -222,6 +250,42 @@ pub(super) fn parse_rates(cost: &Value, usage: &TokenUsage) -> Option<TokenRates
 mod tests {
     use super::*;
 
+    #[test]
+    fn cached_snapshot_preserves_payload_and_rejects_invalid_data() -> color_eyre::Result<()> {
+        let value = serde_json::json!({
+            "fetched_at": 123,
+            "providers": {
+                "fixture": {
+                    "api": "https://fixture.test/v1",
+                    "models": {"model": {"cost": {"input": 2, "output": 8}}}
+                }
+            }
+        });
+        let encoded = serde_json::to_vec(&value)?;
+        let snapshot = read_cached_snapshot(encoded.as_slice())
+            .ok_or_else(|| color_eyre::eyre::eyre!("valid snapshot was rejected"))?;
+        assert_eq!(serde_json::to_value(snapshot)?, value);
+        assert!(read_cached_snapshot(b"{\"fetched_at\":".as_slice()).is_none());
+        assert!(read_cached_snapshot(b"not json".as_slice()).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cached_snapshot_accepts_the_limit_and_bounds_larger_reads() {
+        let prefix = br#"{"fetched_at":123,"providers":{}}"#;
+        let at_limit = prefix
+            .as_slice()
+            .chain(std::io::repeat(b' '))
+            .take(MAX_BYTES as u64);
+        assert!(read_cached_snapshot(at_limit).is_some());
+        let mut growing = prefix
+            .as_slice()
+            .chain(std::io::repeat(b' '))
+            .take(MAX_BYTES as u64 * 2);
+        assert!(read_cached_snapshot(&mut growing).is_none());
+        assert_eq!(growing.limit(), MAX_BYTES as u64 - 1);
+    }
+
     #[tokio::test]
     async fn matches_serving_endpoint_and_context_tier() -> color_eyre::Result<()> {
         let catalog = Catalog::default();
@@ -261,19 +325,31 @@ mod tests {
     #[tokio::test]
     async fn reasoning_variant_uses_base_catalog_rates_for_all_token_categories()
     -> color_eyre::Result<()> {
-        use crate::{DynamicConfig, ProviderConfig, ProviderManagerConfig, ProviderStreamEvent};
+        use crate::{
+            DynamicConfig, ProviderConfig, ProviderManagerConfig, ProviderPricingCatalog,
+            ProviderPricingPolicy, ProviderStreamEvent,
+        };
         use futures::StreamExt;
         use kraai_types::{ModelId, ProviderId};
 
-        let provider = ProviderId::new("codex");
-        let pricing = super::super::Pricing::new(&ProviderManagerConfig {
-            providers: vec![ProviderConfig {
-                id: provider.clone(),
-                type_id: "openai-codex".into(),
-                config: DynamicConfig::new(),
-            }],
-            models: vec![],
-        })?;
+        let provider = ProviderId::new("subscription");
+        let pricing = super::super::Pricing::new(
+            &ProviderManagerConfig {
+                providers: vec![ProviderConfig {
+                    id: provider.clone(),
+                    type_id: "custom-factory".into(),
+                    config: DynamicConfig::new(),
+                }],
+                models: vec![],
+            },
+            |_| ProviderPricingPolicy {
+                subscription: true,
+                catalog: |_| ProviderPricingCatalog {
+                    api: None,
+                    provider: Some("openai".into()),
+                },
+            },
+        )?;
         *pricing.catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
             "fetched_at": 123,
             "providers": {

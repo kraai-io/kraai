@@ -125,8 +125,7 @@ pub fn analyze_requests(
     expected_requests: u64,
     options: &PricingOptions,
 ) -> Result<RequestAccounting> {
-    let events_sha256 = crate::cache::hash_file(path)?;
-    let text = fs::read_to_string(path)?;
+    let (text, events_sha256) = crate::cache::read_hashed_text_file(path)?;
     let events = text
         .lines()
         .filter(|line| !line.trim().is_empty())

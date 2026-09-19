@@ -1,7 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::{
-    DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, ProviderDefinition,
-    ValidationError,
+    ConfiguredModelMetadata, DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind,
+    ProviderDefinition, ProviderPricingCatalog, ProviderPricingPolicy, ValidationError,
 };
 
 pub trait ChatCompletionsProfile: Send + Sync + 'static {
@@ -11,6 +11,22 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
     const DEFAULT_PROVIDER_ID_PREFIX: &'static str;
 
     fn base_url(config: &DynamicConfig) -> Result<String>;
+
+    fn pricing_policy() -> ProviderPricingPolicy {
+        ProviderPricingPolicy {
+            subscription: false,
+            catalog: Self::pricing_catalog,
+        }
+    }
+
+    fn pricing_catalog(config: &DynamicConfig) -> ProviderPricingCatalog {
+        let mut catalog = ProviderPricingCatalog::from_config(config);
+        catalog.api = catalog.api.or_else(Self::default_base_url);
+        catalog.provider = (catalog.api.as_deref().map(|url| url.trim_end_matches('/'))
+            == Some("https://api.openai.com/v1"))
+        .then(|| String::from("openai"));
+        catalog
+    }
 
     fn definition() -> ProviderDefinition {
         ProviderDefinition {
@@ -60,26 +76,7 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
                     default_value: Some(DynamicValue::Bool(true)),
                 },
             ],
-            model_fields: vec![
-                FieldDefinition {
-                    key: String::from("name"),
-                    label: String::from("Display Name"),
-                    value_kind: FieldValueKind::String,
-                    required: false,
-                    secret: false,
-                    help_text: Some(String::from("Optional UI name for the model")),
-                    default_value: None,
-                },
-                FieldDefinition {
-                    key: String::from("max_context"),
-                    label: String::from("Max Context"),
-                    value_kind: FieldValueKind::Integer,
-                    required: false,
-                    secret: false,
-                    help_text: Some(String::from("Optional context limit in tokens")),
-                    default_value: None,
-                },
-            ],
+            model_fields: ConfiguredModelMetadata::fields(),
             supports_model_discovery: true,
             default_provider_id_prefix: Self::DEFAULT_PROVIDER_ID_PREFIX.to_string(),
         }
@@ -133,29 +130,7 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
     }
 
     fn validate_model_config(config: &DynamicConfig) -> Vec<ValidationError> {
-        let mut errors = Vec::new();
-        if let Some(value) = config.get("name")
-            && value.as_str().is_none()
-        {
-            errors.push(ValidationError {
-                field: String::from("name"),
-                message: String::from("Display Name must be a string"),
-            });
-        }
-        if let Some(value) = config.get("max_context") {
-            match value.as_integer() {
-                Some(number) if number > 0 => {}
-                Some(_) => errors.push(ValidationError {
-                    field: String::from("max_context"),
-                    message: String::from("Max Context must be greater than zero"),
-                }),
-                None => errors.push(ValidationError {
-                    field: String::from("max_context"),
-                    message: String::from("Max Context must be an integer"),
-                }),
-            }
-        }
-        errors
+        ConfiguredModelMetadata::validate(config)
     }
 
     fn default_base_url() -> Option<String> {
@@ -202,5 +177,47 @@ impl ChatCompletionsProfile for OpenAiChatCompletionsProfile {
 
     fn default_base_url() -> Option<String> {
         Some(String::from("https://api.openai.com/v1"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pricing_catalog_preserves_endpoint_defaults_and_overrides() {
+        for (policy, default_api) in [
+            (GenericChatCompletionsProfile::pricing_policy(), None),
+            (
+                OpenAiChatCompletionsProfile::pricing_policy(),
+                Some("https://api.openai.com/v1"),
+            ),
+        ] {
+            assert!(!policy.subscription);
+            let default_catalog = (policy.catalog)(&DynamicConfig::new());
+            assert_eq!(default_catalog.api.as_deref(), default_api);
+            assert_eq!(
+                default_catalog.provider.as_deref(),
+                default_api.map(|_| "openai")
+            );
+            for (base_url, expected_provider) in [
+                ("https://api.openai.com/v1", Some("openai")),
+                ("  https://api.openai.com/v1///  ", Some("openai")),
+                ("https://proxy.test/v1", None),
+                ("  ", None),
+            ] {
+                let catalog = (policy.catalog)(&DynamicConfig::from([(
+                    "base_url".into(),
+                    DynamicValue::from(base_url),
+                )]));
+                assert_eq!(catalog.api.as_deref(), Some(base_url.trim()));
+                assert_eq!(catalog.provider.as_deref(), expected_provider);
+            }
+            let invalid_catalog = (policy.catalog)(&DynamicConfig::from([(
+                "base_url".into(),
+                DynamicValue::Bool(false),
+            )]));
+            assert_eq!(invalid_catalog, default_catalog);
+        }
     }
 }

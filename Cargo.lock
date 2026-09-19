@@ -2893,7 +2893,6 @@ name = "kraai-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "color-eyre",
  "directories",
  "futures",
@@ -2915,22 +2914,19 @@ dependencies = [
 name = "kraai-command-catalog"
 version = "0.1.0"
 dependencies = [
- "kraai-command-close-files",
- "kraai-command-core",
- "kraai-command-edit-file",
- "kraai-command-open-files",
+ "kraai-types",
 ]
 
 [[package]]
 name = "kraai-command-close-files"
 version = "0.1.0"
 dependencies = [
+ "kraai-command-catalog",
  "kraai-command-core",
  "kraai-types",
  "kraai-workspace-fs",
  "nu-engine",
  "nu-protocol",
- "serde_json",
 ]
 
 [[package]]
@@ -2945,8 +2941,8 @@ dependencies = [
 name = "kraai-command-edit-file"
 version = "0.1.0"
 dependencies = [
+ "kraai-command-catalog",
  "kraai-command-core",
- "kraai-types",
  "kraai-workspace-fs",
  "nu-engine",
  "nu-protocol",
@@ -2956,12 +2952,12 @@ dependencies = [
 name = "kraai-command-open-files"
 version = "0.1.0"
 dependencies = [
+ "kraai-command-catalog",
  "kraai-command-core",
  "kraai-types",
  "kraai-workspace-fs",
  "nu-engine",
  "nu-protocol",
- "serde_json",
 ]
 
 [[package]]
@@ -2975,6 +2971,7 @@ dependencies = [
  "futures",
  "kraai-persistence",
  "kraai-provider-core",
+ "kraai-provider-openai-chat-completions",
  "kraai-provider-openai-codex",
  "kraai-sandbox",
  "kraai-types",
@@ -2995,7 +2992,10 @@ version = "0.1.0"
 dependencies = [
  "hmac",
  "kraai-command-catalog",
+ "kraai-command-close-files",
  "kraai-command-core",
+ "kraai-command-edit-file",
+ "kraai-command-open-files",
  "kraai-sandbox",
  "kraai-types",
  "nix 0.31.3",
@@ -3003,8 +3003,6 @@ dependencies = [
  "nu-cmd-lang",
  "nu-command",
  "nu-config",
- "nu-engine",
- "nu-parser",
  "nu-protocol",
  "rand 0.10.2",
  "rustix 1.1.4",
@@ -3028,7 +3026,6 @@ dependencies = [
  "kraai-types",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
  "tokio",
  "tracing",
  "ulid",
@@ -3051,7 +3048,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
- "toml",
+ "tokio-util",
  "tracing",
  "ts-rs",
 ]
@@ -3079,7 +3076,6 @@ dependencies = [
  "base64 0.23.1",
  "color-eyre",
  "futures",
- "kraai-persistence",
  "kraai-provider-core",
  "kraai-types",
  "rand 0.10.2",
@@ -3088,7 +3084,9 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tokio",
+ "tokio-util",
  "tracing",
+ "ts-rs",
  "ulid",
  "url",
  "urlencoding",
@@ -3100,9 +3098,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "color-eyre",
- "directories",
  "futures",
  "kraai-agent",
+ "kraai-command-catalog",
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
@@ -3176,7 +3174,6 @@ dependencies = [
  "kraai-types",
  "ratatui",
  "regex",
- "serde",
  "serde_json",
  "signal-hook 0.4.4",
  "tempfile",
@@ -6634,6 +6631,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

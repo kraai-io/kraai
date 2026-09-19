@@ -9,6 +9,7 @@ use kraai_sandbox::{ExecutionOutput, LaunchPlan, OutputEvent, PrivateTempConfig}
 use kraai_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::effects::{RejectStateEffects, StateEffectHandler, serve_effects};
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
@@ -127,7 +128,7 @@ pub async fn execute(
     let effect_execution_id = execution_id.clone();
     let transport_connected = Arc::new(AtomicBool::new(false));
     let connected_for_task = transport_connected.clone();
-    let mut effect_task = tokio::spawn(async move {
+    let mut effect_task = AbortOnDropHandle::new(tokio::spawn(async move {
         let transport = transport::accept(listener, spawned_rx)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
@@ -146,7 +147,7 @@ pub async fn execute(
         )
         .await
         .map_err(|error| ChannelError::Effects(error.to_string()))
-    });
+    }));
     let host_cancellation = cancellation.child_token();
     let output = kraai_sandbox::run(launch, host_cancellation.clone());
     tokio::pin!(output);

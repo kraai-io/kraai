@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, bail};
 use futures::{Stream, StreamExt};
-use kraai_provider_openai_codex::OpenAiCodexAuthController;
+use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions};
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method};
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
@@ -207,12 +207,16 @@ impl UpstreamCredentials {
             Self::OpenAiApiKey { credential, .. } => credential.as_bytes(),
             Self::Codex { account_id, .. } => account_id.as_bytes(),
         };
-        crate::cache::hash_chunks(&[material.to_vec()])
+        crate::cache::hash_chunks(&[material])
     }
 }
 
 fn codex_credentials() -> Result<UpstreamCredentials> {
-    let controller = OpenAiCodexAuthController::new()?;
+    let auth_path =
+        kraai_persistence::agent_state_root()?.join("provider-state/openai-codex/auth.json");
+    let controller = OpenAiCodexAuthController::new_with_options(
+        OpenAiCodexAuthControllerOptions::new(auth_path),
+    )?;
     let worker = controller.clone();
     let thread = std::thread::spawn(move || -> Result<String> {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -427,7 +431,7 @@ async fn run_server(
     config: ProxyServerConfig,
     token: String,
     metrics: Arc<Mutex<ProxyMetrics>>,
-    mut shutdown: oneshot::Receiver<()>,
+    shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<SocketAddr>>,
 ) -> Result<()> {
     let listener = match TcpListener::bind(config.listen_address).await {
@@ -458,12 +462,27 @@ async fn run_server(
         return Ok(());
     }
 
+    serve_connections(|| listener.accept(), state, shutdown).await
+}
+
+async fn serve_connections<Accept, Accepted>(
+    mut accept: Accept,
+    state: Arc<ProxyState>,
+    mut shutdown: oneshot::Receiver<()>,
+) -> Result<()>
+where
+    Accept: FnMut() -> Accepted,
+    Accepted: Future<Output = io::Result<(TcpStream, SocketAddr)>>,
+{
     let mut tasks = tokio::task::JoinSet::new();
-    loop {
+    let result = loop {
         tokio::select! {
-            _ = &mut shutdown => break,
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+            _ = &mut shutdown => break Ok(()),
+            accepted = accept() => {
+                let (stream, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => break Err(color_eyre::Report::from(error)),
+                };
                 let state = Arc::clone(&state);
                 tasks.spawn(async move {
                     if let Err(error) = handle_connection(stream, state).await {
@@ -473,7 +492,7 @@ async fn run_server(
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
         }
-    }
+    };
     let drain = async { while tasks.join_next().await.is_some() {} };
     if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain)
         .await
@@ -482,16 +501,18 @@ async fn run_server(
         tasks.abort_all();
     }
     while tasks.join_next().await.is_some() {}
-    let mut metrics = state
+    let metrics = state
         .metrics
         .lock()
-        .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
-    metrics.unrecorded_requests = state
-        .started_requests
-        .load(Ordering::Relaxed)
-        .saturating_sub(metrics.requests);
-    drop(metrics);
-    Ok(())
+        .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))
+        .map(|mut metrics| {
+            metrics.unrecorded_requests = state
+                .started_requests
+                .load(Ordering::Relaxed)
+                .saturating_sub(metrics.requests);
+        });
+    result?;
+    metrics
 }
 
 struct ProxyState {
@@ -749,7 +770,7 @@ fn upstream_request(
     .body(request.body.clone())
 }
 
-async fn read_request(stream: &mut TcpStream) -> Result<ParsedRequest> {
+async fn read_request(stream: &mut (impl AsyncRead + Unpin)) -> Result<ParsedRequest> {
     let mut bytes = Vec::new();
     let header_end = loop {
         if bytes.len() >= MAX_HEADER_BYTES {
@@ -760,8 +781,11 @@ async fn read_request(stream: &mut TcpStream) -> Result<ParsedRequest> {
         if read == 0 {
             bail!("proxy client disconnected before request headers completed");
         }
+        let search_start = bytes.len().saturating_sub(3);
         bytes.extend_from_slice(chunk.get(..read).unwrap_or_default());
-        if let Some(position) = find_header_end(&bytes) {
+        if let Some(position) = find_header_end(bytes.get(search_start..).unwrap_or_default())
+            .map(|position| search_start.saturating_add(position))
+        {
             if position >= MAX_HEADER_BYTES {
                 bail!("proxy request headers exceed limit");
             }

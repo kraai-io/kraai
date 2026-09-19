@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
@@ -10,6 +11,7 @@ use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use super::script_execution::PendingScriptApproval;
 use crate::api::Event;
@@ -31,11 +33,13 @@ pub(crate) struct RuntimeCore {
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    pub(crate) stream_tasks: TaskTracker,
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
     pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
     /// Separates coherent snapshot reads from state mutations and their corresponding events.
     pub(crate) session_state_barrier: Arc<RwLock<()>>,
+    pub(crate) stopping: Arc<AtomicBool>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) provider_config_path: PathBuf,
     pub(crate) nushell_host_path: Option<std::path::PathBuf>,
@@ -165,6 +169,9 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn stop_active_work(&self) {
+        let state_guard = self.session_state_barrier.write().await;
+        self.stopping.store(true, Ordering::Release);
+        self.stream_tasks.close();
         let active_streams = self
             .active_streams
             .lock()
@@ -172,13 +179,6 @@ impl RuntimeCore {
             .drain()
             .map(|(_, stream)| stream)
             .collect::<Vec<_>>();
-        if !active_streams.is_empty() {
-            let agent = self.agent_manager.write().await;
-            for stream in active_streams {
-                stream.abort_handle.abort();
-            }
-            drop(agent);
-        }
         let active_script_tasks = self
             .active_script_tasks
             .lock()
@@ -186,12 +186,25 @@ impl RuntimeCore {
             .drain()
             .map(|(_, task)| task)
             .collect::<Vec<_>>();
+        drop(state_guard);
+        if !active_streams.is_empty() {
+            let agent = self.agent_manager.write().await;
+            for stream in active_streams {
+                stream.abort_handle.abort();
+            }
+            drop(agent);
+        }
         for task in &active_script_tasks {
             task.cancellation.cancel();
         }
+        self.stream_tasks.wait().await;
         for task in active_script_tasks {
             let _ = task.join_handle.await;
         }
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.stopping.load(Ordering::Acquire)
     }
 
     pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {

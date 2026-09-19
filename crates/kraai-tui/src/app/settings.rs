@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use kraai_runtime::{ProviderDefinition, ProviderSettings};
 
-use kraai_runtime::{FieldDefinition, FieldValueEntry, Model, SettingsValue};
+use kraai_runtime::{FieldDefinition, FieldValueEntry, SettingsValue};
 
 pub(super) fn default_values(fields: &[FieldDefinition]) -> Vec<FieldValueEntry> {
     fields
@@ -93,24 +91,6 @@ pub(super) fn parse_field_input(field: &FieldDefinition, value: &str) -> Option<
 
 pub(super) fn is_boolean_field(field: &FieldDefinition) -> bool {
     matches!(field.value_kind, kraai_runtime::FieldValueKind::Boolean)
-}
-
-pub(super) fn flatten_models_map(
-    models_by_provider: &HashMap<String, Vec<Model>>,
-) -> Vec<(String, Model)> {
-    let mut keys: Vec<&String> = models_by_provider.keys().collect();
-    keys.sort();
-
-    let mut flattened = Vec::new();
-    for provider_id in keys {
-        if let Some(models) = models_by_provider.get(provider_id) {
-            for model in models {
-                flattened.push((provider_id.clone(), model.clone()));
-            }
-        }
-    }
-
-    flattened
 }
 
 pub(super) fn provider_definition_rank(definition: &ProviderDefinition) -> (u8, String, String) {

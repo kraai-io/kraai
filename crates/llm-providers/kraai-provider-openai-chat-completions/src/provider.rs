@@ -4,9 +4,10 @@ use std::marker::PhantomData;
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{
-    DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model, ModelConfig, Provider,
-    ProviderFactory, ProviderRequest, ProviderRequestContext, ProviderStreamEvent, SseEvent,
-    build_streaming_http_client, finite_request, send_with_retry, stream_sse_data,
+    ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
+    ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
+    ProviderRequestContext, ProviderStreamEvent, SseEvent, build_streaming_http_client,
+    finite_request, send_with_retry, stream_sse_data,
 };
 use kraai_types::{AssistantPhase, ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -22,12 +23,6 @@ use crate::wire::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse,
 };
 
-#[derive(Clone)]
-struct ModelMetadata {
-    name: Option<String>,
-    max_context: Option<usize>,
-}
-
 pub struct ChatCompletionsProvider<P> {
     id: ProviderId,
     client: Client,
@@ -35,7 +30,7 @@ pub struct ChatCompletionsProvider<P> {
     auth: ApiKeyAuth,
     only_listed_models: bool,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
-    model_configs: BTreeMap<ModelId, ModelMetadata>,
+    model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     _profile: PhantomData<P>,
 }
 
@@ -88,6 +83,10 @@ where
         self.cached_models.read().await.values().cloned().collect()
     }
 
+    async fn get_model(&self, model_id: &ModelId) -> Option<Model> {
+        self.cached_models.read().await.get(model_id).cloned()
+    }
+
     async fn cache_models(&self) -> Result<()> {
         let response = send_with_retry(
             "list models",
@@ -105,8 +104,7 @@ where
         let response = ensure_success_response("list models", response).await?;
         let models = response.json::<ListModelsResponse>().await?;
 
-        let mut cache = self.cached_models.write().await;
-        cache.clear();
+        let mut cache = BTreeMap::new();
 
         for model in models.data {
             let raw_id = model.id;
@@ -127,28 +125,15 @@ where
                 },
             );
         }
-        drop(cache);
+        let previous = std::mem::replace(&mut *self.cached_models.write().await, cache);
+        drop(previous);
 
         Ok(())
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
-        let name = model
-            .config
-            .get("name")
-            .and_then(DynamicValue::as_str)
-            .map(ToString::to_string)
-            .filter(|value| !value.trim().is_empty());
-        let max_context = model
-            .config
-            .get("max_context")
-            .and_then(DynamicValue::as_integer)
-            .map(usize::try_from)
-            .transpose()
-            .map_err(|error| eyre!("Invalid max_context: {error}"))?;
-
-        self.model_configs
-            .insert(model.id, ModelMetadata { name, max_context });
+        let metadata = ConfiguredModelMetadata::from_config(&model.config)?;
+        self.model_configs.insert(model.id, metadata);
         Ok(())
     }
 
@@ -304,6 +289,10 @@ impl ProviderFactory for OpenAiChatCompletionsFactory {
         GenericChatCompletionsProfile::definition()
     }
 
+    fn pricing_policy() -> ProviderPricingPolicy {
+        GenericChatCompletionsProfile::pricing_policy()
+    }
+
     fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
         create_provider::<GenericChatCompletionsProfile>(id, config)
     }
@@ -326,6 +315,10 @@ impl ProviderFactory for OpenAiFactory {
 
     fn definition() -> kraai_provider_core::ProviderDefinition {
         OpenAiChatCompletionsProfile::definition()
+    }
+
+    fn pricing_policy() -> ProviderPricingPolicy {
+        OpenAiChatCompletionsProfile::pricing_policy()
     }
 
     fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
@@ -552,6 +545,81 @@ mod tests {
         assert_eq!(usage.output_tokens, 40);
         assert_eq!(usage.reasoning_tokens, 5);
         assert_eq!(usage.cache_read_tokens, 20);
+    }
+
+    #[tokio::test]
+    async fn model_cache_replacement_preserves_selection_metadata_and_failed_refreshes() {
+        for only_listed_models in [false, true] {
+            let address = spawn_server(vec![
+                ScriptedResponse::Status {
+                    status_line: "200 OK",
+                    body: r#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"}]}"#,
+                },
+                ScriptedResponse::Status {
+                    status_line: "200 OK",
+                    body: r#"{"data":[{"id":42}]}"#,
+                },
+            ])
+            .await;
+            let Some(client) = test_client_or_skip() else {
+                return;
+            };
+            let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
+                id: ProviderId::new("fixture"),
+                client,
+                base_url: format!("http://{address}"),
+                auth: ApiKeyAuth::resolve(&BTreeMap::from([(
+                    String::from("api_key"),
+                    DynamicValue::from("fixture-key"),
+                )]))
+                .unwrap(),
+                only_listed_models,
+                cached_models: RwLock::new(BTreeMap::from([(
+                    ModelId::new("stale"),
+                    Model {
+                        id: ModelId::new("stale"),
+                        name: String::from("Stale model"),
+                        max_context: None,
+                    },
+                )])),
+                model_configs: BTreeMap::from([(
+                    ModelId::new("alpha"),
+                    ConfiguredModelMetadata {
+                        name: Some(String::from("Configured alpha")),
+                        max_context: Some(4096),
+                    },
+                )]),
+                _profile: PhantomData,
+            };
+            let metadata = |models: Vec<Model>| {
+                models
+                    .into_iter()
+                    .map(|model| (model.id.to_string(), model.name, model.max_context))
+                    .collect::<Vec<_>>()
+            };
+            let mut expected = vec![(
+                String::from("alpha"),
+                String::from("Configured alpha"),
+                Some(4096),
+            )];
+            if !only_listed_models {
+                expected.push((String::from("zeta"), String::from("zeta"), None));
+            }
+
+            provider.cache_models().await.unwrap();
+            assert_eq!(metadata(provider.list_models().await), expected);
+            for listed in provider.list_models().await {
+                let found = provider.get_model(&listed.id).await.unwrap();
+                assert_eq!(metadata(vec![found]), metadata(vec![listed]));
+            }
+            assert!(provider.get_model(&ModelId::new("unknown")).await.is_none());
+            assert!(provider.get_model(&ModelId::new("stale")).await.is_none());
+            if only_listed_models {
+                assert!(provider.get_model(&ModelId::new("zeta")).await.is_none());
+            }
+            assert!(provider.cache_models().await.is_err());
+            assert_eq!(metadata(provider.list_models().await), expected);
+        }
     }
 
     #[test]

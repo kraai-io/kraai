@@ -64,8 +64,9 @@ pub fn serve_model_proxy(request: ProxyServiceRequest) -> Result<()> {
         .provider_config
         .as_ref()
         .map(|config| {
+            let config = config.prepare()?;
             Ok::<_, color_eyre::Report>((
-                Some(config.selected_provider_id()?),
+                Some(config.selected_provider_id().to_owned()),
                 Some(config.materialize(&state_dir, &base_url)?),
             ))
         })

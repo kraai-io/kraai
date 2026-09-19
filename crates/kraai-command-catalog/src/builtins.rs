@@ -1,0 +1,91 @@
+use kraai_types::{CommandExample, CommandMetadata};
+
+macro_rules! command_metadata {
+    (
+        $constant:ident;
+        id: $id:literal;
+        name: $name:literal;
+        description: $description:literal;
+        signature_help: $signature_help:literal;
+        examples: [
+            $(
+                {
+                    description: $example_description:literal,
+                    timeout: $timeout:literal,
+                    script: $script:literal $(,)?
+                }
+            ),* $(,)?
+        ];
+    ) => {
+        pub const $constant: CommandMetadata = CommandMetadata {
+            id: $id,
+            name: $name,
+            description: $description,
+            signature_help: $signature_help,
+            examples: &[
+                $(
+                    CommandExample {
+                        description: $example_description,
+                        script: $script,
+                        script_input: concat!("# timeout=", $timeout, "\n", $script),
+                    }
+                ),*
+            ],
+        };
+    };
+}
+
+command_metadata! {
+    OPEN_FILES;
+    id: "kraai-open-files";
+    name: "kraai-open-files";
+    description: "Prefer this command when reading files for inspection or continued work. The file contents will be provided and 100% up to date every turn until you close the file. Use other methods for opening files only when file contents must be consumed immediately by a pipeline or transformed as data.";
+    signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
+    examples: [
+        {
+            description: "Pin a source file for future turns",
+            timeout: "10sec",
+            script: "kraai-open-files src/main.rs",
+        },
+        {
+            description: "Pin several files without returning their contents",
+            timeout: "10sec",
+            script: "kraai-open-files Cargo.toml src/lib.rs",
+        },
+    ];
+}
+
+command_metadata! {
+    CLOSE_FILES;
+    id: "kraai-close-files";
+    name: "kraai-close-files";
+    description: "Stop pinning one or more files in the context of future turns.";
+    signature_help: "kraai-close-files <path>... -> record<success: bool, paths: list<string>>";
+    examples: [
+        {
+            description: "Remove a file that is no longer needed from future context",
+            timeout: "10sec",
+            script: "kraai-close-files src/main.rs",
+        },
+    ];
+}
+
+command_metadata! {
+    EDIT_FILE;
+    id: "kraai-edit-file";
+    name: "kraai-edit-file";
+    description: "Create a text file or atomically apply exact line-ranged replacements. Prefer this command over ad hoc file rewriting. For an existing file, make the smallest targeted edits that express the change instead of replacing the whole file. Each range is inclusive, must exist in the current file, and its old_text must exactly match that range; include multiple edit records in one call when useful.";
+    signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
+    examples: [
+        {
+            description: "Replace one exact source line",
+            timeout: "10sec",
+            script: "kraai-edit-file src/lib.rs [{start_line: 10, end_line: 10, old_text: 'let enabled = false;', new_text: 'let enabled = true;'}]",
+        },
+        {
+            description: "Create a new text file without replacing an existing path",
+            timeout: "10sec",
+            script: "kraai-edit-file src/new.rs --create --contents 'pub const READY: bool = true;\n'",
+        },
+    ];
+}

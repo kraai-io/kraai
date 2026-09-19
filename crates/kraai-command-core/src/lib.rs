@@ -5,6 +5,10 @@ use std::sync::Arc;
 
 use kraai_types::ContextStateDelta;
 use nu_protocol::engine::Command;
+use nu_protocol::shell_error::generic::GenericError;
+use nu_protocol::{ShellError, Span};
+
+pub use kraai_types::CommandMetadata;
 
 #[derive(Clone)]
 pub struct CommandRegistration {
@@ -94,6 +98,10 @@ impl CommandRegistry {
         }
         Ok(selected)
     }
+
+    pub fn command_ids(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
+        self.registrations.keys().copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,20 +179,14 @@ impl std::fmt::Display for StateEffectError {
 
 impl std::error::Error for StateEffectError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommandMetadata {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-    pub signature_help: &'static str,
-    pub examples: &'static [CommandExample],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommandExample {
-    pub description: &'static str,
-    pub script: &'static str,
-    pub script_input: &'static str,
+pub fn command_error(
+    title: impl Into<String>,
+    message: impl Into<String>,
+    span: Span,
+) -> ShellError {
+    let title: String = title.into();
+    let message: String = message.into();
+    ShellError::Generic(GenericError::new(title, message, span))
 }
 
 #[macro_export]
@@ -192,19 +194,7 @@ macro_rules! declare_kraai_command {
     (
         $(#[$attributes:meta])*
         $visibility:vis struct $command:ident;
-        id: $id:literal;
-        name: $name:literal;
-        description: $description:literal;
-        signature_help: $signature_help:literal;
-        examples: [
-            $(
-                {
-                    description: $example_description:literal,
-                    timeout: $timeout:literal,
-                    script: $script:literal $(,)?
-                }
-            ),* $(,)?
-        ];
+        metadata: $metadata:expr;
         signature: $signature:expr;
         run: |$context:ident, $engine_state:ident, $stack:ident, $call:ident, $input:ident| $body:block
     ) => {
@@ -215,26 +205,7 @@ macro_rules! declare_kraai_command {
         }
 
         impl $command {
-            pub const METADATA: $crate::CommandMetadata = $crate::CommandMetadata {
-                id: $id,
-                name: $name,
-                description: $description,
-                signature_help: $signature_help,
-                examples: &[
-                    $(
-                        $crate::CommandExample {
-                            description: $example_description,
-                            script: $script,
-                            script_input: concat!(
-                                "# timeout=",
-                                $timeout,
-                                "\n",
-                                $script,
-                            ),
-                        }
-                    ),*
-                ],
-            };
+            pub const METADATA: $crate::CommandMetadata = $metadata;
 
             pub fn new(context: $crate::CommandContext) -> Self {
                 Self { context }

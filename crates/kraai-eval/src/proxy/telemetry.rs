@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 
-use super::headers::missing_routing_hint;
+use super::headers::missing_routing_hint_from_body;
 use super::{DownstreamDelivery, ForwardOutcome, ParsedRequest, ProxyState, UpstreamCredentials};
 use crate::metrics::UsageMetrics;
 
@@ -20,7 +20,11 @@ pub(super) struct CacheState {
 }
 
 impl CacheState {
-    fn from_request(request: &ParsedRequest, derived_hint: Option<&HeaderValue>) -> Self {
+    fn from_request(
+        request: &ParsedRequest,
+        body: Option<&serde_json::Value>,
+        derived_hint: Option<&HeaderValue>,
+    ) -> Self {
         let header_hash = |name| {
             request
                 .headers
@@ -28,7 +32,6 @@ impl CacheState {
                 .find(|(header, _)| header == name)
                 .map(|(_, value)| fingerprint(value.as_bytes()))
         };
-        let body = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
         Self {
             session_id_sha256: header_hash("session-id"),
             legacy_session_id_sha256: header_hash("session_id"),
@@ -37,7 +40,6 @@ impl CacheState {
                 .or_else(|| derived_hint.map(|hint| fingerprint(hint.as_bytes()))),
             turn_state_sha256: header_hash("x-codex-turn-state"),
             prompt_cache_key_sha256: body
-                .as_ref()
                 .and_then(|value| value.get("prompt_cache_key"))
                 .and_then(serde_json::Value::as_str)
                 .map(|value| fingerprint(value.as_bytes())),
@@ -55,7 +57,7 @@ impl CacheState {
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
-    crate::cache::hash_chunks(&[bytes.to_vec()])
+    crate::cache::hash_chunks(&[bytes])
 }
 
 #[derive(Serialize)]
@@ -88,9 +90,10 @@ pub(super) fn write_event(
             .and_then(|value| value.get(name))
             .and_then(serde_json::Value::as_str)
     };
-    let derived_hint = missing_routing_hint(
+    let derived_hint = missing_routing_hint_from_body(
         request,
         matches!(state.credentials, UpstreamCredentials::Codex { .. }),
+        body.as_ref(),
     );
     let event = ProxyEvent {
         timestamp_ms,
@@ -107,7 +110,11 @@ pub(super) fn write_event(
             .and_then(|value| value.pointer("/reasoning/effort"))
             .and_then(serde_json::Value::as_str),
         service_tier: field("service_tier"),
-        request_cache_state: CacheState::from_request(request, derived_hint.as_ref()),
+        request_cache_state: CacheState::from_request(
+            request,
+            body.as_ref(),
+            derived_hint.as_ref(),
+        ),
         response_cache_state: &outcome.response_cache_state,
     };
     let mut log = state
@@ -126,7 +133,42 @@ mod tests {
     use color_eyre::eyre::ensure;
 
     use super::*;
-    use crate::proxy::headers::forward_request_headers;
+    use crate::proxy::headers::{forward_request_headers, missing_routing_hint};
+
+    #[test]
+    fn shared_body_preserves_cache_hashes_and_malformed_body_fallback() -> Result<()> {
+        for (body, cache_key) in [
+            (r#"{"prompt_cache_key":"key"}"#, Some("key")),
+            (r#"{"prompt_cache_key":""}"#, Some("")),
+            (
+                r#"{"prompt_cache_key":"old","prompt_cache_key":"new"}"#,
+                Some("new"),
+            ),
+            (r#"{"prompt_cache_key":null}"#, None),
+            (r#"{"prompt_cache_key":5}"#, None),
+            (r#"{"prompt_cache_key":"key"} trailing"#, None),
+            ("not json", None),
+        ] {
+            let request = ParsedRequest {
+                method: String::from("POST"),
+                target: String::from("/v1/responses"),
+                path: String::from("/v1/responses"),
+                headers: vec![(
+                    String::from("session-id"),
+                    HeaderValue::from_static("session"),
+                )],
+                body: body.as_bytes().to_vec(),
+            };
+            let parsed = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
+            let state = CacheState::from_request(&request, parsed.as_ref(), None);
+            ensure!(state.session_id_sha256 == Some(fingerprint(b"session")));
+            ensure!(
+                state.prompt_cache_key_sha256 == cache_key.map(|key| fingerprint(key.as_bytes()))
+            );
+            ensure!(request.body == body.as_bytes());
+        }
+        Ok(())
+    }
 
     #[test]
     fn routing_diagnostics_match_the_effective_subscription_request() -> Result<()> {
@@ -146,7 +188,8 @@ mod tests {
             }
             let derived_hint = missing_routing_hint(&request, true);
             ensure!(derived_hint.is_some() == supplied.is_none());
-            let logged = CacheState::from_request(&request, derived_hint.as_ref());
+            let body = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
+            let logged = CacheState::from_request(&request, body.as_ref(), derived_hint.as_ref());
             let forwarded = forward_request_headers(
                 reqwest::Client::new().post("https://upstream.invalid/responses"),
                 &request,

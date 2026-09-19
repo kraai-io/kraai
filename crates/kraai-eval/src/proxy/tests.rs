@@ -31,6 +31,43 @@ async fn request_parser_preserves_header_octets_and_rejects_invalid_syntax() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn request_header_scanning_preserves_every_split_and_the_size_limit() -> Result<()> {
+    let raw = b"POST /v1/responses?mode=test HTTP/1.1\r\nContent-Length: 2\r\nX-State: opaque-\xff\r\n\r\n{}ignored";
+    let expected = read_request(&mut raw.as_slice()).await?;
+    for split in 0..=raw.len() {
+        let mut input = AsyncReadExt::chain(
+            raw.get(..split).unwrap_or_default(),
+            raw.get(split..).unwrap_or_default(),
+        );
+        let actual = read_request(&mut input).await?;
+        ensure!(actual.method == expected.method);
+        ensure!(actual.target == expected.target);
+        ensure!(actual.path == expected.path);
+        ensure!(actual.headers == expected.headers);
+        ensure!(actual.body == expected.body);
+    }
+
+    let mut large = b"GET /v1/models HTTP/1.1\r\nX-Fill: ".to_vec();
+    large.resize(MAX_HEADER_BYTES - 4, b'x');
+    large.extend_from_slice(b"\r\n\r\n");
+    for split in (MAX_HEADER_BYTES - 7)..=MAX_HEADER_BYTES {
+        let mut input = AsyncReadExt::chain(
+            large.get(..split).unwrap_or_default(),
+            large.get(split..).unwrap_or_default(),
+        );
+        ensure!(read_request(&mut input).await?.path == "/v1/models");
+    }
+    large.truncate(MAX_HEADER_BYTES - 4);
+    large.extend_from_slice(b"xxxx\r\n\r\n");
+    let error = read_request(&mut large.as_slice())
+        .await
+        .err()
+        .ok_or_else(|| color_eyre::eyre::eyre!("oversized headers were accepted"))?;
+    ensure!(error.to_string() == "proxy request headers exceed limit");
+    Ok(())
+}
+
 async fn parse_raw_request(raw: &[u8]) -> Result<ParsedRequest> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let address = listener.local_addr()?;
@@ -56,6 +93,103 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use color_eyre::eyre::ensure;
 use kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions;
+
+#[tokio::test]
+async fn listener_failure_drains_tasks_and_accounts_for_unrecorded_requests() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "kraai-eval-proxy-listener-error-{}",
+        ulid::Ulid::generate()
+    ));
+    fs::create_dir(&root)?;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let address = listener.local_addr()?;
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
+    let state = Arc::new(ProxyState {
+        upstream: format!("http://{}", upstream.local_addr()?),
+        credentials: UpstreamCredentials::OpenAiApiKey {
+            credential: String::from("real-secret"),
+            credential_env: String::from("TEST_API_KEY"),
+        },
+        allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
+        token: String::from("client-token"),
+        client: Client::builder().redirect(Policy::none()).build()?,
+        log: Arc::new(Mutex::new(File::create(root.join("proxy.events.jsonl"))?)),
+        max_requests: 1,
+        request_count: AtomicU64::new(0),
+        started_requests: AtomicU64::new(0),
+        metrics: Arc::clone(&metrics),
+    });
+    let (upstream_started, upstream_ready) = tokio::sync::watch::channel(false);
+    let (response_started, mut response_ready) = tokio::sync::watch::channel(false);
+    let upstream_request = async {
+        let (mut stream, _) = upstream.accept().await?;
+        read_request(&mut stream).await?;
+        upstream_started.send_replace(true);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nx")
+            .await?;
+        response_ready.wait_for(|ready| *ready).await?;
+        stream.shutdown().await?;
+        Ok::<_, color_eyre::Report>(())
+    };
+    let mut accepted = false;
+    let accept = || {
+        let first = !std::mem::replace(&mut accepted, true);
+        let listener = &listener;
+        let mut upstream_ready = upstream_ready.clone();
+        async move {
+            if first {
+                listener.accept().await
+            } else {
+                upstream_ready
+                    .wait_for(|ready| *ready)
+                    .await
+                    .map_err(io::Error::other)?;
+                Err(io::Error::other("injected listener failure"))
+            }
+        }
+    };
+    let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = serve_connections(accept, Arc::clone(&state), shutdown_rx);
+    let client = async {
+        let mut stream = TcpStream::connect(address).await?;
+        stream.write_all(b"POST /v1/responses HTTP/1.1\r\nAuthorization: Bearer client-token\r\nContent-Length: 2\r\n\r\n{}").await?;
+        let mut response = Vec::new();
+        while find_header_end(&response).is_none() {
+            let mut buffer = [0_u8; 1024];
+            let count = stream.read(&mut buffer).await?;
+            ensure!(
+                count != 0,
+                "proxy closed before forwarding the response headers"
+            );
+            response.extend_from_slice(buffer.get(..count).unwrap_or_default());
+        }
+        ensure!(response.starts_with(b"HTTP/1.1 200"));
+        response_started.send_replace(true);
+        stream.read_to_end(&mut response).await?;
+        Ok::<_, color_eyre::Report>(())
+    };
+    let (server, upstream, client) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(server, upstream_request, client)
+    })
+    .await?;
+    upstream?;
+    client?;
+    let error = server
+        .err()
+        .ok_or_else(|| color_eyre::eyre::eyre!("listener failure was lost"))?;
+    ensure!(error.to_string() == "injected listener failure");
+    ensure!(state.started_requests.load(Ordering::Relaxed) == 1);
+    let captured = metrics
+        .lock()
+        .map_err(|error| color_eyre::eyre::eyre!("fixture metrics mutex poisoned: {error}"))?
+        .clone();
+    ensure!(captured.requests == 0 && captured.unrecorded_requests == 1);
+    drop(state);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() -> Result<()> {

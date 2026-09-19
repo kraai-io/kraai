@@ -11,7 +11,6 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
-kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
 kraai-types = { workspace = true }
 rand = { workspace = true }
@@ -20,9 +19,17 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]
 ulid = { workspace = true }
+
+[features]
+typescript = ["dep:ts-rs"]
+
+[dependencies.ts-rs]
+optional = true
+workspace = true
