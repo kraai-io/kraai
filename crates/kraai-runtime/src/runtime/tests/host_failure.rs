@@ -7,7 +7,7 @@ use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
 #[tokio::test]
-async fn host_failure_reaches_the_ui_without_continuing_even_after_recovery() -> Result<()> {
+async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_sessions() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain(
             "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
@@ -75,6 +75,12 @@ async fn host_failure_reaches_the_ui_without_continuing_even_after_recovery() ->
                 .is_turn_active(&session_id)
         );
     }
+    harness.handle.delete_session(session_id).await?;
+    assert_eq!(store.list_all().await?.len(), 1);
+    let sequence = harness.runtime.event_tx.latest_sequence();
+    harness.runtime.recover_script_executions().await?;
+    assert!(harness.handle.list_sessions().await?.is_empty());
+    assert_eq!(harness.runtime.event_tx.latest_sequence(), sequence);
     harness.shutdown().await;
     Ok(())
 }

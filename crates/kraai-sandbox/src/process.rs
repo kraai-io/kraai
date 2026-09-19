@@ -207,10 +207,13 @@ async fn read_output(
         if read == 0 {
             return Ok(captured);
         }
-        let bytes = buffer.iter().take(read).copied().collect::<Vec<_>>();
-        captured.extend_from_slice(&bytes);
+        let bytes = buffer.get(..read).unwrap_or(&buffer);
+        captured.extend_from_slice(bytes);
         if let Some(events) = &events {
-            let _ = events.send(OutputEvent { stream, bytes });
+            let _ = events.send(OutputEvent {
+                stream,
+                bytes: bytes.to_vec(),
+            });
         }
     }
 }

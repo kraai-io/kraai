@@ -1,6 +1,6 @@
 use color_eyre::eyre::Result;
 use futures::poll;
-use kraai_persistence::RequestUsageStore;
+use kraai_persistence::{FileRequestUsageStore, RequestUsageStore};
 use kraai_types::{ModelId, ProviderId, TokenUsage};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::oneshot;
@@ -41,7 +41,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let (saved_tx, saved_rx) = oneshot::channel();
-    let task = tokio::spawn(async move {
+    let task = harness.runtime.stream_tasks.spawn(async move {
         let agent = manager.read().await;
         started_tx.send(()).unwrap();
         release_rx.await.unwrap();
@@ -91,7 +91,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
     assert!(cancelled?);
     let saved = saved?;
     assert!(task.await.unwrap_err().is_cancelled());
-    let requests = RequestUsageStore::new(&harness.data_dir)
+    let requests = FileRequestUsageStore::new(&harness.data_dir)
         .load(&session_id)
         .await?;
     assert_eq!(requests.len(), 1);

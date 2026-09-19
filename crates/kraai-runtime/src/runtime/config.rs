@@ -1,35 +1,25 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Result, WrapErr, eyre};
+use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManagerConfig;
-use kraai_provider_openai_codex::{
-    OpenAiCodexAuthStatus as ProviderOpenAiCodexAuthStatus,
-    OpenAiCodexLoginState as ProviderOpenAiCodexLoginState,
-};
+use kraai_provider_openai_codex::OpenAiCodexAuthStatus;
 use notify::{RecursiveMode, Watcher};
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use super::core::{RuntimeCore, emit_event};
-use crate::api::{
-    Event, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, RuntimeError, RuntimeResult,
-};
-use crate::handle::Command;
+use crate::api::{Event, RuntimeError, RuntimeResult};
+use crate::handle::{Command, RuntimeEventSender};
 use crate::settings::{
-    SettingsDocument, read_settings_document, validate_settings, write_settings_document,
+    SettingsDocument, read_provider_config, validate_settings, write_settings_document,
 };
 
 impl RuntimeCore {
     pub(crate) fn spawn_openai_auth_forwarder(&self) -> JoinHandle<()> {
-        let mut updates = self.openai_codex_auth.subscribe();
-        let runtime = self.clone();
-        tokio::spawn(async move {
-            while let Ok(status) = updates.recv().await {
-                runtime.send_event(Event::OpenAiCodexAuthUpdated {
-                    status: map_openai_codex_auth_status(status),
-                });
-            }
-        })
+        tokio::spawn(forward_auth_updates(
+            self.openai_codex_auth.subscribe(),
+            self.event_tx.clone(),
+        ))
     }
 
     pub(crate) fn spawn_config_watcher(&self) -> JoinHandle<()> {
@@ -124,18 +114,9 @@ impl RuntimeCore {
 
     pub(crate) async fn read_and_validate_provider_config(
         &self,
-        config_loc: &PathBuf,
+        config_loc: &Path,
     ) -> Result<ProviderManagerConfig> {
-        if !config_loc.exists() {
-            return Ok(ProviderManagerConfig {
-                providers: Vec::new(),
-                models: Vec::new(),
-            });
-        }
-        let _ = read_settings_document(config_loc, &self.provider_registry)?;
-        let config_slice = tokio::fs::read(config_loc).await?;
-        toml::from_slice(&config_slice)
-            .wrap_err_with(|| format!("Failed to parse provider config {}", config_loc.display()))
+        read_provider_config(config_loc, &self.provider_registry).await
     }
 
     pub(crate) async fn save_settings_document(
@@ -174,31 +155,53 @@ pub(crate) fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     Ok(raw.canonicalize().unwrap_or(raw))
 }
 
-pub(crate) fn map_openai_codex_auth_status(
-    status: ProviderOpenAiCodexAuthStatus,
-) -> OpenAiCodexAuthStatus {
-    let state = match status.state {
-        ProviderOpenAiCodexLoginState::SignedOut => OpenAiCodexLoginState::SignedOut,
-        ProviderOpenAiCodexLoginState::BrowserPending(pending) => {
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
-                auth_url: pending.auth_url,
-            })
+async fn forward_auth_updates(
+    mut updates: broadcast::Receiver<OpenAiCodexAuthStatus>,
+    events: RuntimeEventSender,
+) {
+    loop {
+        match updates.recv().await {
+            Ok(status) => events.send(Event::OpenAiCodexAuthUpdated { status }),
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => return,
         }
-        ProviderOpenAiCodexLoginState::DeviceCodePending(pending) => {
-            OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
-                verification_url: pending.verification_url,
-                user_code: pending.user_code,
-            })
-        }
-        ProviderOpenAiCodexLoginState::Authenticated => OpenAiCodexLoginState::Authenticated,
-    };
+    }
+}
 
-    OpenAiCodexAuthStatus {
-        state,
-        email: status.email,
-        plan_type: status.plan_type,
-        account_id: status.account_id,
-        last_refresh_unix: status.last_refresh_unix,
-        error: status.error,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use color_eyre::eyre::ensure;
+    use kraai_provider_openai_codex::OpenAiCodexLoginState;
+
+    #[tokio::test]
+    async fn auth_forwarding_recovers_from_lag_and_drains_before_close() -> Result<()> {
+        let (updates, receiver) = broadcast::channel(2);
+        let events = RuntimeEventSender::new(4);
+        let mut received = events.subscribe();
+        let status = |sequence| OpenAiCodexAuthStatus {
+            state: OpenAiCodexLoginState::SignedOut,
+            email: None,
+            plan_type: None,
+            account_id: None,
+            last_refresh_unix: Some(sequence),
+            error: None,
+        };
+        for sequence in 0..3 {
+            updates.send(status(sequence))?;
+        }
+        let forwarding = forward_auth_updates(receiver, events);
+        tokio::pin!(forwarding);
+        ensure!(futures::poll!(&mut forwarding).is_pending());
+        for sequence in 1..3 {
+            ensure!(matches!(received.try_recv()?.event,
+                Event::OpenAiCodexAuthUpdated { status: actual } if actual == status(sequence)));
+        }
+        updates.send(status(3))?;
+        drop(updates);
+        tokio::time::timeout(std::time::Duration::from_secs(1), forwarding).await?;
+        ensure!(matches!(received.try_recv()?.event,
+            Event::OpenAiCodexAuthUpdated { status: actual } if actual == status(3)));
+        Ok(())
     }
 }

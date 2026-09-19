@@ -273,6 +273,116 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
 }
 
 #[test]
+fn model_search_preserves_order_unicode_and_cross_field_matches() {
+    let mut harness = test_harness();
+    let model = |id: &str, name: &str| kraai_runtime::Model {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        max_context: Some(1000),
+    };
+    harness.app.state.models_by_provider = HashMap::from([
+        (String::from("zeta"), vec![model("z-model", "Last")]),
+        (
+            String::from("Alpha"),
+            vec![model("Z-β", "ÉLAN 模型"), model("A-id", "Second")],
+        ),
+    ]);
+    for (query, expected) in [
+        (
+            "",
+            vec![("Alpha", "Z-β"), ("Alpha", "A-id"), ("zeta", "z-model")],
+        ),
+        (
+            " ",
+            vec![("Alpha", "Z-β"), ("Alpha", "A-id"), ("zeta", "z-model")],
+        ),
+        ("ALPHA Z-Β", vec![("Alpha", "Z-β")]),
+        ("Β ÉLAN", vec![("Alpha", "Z-β")]),
+        ("模型", vec![("Alpha", "Z-β")]),
+        ("ZETA Z-MODEL", vec![("zeta", "z-model")]),
+        ("alpha  z", Vec::new()),
+        ("missing", Vec::new()),
+    ] {
+        harness.app.state.menu_search = query.to_owned();
+        let actual: Vec<_> = harness
+            .app
+            .state
+            .filtered_models()
+            .into_iter()
+            .map(|(provider, model)| (provider, model.id.as_str()))
+            .collect();
+        assert_eq!(actual, expected, "query: {query}");
+    }
+
+    harness.app.startup_options.ci = true;
+    harness.app.state.mode = UiMode::ModelMenu;
+    harness.app.state.menu_search = String::from("Β ÉLAN");
+    harness
+        .app
+        .handle_model_menu_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        harness.app.state.selected_provider_id.as_deref(),
+        Some("Alpha")
+    );
+    assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("Z-β"));
+    assert_eq!(
+        harness.app.state.status,
+        "Selected model: Alpha / ÉLAN 模型"
+    );
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+}
+
+#[test]
+fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
+    let mut harness = test_harness();
+    let models = |ids: &[&str]| {
+        HashMap::from([(
+            String::from("provider"),
+            ids.iter()
+                .map(|id| kraai_runtime::Model {
+                    id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    max_context: None,
+                })
+                .collect(),
+        )])
+    };
+    harness.app.state.selected_provider_id = Some(String::from("provider"));
+    harness.app.state.selected_model_id = Some(String::from("keep"));
+    harness.app.state.models_by_provider = models(&["keep", "target"]);
+    harness.app.state.model_menu_index = 1;
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Models(Ok(models(&[
+            "other", "keep", "target",
+        ]))));
+    assert_eq!(harness.app.state.model_menu_index, 2);
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["other", "keep"]))));
+    assert_eq!(harness.app.state.model_menu_index, 0);
+
+    harness.app.state.model_menu_index = 99;
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
+    assert_eq!(harness.app.state.model_menu_index, 1);
+
+    harness.app.state.menu_search = String::from("missing");
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
+    assert_eq!(harness.app.state.model_menu_index, 0);
+    harness.app.state.menu_search.clear();
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Models(Ok(HashMap::new())));
+    assert_eq!(harness.app.state.model_menu_index, 0);
+    assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("keep"));
+}
+
+#[test]
 fn model_search_matches_provider_name_and_id_with_empty_results() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::ModelMenu;

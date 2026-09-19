@@ -2,31 +2,16 @@
 
 use std::path::Path;
 
-use kraai_command_core::declare_kraai_command;
-use kraai_types::ContextStateDelta;
+use kraai_command_core::{command_error, declare_kraai_command};
+use kraai_types::OpenedFilesOperation;
 use kraai_workspace_fs::normalize_allow_missing;
 use nu_engine::CallExt;
-use nu_protocol::shell_error::generic::GenericError;
-use nu_protocol::{
-    Category, IntoPipelineData, ShellError, Signature, Span, SyntaxShape, Type, Value, record,
-};
-
-const COMMAND_ID: &str = "kraai-close-files";
+use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};
 
 declare_kraai_command! {
     /// Removes files from fresh context injection on subsequent model turns.
     pub struct CloseFilesCommand;
-    id: "kraai-close-files";
-    name: "kraai-close-files";
-    description: "Stop pinning one or more files in the context of future turns.";
-    signature_help: "kraai-close-files <path>... -> record<success: bool, paths: list<string>>";
-    examples: [
-        {
-            description: "Remove a file that is no longer needed from future context",
-            timeout: "10sec",
-            script: "kraai-close-files src/main.rs",
-        },
-    ];
+    metadata: kraai_command_catalog::CLOSE_FILES;
     signature: Signature::build("kraai-close-files")
         .rest(
             "paths",
@@ -53,12 +38,8 @@ declare_kraai_command! {
             context
                 .state_effects()
                 .apply(
-                    COMMAND_ID,
-                    vec![ContextStateDelta {
-                        namespace: String::from("opened_files"),
-                        operation: String::from("close"),
-                        payload: serde_json::json!({ "path": normalized_string }),
-                    }],
+                    Self::METADATA.id,
+                    vec![OpenedFilesOperation::Close.into_delta(normalized_string.clone())],
                 )
                 .map_err(|error| {
                     command_error(
@@ -79,12 +60,6 @@ declare_kraai_command! {
         )
         .into_pipeline_data())
     }
-}
-
-fn command_error(title: impl Into<String>, message: impl Into<String>, span: Span) -> ShellError {
-    let title: String = title.into();
-    let message: String = message.into();
-    ShellError::Generic(GenericError::new(title, message, span))
 }
 
 #[cfg(test)]

@@ -6,6 +6,28 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let message_id = manager
+        .add_message(&session_id, ChatRole::User, String::from("cycle"), None)
+        .await?;
+    let mut message = manager.message_store.get(&message_id).await?.unwrap();
+    message.parent_id = Some(message_id.clone());
+    manager.message_store.save(&message).await?;
+
+    let error = manager.prepare_session(&session_id).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("cycle repeats message {message_id}"))
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn restored_session_supplies_script_workspace_independently_of_executable() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let workspace = data_dir.join("configured-workspace");
@@ -459,7 +481,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         message_store,
         session_store,
         context_state_store,
-        Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
         data_dir.clone(),
     );
 

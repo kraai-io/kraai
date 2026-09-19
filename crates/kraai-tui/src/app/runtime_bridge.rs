@@ -1,55 +1,119 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use kraai_runtime::{
-    CreateSessionRequest, OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
-    OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState, RuntimeError, RuntimeEvent,
-    RuntimeHandle,
-};
+use kraai_runtime::{CreateSessionRequest, RuntimeError, RuntimeEvent, RuntimeHandle};
 use tokio::sync::broadcast;
 
-use super::{ProviderAuthState, ProviderAuthStatus, RuntimeRequest, RuntimeResponse};
+use super::auth::map_openai_codex_auth_status;
+use super::{RuntimeRequest, RuntimeResponse};
 
 #[derive(Debug)]
 pub(super) enum RuntimeEventBridgeMessage {
     Event(RuntimeEvent),
     Lagged(u64),
+    StartupComplete(kraai_runtime::RuntimeResult<kraai_runtime::RuntimeStartupState>),
 }
 
-pub(super) fn spawn_event_bridge(
-    mut runtime_events: broadcast::Receiver<RuntimeEvent>,
-) -> Receiver<RuntimeEventBridgeMessage> {
+pub(super) fn spawn_event_bridge(runtime: RuntimeHandle) -> Receiver<RuntimeEventBridgeMessage> {
+    let runtime_events = runtime.subscribe();
     let (event_tx, event_rx) = unbounded();
 
     std::thread::spawn(move || {
-        let Ok(rt) = tokio::runtime::Runtime::new() else {
-            return;
-        };
-
-        rt.block_on(async move {
-            loop {
-                match runtime_events.recv().await {
-                    Ok(event) => {
-                        if event_tx
-                            .send(RuntimeEventBridgeMessage::Event(event))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        if event_tx
-                            .send(RuntimeEventBridgeMessage::Lagged(skipped))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(error) => {
+                let _ = event_tx.send(RuntimeEventBridgeMessage::StartupComplete(Err(
+                    RuntimeError::unavailable(format!("failed to create tokio runtime: {error}")),
+                )));
+                return;
             }
-        });
+        };
+        rt.block_on(forward_runtime_events(
+            runtime_events,
+            event_tx,
+            async move { runtime.wait_for_startup().await },
+        ));
     });
 
     event_rx
+}
+
+async fn forward_runtime_events(
+    mut runtime_events: broadcast::Receiver<RuntimeEvent>,
+    event_tx: Sender<RuntimeEventBridgeMessage>,
+    startup: impl Future<Output = kraai_runtime::RuntimeResult<kraai_runtime::RuntimeStartupState>>,
+) {
+    let result = {
+        tokio::pin!(startup);
+        loop {
+            tokio::select! {
+                result = &mut startup => break result,
+                event = runtime_events.recv() => {
+                    if !forward_runtime_event(&event_tx, event) {
+                        break Err(RuntimeError::unavailable("runtime event channel is closed"));
+                    }
+                }
+            }
+        }
+    };
+    if !drain_startup_events(&mut runtime_events, |event| {
+        forward_runtime_event(&event_tx, event)
+    }) {
+        return;
+    }
+    if event_tx
+        .send(RuntimeEventBridgeMessage::StartupComplete(result))
+        .is_err()
+    {
+        return;
+    }
+    loop {
+        if !forward_runtime_event(&event_tx, runtime_events.recv().await) {
+            return;
+        }
+    }
+}
+
+fn drain_startup_events(
+    runtime_events: &mut broadcast::Receiver<RuntimeEvent>,
+    mut forward: impl FnMut(Result<RuntimeEvent, broadcast::error::RecvError>) -> bool,
+) -> bool {
+    let mut remaining = runtime_events.len();
+    while remaining > 0 {
+        let event = match runtime_events.try_recv() {
+            Ok(event) => {
+                remaining -= 1;
+                Ok(event)
+            }
+            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                remaining =
+                    remaining.saturating_sub(usize::try_from(skipped).unwrap_or(usize::MAX));
+                Err(broadcast::error::RecvError::Lagged(skipped))
+            }
+            Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => {
+                break;
+            }
+        };
+        if !forward(event) {
+            return false;
+        }
+    }
+    true
+}
+
+fn forward_runtime_event(
+    sender: &Sender<RuntimeEventBridgeMessage>,
+    event: Result<RuntimeEvent, broadcast::error::RecvError>,
+) -> bool {
+    let message = match event {
+        Ok(event) => RuntimeEventBridgeMessage::Event(event),
+        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+            RuntimeEventBridgeMessage::Lagged(skipped)
+        }
+        Err(broadcast::error::RecvError::Closed) => return false,
+    };
+    sender.send(message).is_ok()
 }
 
 pub(super) fn spawn_runtime_bridge(
@@ -59,7 +123,10 @@ pub(super) fn spawn_runtime_bridge(
     let (res_tx, runtime_rx): (Sender<RuntimeResponse>, Receiver<RuntimeResponse>) = unbounded();
 
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(error) => {
                 let message = format!("failed to create tokio runtime: {error}");
@@ -72,6 +139,9 @@ pub(super) fn spawn_runtime_bridge(
 
         while let Ok(req) = req_rx.recv() {
             match req {
+                RuntimeRequest::FinishStartupSync => {
+                    let _ = res_tx.send(RuntimeResponse::StartupSyncComplete);
+                }
                 RuntimeRequest::ListModels => {
                     let result = rt.block_on(runtime.list_models());
                     let _ = res_tx.send(RuntimeResponse::Models(result));
@@ -256,6 +326,7 @@ fn respond_with_runtime_error(
 ) {
     let error = RuntimeError::unavailable(message);
     let response = match req {
+        RuntimeRequest::FinishStartupSync => RuntimeResponse::StartupSyncComplete,
         RuntimeRequest::ListModels => RuntimeResponse::Models(Err(error.clone())),
         RuntimeRequest::GetAgentProfileCatalog => {
             RuntimeResponse::AgentProfileCatalog(Err(error.clone()))
@@ -346,30 +417,10 @@ fn respond_with_runtime_error(
     let _ = res_tx.send(response);
 }
 
-fn map_openai_codex_auth_status(status: RuntimeOpenAiCodexAuthStatus) -> ProviderAuthStatus {
-    let mut mapped = ProviderAuthStatus {
-        state: ProviderAuthState::SignedOut,
-        plan_type: status.plan_type,
-        last_refresh: status.last_refresh_unix.map(|value| value.to_string()),
-        auth_url: None,
-        verification_url: None,
-        user_code: None,
-        error: status.error,
-    };
-
-    mapped.state = match status.state {
-        RuntimeOpenAiCodexLoginState::SignedOut => ProviderAuthState::SignedOut,
-        RuntimeOpenAiCodexLoginState::BrowserPending(pending) => {
-            mapped.auth_url = Some(pending.auth_url);
-            ProviderAuthState::BrowserPending
-        }
-        RuntimeOpenAiCodexLoginState::DeviceCodePending(pending) => {
-            mapped.verification_url = Some(pending.verification_url);
-            mapped.user_code = Some(pending.user_code);
-            ProviderAuthState::DeviceCodePending
-        }
-        RuntimeOpenAiCodexLoginState::Authenticated => ProviderAuthState::Authenticated,
-    };
-
-    mapped
-}
+#[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "bridge tests propagate fixture errors and assert event ordering"
+)]
+#[path = "runtime_bridge_tests.rs"]
+mod tests;

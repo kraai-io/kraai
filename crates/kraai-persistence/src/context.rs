@@ -1,15 +1,14 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_types::{CommandInvocationId, ScriptExecutionId};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::OwnedMutexGuard;
 use ulid::Ulid;
 
 use crate::atomic_write;
+use crate::keyed_locks::KeyedLocks;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
@@ -83,27 +82,15 @@ pub trait ContextStateStore: Send + Sync {
 
 pub struct FileContextStateStore {
     directory: PathBuf,
-    session_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
+    session_locks: KeyedLocks<String>,
 }
 
 impl FileContextStateStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             directory: data_dir.join("context-state"),
-            session_locks: RwLock::new(HashMap::new()),
+            session_locks: KeyedLocks::default(),
         }
-    }
-
-    async fn session_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
-        if let Some(lock) = self.session_locks.read().await.get(session_id).cloned() {
-            return lock;
-        }
-        self.session_locks
-            .write()
-            .await
-            .entry(session_id.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
     }
 
     fn document_path(&self, session_id: &str) -> Result<PathBuf> {
@@ -145,8 +132,7 @@ impl FileContextStateStore {
         if mutations.is_empty() {
             return Err(eyre!("Context state events require at least one mutation"));
         }
-        let lock = self.session_lock(session_id).await;
-        let _guard = lock.lock().await;
+        let guard = self.session_locks.lock(session_id).await;
         let mut document = self.load_document(session_id).await?;
         if let ContextStateEventSource::Command {
             execution_id,
@@ -180,16 +166,16 @@ impl FileContextStateStore {
         let path = self.document_path(session_id)?;
         let bytes = serde_json::to_vec_pretty(&document)
             .context("Failed to serialize context state document")?;
-        atomic_write(&path, &bytes).await?;
-        Ok(event)
+        complete_commit(guard, async move { atomic_write(&path, &bytes).await })
+            .await
+            .map(|()| event)
     }
 }
 
 #[async_trait::async_trait]
 impl ContextStateStore for FileContextStateStore {
     async fn list(&self, session_id: &str) -> Result<Vec<ContextStateEvent>> {
-        let lock = self.session_lock(session_id).await;
-        let _guard = lock.lock().await;
+        let _guard = self.session_locks.lock(session_id).await;
         Ok(self.load_document(session_id).await?.events)
     }
 
@@ -232,16 +218,31 @@ impl ContextStateStore for FileContextStateStore {
     }
 
     async fn delete(&self, session_id: &str) -> Result<()> {
-        let lock = self.session_lock(session_id).await;
-        let _guard = lock.lock().await;
+        let guard = self.session_locks.lock(session_id).await;
         let path = self.document_path(session_id)?;
-        match fs::remove_file(&path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error)
-                .with_context(|| format!("Failed to delete context state document: {path:?}")),
-        }
+        complete_commit(guard, async move {
+            match fs::remove_file(&path).await {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error)
+                    .with_context(|| format!("Failed to delete context state document: {path:?}")),
+            }
+        })
+        .await
     }
+}
+
+async fn complete_commit(
+    guard: OwnedMutexGuard<()>,
+    commit: impl Future<Output = Result<()>> + Send + 'static,
+) -> Result<()> {
+    tokio::spawn(async move {
+        let result = commit.await;
+        drop(guard);
+        result
+    })
+    .await
+    .context("Context state commit task failed")?
 }
 
 #[cfg(test)]
@@ -263,6 +264,72 @@ mod tests {
                 root: PathBuf::from("/workspace"),
             },
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_commit_keeps_later_appends_in_order() {
+        let data_dir = test_dir("cancelled-commit");
+        let store = FileContextStateStore::new(&data_dir);
+        let initial = store
+            .append_runtime("session", "initial", vec![pin("/workspace/initial.rs")])
+            .await
+            .unwrap();
+        let cancelled = ContextStateEvent {
+            id: String::from("cancelled"),
+            source: ContextStateEventSource::Runtime {
+                component: String::from("cancelled"),
+            },
+            mutations: vec![pin("/workspace/cancelled.rs")],
+        };
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let caller = {
+            let guard = store.session_locks.lock("session").await;
+            let mut document = store.load_document("session").await.unwrap();
+            document.events.push(cancelled.clone());
+            let bytes = serde_json::to_vec_pretty(&document).unwrap();
+            let path = store.document_path("session").unwrap();
+            tokio::spawn(complete_commit(guard, async move {
+                let _ = entered_tx.send(());
+                release_rx.await?;
+                atomic_write(&path, &bytes).await
+            }))
+        };
+        entered_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+
+        {
+            let mut waiting = std::pin::pin!(store.session_locks.lock("session"));
+            assert!(
+                waiting
+                    .as_mut()
+                    .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                    .is_pending()
+            );
+        }
+        let mut later = std::pin::pin!(store.append_runtime(
+            "session",
+            "later",
+            vec![pin("/workspace/later.rs")],
+        ));
+        assert!(
+            later
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_pending()
+        );
+        store
+            .append_runtime("other", "independent", vec![pin("/workspace/other.rs")])
+            .await
+            .unwrap();
+        release_tx.send(()).unwrap();
+        let later = later.await.unwrap();
+        assert_eq!(
+            store.list("session").await.unwrap(),
+            vec![initial, cancelled, later]
+        );
+        fs::remove_dir_all(data_dir).await.unwrap();
     }
 
     #[tokio::test]

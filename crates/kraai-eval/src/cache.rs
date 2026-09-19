@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail};
@@ -192,18 +193,59 @@ pub(crate) fn path_segment(value: &str, fallback: &str) -> String {
 }
 
 pub fn hash_file(path: &Path) -> Result<String> {
+    require_file(path)?;
+    let mut file = fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let mut hasher = Sha256::new();
+    hasher.update(length.to_le_bytes());
+    let mut buffer = [0_u8; 8192];
+    let mut bytes_read = 0_u64;
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        bytes_read = bytes_read.saturating_add(count as u64);
+        let chunk = buffer
+            .get(..count)
+            .ok_or_else(|| color_eyre::eyre::eyre!("file read exceeded hash buffer"))?;
+        hasher.update(chunk);
+    }
+    if bytes_read != length {
+        return Ok(hash_chunks(&[fs::read(path)?]));
+    }
+    Ok(finish_hash(hasher))
+}
+
+pub(crate) fn read_hashed_text_file(path: &Path) -> Result<(String, String)> {
+    require_file(path)?;
+    let text = fs::read_to_string(path)?;
+    let digest = hash_chunks(&[text.as_bytes()]);
+    Ok((text, digest))
+}
+
+fn require_file(path: &Path) -> Result<()> {
     if !path.is_file() {
         bail!("runner artifact is not a file: {}", path.display());
     }
-    Ok(hash_chunks(&[fs::read(path)?]))
+    Ok(())
 }
 
-pub(crate) fn hash_chunks(chunks: &[Vec<u8>]) -> String {
+pub(crate) fn hash_chunks(chunks: &[impl AsRef<[u8]>]) -> String {
     let mut hasher = Sha256::new();
     for chunk in chunks {
+        let chunk = chunk.as_ref();
         hasher.update((chunk.len() as u64).to_le_bytes());
         hasher.update(chunk);
     }
+    finish_hash(hasher)
+}
+
+fn finish_hash(hasher: Sha256) -> String {
     hasher
         .finalize()
         .iter()
@@ -215,6 +257,50 @@ pub(crate) fn hash_chunks(chunks: &[Vec<u8>]) -> String {
 mod tests {
     use super::*;
     use color_eyre::eyre::ensure;
+
+    #[test]
+    fn streamed_file_hash_preserves_length_prefixed_identity() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("kraai-streamed-hash-{}", ulid::Ulid::generate()));
+        fs::create_dir(&root)?;
+        let path = root.join("artifact");
+        for length in [0, 1, 8191, 8192, 8193, 32769] {
+            let bytes = (0..length)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>();
+            fs::write(&path, &bytes)?;
+            ensure!(hash_file(&path)? == hash_chunks(&[bytes.as_slice()]));
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hashing_supports_regular_files_with_virtual_metadata_lengths() -> Result<()> {
+        let path = Path::new("/proc/sys/kernel/pid_max");
+        if path.exists() {
+            let bytes = fs::read(path)?;
+            ensure!(hash_file(path)? == hash_chunks(&[bytes.as_slice()]));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hashed_text_retains_the_bytes_from_its_single_read() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("kraai-hashed-text-{}", ulid::Ulid::generate()));
+        fs::create_dir(&root)?;
+        let path = root.join("events");
+        let original = "{\"message\":\"é🦀\"}\r\n\n";
+        fs::write(&path, original)?;
+        let (text, digest) = read_hashed_text_file(&path)?;
+        fs::write(&path, "replacement")?;
+        ensure!(text == original);
+        ensure!(digest == hash_chunks(&[original.as_bytes()]));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     struct AccountingFixture {
         root: PathBuf,

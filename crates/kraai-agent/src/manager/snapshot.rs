@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
@@ -28,7 +28,7 @@ pub struct SessionSnapshotData {
 }
 
 impl AgentManager {
-    pub fn request_usage_store(&self) -> Arc<kraai_persistence::RequestUsageStore> {
+    pub fn request_usage_store(&self) -> Arc<dyn kraai_persistence::RequestUsageStore> {
         self.usage_store.clone()
     }
 
@@ -128,7 +128,13 @@ pub(super) async fn load_history(
     in_flight: &HashMap<MessageId, Message>,
 ) -> Result<Vec<Message>> {
     let mut context = Vec::new();
+    let mut visited = HashSet::new();
     while let Some(id) = current {
+        if !visited.insert(id.clone()) {
+            return Err(eyre!(
+                "Corrupt message parent graph: cycle repeats message {id}"
+            ));
+        }
         let message = match in_flight.get(&id) {
             Some(message) => message.clone(),
             None => store

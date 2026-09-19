@@ -14,12 +14,23 @@ struct SessionRequests {
     revision: AtomicU64,
 }
 
-pub struct RequestUsageStore {
+#[async_trait::async_trait]
+pub trait RequestUsageStore: Send + Sync {
+    async fn save(&self, session_id: &str, request: &RequestUsage) -> Result<()>;
+
+    async fn delete(&self, session_id: &str) -> Result<()>;
+
+    async fn load(&self, session_id: &str) -> Result<BTreeMap<MessageId, RequestUsage>>;
+
+    async fn refresh(&self, session_id: &str) -> Result<()>;
+}
+
+pub struct FileRequestUsageStore {
     root: PathBuf,
     hot: tokio::sync::RwLock<BTreeMap<String, Arc<SessionRequests>>>,
 }
 
-impl RequestUsageStore {
+impl FileRequestUsageStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             root: data_dir.join("usage"),
@@ -41,63 +52,6 @@ impl RequestUsageStore {
         let cache = hot.entry(session_id.to_string()).or_default().clone();
         drop(hot);
         Ok(cache)
-    }
-
-    pub async fn save(&self, session_id: &str, request: &RequestUsage) -> Result<()> {
-        MessageId::try_new(request.message_id.as_str()).map_err(|error| eyre!(error))?;
-        let path = self
-            .session_dir(session_id)?
-            .join(format!("{}.json", request.message_id));
-        let cache = self.session_cache(session_id).await?;
-        let io = cache.io.lock().await;
-        crate::atomic_write(&path, &serde_json::to_vec(request)?).await?;
-        if let Some(requests) = cache.requests.write().await.as_mut() {
-            requests.insert(request.message_id.clone(), request.clone());
-        }
-        cache.revision.fetch_add(1, Ordering::Release);
-        drop(io);
-        Ok(())
-    }
-
-    pub async fn delete(&self, session_id: &str) -> Result<()> {
-        let path = self.session_dir(session_id)?;
-        let cache = self.session_cache(session_id).await?;
-        let io = cache.io.lock().await;
-        match fs::remove_dir_all(path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        *cache.requests.write().await = Some(BTreeMap::new());
-        cache.revision.fetch_add(1, Ordering::Release);
-        drop(io);
-        Ok(())
-    }
-
-    pub async fn load(&self, session_id: &str) -> Result<BTreeMap<MessageId, RequestUsage>> {
-        let cache = self.session_cache(session_id).await?;
-        if let Some(requests) = cache.requests.read().await.as_ref() {
-            return Ok(requests.clone());
-        }
-        let io = cache.io.lock().await;
-        if let Some(requests) = cache.requests.read().await.as_ref() {
-            return Ok(requests.clone());
-        }
-        let requests = Self::read_requests(&self.session_dir(session_id)?).await?;
-        *cache.requests.write().await = Some(requests.clone());
-        drop(io);
-        Ok(requests)
-    }
-
-    pub async fn refresh(&self, session_id: &str) -> Result<()> {
-        let cache = self.session_cache(session_id).await?;
-        loop {
-            let revision = cache.revision.load(Ordering::Acquire);
-            let requests = Self::read_requests(&self.session_dir(session_id)?).await;
-            if Self::publish_refresh(&cache, revision, requests).await? {
-                return Ok(());
-            }
-        }
     }
 
     async fn publish_refresh(
@@ -150,6 +104,68 @@ impl RequestUsageStore {
     }
 }
 
+#[async_trait::async_trait]
+impl RequestUsageStore for FileRequestUsageStore {
+    async fn save(&self, session_id: &str, request: &RequestUsage) -> Result<()> {
+        MessageId::try_new(request.message_id.as_str()).map_err(|error| eyre!(error))?;
+        let path = self
+            .session_dir(session_id)?
+            .join(format!("{}.json", request.message_id));
+        let cache = self.session_cache(session_id).await?;
+        let io = cache.io.lock().await;
+        let outcome =
+            crate::atomic_file::atomic_write_with_outcome(&path, &serde_json::to_vec(request)?)
+                .await?;
+        if let Some(requests) = cache.requests.write().await.as_mut() {
+            requests.insert(request.message_id.clone(), request.clone());
+        }
+        cache.revision.fetch_add(1, Ordering::Release);
+        drop(io);
+        outcome.into_result()
+    }
+
+    async fn delete(&self, session_id: &str) -> Result<()> {
+        let path = self.session_dir(session_id)?;
+        let cache = self.session_cache(session_id).await?;
+        let io = cache.io.lock().await;
+        match fs::remove_dir_all(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        *cache.requests.write().await = Some(BTreeMap::new());
+        cache.revision.fetch_add(1, Ordering::Release);
+        drop(io);
+        Ok(())
+    }
+
+    async fn load(&self, session_id: &str) -> Result<BTreeMap<MessageId, RequestUsage>> {
+        let cache = self.session_cache(session_id).await?;
+        if let Some(requests) = cache.requests.read().await.as_ref() {
+            return Ok(requests.clone());
+        }
+        let io = cache.io.lock().await;
+        if let Some(requests) = cache.requests.read().await.as_ref() {
+            return Ok(requests.clone());
+        }
+        let requests = Self::read_requests(&self.session_dir(session_id)?).await?;
+        *cache.requests.write().await = Some(requests.clone());
+        drop(io);
+        Ok(requests)
+    }
+
+    async fn refresh(&self, session_id: &str) -> Result<()> {
+        let cache = self.session_cache(session_id).await?;
+        loop {
+            let revision = cache.revision.load(Ordering::Acquire);
+            let requests = Self::read_requests(&self.session_dir(session_id)?).await;
+            if Self::publish_refresh(&cache, revision, requests).await? {
+                return Ok(());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::panic_in_result_fn,
@@ -175,7 +191,7 @@ mod tests {
     async fn failed_refresh_uses_initialized_cache_and_recovers() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
-        let store = RequestUsageStore::new(&directory);
+        let store = FileRequestUsageStore::new(&directory);
         let mut request = request();
         store.save("session", &request).await?;
         let cached = store.load("session").await?;
@@ -183,7 +199,7 @@ mod tests {
         fs::write(&receipt_path, b"invalid json").await?;
         store.refresh("session").await?;
         assert_eq!(store.load("session").await?, cached);
-        let cold = RequestUsageStore::new(&directory);
+        let cold = FileRequestUsageStore::new(&directory);
         assert!(cold.refresh("session").await.is_err());
         assert!(cold.load("session").await.is_err());
         request.unpriced_attempts = 1;
@@ -201,8 +217,8 @@ mod tests {
     async fn refresh_observes_other_store_writes_and_local_updates() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
-        let first = RequestUsageStore::new(&directory);
-        let second = RequestUsageStore::new(&directory);
+        let first = FileRequestUsageStore::new(&directory);
+        let second = FileRequestUsageStore::new(&directory);
         let mut request = request();
         first.save("session", &request).await?;
         first.load("session").await?;
@@ -230,24 +246,24 @@ mod tests {
     async fn refresh_rejects_reads_superseded_by_save_or_delete() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
-        let store = RequestUsageStore::new(&directory);
+        let store = FileRequestUsageStore::new(&directory);
         let mut request = request();
         store.save("session", &request).await?;
         let cache = store.session_cache("session").await?;
         let revision = cache.revision.load(Ordering::Acquire);
-        let scanned = RequestUsageStore::read_requests(&store.session_dir("session")?).await;
+        let scanned = FileRequestUsageStore::read_requests(&store.session_dir("session")?).await;
         request.unpriced_attempts = 2;
         store.save("session", &request).await?;
-        assert!(!RequestUsageStore::publish_refresh(&cache, revision, scanned).await?);
+        assert!(!FileRequestUsageStore::publish_refresh(&cache, revision, scanned).await?);
         store.refresh("session").await?;
         assert_eq!(
             store.load("session").await?.get(&request.message_id),
             Some(&request)
         );
         let revision = cache.revision.load(Ordering::Acquire);
-        let scanned = RequestUsageStore::read_requests(&store.session_dir("session")?).await;
+        let scanned = FileRequestUsageStore::read_requests(&store.session_dir("session")?).await;
         store.delete("session").await?;
-        assert!(!RequestUsageStore::publish_refresh(&cache, revision, scanned).await?);
+        assert!(!FileRequestUsageStore::publish_refresh(&cache, revision, scanned).await?);
         assert!(store.load("session").await?.is_empty());
         fs::remove_dir_all(directory).await?;
         Ok(())
@@ -257,7 +273,7 @@ mod tests {
     async fn busy_session_does_not_block_other_session_ledger() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
-        let store = RequestUsageStore::new(&directory);
+        let store = FileRequestUsageStore::new(&directory);
         store.save("busy", &request()).await?;
         store.load("busy").await?;
         let cache = store.session_cache("busy").await?;

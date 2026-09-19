@@ -2,24 +2,20 @@ use color_eyre::eyre::{Context, Result, eyre};
 use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
 use kraai_types::{
-    EnvironmentPolicy, ModelId, PathPolicy, PermissionResolution, ProviderId, SandboxCapabilities,
-    SandboxCapability, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptProfileSnapshot,
+    PermissionResolution, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
+    ScriptExecutionStatus,
 };
-use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
-use super::core::{ActiveScriptTask, QueuedMessage, RuntimeCore, emit_event};
+use super::core::{ActiveScriptTask, RuntimeCore, emit_event};
+use super::script_environment::{configured_runtime_roots, script_environment};
 use super::script_execution::{
     CompletedScriptExecution, EffectiveScriptRequest, PendingScriptApproval,
 };
-use super::streaming::StreamJobKind;
 use crate::api::{Event, PendingScriptInfo};
-use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
-fn host_failure(completed: &CompletedScriptExecution) -> color_eyre::Report {
+pub(super) fn host_failure(completed: &CompletedScriptExecution) -> color_eyre::Report {
     eyre!(
         completed
             .record
@@ -32,215 +28,6 @@ fn host_failure(completed: &CompletedScriptExecution) -> color_eyre::Report {
 }
 
 impl RuntimeCore {
-    pub(crate) async fn recover_script_executions(&self) -> Result<()> {
-        let records = self.execution_store.list_all().await?;
-        let mut continuations = Vec::new();
-        for record in records {
-            let completed = if record.phase == kraai_types::ScriptExecutionPhase::Finished {
-                CompletedScriptExecution {
-                    output: self.execution_store.read_output(&record.id).await?,
-                    record,
-                }
-            } else {
-                let output = self.execution_store.read_output(&record.id).await?;
-                let (status, error) = interrupted_execution_outcome(record.phase);
-                let record = self
-                    .execution_store
-                    .finish(
-                        &record.id,
-                        ScriptExecutionCompletion {
-                            status,
-                            exit_code: None,
-                            sandbox_denied: record.sandbox_denied,
-                            error: Some(error),
-                            stdout: output.stdout.clone(),
-                            stderr: output.stderr.clone(),
-                        },
-                    )
-                    .await?;
-                CompletedScriptExecution { record, output }
-            };
-
-            let result = completed.render_result()?;
-            let result_message_id = completed.record.result_message_id.clone();
-            let session_id = completed.record.session_id.clone();
-            self.agent_manager
-                .write()
-                .await
-                .add_script_result_to_history(
-                    &session_id,
-                    result_message_id.clone(),
-                    completed.record.profile.id.clone(),
-                    completed.record.call_id.clone(),
-                    result,
-                )
-                .await?;
-
-            let tip = self.agent_manager.read().await.get_tip(&session_id).await?;
-            if tip.as_ref() == Some(&result_message_id) {
-                if completed.record.status == Some(ScriptExecutionStatus::HostUnavailable) {
-                    self.fail_script_turn(&session_id, &host_failure(&completed))
-                        .await;
-                    continue;
-                }
-                self.agent_manager
-                    .write()
-                    .await
-                    .prepare_script_recovery(&session_id, &completed.record.source_message_id)
-                    .await?;
-                continuations.push(session_id);
-            }
-        }
-        continuations.sort();
-        continuations.dedup();
-        for session_id in continuations {
-            self.spawn_continuation(session_id);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn handle_send_message(
-        &self,
-        session_id: String,
-        message: String,
-        model_id: ModelId,
-        provider_id: ProviderId,
-    ) -> RuntimeResult<SubmitMessageOutcome> {
-        let has_pending_messages = {
-            let queued = self.queued_messages.lock().await;
-            queued
-                .get(&session_id)
-                .is_some_and(|queue| !queue.is_empty())
-                || self.session_preparations.is_active(&session_id)
-        };
-        let mut agent = self.agent_manager.write().await;
-        if agent.is_turn_active(&session_id)
-            || has_pending_messages
-            || self.session_preparations.is_active(&session_id)
-        {
-            drop(agent);
-            let position = self
-                .enqueue_message(
-                    &session_id,
-                    QueuedMessage {
-                        message,
-                        model_id,
-                        provider_id,
-                    },
-                )
-                .await;
-            self.schedule_queue_drain(&session_id);
-            return Ok(SubmitMessageOutcome::Queued { position });
-        }
-
-        let stream_request = {
-            let result = agent
-                .prepare_start_stream(&session_id, message, model_id, provider_id)
-                .await;
-            let providers = agent.cloned_provider_manager();
-            drop(agent);
-            result
-                .map(|result| (providers, result))
-                .map_err(RuntimeError::from_report)?
-        };
-
-        let (providers, request) = stream_request;
-        let message_id = request.message_id.to_string();
-
-        self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
-            .await;
-        Ok(SubmitMessageOutcome::Started { message_id })
-    }
-
-    async fn enqueue_message(&self, session_id: &str, queued_message: QueuedMessage) -> usize {
-        let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.to_string()).or_default();
-        queue.push_back(queued_message);
-        let position = queue.len();
-        drop(queued);
-        position
-    }
-
-    pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
-        let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
-            return;
-        };
-        let is_turn_active = {
-            let agent = self.agent_manager.read().await;
-            agent.is_turn_active(&session_id)
-        };
-        if is_turn_active {
-            return;
-        }
-
-        let messages = self.take_queued_messages(&session_id).await;
-        let Some(last_message) = messages.last() else {
-            return;
-        };
-        let model_id = last_message.model_id.clone();
-        let provider_id = last_message.provider_id.clone();
-        let contents = messages
-            .iter()
-            .map(|message| message.message.clone())
-            .collect();
-
-        let stream_request = {
-            let mut agent = self.agent_manager.write().await;
-            let result = agent
-                .prepare_intercepted_stream(&session_id, contents, model_id, provider_id)
-                .await;
-            if result.is_err() {
-                agent.clear_active_turn(&session_id);
-                self.event_tx.finish_timer(&session_id);
-            }
-            let providers = agent.cloned_provider_manager();
-            drop(agent);
-            match result {
-                Ok(Some(result)) => Some((providers, result)),
-                Ok(None) => {
-                    self.restore_queued_messages(&session_id, messages).await;
-                    return;
-                }
-                Err(error) => {
-                    self.restore_queued_messages(&session_id, messages).await;
-                    self.send_session_report_error(&session_id, error);
-                    None
-                }
-            }
-        };
-
-        let Some((providers, request)) = stream_request else {
-            return;
-        };
-
-        drop(preparation);
-        self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
-            .await;
-    }
-
-    pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {
-        self.queued_messages
-            .lock()
-            .await
-            .remove(session_id)
-            .map(VecDeque::into_iter)
-            .map(Iterator::collect)
-            .unwrap_or_default()
-    }
-
-    pub(crate) async fn restore_queued_messages(
-        &self,
-        session_id: &str,
-        messages: Vec<QueuedMessage>,
-    ) {
-        let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.to_string()).or_default();
-        for message in messages.into_iter().rev() {
-            queue.push_front(message);
-        }
-        drop(queued);
-    }
-
     pub(crate) async fn has_active_script_tasks(&self, session_id: &str) -> bool {
         let mut active_tasks = self.active_script_tasks.lock().await;
         let Some(task) = active_tasks.get(session_id) else {
@@ -322,29 +109,6 @@ impl RuntimeCore {
         {
             self.fail_script_turn(&completed_session, &error).await;
         }
-    }
-}
-
-pub(super) fn interrupted_execution_outcome(
-    phase: ScriptExecutionPhase,
-) -> (ScriptExecutionStatus, String) {
-    match phase {
-        ScriptExecutionPhase::Prepared => (
-            ScriptExecutionStatus::FailedToStart,
-            String::from("Kraai stopped before the prepared script could start"),
-        ),
-        ScriptExecutionPhase::AwaitingApproval => (
-            ScriptExecutionStatus::Cancelled,
-            String::from("Kraai stopped while the script was awaiting approval; it was not run"),
-        ),
-        ScriptExecutionPhase::Running => (
-            ScriptExecutionStatus::RuntimeError,
-            String::from("Kraai stopped while the script was running"),
-        ),
-        ScriptExecutionPhase::Finished => (
-            ScriptExecutionStatus::RuntimeError,
-            String::from("Kraai found a finished script without a terminal outcome"),
-        ),
     }
 }
 
@@ -570,7 +334,7 @@ impl RuntimeCore {
         Ok(())
     }
 
-    async fn fail_script_turn(&self, session_id: &str, error: &color_eyre::Report) {
+    pub(super) async fn fail_script_turn(&self, session_id: &str, error: &color_eyre::Report) {
         {
             let mut agent = self.agent_manager.write().await;
             agent.clear_active_turn(session_id);
@@ -774,82 +538,4 @@ fn capability_names(capabilities: &[SandboxCapability]) -> Vec<String> {
         .iter()
         .map(|capability| capability.as_str().to_string())
         .collect()
-}
-
-fn configured_runtime_roots() -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = std::env::var_os("KRAAI_SCRIPT_RUNTIME_ROOTS")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    // Debug binaries use an ELF interpreter and shared libraries from the Nix store. Packaged
-    // builds opt in through KRAAI_SCRIPT_RUNTIME_ROOTS instead of exposing the whole store by
-    // default.
-    if cfg!(debug_assertions) {
-        let nix_store = PathBuf::from("/nix/store");
-        if nix_store.is_dir() && !roots.iter().any(|root| root == &nix_store) {
-            roots.push(nix_store);
-        }
-    }
-    roots
-}
-
-fn script_environment(profile: &ScriptProfileSnapshot) -> Result<BTreeMap<String, String>> {
-    const MINIMAL: &[&str] = &["LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "TZ"];
-    const ALLOWED: &[&str] = &[
-        "COLORTERM",
-        "EDITOR",
-        "HOME",
-        "LOGNAME",
-        "PAGER",
-        "SHELL",
-        "USER",
-        "VISUAL",
-        "XDG_CACHE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "XDG_STATE_HOME",
-    ];
-    let mut environment = BTreeMap::new();
-    match profile.environment {
-        EnvironmentPolicy::Minimal => copy_environment(MINIMAL, &mut environment),
-        EnvironmentPolicy::AllowList => {
-            copy_environment(MINIMAL, &mut environment);
-            copy_environment(ALLOWED, &mut environment);
-        }
-        EnvironmentPolicy::Inherit => {
-            for (name, value) in std::env::vars_os() {
-                let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
-                    continue;
-                };
-                environment.insert(name.to_string(), value.to_string());
-            }
-        }
-    }
-    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
-    let path = match profile.path {
-        PathPolicy::Inherit => inherited_path,
-        PathPolicy::Packaged => {
-            let mut entries = Vec::new();
-            if let Some(directory) = std::env::current_exe()
-                .ok()
-                .and_then(|executable| executable.parent().map(PathBuf::from))
-            {
-                entries.push(directory);
-            }
-            entries.extend(std::env::split_paths(&inherited_path));
-            std::env::join_paths(entries).context("Failed to construct packaged script PATH")?
-        }
-    };
-    let path = path
-        .into_string()
-        .map_err(|_error| eyre!("Script PATH contains non-UTF-8 data"))?;
-    environment.insert(String::from("PATH"), path);
-    Ok(environment)
-}
-
-fn copy_environment(names: &[&str], target: &mut BTreeMap<String, String>) {
-    for name in names {
-        if let Ok(value) = std::env::var(name) {
-            target.insert((*name).to_string(), value);
-        }
-    }
 }

@@ -64,59 +64,61 @@ impl ScriptProtocolParser {
         }
         self.buffer.push_str(chunk);
         let mut result = IngestResult::default();
+        let mut consumed = 0;
         loop {
+            let buffer = &self.buffer[consumed..];
             match self.phase {
                 Phase::Preamble => {
-                    let Some(start) = self.buffer.find('<') else {
-                        result.accepted.push_str(&self.buffer);
-                        self.buffer.clear();
+                    let Some(start) = buffer.find('<') else {
+                        result.accepted.push_str(buffer);
+                        consumed = self.buffer.len();
                         break;
                     };
-                    result.accepted.push_str(&self.buffer[..start]);
-                    self.buffer.drain(..start);
-                    if self.buffer.starts_with(THINK_OPEN_TAG) {
+                    result.accepted.push_str(&buffer[..start]);
+                    consumed += start;
+                    let buffer = &self.buffer[consumed..];
+                    if buffer.starts_with(THINK_OPEN_TAG) {
                         result.accepted.push_str(THINK_OPEN_TAG);
-                        self.buffer.drain(..THINK_OPEN_TAG.len());
+                        consumed += THINK_OPEN_TAG.len();
                         self.think_depth = self.think_depth.saturating_add(1);
-                    } else if self.buffer.starts_with(THINK_CLOSE_TAG) {
+                    } else if buffer.starts_with(THINK_CLOSE_TAG) {
                         result.accepted.push_str(THINK_CLOSE_TAG);
-                        self.buffer.drain(..THINK_CLOSE_TAG.len());
+                        consumed += THINK_CLOSE_TAG.len();
                         self.think_depth = self.think_depth.saturating_sub(1);
-                    } else if is_partial_think_tag(&self.buffer) {
+                    } else if is_partial_think_tag(buffer) {
                         break;
-                    } else if self.think_depth == 0 && is_possible_opening(&self.buffer) {
-                        let Some(end) = self.buffer.find('>') else {
+                    } else if self.think_depth == 0 && is_possible_opening(buffer) {
+                        let Some(end) = buffer.find('>') else {
                             break;
                         };
                         let tag_end = end + 1;
-                        let tag = self.buffer[..tag_end].to_owned();
-                        self.buffer.drain(..tag_end);
-                        match parse_open_tag(&tag) {
+                        consumed += tag_end;
+                        match parse_open_tag(&buffer[..tag_end]) {
                             Ok(()) => {
                                 self.phase = Phase::Script;
                             }
                             Err(error) => {
                                 self.phase = Phase::Finished;
-                                self.buffer.clear();
+                                consumed = self.buffer.len();
                                 result.error = Some(error);
                                 result.should_stop = true;
                                 break;
                             }
                         }
-                    } else if self.think_depth == 0 && OPEN_PREFIX.starts_with(&self.buffer) {
+                    } else if self.think_depth == 0 && OPEN_PREFIX.starts_with(buffer) {
                         break;
                     } else {
-                        let Some(character) = self.buffer.chars().next() else {
+                        let Some(character) = buffer.chars().next() else {
                             break;
                         };
                         result.accepted.push(character);
-                        self.buffer.drain(..character.len_utf8());
+                        consumed += character.len_utf8();
                     }
                 }
                 Phase::Script => {
-                    if let Some(close) = self.buffer.find(CLOSE_TAG) {
-                        self.source.extend(self.buffer.bytes().take(close));
-                        self.buffer.clear();
+                    if let Some(close) = buffer.find(CLOSE_TAG) {
+                        self.source.extend(buffer.bytes().take(close));
+                        consumed = self.buffer.len();
                         self.phase = Phase::Finished;
                         result.should_stop = true;
                         let input = String::from_utf8_lossy(&self.source).into_owned();
@@ -126,21 +128,22 @@ impl ScriptProtocolParser {
                         }
                         break;
                     }
-                    let keep = partial_suffix_len(&self.buffer, CLOSE_TAG);
-                    let safe = self.buffer.len().saturating_sub(keep);
+                    let keep = partial_suffix_len(buffer, CLOSE_TAG);
+                    let safe = buffer.len().saturating_sub(keep);
                     if safe == 0 {
                         break;
                     }
-                    self.source.extend(self.buffer.bytes().take(safe));
-                    self.buffer.drain(..safe);
+                    self.source.extend(buffer.bytes().take(safe));
+                    consumed += safe;
                 }
                 Phase::Finished => {
-                    self.buffer.clear();
+                    consumed = self.buffer.len();
                     result.should_stop = true;
                     break;
                 }
             }
         }
+        self.buffer.drain(..consumed);
         result
     }
 
@@ -306,5 +309,85 @@ mod tests {
             let completed = first.completed.or(second.completed).expect("script");
             assert_eq!(completed.source, b"good\n");
         }
+    }
+
+    #[test]
+    fn nested_think_and_script_fragments_preserve_each_ingest_result() {
+        let mut parser = ScriptProtocolParser::new();
+        for (chunk, accepted) in [
+            ("<thi", ""),
+            ("nk>α<thi", "<think>α"),
+            (
+                "nk><tool_call>bogus</tool_call></thi",
+                "<think><tool_call>bogus</tool_call>",
+            ),
+            ("nk>β</think>γ<tool_", "</think>β</think>γ"),
+            ("call>\n# timeout=1sec\nécho\n</tool", ""),
+        ] {
+            let result = parser.ingest(chunk);
+            assert_eq!(result.accepted, accepted);
+            assert!(result.completed.is_none());
+            assert!(result.error.is_none());
+            assert!(!result.should_stop);
+        }
+        let result = parser.ingest("_call>tail<tool_call>ignored</tool_call>");
+        assert!(result.accepted.is_empty());
+        assert!(result.error.is_none());
+        assert!(result.should_stop);
+        assert_eq!(
+            result.completed.expect("script").source,
+            "écho\n".as_bytes()
+        );
+        let result = parser.ingest("discarded");
+        assert!(result.accepted.is_empty());
+        assert!(result.completed.is_none());
+        assert!(result.error.is_none());
+        assert!(result.should_stop);
+        let result = parser.finish();
+        assert!(result.accepted.is_empty());
+        assert!(result.error.is_none());
+        assert!(result.should_stop);
+    }
+
+    #[test]
+    fn incomplete_prefixes_and_invalid_tags_preserve_buffered_text() {
+        for prefix in ["<", "<thi", "</thin", "<tool_cal", "<tool_call "] {
+            let mut parser = ScriptProtocolParser::new();
+            let result = parser.ingest(&format!("🦀 {prefix}"));
+            assert_eq!(result.accepted, "🦀 ");
+            assert!(result.error.is_none());
+            assert!(!result.should_stop);
+            let result = parser.finish();
+            assert_eq!(result.accepted, prefix);
+            assert!(result.error.is_none());
+            assert!(!result.should_stop);
+        }
+        let mut parser = ScriptProtocolParser::new();
+        let first = parser.ingest("α<tool_call time");
+        assert_eq!(first.accepted, "α");
+        assert!(!first.should_stop);
+        let second = parser.ingest("out='1sec'>ignored");
+        assert!(second.accepted.is_empty());
+        assert!(matches!(
+            second.error,
+            Some(ProtocolError::MalformedStartTag(_))
+        ));
+        assert!(second.should_stop);
+        assert!(parser.invalid_block().source.is_empty());
+        assert!(parser.finish().should_stop);
+    }
+
+    #[test]
+    fn large_literal_tag_preamble_preserves_text_and_nested_depth() {
+        let text = "<α<tool_callback><think><think>β</think></think>".repeat(4096);
+        let mut parser = ScriptProtocolParser::new();
+        let result = parser.ingest(&text);
+        assert_eq!(result.accepted, text);
+        assert!(result.completed.is_none());
+        assert!(result.error.is_none());
+        assert!(!result.should_stop);
+        let result = parser.ingest("<tool_call>\n# timeout=1sec\necho ok\n</tool_call>");
+        assert_eq!(result.completed.expect("script").source, b"echo ok\n");
+        assert!(result.should_stop);
     }
 }

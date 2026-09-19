@@ -28,7 +28,7 @@ pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
                 .selected_provider_id
                 .as_ref()
                 .zip(state.selected_model_id.as_ref())
-                .is_some_and(|(p, m)| p == provider && m == &model.id);
+                .is_some_and(|(p, m)| p == *provider && m == &model.id);
             let suffix = if current { " (current)" } else { "" };
             lines.push(Line::styled(
                 format!("{marker} {provider} / {}{}", model.name, suffix),

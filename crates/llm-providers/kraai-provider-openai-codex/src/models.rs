@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use color_eyre::eyre::{Result, ensure, eyre};
-use kraai_provider_core::Model;
+use kraai_provider_core::{ConfiguredModelMetadata, Model};
 use kraai_types::ModelId;
 
 use crate::wire::{ListModelEntry, ModelVisibility, ResponsesReasoning};
@@ -9,12 +9,6 @@ use crate::wire::{ListModelEntry, ModelVisibility, ResponsesReasoning};
 #[cfg(test)]
 #[path = "models_tests.rs"]
 mod tests;
-
-#[derive(Clone)]
-pub(crate) struct ModelMetadata {
-    pub(crate) name: Option<String>,
-    pub(crate) max_context: Option<usize>,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedRequestModel {
@@ -69,7 +63,7 @@ impl DiscoveredModels {
         Ok(Self { entries })
     }
 
-    pub(crate) fn list(&self, configs: &BTreeMap<ModelId, ModelMetadata>) -> Vec<Model> {
+    pub(crate) fn list(&self, configs: &BTreeMap<ModelId, ConfiguredModelMetadata>) -> Vec<Model> {
         let mut models = BTreeMap::new();
         for entry in self
             .entries
@@ -92,7 +86,7 @@ impl DiscoveredModels {
     fn listed_model(
         entry: &ListModelEntry,
         effort: Option<&str>,
-        configs: &BTreeMap<ModelId, ModelMetadata>,
+        configs: &BTreeMap<ModelId, ConfiguredModelMetadata>,
     ) -> Model {
         let base_id = ModelId::new(entry.slug.clone());
         let id = effort.map_or_else(
@@ -129,15 +123,13 @@ impl DiscoveredModels {
         let (model, effort) = if let Some(model) = self.entries.get(raw) {
             (model, model.default_reasoning_level.as_deref())
         } else {
-            let (model, suffix) = self
-                .entries
-                .values()
-                .filter_map(|model| {
-                    raw.strip_prefix(&model.slug)
-                        .and_then(|suffix| suffix.strip_prefix('-'))
-                        .map(|suffix| (model, suffix))
+            let (model, suffix) = raw
+                .rmatch_indices('-')
+                .find_map(|(index, _)| {
+                    let prefix = raw.get(..index)?;
+                    let suffix = raw.get(index.saturating_add(1)..)?;
+                    self.entries.get(prefix).map(|model| (model, suffix))
                 })
-                .max_by_key(|(model, _)| model.slug.len())
                 .ok_or_else(|| {
                     eyre!("OpenAI Codex model '{raw}' was not returned by model discovery")
                 })?;

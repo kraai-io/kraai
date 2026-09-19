@@ -190,7 +190,7 @@ impl Default for AppState {
 
 impl AppState {
     pub(super) fn from_startup_options(startup_options: super::StartupOptions) -> Self {
-        let workspace_preferences = super::WorkspacePreferences::load_for_current_workspace()
+        let workspace_preferences = super::workspace_preferences::load_for_current_workspace()
             .unwrap_or_else(|error| {
                 tracing::warn!("Failed to load workspace preferences: {error}");
                 super::WorkspacePreferences::default()

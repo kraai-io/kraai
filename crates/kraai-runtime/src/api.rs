@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
 use kraai_persistence::SessionMeta;
+pub use kraai_provider_openai_codex::{
+    OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
+};
 use kraai_types::{
     AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
     TokenUsage,
@@ -204,43 +207,6 @@ pub struct PendingScriptInfo {
 pub struct WorkspaceState {
     pub workspace_dir: String,
     pub applies_next_chat: bool,
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingBrowserLogin {
-    pub auth_url: String,
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingDeviceCodeLogin {
-    pub verification_url: String,
-    pub user_code: String,
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OpenAiCodexLoginState {
-    SignedOut,
-    BrowserPending(PendingBrowserLogin),
-    DeviceCodePending(PendingDeviceCodeLogin),
-    Authenticated,
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenAiCodexAuthStatus {
-    pub state: OpenAiCodexLoginState,
-    pub email: Option<String>,
-    pub plan_type: Option<String>,
-    pub account_id: Option<String>,
-    pub last_refresh_unix: Option<u64>,
-    pub error: Option<String>,
 }
 
 /// Streaming events sent from the runtime to clients

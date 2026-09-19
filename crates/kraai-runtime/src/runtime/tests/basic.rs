@@ -29,6 +29,62 @@ fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
 }
 
 #[tokio::test]
+async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
+        return Ok(());
+    };
+    let session_id = harness
+        .handle
+        .create_session_with(crate::CreateSessionRequest {
+            workspace_dir: None,
+            profile_id: Some(String::from("test-profile")),
+        })
+        .await?;
+    let read_guard = harness.runtime.agent_manager.read().await;
+    let profiles = tokio::time::timeout(
+        Duration::from_secs(1),
+        harness.handle.list_agent_profiles(session_id),
+    )
+    .await;
+    drop(read_guard);
+    let profiles = profiles??;
+    assert_eq!(
+        profiles.selected_profile_id.as_deref(),
+        Some("test-profile")
+    );
+
+    let catalog = harness.handle.get_agent_profile_catalog(None).await?;
+    assert_eq!(catalog.default_profile_id, "test-profile");
+    assert_eq!(catalog.profiles, profiles.profiles);
+    assert_eq!(catalog.warnings, profiles.warnings);
+    assert_eq!(
+        catalog.workspace_dir,
+        harness.data_dir.join("workspace").display().to_string()
+    );
+
+    let missing = harness.data_dir.join("missing-workspace");
+    let write_guard = harness.runtime.agent_manager.write().await;
+    let invalid = tokio::time::timeout(
+        Duration::from_secs(1),
+        harness
+            .handle
+            .get_agent_profile_catalog(Some(missing.display().to_string())),
+    )
+    .await;
+    drop(write_guard);
+    let error = invalid?
+        .err()
+        .ok_or_else(|| eyre!("missing workspace unexpectedly returned a profile catalog"))?;
+    assert_eq!(error.kind, RuntimeErrorKind::InvalidArgument);
+    assert_eq!(
+        error.message,
+        format!("Workspace directory does not exist: {}", missing.display())
+    );
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> {
     for _ in 0..2 {
         let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {

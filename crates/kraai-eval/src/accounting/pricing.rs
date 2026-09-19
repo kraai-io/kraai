@@ -2,8 +2,11 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, ensure};
 use kraai_provider_core::{
-    DynamicConfig, DynamicValue, Pricing, ProviderConfig, ProviderManagerConfig,
+    DynamicConfig, DynamicValue, Pricing, ProviderConfig, ProviderFactory, ProviderManagerConfig,
+    ProviderPricingPolicy,
 };
+use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
+use kraai_provider_openai_codex::OpenAiCodexFactory;
 use kraai_types::{ModelId, ProviderId, RequestCost, TokenUsage};
 
 use super::RequestMeasurement;
@@ -26,7 +29,7 @@ impl PricingOptions {
 
     pub fn freeze(&self) -> Result<Self> {
         let snapshot = RequestPricing::configuration(self)?;
-        Pricing::new(&snapshot)?;
+        Pricing::new(&snapshot, pricing_policy)?;
         Ok(Self {
             snapshot: Some(snapshot),
             ..self.clone()
@@ -34,7 +37,7 @@ impl PricingOptions {
     }
 
     pub fn validate(&self) -> Result<()> {
-        Pricing::new(&RequestPricing::configuration(self)?)?;
+        Pricing::new(&RequestPricing::configuration(self)?, pricing_policy)?;
         Ok(())
     }
 }
@@ -90,7 +93,7 @@ impl RequestPricing {
             .ok_or_else(|| color_eyre::eyre::eyre!("missing pricing provider"))?
             .id
             .clone();
-        let pricing = Pricing::new(&config)?;
+        let pricing = Pricing::new(&config, pricing_policy)?;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), pricing.refresh()).await;
         Ok(Self { pricing, provider })
     }
@@ -148,6 +151,14 @@ impl RequestPricing {
     }
 }
 
+fn pricing_policy(type_id: &str) -> ProviderPricingPolicy {
+    match type_id {
+        OpenAiFactory::TYPE_ID => OpenAiFactory::pricing_policy(),
+        OpenAiCodexFactory::TYPE_ID => OpenAiCodexFactory::pricing_policy(),
+        _ => OpenAiChatCompletionsFactory::pricing_policy(),
+    }
+}
+
 fn hash_pricing_basis(mut basis: serde_json::Value) -> serde_json::Result<String> {
     basis.sort_all_objects();
     Ok(crate::cache::hash_chunks(&[serde_json::to_vec(&basis)?]))
@@ -156,6 +167,36 @@ fn hash_pricing_basis(mut basis: serde_json::Value) -> serde_json::Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pricing_policies_preserve_defaults_and_unknown_provider_endpoints() {
+        let empty = DynamicConfig::new();
+        let direct = pricing_policy(OpenAiFactory::TYPE_ID);
+        assert_eq!((direct.catalog)(&empty).provider.as_deref(), Some("openai"));
+        assert_eq!(
+            (direct.catalog)(&empty).api.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        let subscription = pricing_policy(OpenAiCodexFactory::TYPE_ID);
+        assert!(subscription.subscription);
+        assert_eq!(
+            (subscription.catalog)(&empty).provider.as_deref(),
+            Some("openai")
+        );
+        for provider_type in [OpenAiChatCompletionsFactory::TYPE_ID, "custom-provider"] {
+            let policy = pricing_policy(provider_type);
+            assert!(!policy.subscription);
+            assert!((policy.catalog)(&empty).provider.is_none());
+            let config = DynamicConfig::from([(
+                "base_url".into(),
+                DynamicValue::from(" https://api.openai.com/v1/ "),
+            )]);
+            assert_eq!(
+                (policy.catalog)(&config).provider.as_deref(),
+                Some("openai")
+            );
+        }
+    }
 
     #[test]
     fn pricing_basis_is_independent_of_recursive_object_key_order() -> Result<()> {

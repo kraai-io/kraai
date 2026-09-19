@@ -99,6 +99,10 @@ pub(crate) struct MockFactory;
 impl ProviderFactory for MockFactory {
     const TYPE_ID: &'static str = "mock";
 
+    fn pricing_policy() -> crate::ProviderPricingPolicy {
+        crate::ProviderPricingPolicy::default()
+    }
+
     fn definition() -> ProviderDefinition {
         ProviderDefinition {
             type_id: String::new(),

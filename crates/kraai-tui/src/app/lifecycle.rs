@@ -40,11 +40,11 @@ impl App {
     }
 
     pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
-        let event_rx = spawn_event_bridge(runtime.subscribe());
+        let event_rx = spawn_event_bridge(runtime.clone());
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
         let state = AppState::from_startup_options(startup_options.clone());
 
-        let mut app = Self {
+        Self {
             event_rx,
             runtime_tx,
             runtime_rx,
@@ -56,6 +56,7 @@ impl App {
             ci_metrics_context_pending: false,
             startup_options,
             startup_message_sent: false,
+            startup_sync: StartupSync::WaitingForRuntime,
             ci_error: None,
             stream_event_content: HashMap::new(),
             state,
@@ -68,10 +69,7 @@ impl App {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
-        };
-
-        app.request_sync();
-        app
+        }
     }
 
     pub fn run_ci(&mut self) -> Result<()> {
@@ -100,7 +98,10 @@ impl App {
         let mut needs_redraw = true;
         while !self.state.exit {
             needs_redraw |= self.process_events();
-            let event_timeout = if needs_redraw {
+            if !needs_redraw && self.startup_sync != StartupSync::Complete {
+                needs_redraw |= self.wait_for_startup_activity();
+            }
+            let event_timeout = if needs_redraw || self.startup_sync != StartupSync::Complete {
                 std::time::Duration::from_millis(0)
             } else if self.state.runtime_is_active() {
                 STATUSLINE_ANIMATION_INTERVAL
@@ -228,6 +229,21 @@ impl App {
         })
     }
 
+    fn wait_for_startup_activity(&mut self) -> bool {
+        crossbeam_channel::select! {
+            recv(self.event_rx) -> message => match message {
+                Ok(message) => self.handle_runtime_event_bridge_message(message),
+                Err(_) => self.handle_runtime_bridge_disconnect(),
+            },
+            recv(self.runtime_rx) -> response => match response {
+                Ok(response) => self.handle_runtime_response(response),
+                Err(_) => self.handle_runtime_bridge_disconnect(),
+            },
+            default(Duration::from_millis(8)) => return false,
+        }
+        true
+    }
+
     pub(super) fn process_events(&mut self) -> bool {
         let mut changed = false;
 
@@ -259,6 +275,23 @@ impl App {
         message: RuntimeEventBridgeMessage,
     ) {
         match message {
+            RuntimeEventBridgeMessage::StartupComplete(result) => {
+                if self.startup_sync != StartupSync::WaitingForRuntime {
+                    return;
+                }
+                self.startup_sync = StartupSync::Synchronizing;
+                let error = match result {
+                    Ok(kraai_runtime::RuntimeStartupState::Failed(error)) => Some(error),
+                    Err(error) => Some(error.to_string()),
+                    Ok(_) => None,
+                };
+                if let Some(error) = error {
+                    self.set_error(format!("Runtime error: {error}"));
+                    self.fail_ci(format!("Runtime error: {error}"));
+                }
+                self.request_sync();
+                self.request(RuntimeRequest::FinishStartupSync);
+            }
             RuntimeEventBridgeMessage::Event(event) => {
                 if event.sequence <= self.last_runtime_event_sequence {
                     return;
@@ -286,7 +319,9 @@ impl App {
                 self.stream_event_content.clear();
                 self.state.status =
                     format!("Missed {skipped} runtime event(s); resynchronizing session state");
-                self.request_sync();
+                if self.startup_sync != StartupSync::WaitingForRuntime {
+                    self.request_sync();
+                }
             }
         }
     }

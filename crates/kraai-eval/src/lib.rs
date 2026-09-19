@@ -266,10 +266,14 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     {
         bail!("Kraai provider config sanitization requires the Codex subscription proxy");
     }
-    let provider_config_sha256 = request
+    let provider_config = request
         .kraai_provider_config
         .as_ref()
-        .map(KraaiProviderConfigRequest::digest)
+        .map(KraaiProviderConfigRequest::prepare)
+        .transpose()?;
+    let provider_config_sha256 = provider_config
+        .as_ref()
+        .map(provider_config::PreparedKraaiProviderConfig::digest)
         .transpose()?;
     let rust_environment = task
         .runner
@@ -347,6 +351,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         run_root: &run_root,
         experiment_id: &experiment_id,
         identity: &identity,
+        provider_config: provider_config.as_ref(),
         rust_environment: rust_environment.as_ref(),
         artifact_path: store.relative_dir(),
         artifact_dir: &artifact_dir,

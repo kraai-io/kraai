@@ -2,6 +2,41 @@ use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
+async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("cycle"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    manager.complete_message(&request.message_id).await?;
+    let message = manager
+        .message_store
+        .get(&request.message_id)
+        .await?
+        .unwrap();
+    let parent_id = message.parent_id.unwrap();
+    let mut parent = manager.message_store.get(&parent_id).await?.unwrap();
+    parent.parent_id = Some(request.message_id.clone());
+    manager.message_store.save(&parent).await?;
+    let reader = manager.capture_session_snapshot(&session_id).await?;
+
+    let error = reader.load().await.err().unwrap();
+
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("cycle repeats message {}", request.message_id))
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;

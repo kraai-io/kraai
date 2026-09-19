@@ -384,10 +384,19 @@ impl App {
                     model_menu_next_index(self.state.model_menu_index, len);
             }
             KeyCode::Enter => {
-                if let Some((provider_id, model)) = models.get(self.state.model_menu_index) {
-                    self.state.selected_provider_id = Some(provider_id.clone());
-                    self.state.selected_model_id = Some(model.id.clone());
-                    self.state.status = format!("Selected model: {} / {}", provider_id, model.name);
+                let selected = models
+                    .get(self.state.model_menu_index)
+                    .map(|(provider, model)| {
+                        (
+                            (*provider).to_owned(),
+                            model.id.clone(),
+                            format!("Selected model: {} / {}", provider, model.name),
+                        )
+                    });
+                if let Some((provider_id, model_id, status)) = selected {
+                    self.state.selected_provider_id = Some(provider_id);
+                    self.state.selected_model_id = Some(model_id);
+                    self.state.status = status;
                     self.save_workspace_preferences();
                     self.state.mode = UiMode::Chat;
                 }

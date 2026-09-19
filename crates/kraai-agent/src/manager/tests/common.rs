@@ -87,7 +87,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
         message_store,
         session_store,
         context_state_store,
-        Arc::new(kraai_persistence::RequestUsageStore::new(&data_dir)),
+        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
         data_dir.clone(),
     );
     (manager, data_dir)

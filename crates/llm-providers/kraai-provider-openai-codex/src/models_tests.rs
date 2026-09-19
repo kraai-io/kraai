@@ -104,14 +104,14 @@ fn model_configs_override_remote_metadata() -> Result<()> {
     let configs = BTreeMap::from([
         (
             ModelId::new("new-model"),
-            ModelMetadata {
+            ConfiguredModelMetadata {
                 name: Some("Custom".into()),
                 max_context: Some(200000),
             },
         ),
         (
             ModelId::new("new-model-high"),
-            ModelMetadata {
+            ConfiguredModelMetadata {
                 name: Some("Thorough".into()),
                 max_context: Some(150000),
             },
@@ -155,6 +155,83 @@ fn resolution_uses_the_longest_model_slug_and_rejects_unknown_efforts() -> Resul
             .is_err_and(|error| error.to_string().contains("unsupported reasoning effort"))
     );
     Ok(())
+}
+
+#[test]
+fn indexed_resolution_matches_prefix_scan_for_overlapping_and_unusual_ids() -> Result<()> {
+    let mut entries = [
+        "model",
+        "model-mini",
+        "model-mini--edge",
+        "模型",
+        "模型-mini",
+        " model ",
+        "-leading",
+        "trailing-",
+    ]
+    .into_iter()
+    .map(model)
+    .collect::<Result<Vec<_>>>()?;
+    let mut plain = model("plain")?;
+    plain.supported_reasoning_levels.clear();
+    plain.default_reasoning_level = None;
+    entries.push(plain);
+    let models = DiscoveredModels::new(entries)?;
+    let mut ids = vec![String::from("unknown"), String::from("unknown-low")];
+    for slug in models.entries.keys() {
+        ids.push(slug.clone());
+        for suffix in ["low", "high", "future-effort", "invalid", "", "-low"] {
+            ids.push(format!("{slug}-{suffix}"));
+        }
+    }
+    for id in ids {
+        let expected = resolve_by_prefix_scan(&models, &id);
+        let actual = models
+            .resolve(&ModelId::new(id.clone()))
+            .map(|resolved| {
+                (
+                    resolved.api_model,
+                    resolved.reasoning.map(|value| value.effort),
+                )
+            })
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected, "model ID {id:?}");
+    }
+    Ok(())
+}
+
+fn resolve_by_prefix_scan(
+    models: &DiscoveredModels,
+    raw: &str,
+) -> std::result::Result<(String, Option<String>), String> {
+    let (model, effort) = if let Some(model) = models.entries.get(raw) {
+        (model, model.default_reasoning_level.as_deref())
+    } else {
+        let (model, suffix) = models
+            .entries
+            .values()
+            .filter_map(|model| {
+                raw.strip_prefix(&model.slug)
+                    .and_then(|suffix| suffix.strip_prefix('-'))
+                    .map(|suffix| (model, suffix))
+            })
+            .max_by_key(|(model, _)| model.slug.len())
+            .ok_or_else(|| {
+                format!("OpenAI Codex model '{raw}' was not returned by model discovery")
+            })?;
+        if !model
+            .supported_reasoning_levels
+            .iter()
+            .any(|level| level.effort == suffix)
+        {
+            return Err(format!(
+                "OpenAI Codex model '{raw}' uses unsupported reasoning effort '{suffix}' for base model '{}'",
+                model.slug
+            ));
+        }
+        (model, Some(suffix))
+    };
+    Ok((model.slug.clone(), effort.map(String::from)))
 }
 
 #[test]

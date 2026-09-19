@@ -1,9 +1,10 @@
-use std::fs;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
-use kraai_persistence::{ContextStateMutation, ContextStateStore, PinnedFileScope};
-use kraai_workspace_fs::{ScopedReadError, read_scoped_text_file};
+use kraai_persistence::{
+    ContextStateEvent, ContextStateMutation, ContextStateStore, PinnedFileScope,
+};
+use kraai_workspace_fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
 
 const REFRESH_COMPONENT: &str = "pinned-file-refresh";
 
@@ -28,8 +29,25 @@ pub(crate) async fn refresh_context_state(
     store: &dyn ContextStateStore,
     session_id: &str,
 ) -> Result<RefreshedContextState> {
+    let events = store.list(session_id).await?;
+    if events.is_empty() {
+        return Ok(RefreshedContextState::default());
+    }
+    let (refreshed, removals) =
+        tokio::task::spawn_blocking(move || refresh_pinned_files(events)).await?;
+    if !removals.is_empty() {
+        store
+            .append_runtime(session_id, REFRESH_COMPONENT, removals)
+            .await?;
+    }
+    Ok(refreshed)
+}
+
+fn refresh_pinned_files(
+    events: Vec<ContextStateEvent>,
+) -> (RefreshedContextState, Vec<ContextStateMutation>) {
     let mut state = ContextState::default();
-    for event in store.list(session_id).await? {
+    for event in events {
         for mutation in event.mutations {
             state.apply(&mutation);
         }
@@ -62,12 +80,6 @@ pub(crate) async fn refresh_context_state(
         }
     }
 
-    if !removals.is_empty() {
-        store
-            .append_runtime(session_id, REFRESH_COMPONENT, removals)
-            .await?;
-    }
-
     let mut prompt_sections = Vec::new();
     if !notifications.is_empty() {
         prompt_sections.push(format!(
@@ -85,10 +97,13 @@ pub(crate) async fn refresh_context_state(
             sections.join("\n\n")
         ));
     }
-    Ok(RefreshedContextState {
-        prompt: prompt_sections.join("\n\n"),
-        notifications,
-    })
+    (
+        RefreshedContextState {
+            prompt: prompt_sections.join("\n\n"),
+            notifications,
+        },
+        removals,
+    )
 }
 
 impl ContextState {
@@ -143,7 +158,7 @@ fn read_pinned_file(pinned: &PinnedFile) -> Result<String, PinnedReadFailure> {
                 other => PinnedReadFailure::Unavailable(other.to_string()),
             })
         }
-        PinnedFileScope::Host => fs::read_to_string(&pinned.path).map_err(|error| {
+        PinnedFileScope::Host => read_regular_text_file(&pinned.path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 PinnedReadFailure::Remove(String::from("it no longer exists"))
             } else {

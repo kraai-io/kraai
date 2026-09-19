@@ -175,12 +175,12 @@ struct UnsignedFrame<'a, T> {
     payload: &'a T,
 }
 
-fn signed_frame<T: Serialize + Clone>(
+fn signed_frame<'a, T: Serialize>(
     execution_id: &ScriptExecutionId,
     sequence: u64,
-    payload: &T,
+    payload: &'a T,
     secret: &[u8; 32],
-) -> Result<AuthenticatedFrame<T>, EffectProtocolError> {
+) -> Result<AuthenticatedFrame<&'a T>, EffectProtocolError> {
     let bytes = serde_json::to_vec(&UnsignedFrame {
         execution_id,
         sequence,
@@ -194,7 +194,7 @@ fn signed_frame<T: Serialize + Clone>(
     Ok(AuthenticatedFrame {
         execution_id: execution_id.clone(),
         sequence,
-        payload: payload.clone(),
+        payload,
         mac,
     })
 }
@@ -220,7 +220,7 @@ fn verify_frame<T: Serialize>(
         .map_err(|_error| EffectProtocolError::Authentication(String::from("invalid frame MAC")))
 }
 
-fn write_authenticated_sync<T: Serialize + Clone>(
+fn write_authenticated_sync<T: Serialize>(
     writer: &mut impl Write,
     execution_id: &ScriptExecutionId,
     sequence: u64,
@@ -250,7 +250,7 @@ fn read_authenticated_sync<T: DeserializeOwned + Serialize>(
     Ok((frame.sequence, frame.payload))
 }
 
-async fn write_authenticated_async<T: Serialize + Clone + Send + Sync>(
+async fn write_authenticated_async<T: Serialize + Send + Sync>(
     writer: &mut (impl AsyncWrite + Unpin + Send),
     execution_id: &ScriptExecutionId,
     sequence: u64,
@@ -362,23 +362,28 @@ impl std::error::Error for EffectProtocolError {}
 
 #[cfg(test)]
 #[expect(
-    clippy::panic,
-    reason = "protocol tests use direct failure messages for fixture construction"
+    clippy::panic_in_result_fn,
+    reason = "protocol tests propagate fixture errors and assert frame integrity"
 )]
 mod tests {
-    use super::{EffectProtocolError, signed_frame, verify_frame};
+    use super::{
+        AuthenticatedFrame, EffectProtocolError, signed_frame, verify_frame,
+        write_authenticated_async, write_authenticated_sync,
+    };
+    use hmac::{Hmac, KeyInit, Mac};
     use kraai_types::{CommandInvocationId, ScriptExecutionId, StateEffectAck};
 
     #[test]
-    fn authenticated_frames_reject_payload_execution_and_mac_tampering() {
+    fn authenticated_frames_reject_payload_execution_and_mac_tampering()
+    -> Result<(), Box<dyn std::error::Error>> {
         let execution_id = ScriptExecutionId::new("execution");
-        let secret = [7_u8; 32];
+        let secret = rand::random::<[u8; 32]>();
         let payload = StateEffectAck {
             invocation_id: CommandInvocationId::new("invocation"),
             error: None,
         };
-        let mut frame = signed_frame(&execution_id, 1, &payload, &secret)
-            .unwrap_or_else(|error| panic!("unable to sign test frame: {error}"));
+        let bytes = serde_json::to_vec(&signed_frame(&execution_id, 1, &payload, &secret)?)?;
+        let mut frame: AuthenticatedFrame<StateEffectAck> = serde_json::from_slice(&bytes)?;
         assert!(verify_frame(&frame, &execution_id, &secret).is_ok());
 
         frame.payload.error = Some(String::from("forged"));
@@ -387,15 +392,44 @@ mod tests {
             Err(EffectProtocolError::Authentication(_))
         ));
 
-        let frame = signed_frame(&execution_id, 1, &payload, &secret)
-            .unwrap_or_else(|error| panic!("unable to sign test frame: {error}"));
+        let frame = signed_frame(&execution_id, 1, &payload, &secret)?;
         assert!(matches!(
             verify_frame(&frame, &ScriptExecutionId::new("other"), &secret),
             Err(EffectProtocolError::ExecutionId)
         ));
         assert!(matches!(
-            verify_frame(&frame, &execution_id, &[8_u8; 32]),
+            verify_frame(&frame, &execution_id, &secret.map(|byte| byte ^ 1)),
             Err(EffectProtocolError::Authentication(_))
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_writers_preserve_frame_bytes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let execution_id = ScriptExecutionId::new("execution");
+        let secret = rand::random::<[u8; 32]>();
+        let payload = StateEffectAck {
+            invocation_id: CommandInvocationId::new("invocation"),
+            error: None,
+        };
+        let mut hmac = Hmac::<sha2::Sha256>::new_from_slice(&secret)?;
+        hmac.update(br#"{"execution_id":"execution","sequence":1,"payload":{"invocation_id":"invocation","error":null}}"#);
+        let mac: [u8; 32] = hmac.finalize().into_bytes().into();
+        let frame = format!(
+            r#"{{"execution_id":"execution","sequence":1,"payload":{{"invocation_id":"invocation","error":null}},"mac":{}}}"#,
+            serde_json::to_string(&mac)?,
+        );
+        let mut expected = u32::try_from(frame.len())?.to_be_bytes().to_vec();
+        expected.extend_from_slice(frame.as_bytes());
+
+        let mut synchronous = Vec::new();
+        write_authenticated_sync(&mut synchronous, &execution_id, 1, &payload, &secret)?;
+        assert_eq!(synchronous, expected);
+
+        let mut asynchronous = Vec::new();
+        write_authenticated_async(&mut asynchronous, &execution_id, 1, &payload, &secret).await?;
+        assert_eq!(asynchronous, expected);
+        Ok(())
     }
 }

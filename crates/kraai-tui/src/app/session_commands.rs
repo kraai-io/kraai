@@ -291,7 +291,7 @@ impl App {
             agent_profile_id: self.state.selected_profile_id.clone(),
         };
 
-        if let Err(error) = preferences.save_for_current_workspace() {
+        if let Err(error) = workspace_preferences::save_for_current_workspace(&preferences) {
             tracing::warn!("Failed to save workspace preferences: {error}");
             self.state.status = format!("Failed saving workspace preferences: {error}");
         }

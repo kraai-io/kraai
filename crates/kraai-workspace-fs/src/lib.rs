@@ -1,5 +1,9 @@
 #![deny(unsafe_code)]
 
+mod edits;
+
+pub use edits::{ExactTextEdit, apply_exact_edits};
+
 #[cfg(windows)]
 mod windows;
 
@@ -10,14 +14,6 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use ulid::Ulid;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactTextEdit {
-    pub start_line: u32,
-    pub end_line: u32,
-    pub old_text: String,
-    pub new_text: String,
-}
 
 pub fn resolve_path(cwd: &Path, requested: &Path) -> PathBuf {
     if requested.is_absolute() {
@@ -65,6 +61,13 @@ fn canonicalize(cwd: &Path, path: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
+    read_validated_text_file(cwd, requested).map(|(path, _)| path)
+}
+
+fn read_validated_text_file(
+    cwd: &Path,
+    requested: &Path,
+) -> Result<(PathBuf, String), WorkspaceFsError> {
     let path = resolve_path(cwd, requested);
     let canonical = canonicalize(cwd, &path).map_err(|source| WorkspaceFsError::Canonicalize {
         path: path.clone(),
@@ -79,11 +82,33 @@ pub fn validate_text_file(cwd: &Path, requested: &Path) -> Result<PathBuf, Works
     if !metadata.is_file() {
         return Err(WorkspaceFsError::NotFile(canonical));
     }
-    fs::read_to_string(&canonical).map_err(|source| WorkspaceFsError::ReadText {
-        path: canonical.clone(),
-        source,
-    })?;
-    Ok(canonical)
+    let contents =
+        read_regular_text_file(&canonical).map_err(|source| WorkspaceFsError::ReadText {
+            path: canonical.clone(),
+            source,
+        })?;
+    Ok((canonical, contents))
+}
+
+pub fn read_regular_text_file(path: &Path) -> std::io::Result<String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a regular file",
+        ));
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
 }
 
 /// Read a path while guaranteeing that resolution remains beneath `root`.
@@ -104,7 +129,7 @@ pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedR
 
 #[cfg(target_os = "linux")]
 pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadError> {
-    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+    use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 
     let relative = path
         .strip_prefix(root)
@@ -112,14 +137,19 @@ pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadErro
     if relative.as_os_str().is_empty() {
         return Err(ScopedReadError::NotFile(path.to_path_buf()));
     }
-    let root_directory = File::open(root).map_err(|source| ScopedReadError::OpenRoot {
+    let root_directory = open(
+        root,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY,
+        Mode::empty(),
+    )
+    .map_err(|error| ScopedReadError::OpenRoot {
         path: root.to_path_buf(),
-        source,
+        source: std::io::Error::from_raw_os_error(error.raw_os_error()),
     })?;
     let descriptor = openat2(
         &root_directory,
         relative,
-        OFlags::RDONLY | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
         ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
     )
@@ -184,11 +214,7 @@ pub fn edit_text_file(
     if edits.is_empty() {
         return Err(WorkspaceFsError::NoEdits);
     }
-    let path = validate_text_file(cwd, requested)?;
-    let original = fs::read_to_string(&path).map_err(|source| WorkspaceFsError::ReadText {
-        path: path.clone(),
-        source,
-    })?;
+    let (path, original) = read_validated_text_file(cwd, requested)?;
     let updated = apply_exact_edits(&path, &original, edits)?;
     let permissions = path
         .metadata()
@@ -205,159 +231,6 @@ pub fn edit_text_file(
     Ok(path)
 }
 
-pub fn apply_exact_edits(
-    path: &Path,
-    contents: &str,
-    edits: &[ExactTextEdit],
-) -> Result<String, WorkspaceFsError> {
-    let lines = index_lines(contents);
-    let mut pending = Vec::with_capacity(edits.len());
-    for (index, edit) in edits.iter().enumerate() {
-        pending.push(validate_edit(path, contents, &lines, index, edit)?);
-    }
-
-    pending.sort_by_key(|edit| (edit.start_line, edit.end_line));
-    for window in pending.windows(2) {
-        let [previous, current] = window else {
-            continue;
-        };
-        if current.start_line <= previous.end_line {
-            return Err(WorkspaceFsError::OverlappingEdits {
-                path: path.to_path_buf(),
-                first_start: previous.start_line,
-                first_end: previous.end_line,
-                second_start: current.start_line,
-                second_end: current.end_line,
-            });
-        }
-    }
-
-    let mut buffer = contents.to_owned();
-    pending.sort_by_key(|edit| edit.start_byte);
-    for edit in pending.iter().rev() {
-        buffer.replace_range(edit.start_byte..edit.end_byte, edit.new_text);
-    }
-    Ok(buffer)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LineSpan {
-    content_start: usize,
-    content_end: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingEdit<'a> {
-    start_line: usize,
-    end_line: usize,
-    start_byte: usize,
-    end_byte: usize,
-    new_text: &'a str,
-}
-
-fn validate_edit<'a>(
-    path: &Path,
-    contents: &str,
-    lines: &[LineSpan],
-    index: usize,
-    edit: &'a ExactTextEdit,
-) -> Result<PendingEdit<'a>, WorkspaceFsError> {
-    let edit_number = index.saturating_add(1);
-    let start_line =
-        usize::try_from(edit.start_line).map_err(|_error| WorkspaceFsError::InvalidLineRange {
-            path: path.to_path_buf(),
-            edit_number,
-            start_line: edit.start_line,
-            end_line: edit.end_line,
-        })?;
-    let end_line =
-        usize::try_from(edit.end_line).map_err(|_error| WorkspaceFsError::InvalidLineRange {
-            path: path.to_path_buf(),
-            edit_number,
-            start_line: edit.start_line,
-            end_line: edit.end_line,
-        })?;
-    if start_line == 0 || end_line < start_line || end_line > lines.len() {
-        return Err(WorkspaceFsError::InvalidLineRange {
-            path: path.to_path_buf(),
-            edit_number,
-            start_line: edit.start_line,
-            end_line: edit.end_line,
-        });
-    }
-    let first = lines.get(start_line.saturating_sub(1)).ok_or_else(|| {
-        WorkspaceFsError::InvalidLineRange {
-            path: path.to_path_buf(),
-            edit_number,
-            start_line: edit.start_line,
-            end_line: edit.end_line,
-        }
-    })?;
-    let last = lines.get(end_line.saturating_sub(1)).ok_or_else(|| {
-        WorkspaceFsError::InvalidLineRange {
-            path: path.to_path_buf(),
-            edit_number,
-            start_line: edit.start_line,
-            end_line: edit.end_line,
-        }
-    })?;
-    let actual = contents
-        .get(first.content_start..last.content_end)
-        .ok_or_else(|| WorkspaceFsError::InvalidTextBoundary {
-            path: path.to_path_buf(),
-            edit_number,
-        })?;
-    if actual != edit.old_text {
-        return Err(WorkspaceFsError::OldTextMismatch {
-            path: path.to_path_buf(),
-            edit_number,
-            expected: edit.old_text.clone(),
-            actual: actual.to_owned(),
-        });
-    }
-    Ok(PendingEdit {
-        start_line,
-        end_line,
-        start_byte: first.content_start,
-        end_byte: last.content_end,
-        new_text: &edit.new_text,
-    })
-}
-
-fn index_lines(contents: &str) -> Vec<LineSpan> {
-    if contents.is_empty() {
-        return vec![LineSpan {
-            content_start: 0,
-            content_end: 0,
-        }];
-    }
-    let bytes = contents.as_bytes();
-    let mut lines = Vec::new();
-    let mut start = 0;
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'\n' {
-            let content_end = if index > start && bytes.get(index.saturating_sub(1)) == Some(&b'\r')
-            {
-                index.saturating_sub(1)
-            } else {
-                index
-            };
-            lines.push(LineSpan {
-                content_start: start,
-                content_end,
-            });
-            start = index.saturating_add(1);
-        }
-    }
-    if start < bytes.len() {
-        lines.push(LineSpan {
-            content_start: start,
-            content_end: bytes.len(),
-        });
-    }
-    lines
-}
-
 enum WriteMode {
     Create,
     Replace { permissions: fs::Permissions },
@@ -372,19 +245,30 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
         .ok_or_else(|| WorkspaceFsError::MissingFileName(path.to_path_buf()))?
         .to_string_lossy();
     let temp_path = parent.join(format!(".{file_name}.{}.tmp", Ulid::generate()));
-    let result = (|| {
-        let mut temp = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|source| WorkspaceFsError::Write {
-                path: temp_path.clone(),
-                source,
-            })?;
+    write_atomic_file(path, parent, &temp_path, contents, mode, sync_directory)
+}
+
+fn write_atomic_file(
+    path: &Path,
+    parent: &Path,
+    temp_path: &Path,
+    contents: &[u8],
+    mode: WriteMode,
+    sync_parent: impl FnOnce(&Path) -> Result<(), WorkspaceFsError>,
+) -> Result<(), WorkspaceFsError> {
+    let mut temp = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp_path)
+        .map_err(|source| WorkspaceFsError::Write {
+            path: temp_path.to_path_buf(),
+            source,
+        })?;
+    let result: Result<(), WorkspaceFsError> = (|| {
         if let WriteMode::Replace { permissions } = &mode {
             temp.set_permissions(permissions.clone())
                 .map_err(|source| WorkspaceFsError::Write {
-                    path: temp_path.clone(),
+                    path: temp_path.to_path_buf(),
                     source,
                 })?;
         }
@@ -392,28 +276,27 @@ fn atomic_write(path: &Path, contents: &[u8], mode: WriteMode) -> Result<(), Wor
             .and_then(|()| temp.flush())
             .and_then(|()| temp.sync_all())
             .map_err(|source| WorkspaceFsError::Write {
-                path: temp_path.clone(),
+                path: temp_path.to_path_buf(),
                 source,
             })?;
         drop(temp);
 
         match mode {
-            WriteMode::Create => rename_without_replacement(&temp_path, path)?,
+            WriteMode::Create => rename_without_replacement(temp_path, path)?,
             WriteMode::Replace { .. } => {
-                replace_file(&temp_path, path).map_err(|source| WorkspaceFsError::Write {
+                replace_file(temp_path, path).map_err(|source| WorkspaceFsError::Write {
                     path: path.to_path_buf(),
                     source,
                 })?;
             }
         }
-        #[cfg(not(windows))]
-        sync_directory(parent)?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
+        let _ = fs::remove_file(temp_path);
     }
-    result
+    result?;
+    sync_parent(parent)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -468,6 +351,11 @@ fn sync_directory(path: &Path) -> Result<(), WorkspaceFsError> {
             path: path.to_path_buf(),
             source,
         })
+}
+
+#[cfg(windows)]
+fn sync_directory(_path: &Path) -> Result<(), WorkspaceFsError> {
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -590,26 +478,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_edits_are_validated_before_any_replacement() {
-        let edits = [
-            ExactTextEdit {
-                start_line: 1,
-                end_line: 1,
-                old_text: String::from("alpha"),
-                new_text: String::from("one"),
-            },
-            ExactTextEdit {
-                start_line: 2,
-                end_line: 2,
-                old_text: String::from("wrong"),
-                new_text: String::from("two"),
-            },
-        ];
-        let error = apply_exact_edits(Path::new("file"), "alpha\nbeta\n", &edits).unwrap_err();
-        assert!(matches!(error, WorkspaceFsError::OldTextMismatch { .. }));
-    }
-
-    #[test]
     fn edit_preserves_trailing_newline_and_permissions() {
         let directory = temp_dir("edit");
         let path = directory.join("file.txt");
@@ -640,6 +508,74 @@ mod tests {
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn regular_reads_preserve_text_and_io_errors() {
+        let root = temp_dir("regular-read");
+        let path = root.join("file.txt");
+        for contents in ["", "alpha\nβeta\n", "last line"] {
+            fs::write(&path, contents).unwrap();
+            assert_eq!(read_regular_text_file(&path).unwrap(), contents);
+            assert_eq!(
+                read_validated_text_file(&root, Path::new("file.txt"))
+                    .unwrap()
+                    .1,
+                contents
+            );
+        }
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        let actual = read_regular_text_file(&path).unwrap_err();
+        let expected = fs::read_to_string(&path).unwrap_err();
+        assert_eq!(actual.kind(), expected.kind());
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert!(matches!(
+            validate_text_file(&root, Path::new("file.txt")),
+            Err(WorkspaceFsError::ReadText { .. })
+        ));
+        fs::remove_file(&path).unwrap();
+        let actual = read_regular_text_file(&path).unwrap_err();
+        let expected = fs::read_to_string(&path).unwrap_err();
+        assert_eq!(actual.kind(), expected.kind());
+        assert_eq!(actual.to_string(), expected.to_string());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn regular_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
+        let root = temp_dir("regular-fifo");
+        let path = root.join("file.txt");
+        fs::write(&path, "initial").unwrap();
+        assert_eq!(read_regular_text_file(&path).unwrap(), "initial");
+        fs::remove_file(&path).unwrap();
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let fifo = path.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(read_regular_text_file(&path)).unwrap();
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+        let reader_completed = if result.is_err() {
+            let unblock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&fifo)
+                .unwrap();
+            let rescued = receive.recv_timeout(std::time::Duration::from_secs(1));
+            drop(unblock);
+            !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
+        } else {
+            true
+        };
+        if reader_completed {
+            reader.join().unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[cfg(windows)]
@@ -675,6 +611,92 @@ mod tests {
     }
 
     #[test]
+    fn atomic_write_cleans_up_only_temporary_files_it_created() {
+        let root = temp_dir("temp-file-ownership");
+        let destination = root.join("file.txt");
+        let temp_path = root.join("existing.tmp");
+        fs::write(&destination, "original").unwrap();
+        fs::write(&temp_path, "owned by another writer").unwrap();
+
+        let error = write_atomic_file(
+            &destination,
+            &root,
+            &temp_path,
+            b"replacement",
+            WriteMode::Replace {
+                permissions: destination.metadata().unwrap().permissions(),
+            },
+            sync_directory,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkspaceFsError::Write { path, source }
+                if path == temp_path && source.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
+        assert_eq!(
+            fs::read_to_string(&temp_path).unwrap(),
+            "owned by another writer"
+        );
+
+        fs::remove_file(&temp_path).unwrap();
+        assert!(
+            write_atomic_file(
+                &destination,
+                &root,
+                &temp_path,
+                b"replacement",
+                WriteMode::Create,
+                sync_directory
+            )
+            .is_err()
+        );
+        assert!(!temp_path.exists());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_failure_does_not_remove_a_reused_temporary_path() {
+        let root = temp_dir("sync-temp-ownership");
+        let destination = root.join("file.txt");
+        let temp_path = root.join("file.tmp");
+        let error = write_atomic_file(
+            &destination,
+            &root,
+            &temp_path,
+            b"replacement",
+            WriteMode::Create,
+            |_| {
+                fs::write(&temp_path, "owned by another writer").map_err(|source| {
+                    WorkspaceFsError::Write {
+                        path: temp_path.clone(),
+                        source,
+                    }
+                })?;
+                Err(WorkspaceFsError::Write {
+                    path: root.clone(),
+                    source: std::io::Error::other("injected parent sync failure"),
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            WorkspaceFsError::Write { path, source }
+                if path == root && source.to_string() == "injected parent sync failure"
+        ));
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "replacement");
+        assert_eq!(
+            fs::read_to_string(&temp_path).unwrap(),
+            "owned by another writer"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn atomic_create_preserves_a_destination_created_after_validation() {
         let root = temp_dir("atomic-create");
         let path = root.join("file.txt");
@@ -682,6 +704,57 @@ mod tests {
         assert!(atomic_write(&path, b"replacement", WriteMode::Create).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scoped_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
+        for replace_root in [false, true] {
+            let directory = temp_dir("scoped-fifo");
+            let root = directory.join("workspace");
+            fs::create_dir(&root).unwrap();
+            let path = root.join("file.txt");
+            fs::write(&path, "initial").unwrap();
+            assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "initial");
+            let fifo = if replace_root {
+                fs::remove_dir_all(&root).unwrap();
+                root.clone()
+            } else {
+                fs::remove_file(&path).unwrap();
+                path.clone()
+            };
+            nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+            let (send, receive) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                send.send(open_scoped_file(&root, &path)).unwrap();
+            });
+            let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+            let reader_completed = if result.is_err() {
+                let unblock = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&fifo)
+                    .unwrap();
+                let rescued = receive.recv_timeout(std::time::Duration::from_secs(1));
+                drop(unblock);
+                !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
+            } else {
+                true
+            };
+            if reader_completed {
+                reader.join().unwrap();
+            }
+            fs::remove_dir_all(directory).unwrap();
+            assert!(result.is_ok(), "scoped open waited for a FIFO writer");
+            if replace_root {
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(ScopedReadError::OpenRoot { .. })
+                ));
+            } else {
+                assert!(matches!(result.unwrap(), Err(ScopedReadError::NotFile(_))));
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

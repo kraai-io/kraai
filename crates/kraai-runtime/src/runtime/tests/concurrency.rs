@@ -12,8 +12,8 @@ use kraai_types::{Message, MessageId};
 use tokio_util::sync::CancellationToken;
 
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
-use crate::runtime::core::ActiveScriptTask;
-use crate::{Event, SessionActivity};
+use crate::runtime::core::{ActiveScriptTask, ActiveStream};
+use crate::{ContinueSessionOutcome, Event, SessionActivity};
 
 async fn wait_for_snapshot_writer(
     snapshot: impl std::future::Future + Send,
@@ -215,6 +215,161 @@ async fn cancellation_finishes_with_a_queued_snapshot_and_stays_active_until_fin
     assert!(result.await??);
     assert!(completion.is_cancelled());
     assert!(harness.runtime.active_script_tasks.lock().await.is_empty());
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
+    assert_shutdown_waits_for_synchronous_stream(false).await?;
+    assert_shutdown_waits_for_synchronous_stream(true).await
+}
+
+async fn assert_shutdown_waits_for_synchronous_stream(cancel_before_shutdown: bool) -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let entered = CancellationToken::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let task_entered = entered.clone();
+    let task_runtime = harness.runtime.clone();
+    let task_session = session_id.clone();
+    let task = harness.runtime.stream_tasks.spawn(async move {
+        let mut stream = futures::stream::poll_fn(move |_| {
+            task_entered.cancel();
+            let _released = release_rx.recv_timeout(Duration::from_secs(5));
+            task_runtime.send_event(Event::HistoryUpdated {
+                session_id: task_session.clone(),
+            });
+            std::task::Poll::Ready(Some(()))
+        });
+        let _ = futures::StreamExt::next(&mut stream).await;
+    });
+    harness.runtime.active_streams.lock().await.insert(
+        session_id.clone(),
+        ActiveStream {
+            message_id: MessageId::new("synchronous-stream"),
+            abort_handle: task.abort_handle(),
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(1), entered.cancelled()).await?;
+    if cancel_before_shutdown {
+        harness.runtime.cancel_stream(session_id).await?;
+        assert!(harness.runtime.active_streams.lock().await.is_empty());
+    }
+    let runtime = harness.runtime.clone();
+    let shutdown = runtime.stop_active_work();
+    tokio::pin!(shutdown);
+    let shutdown_pending = poll!(&mut shutdown).is_pending();
+    let stream_finished_early = task.is_finished();
+
+    release_tx.send(()).expect("stream poll is blocked");
+    if shutdown_pending {
+        tokio::time::timeout(Duration::from_secs(1), shutdown).await?;
+    }
+    let _task_result = tokio::time::timeout(Duration::from_secs(1), task).await?;
+    assert!(shutdown_pending);
+    assert!(!stream_finished_early);
+    assert!(harness.runtime.stream_tasks.is_empty());
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_script_finalization_after_task_removal() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let (removed_tx, removed_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+    let completion = CancellationToken::new();
+    let completion_guard = completion.clone().drop_guard();
+    let runtime = harness.runtime.clone();
+    let task_session = session_id.clone();
+    let join_handle = tokio::spawn(async move {
+        let _completion_guard = completion_guard;
+        start_rx.await.expect("start finalization");
+        let _guard = runtime.session_state_barrier.read().await;
+        runtime
+            .active_script_tasks
+            .lock()
+            .await
+            .remove(&task_session);
+        removed_tx.send(()).expect("report task removal");
+        finish_rx.await.expect("release finalization");
+        runtime.send_event(Event::HistoryUpdated {
+            session_id: task_session,
+        });
+    });
+    harness.runtime.active_script_tasks.lock().await.insert(
+        session_id.clone(),
+        ActiveScriptTask {
+            cancellation: CancellationToken::new(),
+            completion: completion.clone(),
+            join_handle,
+        },
+    );
+    start_tx.send(()).expect("registered task is waiting");
+    tokio::time::timeout(Duration::from_secs(1), removed_rx).await??;
+    let mut events = harness.runtime.event_tx.subscribe();
+    let shutdown_runtime = harness.runtime.clone();
+    let shutdown = shutdown_runtime.stop_active_work();
+    tokio::pin!(shutdown);
+    assert!(poll!(&mut shutdown).is_pending());
+    assert!(!completion.is_cancelled());
+
+    finish_tx.send(()).expect("finalization is waiting");
+    tokio::time::timeout(Duration::from_secs(1), shutdown).await?;
+    assert!(completion.is_cancelled());
+    assert!(matches!(
+        events.try_recv()?.event,
+        Event::HistoryUpdated { session_id: actual } if actual == session_id
+    ));
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let mut agent = harness.runtime.agent_manager.write().await;
+    let request = agent
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
+        .await?;
+    agent.complete_message(&request.message_id).await?;
+    drop(agent);
+    let event_sequence = harness.runtime.event_tx.latest_sequence();
+    let runtime = harness.runtime.clone();
+    let mutation = runtime.session_state_barrier.read().await;
+    let shutdown = runtime.stop_active_work();
+    tokio::pin!(shutdown);
+    assert!(poll!(&mut shutdown).is_pending());
+    let continuation = async {
+        let _guard = runtime.session_state_barrier.read().await;
+        runtime.start_continuation(session_id.clone()).await
+    };
+    tokio::pin!(continuation);
+    assert!(poll!(&mut continuation).is_pending());
+    drop(mutation);
+
+    let ((), outcome) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(shutdown, continuation)
+    })
+    .await?;
+    assert_eq!(outcome?, ContinueSessionOutcome::NothingToContinue);
+    assert!(harness.runtime.active_streams.lock().await.is_empty());
+    assert_eq!(harness.runtime.event_tx.latest_sequence(), event_sequence);
     harness.shutdown().await;
     Ok(())
 }

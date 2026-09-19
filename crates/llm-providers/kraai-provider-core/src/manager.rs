@@ -15,7 +15,7 @@ use crate::stream::ProviderStreamEvent;
 
 #[derive(Default, Clone)]
 pub struct ProviderManager {
-    providers: BTreeMap<ProviderId, Arc<dyn Provider>>,
+    providers: Arc<BTreeMap<ProviderId, Arc<dyn Provider>>>,
     pricing: crate::pricing::Pricing,
 }
 
@@ -32,7 +32,7 @@ impl ProviderManager {
     }
 
     pub fn register_provider(&mut self, id: ProviderId, provider: Box<dyn Provider>) {
-        self.providers.insert(id, Arc::from(provider));
+        Arc::make_mut(&mut self.providers).insert(id, Arc::from(provider));
     }
 
     pub fn has_provider(&self, id: &ProviderId) -> bool {
@@ -52,7 +52,9 @@ impl ProviderManager {
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
     ) -> Result<()> {
-        let pricing = crate::pricing::Pricing::new(&config)?;
+        let pricing = crate::pricing::Pricing::new(&config, |type_id| {
+            registry.pricing_policy(type_id).unwrap_or_default()
+        })?;
         let mut provider_types = BTreeMap::new();
         let mut provider_configs = BTreeMap::new();
         let mut models_by_provider: BTreeMap<ProviderId, Vec<ModelConfig>> = BTreeMap::new();
@@ -136,15 +138,21 @@ impl ProviderManager {
             return Err(ProviderError::ConfigValidationError(failures.join("\n")).into());
         }
 
-        let providers = providers
+        let providers: BTreeMap<ProviderId, Arc<dyn Provider>> = providers
             .into_iter()
             .map(|(id, provider)| (id, Arc::from(provider)))
             .collect();
+        let providers = Arc::new(providers);
 
         self.pricing = pricing;
-        self.pricing.start().await;
-        self.providers = providers;
-        self.update_models_list().await
+        let (_, refresh_result) = tokio::join!(
+            async {
+                self.pricing.start().await;
+                self.providers = providers.clone();
+            },
+            Self::update_models_list_for(&providers),
+        );
+        refresh_result
     }
 
     pub async fn list_all_models(&self) -> HashMap<ProviderId, Vec<Model>> {
@@ -165,36 +173,30 @@ impl ProviderManager {
     async fn update_models_list_for(
         providers: &BTreeMap<ProviderId, Arc<dyn Provider>>,
     ) -> Result<()> {
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(
-            Self::MODEL_CACHE_REFRESH_CONCURRENCY,
-        ));
+        let mut providers = providers.iter();
         let mut tasks = tokio::task::JoinSet::new();
-
-        for (provider_id, provider) in providers {
-            let provider_id = provider_id.clone();
-            let provider = provider.clone();
-            let semaphore = semaphore.clone();
-
-            tasks.spawn(async move {
-                let _permit = semaphore.acquire_owned().await.map_err(|error| {
-                    ProviderModelCacheRefreshError {
-                        provider_id: provider_id.clone(),
-                        message: format!("Failed to acquire model cache refresh permit: {error}"),
-                    }
-                })?;
-
-                provider
-                    .cache_models()
-                    .await
-                    .map_err(|error| ProviderModelCacheRefreshError {
-                        provider_id,
-                        message: error.to_string(),
-                    })
-            });
-        }
-
         let mut failures = Vec::new();
-        while let Some(result) = tasks.join_next().await {
+        loop {
+            while tasks.len() < Self::MODEL_CACHE_REFRESH_CONCURRENCY {
+                let Some((provider_id, provider)) = providers.next() else {
+                    break;
+                };
+                let provider_id = provider_id.clone();
+                let provider = provider.clone();
+                tasks.spawn(async move {
+                    provider
+                        .cache_models()
+                        .await
+                        .map_err(|error| ProviderModelCacheRefreshError {
+                            provider_id,
+                            message: error.to_string(),
+                        })
+                });
+            }
+
+            let Some(result) = tasks.join_next().await else {
+                break;
+            };
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => failures.push(error),
@@ -262,7 +264,7 @@ fn format_validation_errors(prefix: &str, errors: &[ValidationError]) -> String 
 mod tests {
     use super::*;
     use color_eyre::eyre::eyre;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crate::config::{DynamicConfig, DynamicValue, ProviderConfig};
@@ -277,6 +279,11 @@ mod tests {
         config.insert("token".to_string(), DynamicValue::from("abc"));
 
         let mut manager = ProviderManager::new();
+        manager.register_provider(
+            ProviderId::new("active"),
+            Box::new(MockProvider::new("active")),
+        );
+        let snapshot = manager.clone();
         manager
             .load_config(
                 ProviderManagerConfig {
@@ -291,7 +298,50 @@ mod tests {
             )
             .await?;
 
-        assert!(manager.has_provider(&ProviderId::new("mock")));
+        assert_eq!(manager.list_providers(), vec![ProviderId::new("mock")]);
+        assert_eq!(snapshot.list_providers(), vec![ProviderId::new("active")]);
+        Ok(())
+    }
+
+    #[test]
+    fn cloned_managers_isolate_provider_registration() -> Result<()> {
+        let id = ProviderId::new("shared");
+        let mut manager = ProviderManager::new();
+        manager.register_provider(id.clone(), Box::new(MockProvider::new("original")));
+        let mut snapshot = manager.clone();
+        let original = snapshot
+            .get_provider(&id)
+            .ok_or_else(|| eyre!("snapshot lost its provider"))?;
+        assert!(Arc::ptr_eq(
+            &original,
+            &manager
+                .get_provider(&id)
+                .ok_or_else(|| eyre!("manager lost its provider"))?
+        ));
+
+        manager.register_provider(id.clone(), Box::new(MockProvider::new("replacement")));
+        snapshot.register_provider(
+            ProviderId::new("snapshot-only"),
+            Box::new(MockProvider::new("snapshot-only")),
+        );
+        assert_eq!(manager.list_providers(), vec![id.clone()]);
+        assert_eq!(
+            snapshot.list_providers(),
+            vec![id.clone(), ProviderId::new("snapshot-only")]
+        );
+        assert_eq!(
+            manager
+                .get_provider(&id)
+                .ok_or_else(|| eyre!("manager lost replacement provider"))?
+                .get_provider_id(),
+            ProviderId::new("replacement")
+        );
+        assert!(Arc::ptr_eq(
+            &original,
+            &snapshot
+                .get_provider(&id)
+                .ok_or_else(|| eyre!("snapshot lost original provider"))?
+        ));
         Ok(())
     }
 
@@ -347,6 +397,7 @@ mod tests {
                 false,
                 "observed",
             ),
+            crate::ProviderPricingPolicy::default(),
             {
                 let active_initializations = active_initializations.clone();
                 let peak_initializations = peak_initializations.clone();
@@ -389,6 +440,111 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn model_discovery_overlaps_pricing_without_publishing_before_pricing_finishes() -> Result<()> {
+        struct ObservedProvider {
+            id: ProviderId,
+            cache_started: Arc<tokio::sync::Notify>,
+        }
+
+        #[async_trait::async_trait]
+        impl Provider for ObservedProvider {
+            fn get_provider_id(&self) -> ProviderId {
+                self.id.clone()
+            }
+
+            async fn list_models(&self) -> Vec<Model> {
+                Vec::new()
+            }
+
+            async fn cache_models(&self) -> Result<()> {
+                self.cache_started.notify_one();
+                Ok(())
+            }
+
+            async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+                Ok(())
+            }
+
+            async fn generate_reply_stream(
+                &self,
+                _model_id: &ModelId,
+                _request: ProviderRequest,
+                _request_context: &ProviderRequestContext,
+            ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+                unreachable!("not used by this test")
+            }
+        }
+
+        if directories::BaseDirs::new().is_none() {
+            return Err(eyre!("test requires a pricing cache directory"));
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?
+            .block_on(async {
+                let cache_started = Arc::new(tokio::sync::Notify::new());
+                let mut registry = ProviderRegistry::default();
+                let started = cache_started.clone();
+                registry.register_dynamic_factory(
+                    "observed",
+                    simple_provider_definition("Observed", "Observed", true, "observed"),
+                    crate::ProviderPricingPolicy::default(),
+                    move |id, _config| {
+                        Ok(Box::new(ObservedProvider {
+                            id,
+                            cache_started: started.clone(),
+                        }))
+                    },
+                    |_| Vec::new(),
+                    |_| Vec::new(),
+                )?;
+                let config = ProviderManagerConfig {
+                    providers: vec![ProviderConfig {
+                        id: ProviderId::new("replacement"),
+                        type_id: String::from("observed"),
+                        config: DynamicConfig::from([(
+                            String::from("base_url"),
+                            DynamicValue::from("http://127.0.0.1"),
+                        )]),
+                    }],
+                    models: Vec::new(),
+                };
+                let mut manager = ProviderManager::new();
+                manager.register_provider(
+                    ProviderId::new("active"),
+                    Box::new(MockProvider::new("active")),
+                );
+                let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+                let (blocked_tx, blocked_rx) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = blocked_tx.send(());
+                    let _ = release_rx.recv();
+                });
+                blocked_rx.await?;
+
+                let mut loading = Box::pin(manager.load_config(config, registry));
+                let observed = tokio::select! {
+                    result = &mut loading => Err(eyre!(
+                        "startup completed before pricing I/O was released: {result:?}"
+                    )),
+                    result = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        cache_started.notified(),
+                    ) => result.map_err(|error| eyre!("model discovery did not start: {error}")),
+                };
+                let still_pending = observed.is_ok() && futures::poll!(&mut loading).is_pending();
+                drop(loading);
+                drop(release_tx);
+                blocker.await?;
+                observed?;
+                assert!(still_pending);
+                assert_eq!(manager.list_providers(), vec![ProviderId::new("active")]);
+                Ok(())
+            })
+    }
+
     #[tokio::test]
     async fn test_invalid_config() -> Result<()> {
         let mut registry = ProviderRegistry::default();
@@ -419,6 +575,7 @@ mod tests {
         registry.register_dynamic_factory(
             "failing",
             simple_provider_definition("Failing", "Fails during creation", false, "failing"),
+            crate::ProviderPricingPolicy::default(),
             |_id, _config| {
                 Err(ProviderError::ConfigParseError(
                     "provider creation failed".to_string(),
@@ -436,6 +593,7 @@ mod tests {
             ProviderId::new("active"),
             Box::new(MockProvider::new("active")),
         );
+        let snapshot = manager.clone();
 
         let result = manager
             .load_config(
@@ -460,6 +618,7 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(manager.list_providers(), vec![ProviderId::new("active")]);
+        assert_eq!(snapshot.list_providers(), vec![ProviderId::new("active")]);
         Ok(())
     }
 
@@ -474,6 +633,7 @@ mod tests {
                 true,
                 "failing-cache",
             ),
+            crate::ProviderPricingPolicy::default(),
             |id, _config| Ok(Box::new(MockProvider::failing_cache(id.as_str()))),
             |_| Vec::new(),
             |_| Vec::new(),
@@ -484,6 +644,7 @@ mod tests {
             ProviderId::new("active"),
             Box::new(MockProvider::new("active")),
         );
+        let snapshot = manager.clone();
 
         let result = manager
             .load_config(
@@ -504,6 +665,7 @@ mod tests {
             manager.list_providers(),
             vec![ProviderId::new("replacement")]
         );
+        assert_eq!(snapshot.list_providers(), vec![ProviderId::new("active")]);
         Ok(())
     }
 
@@ -513,11 +675,8 @@ mod tests {
         let successful = Arc::new(MockProvider::new("successful"));
 
         let mut manager = ProviderManager::new();
-        manager
-            .providers
-            .insert(ProviderId::new("failing"), failing.clone());
-        manager
-            .providers
+        Arc::make_mut(&mut manager.providers).insert(ProviderId::new("failing"), failing.clone());
+        Arc::make_mut(&mut manager.providers)
             .insert(ProviderId::new("successful"), successful.clone());
 
         let result = manager.update_models_list().await;
@@ -543,11 +702,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_models_list_refreshes_providers_concurrently() -> Result<()> {
+    async fn update_models_list_bounds_refreshes_and_attempts_later_providers_after_failure()
+    -> Result<()> {
         struct ObservedProvider {
             id: ProviderId,
             active: Arc<AtomicUsize>,
-            overlap_seen: Arc<AtomicBool>,
+            peak: Arc<AtomicUsize>,
+            completed: Arc<AtomicUsize>,
         }
 
         #[async_trait::async_trait]
@@ -562,12 +723,15 @@ mod tests {
 
             async fn cache_models(&self) -> Result<()> {
                 let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-                if active > 1 {
-                    self.overlap_seen.store(true, Ordering::SeqCst);
-                }
+                self.peak.fetch_max(active, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 self.active.fetch_sub(1, Ordering::SeqCst);
-                Ok(())
+                self.completed.fetch_add(1, Ordering::SeqCst);
+                if self.id.as_str() == "provider-00" {
+                    Err(eyre!("first provider failed"))
+                } else {
+                    Ok(())
+                }
             }
 
             async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
@@ -585,22 +749,40 @@ mod tests {
         }
 
         let active = Arc::new(AtomicUsize::new(0));
-        let overlap_seen = Arc::new(AtomicBool::new(false));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
         let mut manager = ProviderManager::new();
-        for id in ["first", "second"] {
-            manager.providers.insert(
-                ProviderId::new(id),
+        let provider_count = ProviderManager::MODEL_CACHE_REFRESH_CONCURRENCY + 3;
+        for index in 0..provider_count {
+            let id = ProviderId::new(format!("provider-{index:02}"));
+            Arc::make_mut(&mut manager.providers).insert(
+                id.clone(),
                 Arc::new(ObservedProvider {
-                    id: ProviderId::new(id),
+                    id,
                     active: active.clone(),
-                    overlap_seen: overlap_seen.clone(),
+                    peak: peak.clone(),
+                    completed: completed.clone(),
                 }),
             );
         }
 
-        manager.update_models_list().await?;
+        let Err(error) = manager.update_models_list().await else {
+            return Err(eyre!("first provider unexpectedly succeeded"));
+        };
 
-        assert!(overlap_seen.load(Ordering::SeqCst));
+        assert_eq!(completed.load(Ordering::SeqCst), provider_count);
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            ProviderManager::MODEL_CACHE_REFRESH_CONCURRENCY,
+        );
+        assert!(matches!(
+            error.downcast_ref::<ProviderError>(),
+            Some(ProviderError::ModelCacheRefreshFailed(failures))
+                if failures == &vec![ProviderModelCacheRefreshError {
+                    provider_id: ProviderId::new("provider-00"),
+                    message: String::from("first provider failed"),
+                }]
+        ));
         Ok(())
     }
 }

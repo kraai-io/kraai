@@ -3,6 +3,89 @@ use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::Result;
 
 #[tokio::test]
+async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("start"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    manager
+        .append_text_chunk(
+            &request.message_id,
+            "answer",
+            AssistantPhase::FinalAnswer,
+            "partial",
+        )
+        .await
+        .expect("text should be appended");
+    let original = manager
+        .get_chat_history(&session_id)
+        .await?
+        .remove(&request.message_id)
+        .expect("streaming message");
+    let blocked_root = data_dir.join("blocked-storage");
+    tokio::fs::write(&blocked_root, b"not a directory").await?;
+    let working_store = std::mem::replace(
+        &mut manager.message_store,
+        Arc::new(kraai_persistence::FileMessageStore::new(&blocked_root)),
+    );
+
+    assert!(manager.complete_message(&request.message_id).await.is_err());
+    assert!(
+        manager
+            .cancel_streaming_message(&request.message_id)
+            .await
+            .is_err()
+    );
+    manager.message_store = working_store;
+    let restored = manager
+        .get_chat_history(&session_id)
+        .await?
+        .remove(&request.message_id)
+        .expect("restored streaming message");
+    assert_eq!(restored.status, original.status);
+    assert_eq!(restored.content, original.content);
+    assert_eq!(restored.generation, original.generation);
+    assert_eq!(restored.parent_id, original.parent_id);
+    assert_eq!(
+        manager
+            .append_text_chunk(
+                &request.message_id,
+                "answer",
+                AssistantPhase::FinalAnswer,
+                " output",
+            )
+            .await
+            .as_deref(),
+        Some(" output")
+    );
+    manager.complete_message(&request.message_id).await?;
+    let saved = manager
+        .message_store
+        .get(&request.message_id)
+        .await?
+        .expect("completed message");
+    assert_eq!(saved.status, MessageStatus::Complete);
+    assert_eq!(
+        saved.content.assistant_items(),
+        Some(
+            [AssistantItem::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: String::from("partial output"),
+            }]
+            .as_slice()
+        )
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;

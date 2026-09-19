@@ -131,10 +131,8 @@ impl AgentManager {
     ) -> Option<usize> {
         self.providers
             .get_provider(provider_id)?
-            .list_models()
+            .get_model(model_id)
             .await
-            .into_iter()
-            .find(|model| model.id == *model_id)
             .and_then(|model| model.max_context)
     }
 }

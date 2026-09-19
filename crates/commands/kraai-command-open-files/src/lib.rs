@@ -2,36 +2,16 @@
 
 use std::path::Path;
 
-use kraai_command_core::declare_kraai_command;
-use kraai_types::ContextStateDelta;
+use kraai_command_core::{command_error, declare_kraai_command};
+use kraai_types::OpenedFilesOperation;
 use kraai_workspace_fs::validate_text_file;
 use nu_engine::CallExt;
-use nu_protocol::shell_error::generic::GenericError;
-use nu_protocol::{
-    Category, IntoPipelineData, ShellError, Signature, Span, SyntaxShape, Type, Value, record,
-};
-
-const COMMAND_ID: &str = "kraai-open-files";
+use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};
 
 declare_kraai_command! {
     /// Pins files for fresh context injection on subsequent model turns.
     pub struct OpenFilesCommand;
-    id: "kraai-open-files";
-    name: "kraai-open-files";
-    description: "Prefer this command when reading files for inspection or continued work. The file contents will be provided and 100% up to date every turn until you close the file. Use other methods for opening files only when file contents must be consumed immediately by a pipeline or transformed as data.";
-    signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
-    examples: [
-        {
-            description: "Pin a source file for future turns",
-            timeout: "10sec",
-            script: "kraai-open-files src/main.rs",
-        },
-        {
-            description: "Pin several files without returning their contents",
-            timeout: "10sec",
-            script: "kraai-open-files Cargo.toml src/lib.rs",
-        },
-    ];
+    metadata: kraai_command_catalog::OPEN_FILES;
     signature: Signature::build("kraai-open-files")
         .rest(
             "paths",
@@ -60,12 +40,8 @@ declare_kraai_command! {
             context
                 .state_effects()
                 .apply(
-                    COMMAND_ID,
-                    vec![ContextStateDelta {
-                        namespace: String::from("opened_files"),
-                        operation: String::from("open"),
-                        payload: serde_json::json!({ "path": normalized_string }),
-                    }],
+                    Self::METADATA.id,
+                    vec![OpenedFilesOperation::Open.into_delta(normalized_string.clone())],
                 )
                 .map_err(|error| {
                     command_error(
@@ -86,10 +62,4 @@ declare_kraai_command! {
         )
         .into_pipeline_data())
     }
-}
-
-fn command_error(title: impl Into<String>, message: impl Into<String>, span: Span) -> ShellError {
-    let title: String = title.into();
-    let message: String = message.into();
-    ShellError::Generic(GenericError::new(title, message, span))
 }
