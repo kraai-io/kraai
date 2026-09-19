@@ -1,0 +1,16 @@
+diff --git a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -43,7 +43,11 @@
+                     key
+                 }
+             };
+-            self.versions.insert(key.clone(), revision);
++            if self.values.contains_key(key) {
++                self.versions.insert(key.clone(), revision);
++            } else {
++                self.versions.remove(key);
++            }
+         }
+         self.revision = revision;
+         self.receipts.insert(tx.id, (tx.clone(), revision));

@@ -68,7 +68,7 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let system_prompt = match self
+        let mut system_prompt = match self
             .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await
         {
@@ -88,14 +88,8 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let mut provider_messages: Vec<ConversationItem> =
-            context.into_iter().map(|message| message.content).collect();
-
-        if !system_prompt.content.is_empty() {
-            provider_messages.push(ConversationItem::System {
-                text: system_prompt.content,
-            });
-        }
+        let provider_messages =
+            system_prompt.wrap_history(context.into_iter().map(|message| message.content));
 
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
@@ -195,18 +189,12 @@ impl AgentManager {
         let script_tool_transport = self
             .providers
             .script_tool_transport(&provider_id, &model_id)?;
-        let system_prompt = self
+        let mut system_prompt = self
             .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await?;
 
-        let mut provider_messages: Vec<ConversationItem> =
-            context.into_iter().map(|message| message.content).collect();
-
-        if !system_prompt.content.is_empty() {
-            provider_messages.push(ConversationItem::System {
-                text: system_prompt.content,
-            });
-        }
+        let provider_messages =
+            system_prompt.wrap_history(context.into_iter().map(|message| message.content));
 
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {

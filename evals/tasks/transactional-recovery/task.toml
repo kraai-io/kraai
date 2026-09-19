@@ -1,0 +1,44 @@
+id = "transactional-recovery"
+prompt = '''
+Repair this transactional key-value journal. Basic writes and clean restarts work, but stale transactions, retries, checkpoints and interrupted writes interact incorrectly. Preserve all public types, method signatures, the existing wire format and public tests. You may change private state and reorganize modules. It must work offline without dependencies. Only observable behavior is graded.
+
+A Transaction has an arbitrary u64 id, an ordered checks vector and an ordered writes vector. IDs need not increase; zero and u64::MAX are valid. Check.version is the expected last-write revision of its key. None means the key has never been written, not merely that it is currently absent. A delete, including a delete of an absent key, writes a tombstone version. get and snapshot contain only present values; version includes tombstones. Empty strings, Unicode, NULs, quotes and backslashes are valid keys and values.
+
+For commit, first look up the transaction ID among all successfully committed transactions, including those restored from a checkpoint. If the entire Transaction is structurally identical (including vector order and duplicates), return Commit with applied=false and the ORIGINAL successful revision, without rechecking preconditions or changing any state or bytes. Any other transaction with that ID returns IdConflict(id), even if its checks would fail. Failed transactions do not reserve IDs.
+
+For a new ID, check every precondition in listed order against the same state BEFORE this transaction's writes. The first mismatch returns Stale with the key, expected and actual versions. Duplicate checks are allowed; contradictory checks fail at the first mismatch. Any error leaves values, versions, revision, deduplication state and bytes unchanged. On success, increment the global revision exactly once, apply writes in listed order (last write to a key wins), and set every touched key's version to that revision. Empty and check-only transactions also increment the revision and reserve their ID. The revision starts at zero; inputs never require overflowing u64. Return applied=true and the new revision. Append exactly one encode_transaction frame for a successful new ID, and no bytes for a duplicate or error.
+
+checkpoint returns an independent, immutable snapshot of ALL logical state needed to continue exactly the same behavior, including deleted-key versions and historical duplicate receipts with their original transactions and revisions. Creating a checkpoint must not modify the journal or its bytes. Checkpoint's internals are private and may change. Journal::open(None, bytes) starts from empty state; open(Some(checkpoint), bytes) starts from that checkpoint and replays only the supplied tail. bytes() contains only that supplied tail's complete committed prefix, not any history preceding the checkpoint. A checkpoint may be reused for independent branches. Checkpoints and tails may be chained through any number of restarts. A tail may contain identical transactions already represented in the checkpoint or earlier tail frames; retain those complete frames in bytes() but do not reapply or advance the revision. Conflicting IDs and stale checks in complete frames return the same errors as live commit; never ignore them.
+
+Frames are a little-endian u32 payload byte length followed by that payload. Payload: u64 transaction id; u32 check count; each check is a length-prefixed UTF-8 key, one-byte version tag (0=None, 1=Some followed by u64 revision); u32 write count; each write is a one-byte tag (1=Put, 2=Delete), length-prefixed UTF-8 key and, for Put only, a length-prefixed UTF-8 value. All integers are little-endian, and string lengths are u32 BYTE counts. No surplus payload bytes are permitted. Encoded lengths and counts fit u32. Keep encode_transaction byte-compatible.
+
+A final partial length header or a frame whose declared payload extends past EOF is an uncommitted tail. Discard the entire incomplete frame from both state and bytes, even if it contains complete individual operations, so later appends survive reopening. A complete malformed frame must return InvalidRecord with its starting byte offset within the supplied tail: unknown tags, invalid UTF-8, missing fields, impossible lengths/counts, or surplus bytes. A malformed complete frame cannot be treated as an interrupted write or skipped even when a partial tail follows it. Decode the whole frame before applying anything. Empty tails and empty journals are valid.
+'''
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 900
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/accept-surplus-payload.patch",
+  "mutations/checkpoint-forgets-receipts.patch",
+  "mutations/checks-before-receipts.patch",
+  "mutations/consume-failed-revision.patch",
+  "mutations/forget-tombstones.patch",
+  "mutations/ignore-replay-errors.patch",
+  "mutations/retain-torn-tail.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern transactional_recovery=\"$grade_dir/target/debug/libtransactional_recovery.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

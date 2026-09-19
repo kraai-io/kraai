@@ -1,0 +1,105 @@
+diff --git a/src/codec.rs b/src/codec.rs
+--- a/src/codec.rs
++++ b/src/codec.rs
+@@ -81,5 +81,7 @@
+             _ => return None,
+         });
+     }
+-    Some(Transaction { id, checks, writes })
++    input
++        .is_empty()
++        .then_some(Transaction { id, checks, writes })
+ }
+diff --git a/src/journal.rs b/src/journal.rs
+--- a/src/journal.rs
++++ b/src/journal.rs
+@@ -10,9 +10,9 @@
+ impl Journal {
+     pub fn open(checkpoint: Option<&Checkpoint>, bytes: &[u8]) -> Result<Self, Error> {
+         let state = checkpoint.map(|c| c.state.clone()).unwrap_or_default();
+-        let (state, _committed) = replay::recover(state, bytes)?;
++        let (state, committed) = replay::recover(state, bytes)?;
+         Ok(Self {
+-            bytes: bytes.to_vec(),
++            bytes: bytes[..committed].to_vec(),
+             state,
+         })
+     }
+@@ -26,9 +26,9 @@
+     }
+ 
+     pub fn checkpoint(&self) -> Checkpoint {
+-        let mut state = self.state.clone();
+-        state.receipts.clear();
+-        Checkpoint { state }
++        Checkpoint {
++            state: self.state.clone(),
++        }
+     }
+ 
+     pub fn get(&self, key: &str) -> Option<&str> {
+diff --git a/src/replay.rs b/src/replay.rs
+--- a/src/replay.rs
++++ b/src/replay.rs
+@@ -11,7 +11,7 @@
+         let end = start + len;
+         let tx =
+             codec::decode_payload(&bytes[start..end]).ok_or(Error::InvalidRecord { offset })?;
+-        let _ = state.apply(&tx);
++        state.apply(&tx)?;
+         offset = end;
+     }
+     Ok((state, offset))
+diff --git a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -11,7 +11,16 @@
+ 
+ impl State {
+     pub fn apply(&mut self, tx: &Transaction) -> Result<Commit, Error> {
+-        self.revision += 1;
++        if let Some((previous, revision)) = self.receipts.get(&tx.id) {
++            return if previous == tx {
++                Ok(Commit {
++                    revision: *revision,
++                    applied: false,
++                })
++            } else {
++                Err(Error::IdConflict(tx.id))
++            };
++        }
+         for check in &tx.checks {
+             let actual = self.versions.get(&check.key).copied();
+             if actual != check.version {
+@@ -22,17 +31,7 @@
+                 });
+             }
+         }
+-        if let Some((previous, revision)) = self.receipts.get(&tx.id) {
+-            return if previous == tx {
+-                Ok(Commit {
+-                    revision: *revision,
+-                    applied: false,
+-                })
+-            } else {
+-                Err(Error::IdConflict(tx.id))
+-            };
+-        }
+-        let revision = self.revision;
++        let revision = self.revision + 1;
+         for write in &tx.writes {
+             let key = match write {
+                 Write::Put { key, value } => {
+@@ -44,11 +43,7 @@
+                     key
+                 }
+             };
+-            if self.values.contains_key(key) {
+-                self.versions.insert(key.clone(), revision);
+-            } else {
+-                self.versions.remove(key);
+-            }
++            self.versions.insert(key.clone(), revision);
+         }
+         self.revision = revision;
+         self.receipts.insert(tx.id, (tx.clone(), revision));
