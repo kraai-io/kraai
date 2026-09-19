@@ -205,7 +205,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
 }
 
 #[tokio::test]
-async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<()> {
+async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
@@ -224,10 +224,7 @@ async fn build_code_profile_includes_concise_final_answer_guidance() -> Result<(
 
     let system_prompt = request_prefix(&request);
 
-    assert!(system_prompt.contains("Final answers"));
-    assert!(system_prompt.contains("Lead with the result, not a recap of every step."));
-    assert!(system_prompt.contains("Do not include a mandatory \"think-ahead suggestion\""));
-    assert!(!system_prompt.contains("Offer at least one suggestion"));
+    assert!(system_prompt.contains(include_str!("../../profiles/build_code.md").trim()));
     assert!(system_prompt.contains(
         "make the smallest targeted edits that express the change instead of replacing the whole file"
     ));
