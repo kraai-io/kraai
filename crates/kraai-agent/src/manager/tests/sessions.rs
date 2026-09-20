@@ -96,6 +96,7 @@ description = "Local profile"
 system_prompt = "Local instructions"
 commands = []
 capabilities = []
+nushell_startup = "clean"
 "#,
     )
     .await?;

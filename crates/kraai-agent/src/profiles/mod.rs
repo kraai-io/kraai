@@ -125,56 +125,79 @@ pub fn available_command_ids() -> HashSet<String> {
     kraai_command_catalog::command_id_set()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "built-in capability sets are fixed and valid"
+)]
 fn built_in_profiles() -> Vec<AgentProfile> {
+    let (read_capability, nushell_startup) = if cfg!(windows) {
+        (SandboxCapability::WorkspaceRead, NushellStartup::Clean)
+    } else {
+        (SandboxCapability::HostRead, NushellStartup::Inherit)
+    };
     let common = || {
         (
             CapabilityPermissionRules::default(),
             EscalationPolicy::Prompt,
-            EnvironmentPolicy::AllowList,
-            NushellStartup::Clean,
+            EnvironmentPolicy::Inherit,
+            nushell_startup,
             PathPolicy::Packaged,
         )
     };
     let (plan_rules, plan_escalation, plan_environment, plan_startup, plan_path) = common();
     let (coding_rules, coding_escalation, coding_environment, coding_startup, coding_path) =
         common();
-    vec![
-        AgentProfile {
-            id: String::from("plan"),
-            display_name: String::from("Plan"),
-            description: String::from("Read-only planning and investigation agent"),
-            system_prompt: include_str!("plan_code.md").trim().to_string(),
-            commands: vec![
-                String::from("kraai-open-files"),
-                String::from("kraai-close-files"),
-            ],
-            permissions: SandboxPermissionSet::workspace_read(),
-            permission_rules: plan_rules,
-            escalation_policy: plan_escalation,
-            environment: plan_environment,
-            nushell_startup: plan_startup,
-            path: plan_path,
-            source: AgentProfileSource::BuiltIn,
-        },
-        AgentProfile {
-            id: String::from("coding"),
-            display_name: String::from("Coding"),
-            description: String::from("Implementation agent with workspace write access"),
-            system_prompt: include_str!("build_code.md").trim().to_string(),
-            commands: vec![
-                String::from("kraai-open-files"),
-                String::from("kraai-close-files"),
-                String::from("kraai-edit-file"),
-            ],
-            permissions: SandboxPermissionSet::workspace_write(),
-            permission_rules: coding_rules,
-            escalation_policy: coding_escalation,
-            environment: coding_environment,
-            nushell_startup: coding_startup,
-            path: coding_path,
-            source: AgentProfileSource::BuiltIn,
-        },
-    ]
+    let plan = AgentProfile {
+        id: String::from("plan"),
+        display_name: String::from("Plan"),
+        description: String::from("Read-only planning and investigation agent"),
+        system_prompt: include_str!("plan_code.md").trim().to_string(),
+        commands: vec![
+            String::from("kraai-open-files"),
+            String::from("kraai-close-files"),
+        ],
+        permissions: SandboxPermissionSet::new([read_capability, SandboxCapability::Network])
+            .expect("valid plan capabilities"),
+        permission_rules: plan_rules,
+        escalation_policy: plan_escalation,
+        environment: plan_environment,
+        nushell_startup: plan_startup,
+        path: plan_path,
+        source: AgentProfileSource::BuiltIn,
+    };
+    let coding = AgentProfile {
+        id: String::from("coding"),
+        display_name: String::from("Coding"),
+        description: String::from("Implementation agent with workspace write access"),
+        system_prompt: include_str!("build_code.md").trim().to_string(),
+        commands: vec![
+            String::from("kraai-open-files"),
+            String::from("kraai-close-files"),
+            String::from("kraai-edit-file"),
+        ],
+        permissions: SandboxPermissionSet::new([
+            read_capability,
+            SandboxCapability::WorkspaceWrite,
+            SandboxCapability::Network,
+        ])
+        .expect("valid coding capabilities"),
+        permission_rules: coding_rules,
+        escalation_policy: coding_escalation,
+        environment: coding_environment,
+        nushell_startup: coding_startup,
+        path: coding_path,
+        source: AgentProfileSource::BuiltIn,
+    };
+    let coding_no_sandbox = AgentProfile {
+        id: String::from("coding-no-sandbox"),
+        display_name: String::from("Coding (no sandbox)"),
+        description: String::from("Implementation agent without sandbox restrictions"),
+        permissions: SandboxPermissionSet::new([SandboxCapability::NoSandbox])
+            .expect("valid unsandboxed coding capabilities"),
+        nushell_startup: NushellStartup::Inherit,
+        ..coding.clone()
+    };
+    vec![plan, coding, coding_no_sandbox]
 }
 
 fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {
@@ -470,6 +493,50 @@ mod tests {
                 .capabilities()
                 .contains(SandboxCapability::WorkspaceWrite)
         );
+        for profile in [plan, coding] {
+            assert_eq!(profile.environment, EnvironmentPolicy::Inherit);
+            assert_eq!(
+                profile.nushell_startup,
+                if cfg!(windows) {
+                    NushellStartup::Clean
+                } else {
+                    NushellStartup::Inherit
+                }
+            );
+            assert_eq!(
+                profile
+                    .permissions
+                    .capabilities()
+                    .contains(SandboxCapability::HostRead),
+                !cfg!(windows)
+            );
+            assert!(
+                !profile
+                    .permissions
+                    .capabilities()
+                    .contains(SandboxCapability::HostWrite)
+            );
+            assert!(!profile.permissions.capabilities().is_unsandboxed());
+        }
+        let coding_no_sandbox = resolved
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "coding-no-sandbox")
+            .unwrap();
+        assert!(
+            coding_no_sandbox
+                .permissions
+                .capabilities()
+                .is_unsandboxed()
+        );
+        assert_eq!(coding_no_sandbox.nushell_startup, NushellStartup::Inherit);
+        let mut equivalent = coding_no_sandbox.clone();
+        equivalent.id.clone_from(&coding.id);
+        equivalent.display_name.clone_from(&coding.display_name);
+        equivalent.description.clone_from(&coding.description);
+        equivalent.permissions.clone_from(&coding.permissions);
+        equivalent.nushell_startup = coding.nushell_startup;
+        assert_eq!(&equivalent, coding);
         let _ = fs::remove_dir_all(workspace);
     }
 
@@ -549,7 +616,7 @@ path = "inherit"
         assert_eq!(eval.commands, coding.commands);
         assert_eq!(eval.environment, EnvironmentPolicy::Inherit);
         assert_eq!(eval.escalation_policy, EscalationPolicy::Allow);
-        assert_eq!(eval.nushell_startup, NushellStartup::Clean);
+        assert_eq!(eval.nushell_startup, coding.nushell_startup);
         assert_eq!(eval.path, PathPolicy::Inherit);
         assert!(
             eval.permissions

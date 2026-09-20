@@ -72,8 +72,15 @@ pub(super) fn script_environment(
     let path = path
         .into_string()
         .map_err(|_error| eyre!("Script PATH contains non-UTF-8 data"))?;
-    environment.insert(String::from("PATH"), path);
+    set_path(&mut environment, path);
     Ok(environment)
+}
+
+fn set_path(environment: &mut BTreeMap<String, String>, path: String) {
+    if cfg!(windows) {
+        environment.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+    }
+    environment.insert(String::from("PATH"), path);
 }
 
 fn copy_environment(names: &[&str], target: &mut BTreeMap<String, String>) {
@@ -81,5 +88,32 @@ fn copy_environment(names: &[&str], target: &mut BTreeMap<String, String>) {
         if let Ok(value) = std::env::var(name) {
             target.insert((*name).to_string(), value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_replacement_respects_platform_case_sensitivity() {
+        let mut environment = BTreeMap::from([
+            (String::from("Path"), String::from("inherited")),
+            (String::from("paTH"), String::from("mixed")),
+            (String::from("PATH"), String::from("old")),
+            (String::from("KRAAI_TEST"), String::from("preserved")),
+        ]);
+
+        set_path(&mut environment, String::from("packaged"));
+
+        let mut expected = BTreeMap::from([
+            (String::from("PATH"), String::from("packaged")),
+            (String::from("KRAAI_TEST"), String::from("preserved")),
+        ]);
+        if !cfg!(windows) {
+            expected.insert(String::from("Path"), String::from("inherited"));
+            expected.insert(String::from("paTH"), String::from("mixed"));
+        }
+        assert_eq!(environment, expected);
     }
 }
