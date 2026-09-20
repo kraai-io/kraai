@@ -6,6 +6,7 @@ use kraai_types::{Message, MessageId};
 use tokio::fs;
 use tokio::sync::RwLock;
 
+use crate::FileCompactionStore;
 use crate::atomic_file::atomic_write_with_outcome;
 use crate::keyed_locks::KeyedLocks;
 
@@ -45,6 +46,7 @@ pub struct FileMessageStore {
     message_locks: KeyedLocks<MessageId>,
     /// Base directory for cold storage
     cold_dir: PathBuf,
+    compactions: FileCompactionStore,
 }
 
 impl FileMessageStore {
@@ -54,6 +56,7 @@ impl FileMessageStore {
             hot: RwLock::new(HashMap::new()),
             message_locks: KeyedLocks::default(),
             cold_dir,
+            compactions: FileCompactionStore::new(data_dir),
         }
     }
 
@@ -170,6 +173,7 @@ impl MessageStore for FileMessageStore {
 
     async fn delete(&self, id: &MessageId) -> Result<()> {
         let _guard = self.message_locks.lock(id).await;
+        self.compactions.delete(id).await?;
         // Remove from hot cache
         {
             let mut hot = self.hot.write().await;

@@ -57,10 +57,61 @@ impl RuntimeCore {
             message_id,
             provider_id,
             model_id,
-            provider_request,
+            mut provider_request,
             script_tool_transport,
             context_notifications: _,
+            context_compaction,
         } = request;
+        if let Some(compaction) = context_compaction {
+            let usage_event_tx = event_tx.clone();
+            let usage_session_id = session_id.clone();
+            let compaction = compaction.observe_usage(
+                session_state_barrier.clone(),
+                Arc::new(move |request| {
+                    emit_event(
+                        &usage_event_tx,
+                        Event::RequestUsageUpdated {
+                            session_id: usage_session_id.clone(),
+                            request: Box::new(request),
+                        },
+                    );
+                }),
+            );
+            emit_event(
+                &event_tx,
+                Event::ContextStateChanged {
+                    session_id: session_id.clone(),
+                    notifications: vec![String::from("Compacting conversation context.")],
+                },
+            );
+            let result = compaction.run(&providers, &provider_id, &model_id).await;
+            match result {
+                Ok(outcome) => {
+                    provider_request = outcome.request;
+                    emit_event(
+                        &event_tx,
+                        Event::ContextStateChanged {
+                            session_id: session_id.clone(),
+                            notifications: vec![outcome.notification],
+                        },
+                    );
+                }
+                Err(error) => {
+                    emit_event(
+                        &event_tx,
+                        Event::ContextStateChanged {
+                            session_id: session_id.clone(),
+                            notifications: vec![String::from(
+                                "Conversation context compaction failed.",
+                            )],
+                        },
+                    );
+                    return StreamDriveResult::FailedToStart {
+                        error: error.to_string(),
+                    };
+                }
+            }
+        }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),

@@ -32,6 +32,7 @@ pub struct ChatCompletionChunk {
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionChunkChoice {
     pub delta: ChatCompletionChunkDelta,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

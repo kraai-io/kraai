@@ -51,7 +51,7 @@ impl AgentManager {
             }
         };
         let user_msg_id = user_message.message.id.clone();
-        let context = match self.get_history_context(&user_msg_id).await {
+        let context = match self.get_model_history(&user_msg_id).await {
             Ok(context) => context,
             Err(error) => {
                 self.clear_active_turn(session_id);
@@ -68,10 +68,31 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let mut system_prompt = match self
-            .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
-            .await
-        {
+        let max_context = self
+            .resolve_model_max_context(&provider_id, &model_id)
+            .await;
+        let prepared = async {
+            let prompt = self
+                .build_turn_system_prompt(
+                    session_id,
+                    &profile,
+                    &workspace_dir,
+                    script_tool_transport,
+                )
+                .await?;
+            let (request, compaction) = self
+                .build_model_context(
+                    session_id,
+                    context,
+                    &prompt,
+                    script_tool_definition(script_tool_transport),
+                    max_context,
+                )
+                .await?;
+            Ok::<_, color_eyre::Report>((prompt, request, compaction))
+        }
+        .await;
+        let (system_prompt, provider_request, context_compaction) = match prepared {
             Ok(system_prompt) => system_prompt,
             Err(error) => {
                 self.clear_active_turn(session_id);
@@ -88,16 +109,11 @@ impl AgentManager {
                 return Err(error);
             }
         };
-        let provider_messages =
-            system_prompt.wrap_history(context.into_iter().map(|message| message.content));
-
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
-            max_context: self
-                .resolve_model_max_context(&provider_id, &model_id)
-                .await,
+            max_context,
             usage: None,
         });
         let assistant_msg_id = match self
@@ -131,15 +147,8 @@ impl AgentManager {
             message_id: assistant_msg_id,
             provider_id,
             model_id,
-            provider_request: ProviderRequest {
-                messages: provider_messages,
-                script_tool: (script_tool_transport == ScriptToolTransport::NativeCustom).then(
-                    || ScriptToolDefinition {
-                        name: SCRIPT_TOOL_NAME.to_string(),
-                        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
-                    },
-                ),
-            },
+            provider_request,
+            context_compaction,
             script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         })
@@ -185,24 +194,32 @@ impl AgentManager {
             return Ok(None);
         };
 
-        let context = self.get_history_context(&tip_id).await?;
+        let context = self.get_model_history(&tip_id).await?;
         let script_tool_transport = self
             .providers
             .script_tool_transport(&provider_id, &model_id)?;
-        let mut system_prompt = self
+        let system_prompt = self
             .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await?;
 
-        let provider_messages =
-            system_prompt.wrap_history(context.into_iter().map(|message| message.content));
+        let max_context = self
+            .resolve_model_max_context(&provider_id, &model_id)
+            .await;
+        let (provider_request, context_compaction) = self
+            .build_model_context(
+                session_id,
+                context,
+                &system_prompt,
+                script_tool_definition(script_tool_transport),
+                max_context,
+            )
+            .await?;
 
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
-            max_context: self
-                .resolve_model_max_context(&provider_id, &model_id)
-                .await,
+            max_context,
             usage: None,
         });
         let assistant_msg_id = self
@@ -219,15 +236,8 @@ impl AgentManager {
             message_id: assistant_msg_id,
             provider_id,
             model_id,
-            provider_request: ProviderRequest {
-                messages: provider_messages,
-                script_tool: (script_tool_transport == ScriptToolTransport::NativeCustom).then(
-                    || ScriptToolDefinition {
-                        name: SCRIPT_TOOL_NAME.to_string(),
-                        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
-                    },
-                ),
-            },
+            provider_request,
+            context_compaction,
             script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         }))
@@ -665,5 +675,12 @@ pub(super) fn context_usage(context: &[Message]) -> Option<SessionContextUsage> 
                     usage: usage.clone(),
                 })
             })
+    })
+}
+
+fn script_tool_definition(transport: ScriptToolTransport) -> Option<ScriptToolDefinition> {
+    (transport == ScriptToolTransport::NativeCustom).then(|| ScriptToolDefinition {
+        name: SCRIPT_TOOL_NAME.to_string(),
+        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
     })
 }

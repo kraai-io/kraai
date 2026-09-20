@@ -33,24 +33,6 @@ pub(super) struct TurnSystemPrompt {
     pub(super) context_notifications: Vec<String>,
 }
 
-impl TurnSystemPrompt {
-    pub(super) fn wrap_history(
-        &mut self,
-        history: impl IntoIterator<Item = ConversationItem>,
-    ) -> Vec<ConversationItem> {
-        let mut messages = vec![ConversationItem::System {
-            text: std::mem::take(&mut self.prefix),
-        }];
-        messages.extend(history);
-        if !self.suffix.is_empty() {
-            messages.push(ConversationItem::System {
-                text: std::mem::take(&mut self.suffix),
-            });
-        }
-        messages
-    }
-}
-
 impl AgentManager {
     pub(super) async fn build_turn_system_prompt(
         &self,
