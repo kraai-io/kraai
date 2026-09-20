@@ -8871,6 +8871,13 @@ rec {
             packageId = "ulid";
           }
         ];
+        devDependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
+          }
+        ];
 
       };
       "kraai-command-catalog" = rec {
@@ -21559,7 +21566,7 @@ rec {
           "tracing" = [ "dep:tracing" ];
           "windows-sys" = [ "dep:windows-sys" ];
         };
-        resolvedDefaultFeatures = [ "bytes" "default" "fs" "full" "io-std" "io-util" "libc" "macros" "mio" "net" "parking_lot" "process" "rt" "rt-multi-thread" "signal" "signal-hook-registry" "socket2" "sync" "time" "tokio-macros" "windows-sys" ];
+        resolvedDefaultFeatures = [ "bytes" "default" "fs" "full" "io-std" "io-util" "libc" "macros" "mio" "net" "parking_lot" "process" "rt" "rt-multi-thread" "signal" "signal-hook-registry" "socket2" "sync" "test-util" "time" "tokio-macros" "windows-sys" ];
       };
       "tokio-macros" = rec {
         crateName = "tokio-macros";

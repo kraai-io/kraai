@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Summarizer {
     calls: Arc<AtomicUsize>,
     response: String,
+    delay: std::time::Duration,
 }
 
 #[async_trait::async_trait]
@@ -34,18 +35,22 @@ impl Provider for Summarizer {
         ensure!(request.script_tool.is_none());
         ensure!(estimate_request(&request) < input_limit(16384));
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::pin(futures::stream::iter([
-            Ok(ProviderStreamEvent::TextDelta {
-                item_id: "summary".into(),
-                phase: AssistantPhase::FinalAnswer,
-                delta: self.response.clone(),
-            }),
-            Ok(ProviderStreamEvent::Usage(TokenUsage {
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
+        let mut events = vec![Ok(ProviderStreamEvent::TextDelta {
+            item_id: "summary".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: self.response.clone(),
+        })];
+        if self.delay.is_zero() {
+            events.push(Ok(ProviderStreamEvent::Usage(TokenUsage {
                 input_tokens: 100,
                 output_tokens: 10,
                 ..Default::default()
-            })),
-        ])))
+            })));
+        }
+        Ok(Box::pin(futures::stream::iter(events)))
     }
 }
 
@@ -95,6 +100,13 @@ fn fixture(history: Vec<Message>) -> (ContextCompaction, std::path::PathBuf) {
 }
 
 fn provider(response: &str) -> (ProviderManager, Arc<AtomicUsize>) {
+    provider_with_delay(response, std::time::Duration::ZERO)
+}
+
+fn provider_with_delay(
+    response: &str,
+    delay: std::time::Duration,
+) -> (ProviderManager, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut manager = ProviderManager::new();
     manager.register_provider(
@@ -102,6 +114,7 @@ fn provider(response: &str) -> (ProviderManager, Arc<AtomicUsize>) {
         Box::new(Summarizer {
             calls: calls.clone(),
             response: response.into(),
+            delay,
         }),
     );
     (manager, calls)
@@ -311,6 +324,59 @@ async fn giant_final_tool_result_can_be_fully_compacted_with_user_preserved() ->
             .iter()
             .all(|request| request.started_at > 1_000_000_000_000)
     );
+    tokio::fs::remove_dir_all(root).await?;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn successful_chunks_share_one_overall_deadline() -> Result<()> {
+    let (context, root) = fixture(vec![
+        text("old", &"old detail ".repeat(12000)),
+        text("recent", "Investigating"),
+    ]);
+    let (providers, calls) = provider_with_delay(
+        "Investigation continues.",
+        std::time::Duration::from_secs(110),
+    );
+    let started = tokio::time::Instant::now();
+    let error = context
+        .run(&providers, &ProviderId::new("test"), &ModelId::new("test"))
+        .await
+        .err()
+        .ok_or_else(|| eyre!("Expected overall timeout"))?;
+    ensure!(format!("{error:#}").contains("Context summarization timed out"));
+    ensure!(started.elapsed() == std::time::Duration::from_secs(600));
+    ensure!(calls.load(Ordering::SeqCst) == 6);
+    ensure!(context.usage_store.load("session").await?.len() == 6);
+    ensure!(context.store.get(&MessageId::new("old")).await?.is_none());
+    tokio::fs::remove_dir_all(root).await?;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn per_call_timeout_still_falls_back_when_original_fits() -> Result<()> {
+    let (context, root) = fixture(vec![
+        text("old", &"x".repeat(10000)),
+        text("recent", "Investigating"),
+    ]);
+    let (providers, calls) = provider_with_delay(
+        "Investigation continues.",
+        std::time::Duration::from_secs(121),
+    );
+    let started = tokio::time::Instant::now();
+    let outcome = context
+        .run(&providers, &ProviderId::new("test"), &ModelId::new("test"))
+        .await?;
+    ensure!(!outcome.compacted);
+    ensure!(
+        outcome
+            .notification
+            .contains("Context summarization timed out")
+    );
+    ensure!(started.elapsed() == std::time::Duration::from_secs(120));
+    ensure!(calls.load(Ordering::SeqCst) == 1);
+    ensure!(outcome.request.messages == context.original.messages);
+    ensure!(context.store.get(&MessageId::new("old")).await?.is_none());
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
