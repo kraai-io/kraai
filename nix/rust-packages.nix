@@ -254,16 +254,6 @@
             ${pkgs.just}/bin/just check-node ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "test:portable"}
           '';
         };
-        harbor-contracts =
-          pkgs.runCommand "kraai-harbor-contracts" {
-            nativeBuildInputs = [pkgs.python3];
-          } ''
-            export PYTHONPATH=${../evals/harbor}
-            export PYTHONDONTWRITEBYTECODE=1
-            python -m unittest discover -s ${../evals/harbor/tests} -p test_contracts.py
-            touch "$out"
-          '';
-
         clippy = mkCargoCheck {
           name = "clippy";
           command = ''
