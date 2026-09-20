@@ -75,6 +75,8 @@ pub fn prepare_benchmark_spec(
             String::from("--directory"),
             String::from("/"),
             String::from("--sort=name"),
+            String::from("--exclude=nix/store/*-glibc-*/etc/ld.so.cache"),
+            String::from("--exclude=nix/store/*-glibc-*/etc/ld.so.conf"),
             String::from("--mtime=@0"),
             String::from("--owner=0"),
             String::from("--group=0"),
@@ -97,7 +99,7 @@ pub fn prepare_benchmark_spec(
     let spec = BenchmarkSpec {
         schema_version: 1,
         harness: harness.name,
-        bundle_sha256: crate::cache::hash_file(&runner_bundle)?,
+        bundle_sha256: crate::cache::sha256_file(&runner_bundle)?,
         runner_bundle,
         runner_path: harness.program,
         runner_args: harness.args,
@@ -128,43 +130,6 @@ pub fn runner_store_root(program: &Path) -> Result<PathBuf> {
         "runner path contains parent traversal"
     );
     Ok(Path::new("/nix/store").join(component.as_os_str()))
-}
-
-pub fn docker_proxy_host() -> Result<String> {
-    let response = run_trusted(
-        &[
-            String::from("docker"),
-            String::from("network"),
-            String::from("inspect"),
-            String::from("bridge"),
-        ],
-        &std::env::current_dir()?,
-        Duration::from_secs(30),
-    )?;
-    ensure!(
-        response.success(),
-        "cannot inspect the local Docker bridge; use a running Docker engine or specify --proxy-host with a reachable controller IP"
-    );
-    let value: serde_json::Value = serde_json::from_slice(&response.stdout)?;
-    let configs = value
-        .pointer("/0/IPAM/Config")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("Docker bridge has no gateway; specify --proxy-host")
-        })?;
-    let address = configs
-        .iter()
-        .filter_map(|value| value.get("Gateway"))
-        .filter_map(serde_json::Value::as_str)
-        .find_map(|value| value.parse::<std::net::IpAddr>().ok())
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("Docker bridge has no IP gateway; specify --proxy-host")
-        })?;
-    ensure!(
-        !address.is_loopback() && !address.is_unspecified(),
-        "Docker gateway is not reachable from a container; specify --proxy-host"
-    );
-    Ok(address.to_string())
 }
 
 #[cfg(test)]

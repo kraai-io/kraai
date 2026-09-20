@@ -14,6 +14,8 @@ from kraai_harbor.spec import RunnerSpec
 
 
 class ProfileAgent(BaseInstalledAgent):
+    SUPPORTS_TASK_SKILLS = False
+
     def __init__(self, *args, spec_path: str, **kwargs):
         if kwargs.get("prompt_template_path") is not None:
             raise ValueError("Public benchmarks must use the original task instruction")
@@ -21,10 +23,10 @@ class ProfileAgent(BaseInstalledAgent):
         super().__init__(*args, version=self.spec.bundle_sha256, **kwargs)
         if self.model_name is not None and self.model_name != self.spec.model:
             raise ValueError("Harbor model and runner spec model must match")
-        if self.mcp_servers or self.skills_dir:
-            raise ValueError(
-                "Profile adapter does not support task MCP servers or skills"
-            )
+        if self.mcp_servers:
+            raise ValueError("Profile adapter does not support task MCP servers")
+        if self.skills_dir and not self.SUPPORTS_TASK_SKILLS:
+            raise ValueError("Profile adapter does not support task skills")
 
     @staticmethod
     def name() -> str:
@@ -123,6 +125,23 @@ class ProfileAgent(BaseInstalledAgent):
 
 
 class KraaiAgent(ProfileAgent):
+    SUPPORTS_TASK_SKILLS = True
+
     @staticmethod
     def name() -> str:
         return "kraai"
+
+    async def install(self, environment: BaseEnvironment) -> None:
+        await super().install(environment)
+        if self.skills_dir:
+            source = shlex.quote(self.skills_dir)
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"test -d {source} && mkdir -p \"$HOME/.agents/skills\" && "
+                    f'if [ "$(realpath {source})" != '
+                    '"$(realpath "$HOME/.agents/skills")" ]; then '
+                    f'cp -R -- {shlex.quote(self.skills_dir + "/.")} '
+                    '"$HOME/.agents/skills"; fi'
+                ),
+            )

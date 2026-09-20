@@ -24,15 +24,15 @@ use crate::wire::{ListModelsResponse, ResponsesCustomTool, ResponsesRequest};
 
 const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_CLIENT_VERSION: &str = "0.154.0";
-const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must use HTTPS; HTTP is allowed only for loopback endpoints with proxy-token authentication";
+const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must use HTTPS; HTTP requires proxy-token authentication and a loopback endpoint, or allow_http_proxy for a private network endpoint";
 
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
 
-fn valid_backend_url(value: &str, proxy_token: bool) -> bool {
+fn valid_backend_url(value: &str, proxy_token: bool, allow_http_proxy: bool) -> bool {
     Url::parse(value).is_ok_and(|url| {
-        valid_backend_transport(&url, proxy_token)
+        valid_backend_transport(&url, proxy_token, allow_http_proxy)
             && url.host_str().is_some()
             && url.username().is_empty()
             && url.password().is_none()
@@ -41,21 +41,32 @@ fn valid_backend_url(value: &str, proxy_token: bool) -> bool {
     })
 }
 
-fn valid_backend_transport(url: &Url, proxy_token: bool) -> bool {
+fn valid_backend_transport(url: &Url, proxy_token: bool, allow_http_proxy: bool) -> bool {
     url.scheme() == "https"
         || (url.scheme() == "http"
             && proxy_token
             && match url.host() {
-                Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                Some(url::Host::Ipv4(address)) => {
+                    address.is_loopback()
+                        || (allow_http_proxy && (address.is_private() || address.is_link_local()))
+                }
+                Some(url::Host::Ipv6(address)) => {
+                    address.is_loopback()
+                        || (allow_http_proxy
+                            && (address.is_unique_local() || address.is_unicast_link_local()))
+                }
                 Some(url::Host::Domain(host)) => host == "localhost",
                 None => false,
             })
 }
 
-fn codex_redirect_policy(proxy_token: bool, origin: url::Origin) -> reqwest::redirect::Policy {
+fn codex_redirect_policy(
+    proxy_token: bool,
+    allow_http_proxy: bool,
+    origin: url::Origin,
+) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
-        if !valid_backend_transport(attempt.url(), proxy_token) {
+        if !valid_backend_transport(attempt.url(), proxy_token, allow_http_proxy) {
             attempt.error(BACKEND_URL_ERROR)
         } else if !proxy_token && attempt.url().origin() != origin {
             attempt.error(
@@ -69,11 +80,16 @@ fn codex_redirect_policy(proxy_token: bool, origin: url::Origin) -> reqwest::red
     })
 }
 
-fn build_codex_http_client(proxy_token: bool, base_url: &str) -> Result<Client> {
+fn build_codex_http_client(
+    proxy_token: bool,
+    allow_http_proxy: bool,
+    base_url: &str,
+) -> Result<Client> {
     Ok(streaming_http_client_builder()
         .https_only(!proxy_token)
         .redirect(codex_redirect_policy(
             proxy_token,
+            allow_http_proxy,
             Url::parse(base_url)?.origin(),
         ))
         .build()?)
@@ -138,6 +154,18 @@ impl OpenAiCodexFactory {
                     )),
                 },
                 FieldDefinition {
+                    key: "allow_http_proxy".to_string(),
+                    label: "Allow Private HTTP Proxy".to_string(),
+                    value_kind: FieldValueKind::Boolean,
+                    required: false,
+                    secret: false,
+                    help_text: Some(
+                        "Permit temporary proxy tokens over a trusted private container network"
+                            .to_string(),
+                    ),
+                    default_value: Some(DynamicValue::Bool(false)),
+                },
+                FieldDefinition {
                     key: "proxy_token_env".to_string(),
                     label: "Proxy Token Env Var".to_string(),
                     value_kind: FieldValueKind::String,
@@ -161,12 +189,16 @@ impl OpenAiCodexFactory {
             .get("proxy_token_env")
             .and_then(DynamicValue::as_str)
             .is_some_and(|name| !name.trim().is_empty());
+        let allow_http_proxy = config
+            .get("allow_http_proxy")
+            .and_then(DynamicValue::as_bool)
+            .unwrap_or(false);
         let mut errors = match config.get("base_url") {
             None => Vec::new(),
             Some(value)
-                if value
-                    .as_str()
-                    .is_some_and(|url| valid_backend_url(url.trim(), proxy_token)) =>
+                if value.as_str().is_some_and(|url| {
+                    valid_backend_url(url.trim(), proxy_token, allow_http_proxy)
+                }) =>
             {
                 Vec::new()
             }
@@ -184,6 +216,19 @@ impl OpenAiCodexFactory {
                 field: "proxy_token_env".to_string(),
                 message: "Proxy token environment variable name is invalid".to_string(),
             });
+        }
+        if let Some(value) = config.get("allow_http_proxy") {
+            if value.as_bool().is_none() {
+                errors.push(ValidationError {
+                    field: "allow_http_proxy".into(),
+                    message: "Expected a boolean".into(),
+                });
+            } else if allow_http_proxy && !proxy_token {
+                errors.push(ValidationError {
+                    field: "allow_http_proxy".into(),
+                    message: "HTTP proxy access requires proxy_token_env".into(),
+                });
+            }
         }
         errors
     }
@@ -212,7 +257,11 @@ impl OpenAiCodexFactory {
                 })
             })
             .transpose()?;
-        if !valid_backend_url(&base_url, proxy_token.is_some()) {
+        let allow_http_proxy = config
+            .get("allow_http_proxy")
+            .and_then(DynamicValue::as_bool)
+            .unwrap_or(false);
+        if !valid_backend_url(&base_url, proxy_token.is_some(), allow_http_proxy) {
             return Err(eyre!(BACKEND_URL_ERROR));
         }
         if proxy_token.is_some() && base_url == DEFAULT_CHATGPT_BACKEND_URL {
@@ -223,11 +272,12 @@ impl OpenAiCodexFactory {
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
-            client: build_codex_http_client(proxy_token.is_some(), &base_url)?,
+            client: build_codex_http_client(proxy_token.is_some(), allow_http_proxy, &base_url)?,
             models: RwLock::new(DiscoveredModels::default()),
             model_configs: BTreeMap::new(),
             base_url,
             proxy_token,
+            allow_http_proxy,
         }))
     }
 }
@@ -240,6 +290,7 @@ pub struct OpenAiCodexProvider {
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     base_url: String,
     proxy_token: Option<String>,
+    allow_http_proxy: bool,
 }
 
 #[async_trait::async_trait]
@@ -377,7 +428,11 @@ impl OpenAiCodexProvider {
     where
         F: Fn(RequestAuthentication) -> RequestBuilder + Send + Sync,
     {
-        if !valid_backend_url(&self.base_url, self.proxy_token.is_some()) {
+        if !valid_backend_url(
+            &self.base_url,
+            self.proxy_token.is_some(),
+            self.allow_http_proxy,
+        ) {
             return Err(eyre!(BACKEND_URL_ERROR));
         }
         if let Some(token) = &self.proxy_token {
@@ -532,20 +587,31 @@ mod tests {
             model_configs: BTreeMap::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,
+            allow_http_proxy: false,
         })
     }
 
     #[test]
     fn backend_url_validation_rejects_credentials_queries_and_non_http_schemes() {
-        assert!(valid_backend_url("https://chatgpt.com/backend-api", false));
-        assert!(valid_backend_url("http://127.0.0.1:1234/backend-api", true));
-        assert!(!valid_backend_url("file:///tmp/backend", true));
+        assert!(valid_backend_url(
+            "https://chatgpt.com/backend-api",
+            false,
+            false
+        ));
+        assert!(valid_backend_url(
+            "http://127.0.0.1:1234/backend-api",
+            true,
+            false
+        ));
+        assert!(!valid_backend_url("file:///tmp/backend", true, false));
         assert!(!valid_backend_url(
             "https://user:secret@example.com/backend",
+            false,
             false
         ));
         assert!(!valid_backend_url(
             "https://example.com/backend?redirect=elsewhere",
+            false,
             false
         ));
     }

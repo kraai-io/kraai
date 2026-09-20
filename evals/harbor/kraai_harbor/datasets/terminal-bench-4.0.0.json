@@ -1,0 +1,411 @@
+[
+  {
+    "name": "terminal-bench/terminal-bench",
+    "version": "4.0.0",
+    "description": "Terminal-Bench 4.0.0 official release",
+    "tasks": [
+      {
+        "name": "atrx-vep-crispr",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/atrx-vep-crispr"
+      },
+      {
+        "name": "batched-eval-parity",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/batched-eval-parity"
+      },
+      {
+        "name": "biped-contact-dynamics",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/biped-contact-dynamics"
+      },
+      {
+        "name": "bun-sourcemap-leak",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/bun-sourcemap-leak"
+      },
+      {
+        "name": "cad-model",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/cad-model"
+      },
+      {
+        "name": "cargo-flight-dispatch",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/cargo-flight-dispatch"
+      },
+      {
+        "name": "coq-block-bound",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/coq-block-bound"
+      },
+      {
+        "name": "ctr-optimization",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/ctr-optimization"
+      },
+      {
+        "name": "cumulative-layout-shift",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/cumulative-layout-shift"
+      },
+      {
+        "name": "data-anonymization",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/data-anonymization"
+      },
+      {
+        "name": "distributed-dedup",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/distributed-dedup"
+      },
+      {
+        "name": "embedding-drift-monitor",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/embedding-drift-monitor"
+      },
+      {
+        "name": "fin-saccr-rwa",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/fin-saccr-rwa"
+      },
+      {
+        "name": "foodstuff-beta-activity",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/foodstuff-beta-activity"
+      },
+      {
+        "name": "formal-crypto",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/formal-crypto"
+      },
+      {
+        "name": "fp8-rmsnorm-gemm",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/fp8-rmsnorm-gemm"
+      },
+      {
+        "name": "freecad-impeller",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/freecad-impeller"
+      },
+      {
+        "name": "freecad-platform-drawing",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/freecad-platform-drawing"
+      },
+      {
+        "name": "freecad-spring-clip",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/freecad-spring-clip"
+      },
+      {
+        "name": "freight-dispatch-shift",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/freight-dispatch-shift"
+      },
+      {
+        "name": "glycan-ms2-elucidation",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/glycan-ms2-elucidation"
+      },
+      {
+        "name": "gsea-proteomics",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/gsea-proteomics"
+      },
+      {
+        "name": "heat-pump-warranty",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/heat-pump-warranty"
+      },
+      {
+        "name": "hof-topology-interpenetration",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/hof-topology-interpenetration"
+      },
+      {
+        "name": "html-js-filter",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/html-js-filter"
+      },
+      {
+        "name": "interleaved-vigenere",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/interleaved-vigenere"
+      },
+      {
+        "name": "intrastat-meldung",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/intrastat-meldung"
+      },
+      {
+        "name": "jax-speedrun-gpu",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/jax-speedrun-gpu"
+      },
+      {
+        "name": "ks-solver-cpp",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/ks-solver-cpp"
+      },
+      {
+        "name": "kv-live-surgery",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/kv-live-surgery"
+      },
+      {
+        "name": "lake-temp-glm",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/lake-temp-glm"
+      },
+      {
+        "name": "layout-config-recreation",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/layout-config-recreation"
+      },
+      {
+        "name": "layout-config-recreation2",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/layout-config-recreation2"
+      },
+      {
+        "name": "legacy-utility-triage",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/legacy-utility-triage"
+      },
+      {
+        "name": "live-database-cutover",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/live-database-cutover"
+      },
+      {
+        "name": "math-eval-grader",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/math-eval-grader"
+      },
+      {
+        "name": "medical-claims-processing",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/medical-claims-processing"
+      },
+      {
+        "name": "mp-checkpoint-consolidation",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/mp-checkpoint-consolidation"
+      },
+      {
+        "name": "music-harmony",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/music-harmony"
+      },
+      {
+        "name": "mvcc-lsm-compaction",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/mvcc-lsm-compaction"
+      },
+      {
+        "name": "nextjs-performance",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/nextjs-performance"
+      },
+      {
+        "name": "ontology-kg-querying",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/ontology-kg-querying"
+      },
+      {
+        "name": "payments-pipeline-fix",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/payments-pipeline-fix"
+      },
+      {
+        "name": "photonic-waveguide-routing",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/photonic-waveguide-routing"
+      },
+      {
+        "name": "pretrain-shard-corruption",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/pretrain-shard-corruption"
+      },
+      {
+        "name": "production-planning",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/production-planning"
+      },
+      {
+        "name": "protein-autointerp-disulfide",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/protein-autointerp-disulfide"
+      },
+      {
+        "name": "react-lead-form",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/react-lead-form"
+      },
+      {
+        "name": "retro-console-soc",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/retro-console-soc"
+      },
+      {
+        "name": "risk-scorer-replay",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/risk-scorer-replay"
+      },
+      {
+        "name": "roy-polymorph-cn",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/roy-polymorph-cn"
+      },
+      {
+        "name": "rs-archive-clone",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/rs-archive-clone"
+      },
+      {
+        "name": "satb-audio-transcription",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/satb-audio-transcription"
+      },
+      {
+        "name": "session-window-debug",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/session-window-debug"
+      },
+      {
+        "name": "sglang-qwen-burst",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/sglang-qwen-burst"
+      },
+      {
+        "name": "shadow-relay",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/shadow-relay"
+      },
+      {
+        "name": "sound-change-cascade",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/sound-change-cascade"
+      },
+      {
+        "name": "takens-embedding-lean",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/takens-embedding-lean"
+      },
+      {
+        "name": "telecom-entity-resolution",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/telecom-entity-resolution"
+      },
+      {
+        "name": "uefi-bootkit",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/uefi-bootkit"
+      },
+      {
+        "name": "vba-userform-port",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/vba-userform-port"
+      },
+      {
+        "name": "vf2-speedup-networkx",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/vf2-speedup-networkx"
+      },
+      {
+        "name": "vllm-deepseek-streaming",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/vllm-deepseek-streaming"
+      },
+      {
+        "name": "vpp-loss-divergence",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/vpp-loss-divergence"
+      },
+      {
+        "name": "wal-recovery-ordering",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/wal-recovery-ordering"
+      },
+      {
+        "name": "wdm-design",
+        "git_url": "https://github.com/harbor-framework/terminal-bench.git",
+        "git_commit_id": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "path": "tasks/wdm-design"
+      }
+    ],
+    "disabled_tasks": {
+      "fp8-rmsnorm-gemm": "Requires an H100 GPU; disabled for local evaluation",
+      "jax-speedrun-gpu": "Requires an H100 GPU; disabled for local evaluation",
+      "math-eval-grader": "Requires an H100 GPU; disabled for local evaluation",
+      "ctr-optimization": "Temporarily disabled: mandatory 48-hour simulation takes 4 hours 48 minutes of wall time"
+    }
+  }
+]

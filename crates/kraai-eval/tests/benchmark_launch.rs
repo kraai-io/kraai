@@ -43,3 +43,102 @@ fn missing_uv_emits_json_launch_failure() -> Result<()> {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn terminal_bench_selection_is_pinned_and_attempts_reuse_the_same_directory() -> Result<()> {
+    let mut directories = Vec::new();
+    for (count, attempts) in [("5", "1"), ("10", "1"), ("10", "2")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
+            .args([
+                "benchmark",
+                "terminal-bench",
+                "--model",
+                "gpt-6-astra-low",
+                "--task-count",
+                count,
+                "--attempts",
+                attempts,
+                "--dry-run",
+            ])
+            .arg("--runner")
+            .arg(std::env::current_exe()?)
+            .env("KRAAI_EVAL_HARBOR", std::env::temp_dir())
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        ensure!(
+            plan.get("dataset").and_then(serde_json::Value::as_str)
+                == Some("terminal-bench/terminal-bench@4.0.0")
+        );
+        ensure!(plan.get("task_count").and_then(serde_json::Value::as_u64) == Some(count.parse()?));
+        directories.push(plan.get("job_dir").cloned());
+    }
+    ensure!(directories.first() == directories.last());
+    Ok(())
+}
+
+#[test]
+fn task_count_cannot_be_combined_with_a_different_selection_mode() -> Result<()> {
+    for selection in [vec!["--full-dataset"], vec!["--task-name", "one"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
+            .args([
+                "benchmark",
+                "terminal-bench",
+                "--oracle",
+                "--task-count",
+                "2",
+                "--dry-run",
+            ])
+            .args(selection)
+            .output()?;
+        ensure!(!output.status.success());
+    }
+    Ok(())
+}
+
+#[test]
+fn runner_changes_separate_cached_benchmark_versions() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "kraai-benchmark-version-{}",
+        ulid::Ulid::generate()
+    ));
+    fs::create_dir(&root)?;
+    let runner = root.join("runner");
+    let mut directories = Vec::new();
+    for contents in ["first version", "second version"] {
+        fs::write(&runner, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&runner, fs::Permissions::from_mode(0o755))?;
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
+            .args([
+                "benchmark",
+                "terminal-bench",
+                "--model",
+                "gpt-6-astra-low",
+                "--task-count",
+                "5",
+                "--dry-run",
+                "--runner",
+            ])
+            .arg(&runner)
+            .env("KRAAI_EVAL_HARBOR", &root)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        directories.push(plan.get("job_dir").cloned());
+    }
+    ensure!(directories.first() != directories.last());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

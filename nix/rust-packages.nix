@@ -131,6 +131,7 @@
         + ''
           install -Dm755 ${nushellHost}/bin/kraai-nushell-host "$out/bin/kraai-nushell-host"
           wrapProgram "$out/bin/kraai" \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
             --prefix PATH : ${lib.makeBinPath (
             [pkgs.ripgrep]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
@@ -150,6 +151,7 @@
         (old.postInstall or "")
         + ''
           wrapProgram "$out/bin/kraai-eval" \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
             --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
             --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
             --prefix PATH : ${lib.makeBinPath [
@@ -160,6 +162,8 @@
             pkgs.findutils
             pkgs.git
             pkgs.gnutar
+            pkgs.docker-client
+            pkgs.docker-compose
             pkgs.gnused
             pkgs.pkg-config
             pkgs.ripgrep
