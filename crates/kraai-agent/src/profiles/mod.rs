@@ -130,12 +130,17 @@ pub fn available_command_ids() -> HashSet<String> {
     reason = "built-in capability sets are fixed and valid"
 )]
 fn built_in_profiles() -> Vec<AgentProfile> {
+    let (read_capability, nushell_startup) = if cfg!(windows) {
+        (SandboxCapability::WorkspaceRead, NushellStartup::Clean)
+    } else {
+        (SandboxCapability::HostRead, NushellStartup::Inherit)
+    };
     let common = || {
         (
             CapabilityPermissionRules::default(),
             EscalationPolicy::Prompt,
             EnvironmentPolicy::Inherit,
-            NushellStartup::Inherit,
+            nushell_startup,
             PathPolicy::Packaged,
         )
     };
@@ -151,11 +156,8 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             String::from("kraai-open-files"),
             String::from("kraai-close-files"),
         ],
-        permissions: SandboxPermissionSet::new([
-            SandboxCapability::HostRead,
-            SandboxCapability::Network,
-        ])
-        .expect("valid plan capabilities"),
+        permissions: SandboxPermissionSet::new([read_capability, SandboxCapability::Network])
+            .expect("valid plan capabilities"),
         permission_rules: plan_rules,
         escalation_policy: plan_escalation,
         environment: plan_environment,
@@ -174,7 +176,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             String::from("kraai-edit-file"),
         ],
         permissions: SandboxPermissionSet::new([
-            SandboxCapability::HostRead,
+            read_capability,
             SandboxCapability::WorkspaceWrite,
             SandboxCapability::Network,
         ])
@@ -192,6 +194,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         description: String::from("Implementation agent without sandbox restrictions"),
         permissions: SandboxPermissionSet::new([SandboxCapability::NoSandbox])
             .expect("valid unsandboxed coding capabilities"),
+        nushell_startup: NushellStartup::Inherit,
         ..coding.clone()
     };
     vec![plan, coding, coding_no_sandbox]
@@ -492,12 +495,20 @@ mod tests {
         );
         for profile in [plan, coding] {
             assert_eq!(profile.environment, EnvironmentPolicy::Inherit);
-            assert_eq!(profile.nushell_startup, NushellStartup::Inherit);
-            assert!(
+            assert_eq!(
+                profile.nushell_startup,
+                if cfg!(windows) {
+                    NushellStartup::Clean
+                } else {
+                    NushellStartup::Inherit
+                }
+            );
+            assert_eq!(
                 profile
                     .permissions
                     .capabilities()
-                    .contains(SandboxCapability::HostRead)
+                    .contains(SandboxCapability::HostRead),
+                !cfg!(windows)
             );
             assert!(
                 !profile
@@ -518,11 +529,13 @@ mod tests {
                 .capabilities()
                 .is_unsandboxed()
         );
+        assert_eq!(coding_no_sandbox.nushell_startup, NushellStartup::Inherit);
         let mut equivalent = coding_no_sandbox.clone();
         equivalent.id.clone_from(&coding.id);
         equivalent.display_name.clone_from(&coding.display_name);
         equivalent.description.clone_from(&coding.description);
         equivalent.permissions.clone_from(&coding.permissions);
+        equivalent.nushell_startup = coding.nushell_startup;
         assert_eq!(&equivalent, coding);
         let _ = fs::remove_dir_all(workspace);
     }
@@ -603,7 +616,7 @@ path = "inherit"
         assert_eq!(eval.commands, coding.commands);
         assert_eq!(eval.environment, EnvironmentPolicy::Inherit);
         assert_eq!(eval.escalation_policy, EscalationPolicy::Allow);
-        assert_eq!(eval.nushell_startup, NushellStartup::Inherit);
+        assert_eq!(eval.nushell_startup, coding.nushell_startup);
         assert_eq!(eval.path, PathPolicy::Inherit);
         assert!(
             eval.permissions
