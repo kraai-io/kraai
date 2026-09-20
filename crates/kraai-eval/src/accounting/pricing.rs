@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use color_eyre::eyre::{Result, ensure};
 use kraai_provider_core::{
@@ -15,7 +16,7 @@ use super::RequestMeasurement;
 pub struct PricingOptions {
     pub config: Option<PathBuf>,
     pub provider: Option<String>,
-    pub(crate) snapshot: Option<ProviderManagerConfig>,
+    pub(crate) snapshot: Option<Arc<ProviderManagerConfig>>,
 }
 
 impl PricingOptions {
@@ -37,7 +38,8 @@ impl PricingOptions {
     }
 
     pub fn validate(&self) -> Result<()> {
-        Pricing::new(&RequestPricing::configuration(self)?, pricing_policy)?;
+        let config = RequestPricing::configuration(self)?;
+        Pricing::new(&config, pricing_policy)?;
         Ok(())
     }
 }
@@ -48,7 +50,7 @@ pub(super) struct RequestPricing {
 }
 
 impl RequestPricing {
-    fn configuration(options: &PricingOptions) -> Result<ProviderManagerConfig> {
+    fn configuration(options: &PricingOptions) -> Result<Arc<ProviderManagerConfig>> {
         if let Some(snapshot) = &options.snapshot {
             return Ok(snapshot.clone());
         }
@@ -82,7 +84,7 @@ impl RequestPricing {
                 models: vec![],
             }
         };
-        Ok(config)
+        Ok(Arc::new(config))
     }
 
     pub async fn load(options: &PricingOptions) -> Result<Self> {

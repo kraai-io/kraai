@@ -12,7 +12,7 @@ declare_kraai_command! {
     /// Pins files for fresh context injection on subsequent model turns.
     pub struct OpenFilesCommand;
     metadata: kraai_command_catalog::OPEN_FILES;
-    signature: Signature::build("kraai-open-files")
+    signature: Signature::build(Self::METADATA.name)
         .rest(
             "paths",
             SyntaxShape::String,

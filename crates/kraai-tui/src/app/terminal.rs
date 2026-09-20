@@ -463,9 +463,7 @@ impl App {
                 } else if let Some(session) =
                     sessions.get(self.state.sessions_menu_index.saturating_sub(1))
                 {
-                    self.request(RuntimeRequest::LoadSession {
-                        session_id: session.id.clone(),
-                    });
+                    self.load_session(session.id.clone());
                 }
             }
             KeyCode::Delete => {

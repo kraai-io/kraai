@@ -1,6 +1,71 @@
 use std::collections::HashMap;
 
 #[test]
+fn streaming_prefix_extension_preserves_phase_normalization_and_buffer() {
+    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
+
+    let mut text = String::with_capacity(128);
+    text.push('é');
+    let pointer = text.as_ptr();
+    let mut cached = ConversationItem::Assistant {
+        items: vec![AssistantItem::Text {
+            phase: AssistantPhase::Commentary,
+            text,
+        }],
+    };
+    let mut events = String::from("é\nnext");
+    assert!(super::merge_stream_chunk_into_cached_content(
+        &mut cached,
+        &mut events,
+        "\nnext",
+    ));
+    assert!(matches!(
+        &cached,
+        ConversationItem::Assistant { items }
+            if matches!(items.as_slice(), [AssistantItem::Text { phase, text }]
+                if *phase == AssistantPhase::FinalAnswer
+                    && text == "é\nnext"
+                    && text.as_ptr() == pointer)
+    ));
+    assert!(!super::merge_stream_chunk_into_cached_content(
+        &mut cached,
+        &mut events,
+        "\nnext",
+    ));
+    assert_eq!(events, "é\nnext");
+}
+
+#[test]
+fn streaming_prefix_extension_still_collapses_multiple_items() {
+    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
+
+    let mut cached = ConversationItem::Assistant {
+        items: ["", "é", ""]
+            .into_iter()
+            .map(|text| AssistantItem::Text {
+                phase: AssistantPhase::Commentary,
+                text: text.into(),
+            })
+            .collect(),
+    };
+    let mut events = String::from("é\nnext");
+    assert!(super::merge_stream_chunk_into_cached_content(
+        &mut cached,
+        &mut events,
+        "\nnext",
+    ));
+    assert_eq!(
+        cached,
+        ConversationItem::Assistant {
+            items: vec![AssistantItem::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: "é\nnext".into(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     use super::{KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -556,10 +621,19 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
 }
 
 mod approval_overflow;
+mod approval_response;
 mod cost;
 mod editor_review;
 mod enhancements;
 mod host_failure;
+mod session_load;
+#[expect(
+    clippy::unwrap_used,
+    reason = "snapshot delivery tests assert their fixtures and captured output"
+)]
+mod snapshot_delivery;
+
+mod auth_response;
 
 #[path = "tests/startup.rs"]
 mod startup;

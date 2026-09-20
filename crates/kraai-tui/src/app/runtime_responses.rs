@@ -408,21 +408,26 @@ impl App {
                 }
             }
             RuntimeResponse::LoadSession {
+                load_id,
                 session_id,
-                result: Ok(true),
+                result,
             } => {
-                self.reset_chat_session(Some(session_id), "Session loaded");
-                self.request_sync();
-            }
-            RuntimeResponse::LoadSession {
-                result: Ok(false), ..
-            } => {
-                self.state.status = String::from("Session not found");
-            }
-            RuntimeResponse::LoadSession {
-                result: Err(err), ..
-            } => {
-                self.set_error(format!("Failed to load session: {err}"));
+                if self.state.pending_session_load_id != Some(load_id) {
+                    return;
+                }
+                self.state.pending_session_load_id = None;
+                match result {
+                    Ok(true) => {
+                        self.reset_chat_session(Some(session_id), "Session loaded");
+                        self.request_sync();
+                    }
+                    Ok(false) => {
+                        self.state.status = String::from("Session not found");
+                    }
+                    Err(err) => {
+                        self.set_error(format!("Failed to load session: {err}"));
+                    }
+                }
             }
             RuntimeResponse::Sessions(Ok(sessions)) => {
                 let selected = self
@@ -507,10 +512,10 @@ impl App {
                     .is_some_and(|script| script.execution_id == execution_id)
                 {
                     self.state.pending_script = None;
+                    self.state.script_phase = ScriptPhase::Executing;
+                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.status = String::from("Executing approved Nushell script");
                 }
-                self.state.script_phase = ScriptPhase::Executing;
-                self.state.profile_lock_stale_after_terminal_event = false;
-                self.state.status = String::from("Executing approved Nushell script");
             }
             RuntimeResponse::ApproveScript {
                 session_id,
@@ -536,9 +541,9 @@ impl App {
                     .is_some_and(|script| script.execution_id == execution_id)
                 {
                     self.state.pending_script = None;
+                    self.state.script_phase = ScriptPhase::Executing;
+                    self.state.status = String::from("Script capability escalation denied");
                 }
-                self.state.script_phase = ScriptPhase::Executing;
-                self.state.status = String::from("Script capability escalation denied");
             }
             RuntimeResponse::DenyScript {
                 session_id,

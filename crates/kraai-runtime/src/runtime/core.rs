@@ -41,11 +41,15 @@ pub(crate) struct RuntimeCore {
     pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
-    pub(crate) provider_config_path: PathBuf,
-    pub(crate) nushell_host_path: Option<std::path::PathBuf>,
-    pub(crate) script_runtime_roots: Option<Vec<std::path::PathBuf>>,
-    pub(crate) use_current_executable_as_nushell_host: bool,
+    pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+}
+
+pub(crate) struct RuntimeConfig {
+    pub(crate) provider_config_path: PathBuf,
+    pub(crate) nushell_host_path: Option<PathBuf>,
+    pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
+    pub(crate) use_current_executable_as_nushell_host: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -209,7 +213,7 @@ impl RuntimeCore {
 
     pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {
         let config = self
-            .read_and_validate_provider_config(&self.provider_config_path)
+            .read_and_validate_provider_config(&self.config.provider_config_path)
             .await?;
         self.agent_manager
             .write()

@@ -20,6 +20,7 @@ use crate::components::TextInput;
 
 mod auth;
 mod chat;
+mod chat_render;
 mod composer;
 mod cost;
 mod duration;
@@ -42,12 +43,13 @@ use self::auth::{
     ProviderAuthState, ProviderAuthStatus, map_openai_codex_auth_status, open_external_target,
     pending_auth_target,
 };
+use self::chat_render::build_tip_chain;
 use self::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
 use self::settings::{
     clear_field_value, default_values, field_value_display, is_boolean_field, merge_values,
     next_provider_id, parse_field_input, provider_definition_rank, set_field_value,
 };
-use self::state::{AppState, build_tip_chain};
+use self::state::AppState;
 pub use self::types::StartupOptions;
 use self::types::{
     ActiveSettingsEditor, OptimisticMessage, PendingSubmit, ProviderDetailAction,
@@ -265,7 +267,7 @@ impl App {
 fn merge_newer_streaming_prefix(incoming_content: &mut ConversationItem, candidate_content: &str) {
     let incoming_display = incoming_content.display_text();
     if candidate_content.len() > incoming_display.len()
-        && candidate_content.starts_with(&incoming_display)
+        && candidate_content.starts_with(incoming_display.as_ref())
     {
         replace_streaming_display(incoming_content, candidate_content.to_string());
     }
@@ -281,17 +283,24 @@ fn merge_stream_chunk_into_cached_content(
         return false;
     }
 
-    if event_content.starts_with(&cached_display) {
-        replace_streaming_display(cached_content, event_content.clone());
+    if let Some(suffix) = event_content.strip_prefix(cached_display.as_ref()) {
+        if let ConversationItem::Assistant { items } = cached_content
+            && let [AssistantItem::Text { phase, text }] = items.as_mut_slice()
+        {
+            *phase = AssistantPhase::FinalAnswer;
+            text.push_str(suffix);
+        } else {
+            replace_streaming_display(cached_content, event_content.clone());
+        }
         return true;
     }
 
     if cached_display.ends_with(chunk) {
-        event_content.clone_from(&cached_display);
+        cached_display.as_ref().clone_into(event_content);
         return false;
     }
 
-    let mut merged = cached_display;
+    let mut merged = cached_display.into_owned();
     merged.push_str(chunk);
     event_content.clone_from(&merged);
     replace_streaming_display(cached_content, merged);

@@ -6,14 +6,484 @@ use std::sync::{
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
-use futures::poll;
+use futures::{StreamExt, poll};
 use kraai_persistence::{FileMessageStore, MessageStore};
 use kraai_types::{Message, MessageId};
 use tokio_util::sync::CancellationToken;
 
-use super::harness::{RuntimeTestHarness, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::runtime::core::{ActiveScriptTask, ActiveStream};
 use crate::{ContinueSessionOutcome, Event, SessionActivity};
+
+struct HandoffProvider {
+    requests: tokio::sync::mpsc::UnboundedSender<kraai_provider_core::ProviderRequest>,
+    first_request: AtomicBool,
+    hold_after_call: bool,
+    text_before_call: Option<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl kraai_provider_core::Provider for HandoffProvider {
+    fn get_provider_id(&self) -> kraai_types::ProviderId {
+        kraai_types::ProviderId::new("mock")
+    }
+
+    async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
+        Vec::new()
+    }
+
+    async fn cache_models(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn register_model(&mut self, _model: kraai_provider_core::ModelConfig) -> Result<()> {
+        Ok(())
+    }
+
+    fn script_tool_transport(
+        &self,
+        _model_id: &kraai_types::ModelId,
+    ) -> kraai_provider_core::ScriptToolTransport {
+        kraai_provider_core::ScriptToolTransport::NativeCustom
+    }
+
+    async fn generate_reply_stream(
+        &self,
+        _model_id: &kraai_types::ModelId,
+        request: kraai_provider_core::ProviderRequest,
+        _context: &kraai_provider_core::ProviderRequestContext,
+    ) -> Result<futures::stream::BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>>
+    {
+        self.requests.send(request)?;
+        if self.first_request.swap(false, Ordering::SeqCst) {
+            let mut events = Vec::new();
+            if let Some(text) = self.text_before_call {
+                events.push(Ok(kraai_provider_core::ProviderStreamEvent::TextDelta {
+                    item_id: "partial-text".into(),
+                    phase: kraai_types::AssistantPhase::Commentary,
+                    delta: text.into(),
+                }));
+            }
+            events.push(Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
+                call_id: kraai_types::ToolCallId::new("handoff-call"),
+                name: String::from("kraai_nushell"),
+                input: String::from(
+                    "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
+                ),
+            }));
+            let events = futures::stream::iter(events);
+            if self.hold_after_call {
+                Ok(Box::pin(events.chain(futures::stream::pending())))
+            } else {
+                Ok(Box::pin(events))
+            }
+        } else {
+            Ok(Box::pin(futures::stream::pending()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn continuation_cannot_overtake_script_approval_during_stream_completion() -> Result<()> {
+    let data_dir =
+        std::env::temp_dir().join(format!("kraai-script-handoff-{}", ulid::Ulid::generate()));
+    let store = Arc::new(PausedMessageStore {
+        inner: FileMessageStore::new(&data_dir),
+        pause: AtomicBool::new(false),
+        pause_completed_script: AtomicBool::new(true),
+        fail_script_result_save: AtomicBool::new(false),
+        persist_failed_script_result: false,
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let mut providers = kraai_provider_core::ProviderManager::new();
+    providers.register_provider(
+        kraai_types::ProviderId::new("mock"),
+        Box::new(HandoffProvider {
+            requests,
+            first_request: AtomicBool::new(true),
+            hold_after_call: false,
+            text_before_call: None,
+        }),
+    );
+    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone()))
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("change it"),
+            String::from("mock-model"),
+            String::from("mock"),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(1), received.recv())
+        .await?
+        .expect("initial provider request");
+    tokio::time::timeout(Duration::from_secs(1), store.entered.notified()).await?;
+
+    let handle = harness.handle.clone();
+    let continuation = handle.continue_session(session_id.clone());
+    tokio::pin!(continuation);
+    let early_result = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let std::task::Poll::Ready(result) = poll!(&mut continuation) {
+                break Some(result);
+            }
+            if harness.runtime.agent_manager.try_read().is_err() {
+                break None;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    store.release.notify_one();
+    let outcome = match early_result {
+        Some(result) => result?,
+        None => tokio::time::timeout(Duration::from_secs(1), &mut continuation).await??,
+    };
+    let premature_request = if outcome == ContinueSessionOutcome::Started {
+        Some(
+            tokio::time::timeout(Duration::from_secs(1), received.recv())
+                .await?
+                .expect("continued provider request"),
+        )
+    } else {
+        None
+    };
+    harness
+        .events
+        .wait_for("script approval after handoff", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::ScriptApprovalRequested { session_id: actual, .. } if actual == &session_id)
+            })
+        })
+        .await;
+    if outcome == ContinueSessionOutcome::NothingToContinue {
+        let pending = harness
+            .handle
+            .get_pending_script(session_id.clone())
+            .await?
+            .expect("pending script approval");
+        harness
+            .handle
+            .deny_script(session_id.clone(), pending.execution_id)
+            .await?;
+        let request = tokio::time::timeout(Duration::from_secs(1), received.recv())
+            .await?
+            .expect("automatic continuation after denial");
+        assert!(request.messages.iter().any(|message| {
+            matches!(message, kraai_types::ConversationItem::ScriptResult { call_id, .. }
+                if call_id.as_str() == "handoff-call")
+        }));
+        assert_eq!(
+            harness.handle.continue_session(session_id.clone()).await?,
+            ContinueSessionOutcome::NothingToContinue
+        );
+        assert!(received.try_recv().is_err());
+    }
+    harness.shutdown().await;
+    tokio::fs::remove_dir_all(data_dir).await?;
+    assert_eq!(
+        outcome,
+        ContinueSessionOutcome::NothingToContinue,
+        "continuation bypassed script approval; provider history: {:?}",
+        premature_request.map(|request| request.messages)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_after_script_boundary_keeps_the_next_provider_history_valid() -> Result<()> {
+    assert_cancellation_history(None).await
+}
+
+#[tokio::test]
+async fn cancelled_script_result_save_failure_can_be_retried() -> Result<()> {
+    assert_cancellation_history(Some(false)).await
+}
+
+#[tokio::test]
+async fn cancelled_script_result_retry_links_an_already_saved_result_once() -> Result<()> {
+    assert_cancellation_history(Some(true)).await
+}
+
+async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()> {
+    let data_dir =
+        std::env::temp_dir().join(format!("kraai-cancelled-script-{}", ulid::Ulid::generate()));
+    let store = Arc::new(PausedMessageStore {
+        inner: FileMessageStore::new(&data_dir),
+        pause: AtomicBool::new(false),
+        pause_completed_script: AtomicBool::new(false),
+        fail_script_result_save: AtomicBool::new(fail_after_save.is_some()),
+        persist_failed_script_result: fail_after_save.unwrap_or(false),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let mut providers = kraai_provider_core::ProviderManager::new();
+    providers.register_provider(
+        kraai_types::ProviderId::new("mock"),
+        Box::new(HandoffProvider {
+            requests,
+            first_request: AtomicBool::new(true),
+            hold_after_call: true,
+            text_before_call: Some("I am partway through."),
+        }),
+    );
+    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone()))
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "change it".into(),
+            "mock-model".into(),
+            "mock".into(),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(1), received.recv())
+        .await?
+        .expect("first provider request");
+    harness
+        .events
+        .wait_for("script call before usage drain completes", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamChunk { session_id: id, chunk, .. }
+                if id == &session_id && chunk.contains("<tool_call>"))
+            })
+        })
+        .await;
+    if fail_after_save.is_some() {
+        let error = harness
+            .handle
+            .cancel_stream(session_id.clone())
+            .await
+            .expect_err("result persistence must fail once");
+        assert!(
+            error
+                .message
+                .contains("injected cancelled result save failure")
+        );
+        let snapshot = harness
+            .handle
+            .get_session_snapshot(session_id.clone())
+            .await?;
+        assert!(snapshot.session.is_running);
+        assert!(snapshot.session.is_streaming);
+        assert_eq!(
+            harness.handle.continue_session(session_id.clone()).await?,
+            ContinueSessionOutcome::NothingToContinue
+        );
+    }
+    assert!(harness.handle.cancel_stream(session_id.clone()).await?);
+    assert!(!harness.handle.cancel_stream(session_id.clone()).await?);
+    assert!(harness.runtime.execution_store.list_all().await?.is_empty());
+    assert!(
+        received.try_recv().is_err(),
+        "cancellation started an automatic continuation"
+    );
+    harness
+        .handle
+        .send_message(
+            session_id,
+            "skip that, do something else".into(),
+            "mock-model".into(),
+            "mock".into(),
+        )
+        .await?;
+    let request = tokio::time::timeout(Duration::from_secs(1), received.recv())
+        .await?
+        .expect("provider request after cancellation");
+    harness.shutdown().await;
+    let has_call = request.messages.iter().any(|item| {
+        matches!(item, kraai_types::ConversationItem::Assistant { items }
+            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { call_id, .. }
+                if call_id.as_str() == "handoff-call")))
+    });
+    assert!(has_call, "cancellation discarded the script call");
+    let results = request
+        .messages
+        .iter()
+        .filter_map(|item| {
+            if let kraai_types::ConversationItem::ScriptResult { call_id, output } = item
+                && call_id.as_str() == "handoff-call"
+            {
+                Some(output)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.len(),
+        1,
+        "cancelled script needs exactly one matching result"
+    );
+    assert!(
+        results
+            .first()
+            .expect("cancelled script result")
+            .contains("status=\"cancelled\"")
+    );
+    assert!(request.messages.iter().any(|item| {
+        matches!(item, kraai_types::ConversationItem::Assistant { items }
+            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::Text { phase, text }
+                if *phase == kraai_types::AssistantPhase::Commentary && text == "I am partway through.")))
+    }));
+    let mut result_count = 0;
+    let mut on_disk: Vec<_> = store.list_all_on_disk().await?.into_iter().collect();
+    on_disk.sort();
+    for id in on_disk {
+        if let Some(message) = store.get(&id).await?
+            && matches!(
+                message.content,
+                kraai_types::ConversationItem::ScriptResult { .. }
+            )
+        {
+            result_count += 1;
+        }
+    }
+    assert_eq!(result_count, 1, "retry left duplicate durable results");
+    tokio::fs::remove_dir_all(data_dir).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![ScriptedChunk::plain("other session complete")],
+        vec![ScriptedChunk::plain("queued message complete")],
+    ])
+    .await
+    .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let mut runtime = harness.runtime.clone();
+    runtime.queue_drains = Arc::default();
+    let preparation = runtime.session_preparations.begin(&session_id).await;
+    assert!(matches!(
+        runtime
+            .handle_send_message(
+                session_id.clone(),
+                "queued".into(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("mock"),
+            )
+            .await?,
+        crate::SubmitMessageOutcome::Queued { position: 1 }
+    ));
+    let (_commands, mut receiver) = tokio::sync::mpsc::channel(1);
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
+            .await?,
+        Some(crate::handle::Command::StartQueuedMessages { session_id: id }) if id == session_id
+    ));
+    runtime
+        .handle_start_queued_messages(session_id.clone())
+        .await;
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            harness.handle.send_message(
+                other_session,
+                "independent".into(),
+                "mock-model".into(),
+                "mock".into(),
+            ),
+        )
+        .await??,
+        crate::SubmitMessageOutcome::Started { .. }
+    ));
+    drop(preparation);
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
+            .await?,
+        Some(crate::handle::Command::StartQueuedMessages { session_id: id }) if id == session_id
+    ));
+    runtime
+        .handle_start_queued_messages(session_id.clone())
+        .await;
+    harness
+        .events
+        .wait_for("deferred message started", |events| {
+            events.iter().any(|event| {
+            matches!(event, Event::StreamStart { session_id: id, .. } if id == &session_id)
+        })
+        })
+        .await;
+    assert!(runtime.take_queued_messages(&session_id).await.is_empty());
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_continuation_waits_for_handoff() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("continued")]])
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let request = harness
+        .runtime
+        .agent_manager
+        .write()
+        .await
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
+        .await?;
+    harness
+        .runtime
+        .agent_manager
+        .read()
+        .await
+        .complete_message(&request.message_id)
+        .await?;
+    let preparation = harness
+        .runtime
+        .session_preparations
+        .begin(&session_id)
+        .await;
+    harness.runtime.spawn_continuation(session_id.clone());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while harness.runtime.session_state_barrier.try_write().is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        harness.handle.continue_session(session_id.clone()).await?,
+        ContinueSessionOutcome::NothingToContinue
+    );
+    drop(preparation);
+    let events = harness
+        .events
+        .wait_for("automatic continuation after handoff", |events| {
+            events.iter().any(|event| {
+            matches!(event, Event::StreamComplete { session_id: id, .. } if id == &session_id)
+        })
+        })
+        .await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(event, Event::StreamStart { session_id: id, .. } if id == &session_id)
+            })
+            .count(),
+        1
+    );
+    harness.shutdown().await;
+    Ok(())
+}
 
 async fn wait_for_snapshot_writer(
     snapshot: impl std::future::Future + Send,
@@ -381,6 +851,9 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
     let store = Arc::new(PausedMessageStore {
         inner: FileMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
+        pause_completed_script: AtomicBool::new(false),
+        fail_script_result_save: AtomicBool::new(false),
+        persist_failed_script_result: false,
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
     });
@@ -449,6 +922,9 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
 struct PausedMessageStore {
     inner: FileMessageStore,
     pause: AtomicBool,
+    pause_completed_script: AtomicBool,
+    fail_script_result_save: AtomicBool,
+    persist_failed_script_result: bool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -463,6 +939,26 @@ impl MessageStore for PausedMessageStore {
         self.inner.get(id).await
     }
     async fn save(&self, message: &Message) -> Result<()> {
+        if matches!(
+            &message.content,
+            kraai_types::ConversationItem::ScriptResult { .. }
+        ) && self.fail_script_result_save.swap(false, Ordering::SeqCst)
+        {
+            if self.persist_failed_script_result {
+                self.inner.save(message).await?;
+            }
+            return Err(color_eyre::eyre::eyre!(
+                "injected cancelled result save failure"
+            ));
+        }
+        if message.status == kraai_types::MessageStatus::Complete
+            && matches!(&message.content, kraai_types::ConversationItem::Assistant { items }
+                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { .. })))
+            && self.pause_completed_script.swap(false, Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
         self.inner.save(message).await
     }
     async fn unload(&self, id: &MessageId) {

@@ -53,6 +53,10 @@ impl SandboxPermissionSet {
     pub fn capabilities(&self) -> &SandboxCapabilities {
         &self.capabilities
     }
+
+    pub fn into_capabilities(self) -> SandboxCapabilities {
+        self.capabilities
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

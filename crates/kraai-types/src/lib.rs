@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod command;
+mod context_state;
 mod cost;
 mod effect;
 mod error;
@@ -10,6 +11,9 @@ mod profile;
 mod script;
 
 pub use command::{CommandExample, CommandMetadata};
+pub use context_state::{
+    ContextStateEvent, ContextStateEventSource, ContextStateMutation, PinnedFileScope,
+};
 pub use cost::{CostSummary, RequestCost, RequestUsage, TokenRates, Usd};
 
 pub use effect::{ContextStateDelta, OpenedFilesOperation, StateEffectAck, StateEffectRequest};
@@ -23,7 +27,7 @@ pub use profile::{EnvironmentPolicy, NushellStartup, PathPolicy, ScriptProfileSn
 pub use script::{ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream};
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 fn validate_id(value: &str) -> Result<(), String> {
     if value.is_empty() {
@@ -119,27 +123,34 @@ impl ConversationItem {
         }
     }
 
-    pub fn display_text(&self) -> String {
+    pub fn display_text(&self) -> Cow<'_, str> {
         match self {
-            Self::System { text } | Self::User { text } => text.clone(),
+            Self::System { text } | Self::User { text } => Cow::Borrowed(text),
             Self::Assistant { items } => render_assistant_items(items),
-            Self::ScriptResult { output, .. } => output.clone(),
+            Self::ScriptResult { output, .. } => Cow::Borrowed(output),
         }
     }
 }
 
-fn render_assistant_items(items: &[AssistantItem]) -> String {
-    let mut rendered = String::new();
+fn render_assistant_items(items: &[AssistantItem]) -> Cow<'_, str> {
+    let mut rendered = Cow::Borrowed("");
     for item in items {
         if matches!(item, AssistantItem::Text { text, .. } if text.is_empty()) {
             continue;
         }
         if !rendered.is_empty() {
-            rendered.push_str("\n\n");
+            rendered.to_mut().push_str("\n\n");
         }
         match item {
-            AssistantItem::Text { text, .. } => rendered.push_str(text),
+            AssistantItem::Text { text, .. } => {
+                if rendered.is_empty() {
+                    rendered = Cow::Borrowed(text);
+                } else {
+                    rendered.to_mut().push_str(text);
+                }
+            }
             AssistantItem::ScriptCall { input, .. } => {
+                let rendered = rendered.to_mut();
                 rendered.push_str("<tool_call>\n");
                 rendered.push_str(input);
                 rendered.push_str("\n</tool_call>");
@@ -168,7 +179,7 @@ impl Message {
         self.content.role()
     }
 
-    pub fn display_text(&self) -> String {
+    pub fn display_text(&self) -> Cow<'_, str> {
         self.content.display_text()
     }
 }
@@ -377,6 +388,30 @@ mod tests {
                 ConversationItem::Assistant { items }.display_text(),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn display_text_borrows_existing_text() {
+        let text = "é\n display";
+        for content in [
+            ConversationItem::System { text: text.into() },
+            ConversationItem::User { text: text.into() },
+            ConversationItem::ScriptResult {
+                call_id: ToolCallId::new("call"),
+                output: text.into(),
+            },
+            ConversationItem::Assistant {
+                items: ["", text, ""]
+                    .into_iter()
+                    .map(|text| AssistantItem::Text {
+                        phase: AssistantPhase::Commentary,
+                        text: text.into(),
+                    })
+                    .collect(),
+            },
+        ] {
+            assert!(matches!(content.display_text(), Cow::Borrowed(value) if value == text));
         }
     }
 

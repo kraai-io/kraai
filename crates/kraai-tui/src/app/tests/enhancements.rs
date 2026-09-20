@@ -96,7 +96,7 @@ fn session_filter_selects_and_deletes_the_visible_session() {
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::LoadSession { session_id }) if session_id == "beta")
+        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::LoadSession { session_id, .. }) if session_id == "beta")
     );
     harness
         .app

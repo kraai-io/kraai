@@ -1,9 +1,9 @@
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
-use kraai_persistence::{
-    ContextStateEvent, ContextStateMutation, ContextStateStore, PinnedFileScope,
-};
+use kraai_persistence::ContextStateStore;
+use kraai_types::{ContextStateEvent, ContextStateMutation, PinnedFileScope};
 use kraai_workspace_fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
 
 const REFRESH_COMPONENT: &str = "pinned-file-refresh";
@@ -49,82 +49,84 @@ fn refresh_pinned_files(
     let mut state = ContextState::default();
     for event in events {
         for mutation in event.mutations {
-            state.apply(&mutation);
+            state.apply(mutation);
         }
     }
 
-    let mut sections = Vec::new();
+    let mut sections = String::new();
     let mut removals = Vec::new();
     let mut notifications = Vec::new();
-    for pinned in &state.opened_files {
-        match read_pinned_file(pinned) {
-            Ok(contents) => sections.push(format!(
-                "File: {}\n```text\n{}\n```",
-                pinned.path.display(),
-                format_text_with_line_numbers(&contents)
-            )),
+    for pinned in state.opened_files {
+        match read_pinned_file(&pinned) {
+            Ok(contents) => {
+                begin_file_section(&mut sections, &pinned);
+                append_text_with_line_numbers(&mut sections, &contents);
+                sections.push_str("\n```");
+            }
             Err(PinnedReadFailure::Remove(reason)) => {
                 notifications.push(format!(
                     "{} was automatically unpinned because {reason}.",
                     pinned.path.display()
                 ));
                 removals.push(ContextStateMutation::UnpinFile {
-                    path: pinned.path.clone(),
+                    path: pinned.path,
                     reason: Some(reason),
                 });
             }
-            Err(PinnedReadFailure::Unavailable(error)) => sections.push(format!(
-                "File: {}\n```text\n[temporarily unavailable: {error}]\n```",
-                pinned.path.display()
-            )),
+            Err(PinnedReadFailure::Unavailable(error)) => {
+                begin_file_section(&mut sections, &pinned);
+                let _ = write!(sections, "[temporarily unavailable: {error}]\n```");
+            }
         }
     }
 
-    let mut prompt_sections = Vec::new();
-    if !notifications.is_empty() {
-        prompt_sections.push(format!(
-            "Pinned File Updates\n{}",
-            notifications
-                .iter()
-                .map(|notification| format!("- {notification}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-    if !sections.is_empty() {
-        prompt_sections.push(format!(
-            "Opened Files\nThese files are pinned into context for this turn. They are freshly read from disk before every turn and are not cached. Treat them as the authoritative current on-disk contents. Prefer this section over cat, sed, nl, or similar shell inspection commands for these paths.\n\nFormat: <line>|<content>.\n\n{}",
-            sections.join("\n\n")
-        ));
-    }
+    let prompt = if notifications.is_empty() {
+        sections
+    } else {
+        let mut prompt = String::from("Pinned File Updates");
+        for notification in &notifications {
+            let _ = write!(prompt, "\n- {notification}");
+        }
+        if !sections.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&sections);
+        }
+        prompt
+    };
     (
         RefreshedContextState {
-            prompt: prompt_sections.join("\n\n"),
+            prompt,
             notifications,
         },
         removals,
     )
 }
 
+fn begin_file_section(sections: &mut String, pinned: &PinnedFile) {
+    if sections.is_empty() {
+        sections.push_str("Opened Files\nThese files are pinned into context for this turn. They are freshly read from disk before every turn and are not cached. Treat them as the authoritative current on-disk contents. Prefer this section over cat, sed, nl, or similar shell inspection commands for these paths.\n\nFormat: <line>|<content>.\n\n");
+    } else {
+        sections.push_str("\n\n");
+    }
+    let _ = write!(sections, "File: {}\n```text\n", pinned.path.display());
+}
+
 impl ContextState {
-    fn apply(&mut self, mutation: &ContextStateMutation) {
+    fn apply(&mut self, mutation: ContextStateMutation) {
         match mutation {
             ContextStateMutation::PinFile { path, scope } => {
                 if let Some(existing) = self
                     .opened_files
                     .iter_mut()
-                    .find(|existing| existing.path == *path)
+                    .find(|existing| existing.path == path)
                 {
-                    existing.scope = scope.clone();
+                    existing.scope = scope;
                 } else {
-                    self.opened_files.push(PinnedFile {
-                        path: path.clone(),
-                        scope: scope.clone(),
-                    });
+                    self.opened_files.push(PinnedFile { path, scope });
                 }
             }
             ContextStateMutation::UnpinFile { path, .. } => {
-                self.opened_files.retain(|existing| existing.path != *path);
+                self.opened_files.retain(|existing| existing.path != path);
             }
         }
     }
@@ -168,13 +170,14 @@ fn read_pinned_file(pinned: &PinnedFile) -> Result<String, PinnedReadFailure> {
     }
 }
 
-fn format_text_with_line_numbers(contents: &str) -> String {
-    contents
-        .lines()
-        .enumerate()
-        .map(|(index, line)| format!("{}|{line}", index.saturating_add(1)))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn append_text_with_line_numbers(formatted: &mut String, contents: &str) {
+    formatted.reserve(contents.len());
+    for (index, line) in contents.lines().enumerate() {
+        if index > 0 {
+            formatted.push('\n');
+        }
+        let _ = write!(formatted, "{}|{line}", index.saturating_add(1));
+    }
 }
 
 #[cfg(test)]
@@ -182,16 +185,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn line_numbering_preserves_blank_lines_line_endings_and_unicode() {
+        for (input, expected) in [
+            ("", ""),
+            ("\n", "1|"),
+            ("\n\n", "1|\n2|"),
+            ("one\n", "1|one"),
+            ("one\r\ntwo\n\n", "1|one\n2|two\n3|"),
+            ("one\rtwo", "1|one\rtwo"),
+            ("é\n模型\n🦀", "1|é\n2|模型\n3|🦀"),
+        ] {
+            let mut formatted = String::new();
+            append_text_with_line_numbers(&mut formatted, input);
+            assert_eq!(formatted, expected);
+        }
+    }
+
+    #[test]
     fn state_folds_pin_reauthorization_and_unpin_in_order() {
         let path = PathBuf::from("/workspace/file.rs");
         let mut state = ContextState::default();
-        state.apply(&ContextStateMutation::PinFile {
+        state.apply(ContextStateMutation::PinFile {
             path: path.clone(),
             scope: PinnedFileScope::Workspace {
                 root: PathBuf::from("/workspace"),
             },
         });
-        state.apply(&ContextStateMutation::PinFile {
+        state.apply(ContextStateMutation::PinFile {
             path: path.clone(),
             scope: PinnedFileScope::Host,
         });
@@ -200,7 +220,7 @@ mod tests {
             state.opened_files.first().map(|file| &file.scope),
             Some(&PinnedFileScope::Host)
         );
-        state.apply(&ContextStateMutation::UnpinFile { path, reason: None });
+        state.apply(ContextStateMutation::UnpinFile { path, reason: None });
         assert!(state.opened_files.is_empty());
     }
 }

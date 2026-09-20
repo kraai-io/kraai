@@ -126,6 +126,109 @@ async fn dropping_execution_cancels_an_in_progress_state_effect()
     Ok(())
 }
 
+async fn stalled_effect_after_host_exit(
+    exit_code: i32,
+    cancel: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let workspace = TestWorkspace::new();
+    std::fs::write(workspace.0.join("fixture.txt"), "fixture")?;
+    let entered = CancellationToken::new();
+    let dropped = CancellationToken::new();
+    let mut plan = plan(
+        format!(
+            "print 'before effect'; print --stderr 'effect pending'; \
+             job spawn {{ kraai-open-files fixture.txt }} | ignore; \
+             while not ('exit-now' | path exists) {{ sleep 1ms }}; exit {exit_code}"
+        )
+        .into_bytes(),
+        &workspace,
+    );
+    plan.timeout = Duration::from_secs(3);
+    plan.active_commands.push(String::from("kraai-open-files"));
+    plan.state_effect_handler = Arc::new(StalledEffects {
+        entered: entered.clone(),
+        dropped: dropped.clone(),
+    });
+    let cancellation = CancellationToken::new();
+    let mut execution = Box::pin(execute(plan, cancellation.clone()));
+    tokio::select! {
+        result = &mut execution => {
+            return Err(format!("execution stopped before entering the state effect: {result:?}").into());
+        }
+        entered = tokio::time::timeout(Duration::from_secs(5), entered.cancelled()) => entered?,
+    }
+    std::fs::write(workspace.0.join("exit-now"), "")?;
+    if cancel {
+        cancellation.cancel();
+    }
+    let completed = tokio::time::timeout(Duration::from_secs(5), &mut execution).await;
+    drop(execution);
+    tokio::time::timeout(Duration::from_secs(1), dropped.cancelled()).await?;
+    let result =
+        completed.map_err(|_elapsed| "execution ignored script timeout after host exit")??;
+    assert_eq!(
+        result.output.termination,
+        if cancel {
+            Termination::Cancelled
+        } else {
+            Termination::TimedOut
+        }
+    );
+    assert_eq!(result.output.stdout, b"before effect\n");
+    assert_eq!(result.output.stderr, b"effect pending\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_timeout_still_bounds_effect_completion_after_host_exit()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    for exit_code in [0, 7] {
+        stalled_effect_after_host_exit(exit_code, false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_drops_a_pending_state_effect()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    stalled_effect_after_host_exit(0, true).await
+}
+
+#[tokio::test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "test asserts behavior and propagates fixture errors"
+)]
+async fn completed_state_effects_preserve_the_host_exit_status()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    for exit_code in [0, 7] {
+        let workspace = TestWorkspace::new();
+        std::fs::write(workspace.0.join("fixture.txt"), "fixture")?;
+        let effects = Arc::new(RecordingEffects::default());
+        let mut plan = plan(
+            format!(
+                "kraai-open-files fixture.txt | ignore; print 'after effect'; exit {exit_code}"
+            )
+            .into_bytes(),
+            &workspace,
+        );
+        plan.active_commands.push(String::from("kraai-open-files"));
+        plan.state_effect_handler = effects.clone();
+
+        let result = execute(plan, CancellationToken::new()).await?;
+        assert_eq!(
+            result.output.termination,
+            Termination::Exited {
+                code: Some(exit_code)
+            }
+        );
+        assert_eq!(result.output.stdout, b"after effect\n");
+        assert!(result.output.stderr.is_empty());
+        assert_eq!(effects.requests.lock().expect("recording lock").len(), 1);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn executes_structured_nushell_through_the_private_transport() {
     let workspace = TestWorkspace::new();

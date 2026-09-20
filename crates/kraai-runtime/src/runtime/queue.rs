@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, mpsc};
@@ -13,7 +13,8 @@ use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 /// Coalesce overlapping preparations without blocking the command loop.
 #[derive(Default)]
 pub(crate) struct SessionPreparations {
-    active: Mutex<HashSet<String>>,
+    active: Mutex<HashMap<String, Option<Arc<QueueDrains>>>>,
+    ready: Notify,
 }
 
 pub(crate) struct SessionPreparation {
@@ -23,32 +24,68 @@ pub(crate) struct SessionPreparation {
 
 impl SessionPreparations {
     pub(crate) fn try_begin(self: &Arc<Self>, session_id: &str) -> Option<SessionPreparation> {
-        let inserted = self
+        self.try_begin_with_drain(session_id, None)
+    }
+
+    fn try_begin_with_drain(
+        self: &Arc<Self>,
+        session_id: &str,
+        drain: Option<&Arc<QueueDrains>>,
+    ) -> Option<SessionPreparation> {
+        let mut active = self
             .active
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(session_id.to_string());
-        inserted.then(|| SessionPreparation {
+            .unwrap_or_else(|error| error.into_inner());
+        match active.entry(session_id.to_string()) {
+            Entry::Vacant(entry) => {
+                entry.insert(None);
+            }
+            Entry::Occupied(mut entry) => {
+                if let Some(drain) = drain {
+                    entry.insert(Some(drain.clone()));
+                }
+                return None;
+            }
+        }
+        drop(active);
+        Some(SessionPreparation {
             preparations: self.clone(),
             session_id: session_id.to_string(),
         })
+    }
+
+    pub(crate) async fn begin(self: &Arc<Self>, session_id: &str) -> SessionPreparation {
+        loop {
+            let ready = self.ready.notified();
+            tokio::pin!(ready);
+            ready.as_mut().enable();
+            if let Some(preparation) = self.try_begin(session_id) {
+                return preparation;
+            }
+            ready.await;
+        }
     }
 
     pub(crate) fn is_active(&self, session_id: &str) -> bool {
         self.active
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .contains(session_id)
+            .contains_key(session_id)
     }
 }
 
 impl Drop for SessionPreparation {
     fn drop(&mut self) {
-        self.preparations
+        let drain = self
+            .preparations
             .active
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(&self.session_id);
+        self.preparations.ready.notify_waiters();
+        if let Some(Some(drain)) = drain {
+            drain.schedule(&self.session_id);
+        }
     }
 }
 
@@ -182,7 +219,10 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
-        let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
+        let Some(preparation) = self
+            .session_preparations
+            .try_begin_with_drain(&session_id, Some(&self.queue_drains))
+        else {
             return;
         };
         let is_turn_active = {
@@ -239,13 +279,8 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {
-        self.queued_messages
-            .lock()
-            .await
-            .remove(session_id)
-            .map(VecDeque::into_iter)
-            .map(Iterator::collect)
-            .unwrap_or_default()
+        let messages = self.queued_messages.lock().await.remove(session_id);
+        messages.map(Vec::from).unwrap_or_default()
     }
 
     pub(crate) async fn restore_queued_messages(

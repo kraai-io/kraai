@@ -8,9 +8,9 @@ use kraai_types::{ModelId, ProviderId};
 use crate::config::{ModelConfig, ProviderManagerConfig};
 use crate::definition::ValidationError;
 use crate::error::{ProviderError, ProviderModelCacheRefreshError};
-use crate::http_retry::ProviderRequestContext;
 use crate::provider::{Model, Provider, ProviderRequest, ScriptToolTransport};
 use crate::registry::ProviderRegistry;
+use crate::request_context::ProviderRequestContext;
 use crate::stream::ProviderStreamEvent;
 
 #[derive(Default, Clone)]
@@ -55,7 +55,6 @@ impl ProviderManager {
         let pricing = crate::pricing::Pricing::new(&config, |type_id| {
             registry.pricing_policy(type_id).unwrap_or_default()
         })?;
-        let mut provider_types = BTreeMap::new();
         let mut provider_configs = BTreeMap::new();
         let mut models_by_provider: BTreeMap<ProviderId, Vec<ModelConfig>> = BTreeMap::new();
 
@@ -72,17 +71,18 @@ impl ProviderManager {
                 );
             }
 
-            provider_types.insert(provider_config.id.clone(), provider_config.type_id.clone());
             provider_configs.insert(provider_config.id.clone(), provider_config);
         }
 
         for model_config in config.models {
-            let provider_type = provider_types
-                .get(&model_config.provider_id)
-                .ok_or_else(|| {
-                    ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
-                })?;
-            let errors = registry.validate_model_config(provider_type, &model_config.config)?;
+            let provider_config =
+                provider_configs
+                    .get(&model_config.provider_id)
+                    .ok_or_else(|| {
+                        ProviderError::ProviderNotRegistered(model_config.provider_id.clone())
+                    })?;
+            let errors =
+                registry.validate_model_config(&provider_config.type_id, &model_config.config)?;
             if !errors.is_empty() {
                 return Err(
                     ProviderError::ConfigValidationError(format_validation_errors(

@@ -1,248 +1,6 @@
 use super::*;
 
-const SCRIPT_TOOL_NAME: &str = "kraai_nushell";
-const SCRIPT_TOOL_DESCRIPTION: &str = "Execute one complete Nushell script in Kraai's local, policy-controlled scripting environment. Input must be plaintext Nushell beginning with a metadata comment containing timeout.";
-
 impl AgentManager {
-    pub async fn prepare_start_stream(
-        &mut self,
-        session_id: &str,
-        message: String,
-        model_id: ModelId,
-        provider_id: ProviderId,
-    ) -> Result<PendingStreamRequest> {
-        self.finish_pending_message_rollback(session_id).await?;
-        let script_tool_transport = self
-            .providers
-            .script_tool_transport(&provider_id, &model_id)
-            .unwrap_or(ScriptToolTransport::TextEnvelope);
-        let session = self
-            .recover_interrupted_stream(self.require_session(session_id).await?)
-            .await?;
-        let profile = self.resolve_selected_profile(&session)?;
-        let workspace_dir = {
-            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-            if state.active_turn_profile.is_some() {
-                return Err(eyre!(kraai_types::DomainError::conflict(
-                    "Cannot send a new message while the current turn is active"
-                )));
-            }
-            state.promote_pending_workspace_dir();
-            state.last_model = Some(model_id.clone());
-            state.last_provider = Some(provider_id.clone());
-            state.active_turn_profile = Some(profile.clone());
-            state.active_workspace_dir.clone()
-        };
-        self.last_used_profile_id = Some(profile.id.clone());
-
-        let user_message = match self
-            .append_message(
-                session_id,
-                ChatRole::User,
-                message,
-                Some(profile.id.clone()),
-            )
-            .await
-        {
-            Ok(appended) => appended,
-            Err(error) => {
-                self.clear_active_turn(session_id);
-                return Err(error);
-            }
-        };
-        let user_msg_id = user_message.message.id.clone();
-        let context = match self.get_model_history(&user_msg_id).await {
-            Ok(context) => context,
-            Err(error) => {
-                self.clear_active_turn(session_id);
-                if let Err(rollback_error) = self
-                    .conversation_store
-                    .restore_appended_message(session_id, &user_message)
-                    .await
-                {
-                    tracing::error!(
-                        "Failed to roll back user message {} after context preparation failure: {rollback_error}",
-                        user_msg_id
-                    );
-                }
-                return Err(error);
-            }
-        };
-        let max_context = self
-            .resolve_model_max_context(&provider_id, &model_id)
-            .await;
-        let prepared = async {
-            let prompt = self
-                .build_turn_system_prompt(
-                    session_id,
-                    &profile,
-                    &workspace_dir,
-                    script_tool_transport,
-                )
-                .await?;
-            let (request, compaction) = self
-                .build_model_context(
-                    session_id,
-                    context,
-                    &prompt,
-                    script_tool_definition(script_tool_transport),
-                    max_context,
-                )
-                .await?;
-            Ok::<_, color_eyre::Report>((prompt, request, compaction))
-        }
-        .await;
-        let (system_prompt, provider_request, context_compaction) = match prepared {
-            Ok(system_prompt) => system_prompt,
-            Err(error) => {
-                self.clear_active_turn(session_id);
-                if let Err(rollback_error) = self
-                    .conversation_store
-                    .restore_appended_message(session_id, &user_message)
-                    .await
-                {
-                    tracing::error!(
-                        "Failed to roll back user message {} after system prompt failure: {rollback_error}",
-                        user_msg_id
-                    );
-                }
-                return Err(error);
-            }
-        };
-        let stream_id = StreamId::new(Ulid::generate());
-        let generation = Some(MessageGeneration {
-            provider_id: provider_id.clone(),
-            model_id: model_id.clone(),
-            max_context,
-            usage: None,
-        });
-        let assistant_msg_id = match self
-            .start_streaming_message(
-                session_id,
-                ChatRole::Assistant,
-                stream_id,
-                Some(profile.id),
-                generation,
-            )
-            .await
-        {
-            Ok(message_id) => message_id,
-            Err(error) => {
-                self.clear_active_turn(session_id);
-                if let Err(rollback_error) = self
-                    .conversation_store
-                    .restore_appended_message(session_id, &user_message)
-                    .await
-                {
-                    tracing::error!(
-                        "Failed to roll back user message {} after assistant placeholder failure: {rollback_error}",
-                        user_msg_id
-                    );
-                }
-                return Err(error);
-            }
-        };
-
-        Ok(PendingStreamRequest {
-            message_id: assistant_msg_id,
-            provider_id,
-            model_id,
-            provider_request,
-            context_compaction,
-            script_tool_transport,
-            context_notifications: system_prompt.context_notifications,
-        })
-    }
-
-    pub async fn prepare_continuation_stream(
-        &mut self,
-        session_id: &str,
-    ) -> Result<Option<PendingStreamRequest>> {
-        self.finish_pending_message_rollback(session_id).await?;
-        let session = self
-            .recover_interrupted_stream(self.require_session(session_id).await?)
-            .await?;
-        let selected_profile = self.resolve_selected_profile(&session)?;
-        let (model_id, provider_id, profile, workspace_dir) = {
-            let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-            let Some(model_id) = &state.last_model else {
-                return Ok(None);
-            };
-            let Some(provider_id) = &state.last_provider else {
-                return Ok(None);
-            };
-            let profile = match state.active_turn_profile.clone() {
-                Some(profile) => profile,
-                None => {
-                    state.active_turn_profile = Some(selected_profile.clone());
-                    selected_profile.clone()
-                }
-            };
-            (
-                model_id.clone(),
-                provider_id.clone(),
-                profile,
-                state.active_workspace_dir.clone(),
-            )
-        };
-
-        if self.session_has_active_stream(session_id).await {
-            return Ok(None);
-        }
-
-        let Some(tip_id) = self.get_tip(session_id).await? else {
-            return Ok(None);
-        };
-
-        let context = self.get_model_history(&tip_id).await?;
-        let script_tool_transport = self
-            .providers
-            .script_tool_transport(&provider_id, &model_id)?;
-        let system_prompt = self
-            .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
-            .await?;
-
-        let max_context = self
-            .resolve_model_max_context(&provider_id, &model_id)
-            .await;
-        let (provider_request, context_compaction) = self
-            .build_model_context(
-                session_id,
-                context,
-                &system_prompt,
-                script_tool_definition(script_tool_transport),
-                max_context,
-            )
-            .await?;
-
-        let stream_id = StreamId::new(Ulid::generate());
-        let generation = Some(MessageGeneration {
-            provider_id: provider_id.clone(),
-            model_id: model_id.clone(),
-            max_context,
-            usage: None,
-        });
-        let assistant_msg_id = self
-            .start_streaming_message(
-                session_id,
-                ChatRole::Assistant,
-                stream_id,
-                Some(profile.id),
-                generation,
-            )
-            .await?;
-
-        Ok(Some(PendingStreamRequest {
-            message_id: assistant_msg_id,
-            provider_id,
-            model_id,
-            provider_request,
-            context_compaction,
-            script_tool_transport,
-            context_notifications: system_prompt.context_notifications,
-        }))
-    }
-
     #[cfg(test)]
     pub(super) async fn add_message(
         &mut self,
@@ -381,6 +139,7 @@ impl AgentManager {
                 previous_tip: appended.previous_tip,
                 previous_title: appended.previous_title,
                 message: appended.message,
+                cancellation_result_id: None,
                 text_item_ids: HashMap::new(),
                 subscription,
                 unpriced_attempts: 0,
@@ -519,6 +278,7 @@ impl AgentManager {
     pub async fn cancel_streaming_message(
         &self,
         message_id: &MessageId,
+        cancelled_script_output: &str,
     ) -> Result<Option<CancelledStreamResult>> {
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -532,8 +292,40 @@ impl AgentManager {
             .assistant_items()
             .is_some_and(|items| !items.is_empty());
         let persist_result = if persisted {
-            state.message.status = MessageStatus::Complete;
-            self.message_store.save(&state.message).await
+            async {
+                let call_id = state.message.content.assistant_items().and_then(|items| {
+                    items.iter().find_map(|item| match item {
+                        AssistantItem::ScriptCall { call_id, .. } => Some(call_id.clone()),
+                        AssistantItem::Text { .. } => None,
+                    })
+                });
+                if let Some(call_id) = call_id {
+                    self.message_store.save(&state.message).await?;
+                    let result_id = state
+                        .cancellation_result_id
+                        .get_or_insert_with(|| MessageId::new(Ulid::generate()))
+                        .clone();
+                    self.conversation_store
+                        .append_message_idempotent(
+                            result_id,
+                            AppendMessageRequest {
+                                session_id: state.session_id.clone(),
+                                content: ConversationItem::ScriptResult {
+                                    call_id,
+                                    output: cancelled_script_output.to_string(),
+                                },
+                                status: MessageStatus::Complete,
+                                agent_profile_id: state.message.agent_profile_id.clone(),
+                                generation: None,
+                                title_if_first_message: None,
+                            },
+                        )
+                        .await?;
+                }
+                state.message.status = MessageStatus::Complete;
+                self.message_store.save(&state.message).await
+            }
+            .await
         } else {
             self.conversation_store
                 .restore_tip_title_and_delete_message(
@@ -581,17 +373,6 @@ impl AgentManager {
         Ok(())
     }
 
-    pub(super) async fn get_history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
-        let streaming = self.streaming_messages.read().await;
-        let in_flight = streaming
-            .iter()
-            .map(|(id, state)| (id.clone(), state.message.clone()))
-            .collect();
-        drop(streaming);
-        super::snapshot::load_history(self.message_store.as_ref(), Some(from.clone()), &in_flight)
-            .await
-    }
-
     pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
         let mut result = BTreeMap::new();
 
@@ -599,10 +380,12 @@ impl AgentManager {
             return Ok(result);
         };
 
-        let context = self.get_history_context(&tip_id).await?;
-        for msg in context {
-            result.insert(msg.id.clone(), msg);
-        }
+        self.visit_history_context(&tip_id, |message| {
+            result
+                .entry(message.id.clone())
+                .or_insert_with(|| message.into_owned());
+        })
+        .await?;
 
         let streaming = self.streaming_messages.read().await;
         let mut streaming_messages: Vec<_> = streaming
@@ -615,18 +398,6 @@ impl AgentManager {
         result.extend(streaming_messages);
 
         Ok(result)
-    }
-
-    pub async fn get_session_context_usage(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<SessionContextUsage>> {
-        let Some(tip_id) = self.get_tip(session_id).await? else {
-            return Ok(None);
-        };
-
-        let context = self.get_history_context(&tip_id).await?;
-        Ok(context_usage(&context))
     }
 
     pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
@@ -660,27 +431,4 @@ impl AgentManager {
 
         Ok(None)
     }
-}
-
-pub(super) fn context_usage(context: &[Message]) -> Option<SessionContextUsage> {
-    context.iter().rev().find_map(|message| {
-        (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
-            .then_some(message.generation.as_ref())
-            .flatten()
-            .and_then(|generation| {
-                generation.usage.as_ref().map(|usage| SessionContextUsage {
-                    provider_id: generation.provider_id.clone(),
-                    model_id: generation.model_id.clone(),
-                    max_context: generation.max_context,
-                    usage: usage.clone(),
-                })
-            })
-    })
-}
-
-fn script_tool_definition(transport: ScriptToolTransport) -> Option<ScriptToolDefinition> {
-    (transport == ScriptToolTransport::NativeCustom).then(|| ScriptToolDefinition {
-        name: SCRIPT_TOOL_NAME.to_string(),
-        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
-    })
 }

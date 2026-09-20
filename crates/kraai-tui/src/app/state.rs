@@ -1,18 +1,15 @@
 use kraai_runtime::TurnTimer;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{ChatRole, ConversationItem, Message, MessageId, MessageStatus};
-
-use crate::components::{ChatHistory, RenderedLine};
+use kraai_types::{Message, MessageId};
 
 use super::auth::ProviderAuthStatus;
+use super::chat_render::ChatRenderCache;
 use super::types::{
     ActiveSettingsEditor, ExitUsageTotals, OptimisticMessage, PendingSubmit,
     ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase, SettingsFocus,
@@ -96,6 +93,8 @@ pub(super) struct AppState {
     pub(super) openai_codex_auth: ProviderAuthStatus,
     pub(super) pending_submit: Option<PendingSubmit>,
     pub(super) next_session_creation_id: u64,
+    pub(super) next_session_load_id: u64,
+    pub(super) pending_session_load_id: Option<u64>,
     pub(super) exit_usage_totals: ExitUsageTotals,
 }
 
@@ -183,13 +182,15 @@ impl Default for AppState {
             openai_codex_auth: ProviderAuthStatus::default(),
             pending_submit: None,
             next_session_creation_id: 0,
+            next_session_load_id: 0,
+            pending_session_load_id: None,
             exit_usage_totals: ExitUsageTotals::default(),
         }
     }
 }
 
 impl AppState {
-    pub(super) fn from_startup_options(startup_options: super::StartupOptions) -> Self {
+    pub(super) fn from_startup_options(startup_options: &super::StartupOptions) -> Self {
         let workspace_preferences = super::workspace_preferences::load_for_current_workspace()
             .unwrap_or_else(|error| {
                 tracing::warn!("Failed to load workspace preferences: {error}");
@@ -199,10 +200,15 @@ impl AppState {
         Self {
             selected_provider_id: startup_options
                 .provider_id
+                .clone()
                 .or(workspace_preferences.provider_id),
-            selected_model_id: startup_options.model_id.or(workspace_preferences.model_id),
+            selected_model_id: startup_options
+                .model_id
+                .clone()
+                .or(workspace_preferences.model_id),
             selected_profile_id: startup_options
                 .agent_profile_id
+                .clone()
                 .or(workspace_preferences.agent_profile_id),
             ..Self::default()
         }
@@ -226,227 +232,4 @@ impl AppState {
                 && !self.profile_lock_stale_after_terminal_event
                 && self.script_phase != ScriptPhase::AwaitingApproval)
     }
-
-    pub(super) fn chat_max_scroll(&self) -> u16 {
-        let cache = self.chat_render_cache.borrow();
-        cache.total_lines.saturating_sub(self.chat_viewport_height)
-    }
-
-    pub(super) fn rendered_messages(&self) -> Vec<Message> {
-        let mut rendered_messages: Vec<Message> =
-            build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
-                .into_iter()
-                .cloned()
-                .collect();
-
-        for optimistic in &self.optimistic_messages {
-            let content = if optimistic.is_queued {
-                format!("{} [queued]", optimistic.content)
-            } else {
-                optimistic.content.clone()
-            };
-            rendered_messages.push(Message {
-                id: MessageId::new(optimistic.local_id.clone()),
-                parent_id: None,
-                content: ConversationItem::User { text: content },
-                status: MessageStatus::Complete,
-                agent_profile_id: self.selected_profile_id.clone(),
-                generation: None,
-            });
-        }
-
-        rendered_messages
-    }
-
-    pub(super) fn refresh_chat_render_cache(&self, width: u16) {
-        let needs_refresh = {
-            let cache = self.chat_render_cache.borrow();
-            cache.epoch != self.chat_epoch || cache.width != width
-        };
-        if !needs_refresh {
-            return;
-        }
-
-        let mut rendered_messages = self.rendered_messages();
-        let completed: HashSet<String> = rendered_messages
-            .iter()
-            .filter_map(|message| match &message.content {
-                ConversationItem::ScriptResult { call_id, .. } => Some(call_id.to_string()),
-                _ => None,
-            })
-            .collect();
-        let mut sources = HashMap::new();
-        for message in &mut rendered_messages {
-            if let ConversationItem::Assistant { items } = &mut message.content {
-                items.retain(|item| {
-                    if let kraai_types::AssistantItem::ScriptCall { call_id, input, .. } = item
-                        && completed.contains(call_id.as_str())
-                    {
-                        sources.insert(call_id.to_string(), input.clone());
-                        return false;
-                    }
-                    true
-                });
-            }
-        }
-        let mut cache = self.chat_render_cache.borrow_mut();
-        let mut prior_entries = std::mem::take(&mut cache.message_cache);
-        if cache.width != width {
-            prior_entries.clear();
-        }
-
-        let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
-        let mut sections = Vec::new();
-        let mut total_lines: u16 = 0;
-        let mut execution_offsets = HashMap::new();
-
-        for msg in &rendered_messages {
-            if self.mode == UiMode::Executions
-                && !matches!(msg.content, ConversationItem::ScriptResult { .. })
-            {
-                continue;
-            }
-            let key = msg.id.as_str().to_string();
-            let mut fingerprint = message_fingerprint(msg);
-            let lines = if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
-                let summary = super::executions::result_summary(output);
-                let expanded = self
-                    .execution_expanded
-                    .get(call_id.as_str())
-                    .copied()
-                    .unwrap_or(false);
-                execution_offsets.insert(
-                    call_id.to_string(),
-                    total_lines.saturating_add(u16::from(!sections.is_empty())),
-                );
-                let source = sources.get(call_id.as_str()).map(String::as_str);
-                let selected = self.selected_execution.as_deref() == Some(call_id.as_str());
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (fingerprint, source, expanded, selected).hash(&mut hasher);
-                fingerprint = hasher.finish();
-                match prior_entries.remove(&key) {
-                    Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_execution_lines(
-                        &summary, source, output, expanded, selected, width,
-                    )),
-                }
-            } else if matches!(&msg.content, ConversationItem::Assistant { items } if items.is_empty())
-            {
-                continue;
-            } else {
-                match prior_entries.remove(&key) {
-                    Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
-                }
-            };
-
-            if lines.is_empty() {
-                continue;
-            }
-
-            if !sections.is_empty() {
-                sections.push(Arc::new(vec![ChatHistory::separator_line()]));
-                total_lines = total_lines.saturating_add(1);
-            }
-
-            total_lines = total_lines.saturating_add(lines.len().min(u16::MAX as usize) as u16);
-            sections.push(Arc::clone(&lines));
-            next_entries.insert(key, CachedMessageRender { fingerprint, lines });
-        }
-
-        cache.execution_offsets = execution_offsets;
-        cache.sections = sections;
-        cache.total_lines = total_lines;
-        cache.message_cache = next_entries;
-        cache.width = width;
-        cache.epoch = self.chat_epoch;
-    }
-}
-
-#[derive(Default)]
-pub(super) struct ChatRenderCache {
-    pub(super) execution_offsets: HashMap<String, u16>,
-    pub(super) width: u16,
-    pub(super) epoch: u64,
-    pub(super) sections: Vec<Arc<Vec<RenderedLine>>>,
-    pub(super) total_lines: u16,
-    pub(super) message_cache: HashMap<String, CachedMessageRender>,
-}
-
-pub(super) struct CachedMessageRender {
-    pub(super) fingerprint: u64,
-    pub(super) lines: Arc<Vec<RenderedLine>>,
-}
-
-pub(super) fn build_tip_chain<'a>(
-    history: &'a BTreeMap<MessageId, Message>,
-    current_tip_id: Option<&str>,
-) -> Vec<&'a Message> {
-    if history.is_empty() {
-        return Vec::new();
-    }
-
-    let mut parent_ids: HashSet<&MessageId> = HashSet::new();
-    for msg in history.values() {
-        if let Some(parent_id) = &msg.parent_id {
-            parent_ids.insert(parent_id);
-        }
-    }
-
-    let inferred_tip = history
-        .keys()
-        .find(|id| !parent_ids.contains(*id))
-        .map(ToString::to_string);
-
-    let current_tip_is_leaf = current_tip_id.is_some_and(|id| {
-        let message_id = MessageId::new(id.to_string());
-        history.contains_key(&message_id) && !parent_ids.contains(&message_id)
-    });
-
-    let tip_id = if current_tip_is_leaf {
-        current_tip_id.map(|id| MessageId::new(id.to_string()))
-    } else {
-        inferred_tip.map(MessageId::new)
-    };
-
-    let mut chain = Vec::new();
-    let mut cursor = tip_id;
-
-    while let Some(message_id) = cursor {
-        if let Some(message) = history.get(&message_id) {
-            chain.push(message);
-            cursor = message.parent_id.clone();
-        } else {
-            break;
-        }
-    }
-
-    chain.reverse();
-    chain
-}
-
-fn message_fingerprint(msg: &Message) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    msg.id.as_str().hash(&mut hasher);
-    msg.parent_id
-        .as_ref()
-        .map(|id| id.as_str())
-        .hash(&mut hasher);
-    match msg.role() {
-        ChatRole::System => 0u8,
-        ChatRole::User => 1u8,
-        ChatRole::Assistant => 2u8,
-        ChatRole::ToolCallResult => 3u8,
-    }
-    .hash(&mut hasher);
-    match &msg.status {
-        MessageStatus::Complete => 0u8.hash(&mut hasher),
-        MessageStatus::Streaming { stream_id } => {
-            1u8.hash(&mut hasher);
-            stream_id.as_str().hash(&mut hasher);
-        }
-        MessageStatus::Cancelled => 2u8.hash(&mut hasher),
-    }
-    msg.display_text().hash(&mut hasher);
-    hasher.finish()
 }

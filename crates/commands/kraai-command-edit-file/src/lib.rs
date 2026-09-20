@@ -13,7 +13,7 @@ declare_kraai_command! {
     /// Applies deterministic, exact text edits or creates one text file.
     pub struct EditFileCommand;
     metadata: kraai_command_catalog::EDIT_FILE;
-    signature: Signature::build("kraai-edit-file")
+    signature: Signature::build(Self::METADATA.name)
         .required("path", SyntaxShape::String, "Text file path to edit or create.")
         .optional(
             "edits",

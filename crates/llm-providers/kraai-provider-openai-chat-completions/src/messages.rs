@@ -10,14 +10,11 @@ pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMe
                 ConversationItem::System { text } => ("system", text),
                 ConversationItem::User { text } => ("user", text),
                 message @ ConversationItem::Assistant { .. } => {
-                    ("assistant", message.display_text())
+                    ("assistant", message.display_text().into_owned())
                 }
                 ConversationItem::ScriptResult { output, .. } => ("user", output),
             };
-            RequestMessage {
-                role: role.to_string(),
-                content,
-            }
+            RequestMessage { role, content }
         })
         .collect()
 }
@@ -42,7 +39,7 @@ mod tests {
         ]);
         let roles_and_text: Vec<_> = messages
             .iter()
-            .map(|message| (message.role.as_str(), message.content.as_str()))
+            .map(|message| (message.role, message.content.as_str()))
             .collect();
         assert_eq!(
             roles_and_text,

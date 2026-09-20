@@ -233,10 +233,6 @@ impl App {
             return;
         }
 
-        let Some(message) = self.startup_options.message.clone() else {
-            return;
-        };
-
         if !self.state.config_loaded
             || self.state.pending_submit.is_some()
             || self.state.is_streaming
@@ -250,6 +246,10 @@ impl App {
         {
             return;
         }
+
+        let Some(message) = self.startup_options.message.take() else {
+            return;
+        };
 
         self.startup_message_sent = true;
         self.submit_message(message);
@@ -341,6 +341,15 @@ impl App {
             || self.state.profile_locked
             || self.ci_metrics_history_pending
             || self.ci_metrics_context_pending
+            || self
+                .state
+                .current_session_id
+                .as_ref()
+                .is_some_and(|session_id| {
+                    self.session_snapshot_sequences
+                        .get(session_id)
+                        .is_some_and(|sequence| self.last_runtime_event_sequence < *sequence)
+                })
         {
             return;
         }

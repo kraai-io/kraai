@@ -4,6 +4,12 @@ use base64::Engine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+#[path = "state_tests.rs"]
+mod state_tests;
+
+#[path = "refresh_cancellation_tests.rs"]
+mod refresh_cancellation_tests;
+
 #[test]
 fn request_auth_applies_subscription_headers_without_exposing_fields() {
     let auth = OpenAiCodexRequestAuth {

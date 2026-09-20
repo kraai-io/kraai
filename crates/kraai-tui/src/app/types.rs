@@ -166,6 +166,7 @@ pub(super) enum RuntimeRequest {
         session_id: String,
     },
     LoadSession {
+        load_id: u64,
         session_id: String,
     },
     ListSessions,
@@ -230,6 +231,7 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<Option<String>>,
     },
     LoadSession {
+        load_id: u64,
         session_id: String,
         result: RuntimeResult<bool>,
     },

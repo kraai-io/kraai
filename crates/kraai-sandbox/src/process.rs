@@ -132,12 +132,7 @@ async fn spawn_and_wait(
         Termination::Exited { code } => code,
         Termination::TimedOut | Termination::Cancelled => None,
     };
-    let sandbox_denied = sandboxed
-        && is_likely_sandbox_denied(
-            exit_code,
-            &String::from_utf8_lossy(&stdout),
-            &String::from_utf8_lossy(&stderr),
-        );
+    let sandbox_denied = sandboxed && is_likely_sandbox_denied(exit_code, &stdout, &stderr);
 
     Ok(ExecutionOutput {
         termination,
@@ -289,7 +284,11 @@ async fn terminate_process_tree(
     Ok(())
 }
 
-pub(crate) fn is_likely_sandbox_denied(exit_code: Option<i32>, stdout: &str, stderr: &str) -> bool {
+pub(crate) fn is_likely_sandbox_denied(
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> bool {
     if exit_code == Some(0) {
         return false;
     }
@@ -307,7 +306,7 @@ pub(crate) fn is_likely_sandbox_denied(exit_code: Option<i32>, stdout: &str, std
     ];
 
     [stdout, stderr].into_iter().any(|section| {
-        let lower = section.to_lowercase();
+        let lower = String::from_utf8_lossy(section).to_lowercase();
         SANDBOX_DENIED_KEYWORDS
             .iter()
             .any(|keyword| lower.contains(keyword))

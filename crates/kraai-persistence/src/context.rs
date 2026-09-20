@@ -1,55 +1,17 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, eyre};
-use kraai_types::{CommandInvocationId, ScriptExecutionId};
+use kraai_types::{
+    CommandInvocationId, ContextStateEvent, ContextStateEventSource, ContextStateMutation,
+    ScriptExecutionId,
+};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use tokio::sync::OwnedMutexGuard;
 use ulid::Ulid;
 
 use crate::atomic_write;
+use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum PinnedFileScope {
-    Workspace { root: PathBuf },
-    Host,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum ContextStateMutation {
-    PinFile {
-        path: PathBuf,
-        scope: PinnedFileScope,
-    },
-    UnpinFile {
-        path: PathBuf,
-        reason: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum ContextStateEventSource {
-    Command {
-        execution_id: ScriptExecutionId,
-        sequence: u64,
-        invocation_id: CommandInvocationId,
-        command_id: String,
-    },
-    Runtime {
-        component: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextStateEvent {
-    pub id: String,
-    pub source: ContextStateEventSource,
-    pub mutations: Vec<ContextStateMutation>,
-}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct ContextStateDocument {
@@ -166,9 +128,13 @@ impl FileContextStateStore {
         let path = self.document_path(session_id)?;
         let bytes = serde_json::to_vec_pretty(&document)
             .context("Failed to serialize context state document")?;
-        complete_commit(guard, async move { atomic_write(&path, &bytes).await })
-            .await
-            .map(|()| event)
+        complete_commit(
+            guard,
+            async move { atomic_write(&path, &bytes).await },
+            "Context state commit task failed",
+        )
+        .await
+        .map(|()| event)
     }
 }
 
@@ -220,29 +186,21 @@ impl ContextStateStore for FileContextStateStore {
     async fn delete(&self, session_id: &str) -> Result<()> {
         let guard = self.session_locks.lock(session_id).await;
         let path = self.document_path(session_id)?;
-        complete_commit(guard, async move {
-            match fs::remove_file(&path).await {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error)
-                    .with_context(|| format!("Failed to delete context state document: {path:?}")),
-            }
-        })
+        complete_commit(
+            guard,
+            async move {
+                match fs::remove_file(&path).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error).with_context(|| {
+                        format!("Failed to delete context state document: {path:?}")
+                    }),
+                }
+            },
+            "Context state commit task failed",
+        )
         .await
     }
-}
-
-async fn complete_commit(
-    guard: OwnedMutexGuard<()>,
-    commit: impl Future<Output = Result<()>> + Send + 'static,
-) -> Result<()> {
-    tokio::spawn(async move {
-        let result = commit.await;
-        drop(guard);
-        result
-    })
-    .await
-    .context("Context state commit task failed")?
 }
 
 #[cfg(test)]
@@ -252,6 +210,7 @@ async fn complete_commit(
 )]
 mod tests {
     use super::*;
+    use kraai_types::PinnedFileScope;
 
     fn test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::generate()))
@@ -289,11 +248,15 @@ mod tests {
             document.events.push(cancelled.clone());
             let bytes = serde_json::to_vec_pretty(&document).unwrap();
             let path = store.document_path("session").unwrap();
-            tokio::spawn(complete_commit(guard, async move {
-                let _ = entered_tx.send(());
-                release_rx.await?;
-                atomic_write(&path, &bytes).await
-            }))
+            tokio::spawn(complete_commit(
+                guard,
+                async move {
+                    let _ = entered_tx.send(());
+                    release_rx.await?;
+                    atomic_write(&path, &bytes).await
+                },
+                "Context state commit task failed",
+            ))
         };
         entered_rx.await.unwrap();
         caller.abort();

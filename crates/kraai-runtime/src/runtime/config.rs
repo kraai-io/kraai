@@ -25,7 +25,7 @@ impl RuntimeCore {
     pub(crate) fn spawn_config_watcher(&self) -> JoinHandle<()> {
         let command_tx = self.command_tx.clone();
         let event_tx = self.event_tx.clone();
-        let config_loc = self.provider_config_path.clone();
+        let config_loc = self.config.provider_config_path.clone();
 
         tokio::spawn(async move {
             let config_dir = match config_loc.parent() {
@@ -127,7 +127,7 @@ impl RuntimeCore {
         if !violations.is_empty() {
             return Err(RuntimeError::validation(violations));
         }
-        write_settings_document(&self.provider_config_path, &settings)
+        write_settings_document(&self.config.provider_config_path, &settings)
             .await
             .map_err(RuntimeError::internal)?;
         self.load_providers_config_and_emit()
@@ -180,6 +180,7 @@ mod tests {
         let events = RuntimeEventSender::new(4);
         let mut received = events.subscribe();
         let status = |sequence| OpenAiCodexAuthStatus {
+            sequence,
             state: OpenAiCodexLoginState::SignedOut,
             email: None,
             plan_type: None,

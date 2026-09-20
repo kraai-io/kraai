@@ -18,9 +18,9 @@ pub struct ProviderRegistry {
 struct FactoryEntry {
     definition: ProviderDefinition,
     pricing_policy: ProviderPricingPolicy,
-    create: Arc<ProviderFactoryFn>,
-    validate_provider_config: Arc<ValidateConfigFn>,
-    validate_model_config: Arc<ValidateConfigFn>,
+    create: Box<ProviderFactoryFn>,
+    validate_provider_config: Box<ValidateConfigFn>,
+    validate_model_config: Box<ValidateConfigFn>,
 }
 
 type ProviderFactoryFn =
@@ -47,12 +47,9 @@ pub trait ProviderFactory {
 
 impl ProviderRegistry {
     pub fn register_factory<F: ProviderFactory + 'static>(&mut self) -> Result<(), ProviderError> {
-        let mut definition = F::definition();
-        definition.type_id = F::TYPE_ID.to_string();
-
         self.register_dynamic_factory(
             F::TYPE_ID,
-            definition,
+            F::definition(),
             F::pricing_policy(),
             |id, config| {
                 F::create(id, config)
@@ -98,9 +95,9 @@ impl ProviderRegistry {
         let entry = FactoryEntry {
             definition,
             pricing_policy,
-            create: Arc::new(create),
-            validate_provider_config: Arc::new(validate_provider_config),
-            validate_model_config: Arc::new(validate_model_config),
+            create: Box::new(create),
+            validate_provider_config: Box::new(validate_provider_config),
+            validate_model_config: Box::new(validate_model_config),
         };
 
         Arc::make_mut(&mut self.factories).insert(key, Arc::new(entry));

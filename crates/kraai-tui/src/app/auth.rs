@@ -15,6 +15,7 @@ pub(super) enum ProviderAuthState {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct ProviderAuthStatus {
+    pub(super) sequence: u64,
     pub(super) state: ProviderAuthState,
     pub(super) plan_type: Option<String>,
     pub(super) last_refresh: Option<String>,
@@ -28,6 +29,7 @@ pub(super) fn map_openai_codex_auth_status(
     status: RuntimeOpenAiCodexAuthStatus,
 ) -> ProviderAuthStatus {
     let mut mapped = ProviderAuthStatus {
+        sequence: status.sequence,
         state: ProviderAuthState::SignedOut,
         plan_type: status.plan_type,
         last_refresh: status.last_refresh_unix.map(|value| value.to_string()),

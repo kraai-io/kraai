@@ -20,7 +20,7 @@ impl AgentManager {
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
-        let selected_profile = self.resolve_selected_profile(&session)?;
+        let selected_profile = Arc::new(self.resolve_selected_profile(&session)?);
         let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
         let previous_state = state.clone();
         if state.active_turn_profile.is_none() {

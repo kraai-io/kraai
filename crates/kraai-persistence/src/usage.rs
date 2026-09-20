@@ -7,10 +7,12 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_types::{MessageId, RequestUsage};
 use tokio::fs;
 
+use crate::commit::complete_commit;
+
 #[derive(Default)]
 struct SessionRequests {
     requests: tokio::sync::RwLock<Option<BTreeMap<MessageId, RequestUsage>>>,
-    io: tokio::sync::Mutex<()>,
+    io: Arc<tokio::sync::Mutex<()>>,
     revision: AtomicU64,
 }
 
@@ -75,7 +77,8 @@ impl FileRequestUsageStore {
                 return Err(error);
             }
         };
-        *cache.requests.write().await = Some(requests);
+        let previous = cache.requests.write().await.replace(requests);
+        drop(previous);
         cache.revision.fetch_add(1, Ordering::Release);
         drop(io);
         Ok(true)
@@ -112,31 +115,44 @@ impl RequestUsageStore for FileRequestUsageStore {
             .session_dir(session_id)?
             .join(format!("{}.json", request.message_id));
         let cache = self.session_cache(session_id).await?;
-        let io = cache.io.lock().await;
-        let outcome =
-            crate::atomic_file::atomic_write_with_outcome(&path, &serde_json::to_vec(request)?)
-                .await?;
-        if let Some(requests) = cache.requests.write().await.as_mut() {
-            requests.insert(request.message_id.clone(), request.clone());
-        }
-        cache.revision.fetch_add(1, Ordering::Release);
-        drop(io);
-        outcome.into_result()
+        let io = Arc::clone(&cache.io).lock_owned().await;
+        let bytes = serde_json::to_vec(request)?;
+        let request = request.clone();
+        complete_commit(
+            io,
+            async move {
+                let outcome = crate::atomic_file::atomic_write_with_outcome(&path, &bytes).await?;
+                if let Some(requests) = cache.requests.write().await.as_mut() {
+                    requests.insert(request.message_id.clone(), request);
+                }
+                cache.revision.fetch_add(1, Ordering::Release);
+                outcome.into_result()
+            },
+            "Request usage commit task failed",
+        )
+        .await
     }
 
     async fn delete(&self, session_id: &str) -> Result<()> {
         let path = self.session_dir(session_id)?;
         let cache = self.session_cache(session_id).await?;
-        let io = cache.io.lock().await;
-        match fs::remove_dir_all(path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        *cache.requests.write().await = Some(BTreeMap::new());
-        cache.revision.fetch_add(1, Ordering::Release);
-        drop(io);
-        Ok(())
+        let io = Arc::clone(&cache.io).lock_owned().await;
+        complete_commit(
+            io,
+            async move {
+                match fs::remove_dir_all(path).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+                let previous = cache.requests.write().await.replace(BTreeMap::new());
+                drop(previous);
+                cache.revision.fetch_add(1, Ordering::Release);
+                Ok(())
+            },
+            "Request usage commit task failed",
+        )
+        .await
     }
 
     async fn load(&self, session_id: &str) -> Result<BTreeMap<MessageId, RequestUsage>> {
@@ -185,6 +201,67 @@ mod tests {
             unpriced_attempts: 0,
             usage: None,
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_mutations_publish_the_cache_and_revision() -> Result<()> {
+        for deleting in [false, true] {
+            let directory = std::env::temp_dir()
+                .join(format!("kraai-usage-cancelled-{}", ulid::Ulid::generate()));
+            let store = Arc::new(FileRequestUsageStore::new(&directory));
+            let mut request = request();
+            store.save("session", &request).await?;
+            let initial = store.load("session").await?;
+            let cache = store.session_cache("session").await?;
+            let revision = cache.revision.load(Ordering::Acquire);
+            let cached = cache.requests.read().await;
+            request.unpriced_attempts = 1;
+            let path = store.session_dir("session")?.join("request.json");
+            let expected = serde_json::to_vec(&request)?;
+            let caller = tokio::spawn({
+                let store = Arc::clone(&store);
+                let request = request.clone();
+                async move {
+                    if deleting {
+                        store.delete("session").await
+                    } else {
+                        store.save("session", &request).await
+                    }
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match fs::read(&path).await {
+                        Ok(bytes) if !deleting && bytes == expected => break,
+                        Err(error) if deleting && error.kind() == std::io::ErrorKind::NotFound => {
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(error) => return Err(error),
+                    }
+                    tokio::task::yield_now().await;
+                }
+                Ok(())
+            })
+            .await??;
+            caller.abort();
+            assert!(caller.await.is_err_and(|error| error.is_cancelled()));
+            drop(cached);
+
+            let guard =
+                tokio::time::timeout(std::time::Duration::from_secs(5), cache.io.lock()).await?;
+            assert_eq!(cache.revision.load(Ordering::Acquire), revision + 1);
+            drop(guard);
+            assert!(!FileRequestUsageStore::publish_refresh(&cache, revision, Ok(initial)).await?);
+            let loaded = store.load("session").await?;
+            if deleting {
+                assert!(loaded.is_empty());
+            } else {
+                assert_eq!(loaded.get(&request.message_id), Some(&request));
+            }
+            fs::remove_dir_all(directory).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]

@@ -1,8 +1,7 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_dir, test_manager};
 use color_eyre::eyre::Result;
-use kraai_persistence::{ContextStateMutation, PinnedFileScope};
-use kraai_types::{CommandInvocationId, ScriptExecutionId};
+use kraai_types::{CommandInvocationId, ContextStateMutation, PinnedFileScope, ScriptExecutionId};
 use ulid::Ulid;
 
 fn request_prefix(request: &PendingStreamRequest) -> &str {
@@ -27,6 +26,87 @@ fn request_suffix(request: &PendingStreamRequest) -> &str {
             _ => None,
         })
         .expect("request should end with its dynamic context")
+}
+
+#[tokio::test]
+async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidation() -> Result<()>
+{
+    let (mut manager, data_dir) = test_manager().await;
+    let workspace = data_dir.join("profile-workspace");
+    tokio::fs::create_dir_all(workspace.join(".kraai")).await?;
+    let profile_path = workspace.join(".kraai/agents.toml");
+    let profile = |prompt: &str| {
+        format!(
+            "[[profiles]]\nid = \"turn-snapshot\"\nextends = \"plan\"\nsystem_prompt = \"{prompt}\"\n"
+        )
+    };
+    tokio::fs::write(&profile_path, profile("ORIGINAL TURN PROMPT")).await?;
+    let session = manager
+        .create_session_with(Some(workspace), Some(String::from("turn-snapshot")))
+        .await?;
+    let first = manager
+        .prepare_start_stream(
+            &session,
+            String::from("first"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert!(request_prefix(&first).contains("ORIGINAL TURN PROMPT"));
+    manager.complete_message(&first.message_id).await?;
+    let original = manager.script_turn_context(&session)?;
+    let mut detached = manager.script_turn_context(&session)?;
+    detached.profile.id.clear();
+    detached.profile.commands.clear();
+    assert_eq!(manager.script_turn_context(&session)?, original);
+
+    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT")).await?;
+    assert!(
+        manager
+            .prepare_intercepted_stream(
+                &session,
+                vec![String::from("queued")],
+                ModelId::new("mock-model"),
+                ProviderId::new("missing"),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.get_tip(&session).await?, Some(first.message_id));
+    assert_eq!(manager.script_turn_context(&session)?, original);
+    let continuation = manager
+        .prepare_continuation_stream(&session)
+        .await?
+        .expect("continuation after rollback");
+    assert!(request_prefix(&continuation).contains("ORIGINAL TURN PROMPT"));
+    assert!(!request_prefix(&continuation).contains("REFRESHED TURN PROMPT"));
+    manager.complete_message(&continuation.message_id).await?;
+
+    tokio::fs::write(&profile_path, "").await?;
+    let error = manager
+        .prepare_continuation_stream(&session)
+        .await
+        .expect_err("removed selected profile must still be revalidated");
+    assert_eq!(
+        error.to_string(),
+        "Selected profile is unavailable: turn-snapshot"
+    );
+    assert_eq!(manager.script_turn_context(&session)?, original);
+
+    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT")).await?;
+    manager.clear_active_turn(&session);
+    let next = manager
+        .prepare_start_stream(
+            &session,
+            String::from("next turn"),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert!(request_prefix(&next).contains("REFRESHED TURN PROMPT"));
+    assert!(!request_prefix(&next).contains("ORIGINAL TURN PROMPT"));
+    cleanup_dir(data_dir).await;
+    Ok(())
 }
 
 async fn persist_open_effect(
@@ -409,7 +489,7 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
     let state = manager.ensure_runtime_state(&session_id, &session.workspace_dir);
     state.last_model = Some(ModelId::new("mock-model"));
     state.last_provider = Some(ProviderId::new("mock"));
-    state.active_turn_profile = Some(profile);
+    state.active_turn_profile = Some(Arc::new(profile));
 
     let request = manager
         .prepare_continuation_stream(&session_id)

@@ -134,7 +134,7 @@ mod tests {
             target: String::from("/backend-api/codex/responses"),
             path: String::from("/backend-api/codex/responses"),
             headers: Vec::new(),
-            body: body.to_vec(),
+            body: body.to_vec().into(),
         }
     }
 

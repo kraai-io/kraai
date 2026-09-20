@@ -5,6 +5,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use super::{ChatHistory, RenderedLine, RenderedSpan};
@@ -131,12 +132,20 @@ pub(super) fn render_message(
 }
 
 fn strip_non_code_inline_markdown(text: &str) -> String {
-    let text = IMAGE_RE.replace_all(text, "$1").to_string();
-    let text = LINK_RE.replace_all(&text, "$1 ($2)").to_string();
-    let text = STRONG_RE.replace_all(&text, "$1$2").to_string();
-    let text = EMPHASIS_RE.replace_all(&text, "$1$2").to_string();
-    let text = STRIKE_RE.replace_all(&text, "$1").to_string();
-    ESCAPE_RE.replace_all(&text, "$1").to_string()
+    let mut text = Cow::Borrowed(text);
+    for (regex, replacement) in [
+        (&IMAGE_RE, "$1"),
+        (&LINK_RE, "$1 ($2)"),
+        (&STRONG_RE, "$1$2"),
+        (&EMPHASIS_RE, "$1$2"),
+        (&STRIKE_RE, "$1"),
+        (&ESCAPE_RE, "$1"),
+    ] {
+        if let Cow::Owned(replaced) = regex.replace_all(&text, replacement) {
+            text = Cow::Owned(replaced);
+        }
+    }
+    text.into_owned()
 }
 
 fn inline_markdown_spans(
@@ -189,4 +198,24 @@ fn inline_markdown_spans(
     }
 
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_non_code_inline_markdown;
+
+    #[test]
+    fn inline_replacements_preserve_order_and_plain_text() {
+        for (input, expected) in [
+            ("plain 你好 text", "plain 你好 text"),
+            ("**unterminated [label", "**unterminated [label"),
+            (
+                "![**image**](asset) [~~link~~](url) __bold__ _italic_ \\[literal\\]",
+                "image link (url) bold italic [literal]",
+            ),
+            ("[label](url) after", "label (url) after"),
+        ] {
+            assert_eq!(strip_non_code_inline_markdown(input), expected);
+        }
+    }
 }

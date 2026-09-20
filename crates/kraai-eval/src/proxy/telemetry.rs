@@ -157,7 +157,7 @@ mod tests {
                     String::from("session-id"),
                     HeaderValue::from_static("session"),
                 )],
-                body: body.as_bytes().to_vec(),
+                body: body.as_bytes().to_vec().into(),
             };
             let parsed = serde_json::from_slice::<serde_json::Value>(&request.body).ok();
             let state = CacheState::from_request(&request, parsed.as_ref(), None);
@@ -177,7 +177,9 @@ mod tests {
             target: String::from("/backend-api/codex/responses"),
             path: String::from("/backend-api/codex/responses"),
             headers: Vec::new(),
-            body: br#"{"model":"gpt-6-astra","service_tier":"priority"}"#.to_vec(),
+            body: br#"{"model":"gpt-6-astra","service_tier":"priority"}"#
+                .to_vec()
+                .into(),
         };
         for supplied in [None, Some("model=supplied;tier=flex")] {
             if let Some(hint) = supplied {

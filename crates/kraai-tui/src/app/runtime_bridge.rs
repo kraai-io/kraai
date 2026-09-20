@@ -119,302 +119,228 @@ fn forward_runtime_event(
 pub(super) fn spawn_runtime_bridge(
     runtime: RuntimeHandle,
 ) -> (Sender<RuntimeRequest>, Receiver<RuntimeResponse>) {
-    let (runtime_tx, req_rx): (Sender<RuntimeRequest>, Receiver<RuntimeRequest>) = unbounded();
-    let (res_tx, runtime_rx): (Sender<RuntimeResponse>, Receiver<RuntimeResponse>) = unbounded();
+    let (runtime_tx, req_rx) = unbounded();
+    let (res_tx, runtime_rx) = unbounded();
 
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
+        let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-        {
-            Ok(rt) => rt,
-            Err(error) => {
-                let message = format!("failed to create tokio runtime: {error}");
-                while let Ok(req) = req_rx.recv() {
-                    respond_with_runtime_error(&res_tx, req, &message);
-                }
-                return;
-            }
-        };
-
-        while let Ok(req) = req_rx.recv() {
-            match req {
-                RuntimeRequest::FinishStartupSync => {
-                    let _ = res_tx.send(RuntimeResponse::StartupSyncComplete);
-                }
-                RuntimeRequest::ListModels => {
-                    let result = rt.block_on(runtime.list_models());
-                    let _ = res_tx.send(RuntimeResponse::Models(result));
-                }
-                RuntimeRequest::GetAgentProfileCatalog => {
-                    let result = rt.block_on(runtime.get_agent_profile_catalog(None));
-                    let _ = res_tx.send(RuntimeResponse::AgentProfileCatalog(result));
-                }
-                RuntimeRequest::ListProviderDefinitions => {
-                    let result = rt.block_on(runtime.list_provider_definitions());
-                    let _ = res_tx.send(RuntimeResponse::ProviderDefinitions(result));
-                }
-                RuntimeRequest::GetSettings => {
-                    let result = rt.block_on(runtime.get_settings());
-                    let _ = res_tx.send(RuntimeResponse::Settings(result));
-                }
-                RuntimeRequest::GetOpenAiCodexAuthStatus => {
-                    let result = rt
-                        .block_on(runtime.get_openai_codex_auth_status())
-                        .map(map_openai_codex_auth_status);
-                    let _ = res_tx.send(RuntimeResponse::OpenAiCodexAuthStatus(result));
-                }
-                RuntimeRequest::StartOpenAiCodexBrowserLogin => {
-                    let result = rt
-                        .block_on(runtime.start_openai_codex_browser_login())
-                        .and_then(|_| {
-                            rt.block_on(runtime.get_openai_codex_auth_status())
-                                .map(map_openai_codex_auth_status)
-                        });
-                    let _ = res_tx.send(RuntimeResponse::StartOpenAiCodexBrowserLogin(result));
-                }
-                RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
-                    let result = rt
-                        .block_on(runtime.start_openai_codex_device_code_login())
-                        .and_then(|_| {
-                            rt.block_on(runtime.get_openai_codex_auth_status())
-                                .map(map_openai_codex_auth_status)
-                        });
-                    let _ = res_tx.send(RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result));
-                }
-                RuntimeRequest::CancelOpenAiCodexLogin => {
-                    let result = rt
-                        .block_on(runtime.cancel_openai_codex_login())
-                        .and_then(|_| {
-                            rt.block_on(runtime.get_openai_codex_auth_status())
-                                .map(map_openai_codex_auth_status)
-                        });
-                    let _ = res_tx.send(RuntimeResponse::CancelOpenAiCodexLogin(result));
-                }
-                RuntimeRequest::LogoutOpenAiCodexAuth => {
-                    let result = rt
-                        .block_on(runtime.logout_openai_codex_auth())
-                        .and_then(|_| {
-                            rt.block_on(runtime.get_openai_codex_auth_status())
-                                .map(map_openai_codex_auth_status)
-                        });
-                    let _ = res_tx.send(RuntimeResponse::LogoutOpenAiCodexAuth(result));
-                }
-                RuntimeRequest::SetSessionProfile {
-                    session_id,
-                    profile_id,
-                } => {
-                    let result = rt.block_on(
-                        runtime.set_session_profile(session_id.clone(), profile_id.clone()),
-                    );
-                    let _ = res_tx.send(RuntimeResponse::SetSessionProfile {
-                        session_id,
-                        profile_id,
-                        result,
-                    });
-                }
-                RuntimeRequest::CreateSession {
-                    creation_id,
-                    profile_id,
-                } => {
-                    let result = rt.block_on(runtime.create_session_with(CreateSessionRequest {
-                        workspace_dir: None,
-                        profile_id,
-                    }));
-                    let _ = res_tx.send(RuntimeResponse::CreateSession {
-                        creation_id,
-                        result,
-                    });
-                }
-                RuntimeRequest::SendMessage {
-                    session_id,
-                    message,
-                    model_id,
-                    provider_id,
-                } => {
-                    let result = rt.block_on(runtime.send_message(
-                        session_id,
-                        message,
-                        model_id,
-                        provider_id,
-                    ));
-                    let _ = res_tx.send(RuntimeResponse::SendMessage(result));
-                }
-                RuntimeRequest::SaveSettings { settings } => {
-                    let result = rt.block_on(runtime.save_settings(settings));
-                    let _ = res_tx.send(RuntimeResponse::SaveSettings(result));
-                }
-                RuntimeRequest::GetChatHistory { session_id } => {
-                    let result = rt.block_on(runtime.get_chat_history(session_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::ChatHistory { session_id, result });
-                }
-                RuntimeRequest::GetSessionSnapshot { session_id } => {
-                    let result = rt.block_on(runtime.get_session_snapshot(session_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::SessionSnapshot {
-                        session_id,
-                        result: Box::new(result),
-                    });
-                }
-                RuntimeRequest::GetCurrentTip { session_id } => {
-                    let result = rt.block_on(runtime.get_tip(session_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::CurrentTip { session_id, result });
-                }
-                RuntimeRequest::UndoLastUserMessage { session_id } => {
-                    let result = rt.block_on(runtime.undo_last_user_message(session_id.clone()));
-                    let _ =
-                        res_tx.send(RuntimeResponse::UndoLastUserMessage { session_id, result });
-                }
-                RuntimeRequest::LoadSession { session_id } => {
-                    let result = rt.block_on(runtime.load_session(session_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::LoadSession { session_id, result });
-                }
-                RuntimeRequest::ListSessions => {
-                    let result = rt.block_on(runtime.list_sessions());
-                    let _ = res_tx.send(RuntimeResponse::Sessions(result));
-                }
-                RuntimeRequest::ListUserInputHistory { limit } => {
-                    let result = rt.block_on(runtime.list_user_input_history(limit));
-                    let _ = res_tx.send(RuntimeResponse::UserInputHistory(result));
-                }
-                RuntimeRequest::DeleteSession { session_id } => {
-                    let result = rt.block_on(runtime.delete_session(session_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::DeleteSession { session_id, result });
-                }
-                RuntimeRequest::ApproveScript {
-                    session_id,
-                    execution_id,
-                } => {
-                    let result = rt
-                        .block_on(runtime.approve_script(session_id.clone(), execution_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::ApproveScript {
-                        session_id,
-                        execution_id,
-                        result,
-                    });
-                }
-                RuntimeRequest::DenyScript {
-                    session_id,
-                    execution_id,
-                } => {
-                    let result =
-                        rt.block_on(runtime.deny_script(session_id.clone(), execution_id.clone()));
-                    let _ = res_tx.send(RuntimeResponse::DenyScript {
-                        session_id,
-                        execution_id,
-                        result,
-                    });
-                }
-                RuntimeRequest::CancelStream { session_id } => {
-                    let result = rt.block_on(runtime.cancel_stream(session_id));
-                    let _ = res_tx.send(RuntimeResponse::CancelStream(result));
-                }
-                RuntimeRequest::ContinueSession { session_id } => {
-                    let result = rt.block_on(runtime.continue_session(session_id));
-                    let _ = res_tx.send(RuntimeResponse::ContinueSession(result));
-                }
-            }
+            .map_err(|error| {
+                RuntimeError::unavailable(format!("failed to create tokio runtime: {error}"))
+            });
+        let bridge = RequestBridge { runtime, executor };
+        while let Ok(request) = req_rx.recv() {
+            let _ = res_tx.send(bridge.dispatch(request));
         }
     });
 
     (runtime_tx, runtime_rx)
 }
 
-fn respond_with_runtime_error(
-    res_tx: &Sender<RuntimeResponse>,
-    req: RuntimeRequest,
-    message: &str,
-) {
-    let error = RuntimeError::unavailable(message);
-    let response = match req {
-        RuntimeRequest::FinishStartupSync => RuntimeResponse::StartupSyncComplete,
-        RuntimeRequest::ListModels => RuntimeResponse::Models(Err(error.clone())),
-        RuntimeRequest::GetAgentProfileCatalog => {
-            RuntimeResponse::AgentProfileCatalog(Err(error.clone()))
+struct RequestBridge {
+    executor: kraai_runtime::RuntimeResult<tokio::runtime::Runtime>,
+    runtime: RuntimeHandle,
+}
+
+impl RequestBridge {
+    fn execute<'a, T, F>(
+        &'a self,
+        request: impl FnOnce(&'a RuntimeHandle) -> F,
+    ) -> kraai_runtime::RuntimeResult<T>
+    where
+        F: Future<Output = kraai_runtime::RuntimeResult<T>>,
+    {
+        match &self.executor {
+            Ok(executor) => executor.block_on(request(&self.runtime)),
+            Err(error) => Err(error.clone()),
         }
-        RuntimeRequest::ListProviderDefinitions => {
-            RuntimeResponse::ProviderDefinitions(Err(error.clone()))
-        }
-        RuntimeRequest::GetSettings => RuntimeResponse::Settings(Err(error.clone())),
-        RuntimeRequest::GetOpenAiCodexAuthStatus => {
-            RuntimeResponse::OpenAiCodexAuthStatus(Err(error.clone()))
-        }
-        RuntimeRequest::StartOpenAiCodexBrowserLogin => {
-            RuntimeResponse::StartOpenAiCodexBrowserLogin(Err(error.clone()))
-        }
-        RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
-            RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(Err(error.clone()))
-        }
-        RuntimeRequest::CancelOpenAiCodexLogin => {
-            RuntimeResponse::CancelOpenAiCodexLogin(Err(error.clone()))
-        }
-        RuntimeRequest::LogoutOpenAiCodexAuth => {
-            RuntimeResponse::LogoutOpenAiCodexAuth(Err(error.clone()))
-        }
-        RuntimeRequest::SetSessionProfile {
-            session_id,
-            profile_id,
-        } => RuntimeResponse::SetSessionProfile {
-            session_id,
-            profile_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::CreateSession { creation_id, .. } => RuntimeResponse::CreateSession {
-            creation_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::SendMessage { .. } => RuntimeResponse::SendMessage(Err(error.clone())),
-        RuntimeRequest::SaveSettings { .. } => RuntimeResponse::SaveSettings(Err(error.clone())),
-        RuntimeRequest::GetChatHistory { session_id } => RuntimeResponse::ChatHistory {
-            session_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::GetSessionSnapshot { session_id } => RuntimeResponse::SessionSnapshot {
-            session_id,
-            result: Box::new(Err(error.clone())),
-        },
-        RuntimeRequest::GetCurrentTip { session_id } => RuntimeResponse::CurrentTip {
-            session_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::UndoLastUserMessage { session_id } => {
-            RuntimeResponse::UndoLastUserMessage {
+    }
+
+    fn dispatch(&self, req: RuntimeRequest) -> RuntimeResponse {
+        match req {
+            RuntimeRequest::FinishStartupSync => RuntimeResponse::StartupSyncComplete,
+            RuntimeRequest::ListModels => {
+                let result = self.execute(|runtime| runtime.list_models());
+                RuntimeResponse::Models(result)
+            }
+            RuntimeRequest::GetAgentProfileCatalog => {
+                let result = self.execute(|runtime| runtime.get_agent_profile_catalog(None));
+                RuntimeResponse::AgentProfileCatalog(result)
+            }
+            RuntimeRequest::ListProviderDefinitions => {
+                let result = self.execute(|runtime| runtime.list_provider_definitions());
+                RuntimeResponse::ProviderDefinitions(result)
+            }
+            RuntimeRequest::GetSettings => {
+                let result = self.execute(|runtime| runtime.get_settings());
+                RuntimeResponse::Settings(result)
+            }
+            RuntimeRequest::GetOpenAiCodexAuthStatus => {
+                let result = self
+                    .execute(|runtime| runtime.get_openai_codex_auth_status())
+                    .map(map_openai_codex_auth_status);
+                RuntimeResponse::OpenAiCodexAuthStatus(result)
+            }
+            RuntimeRequest::StartOpenAiCodexBrowserLogin => {
+                let result = self
+                    .execute(|runtime| runtime.start_openai_codex_browser_login())
+                    .and_then(|_| {
+                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
+                            .map(map_openai_codex_auth_status)
+                    });
+                RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
+            }
+            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
+                let result = self
+                    .execute(|runtime| runtime.start_openai_codex_device_code_login())
+                    .and_then(|_| {
+                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
+                            .map(map_openai_codex_auth_status)
+                    });
+                RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result)
+            }
+            RuntimeRequest::CancelOpenAiCodexLogin => {
+                let result = self
+                    .execute(|runtime| runtime.cancel_openai_codex_login())
+                    .and_then(|_| {
+                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
+                            .map(map_openai_codex_auth_status)
+                    });
+                RuntimeResponse::CancelOpenAiCodexLogin(result)
+            }
+            RuntimeRequest::LogoutOpenAiCodexAuth => {
+                let result = self
+                    .execute(|runtime| runtime.logout_openai_codex_auth())
+                    .and_then(|_| {
+                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
+                            .map(map_openai_codex_auth_status)
+                    });
+                RuntimeResponse::LogoutOpenAiCodexAuth(result)
+            }
+            RuntimeRequest::SetSessionProfile {
                 session_id,
-                result: Err(error.clone()),
+                profile_id,
+            } => {
+                let result = self.execute(|runtime| {
+                    runtime.set_session_profile(session_id.clone(), profile_id.clone())
+                });
+                RuntimeResponse::SetSessionProfile {
+                    session_id,
+                    profile_id,
+                    result,
+                }
+            }
+            RuntimeRequest::CreateSession {
+                creation_id,
+                profile_id,
+            } => {
+                let result = self.execute(|runtime| {
+                    runtime.create_session_with(CreateSessionRequest {
+                        workspace_dir: None,
+                        profile_id,
+                    })
+                });
+                RuntimeResponse::CreateSession {
+                    creation_id,
+                    result,
+                }
+            }
+            RuntimeRequest::SendMessage {
+                session_id,
+                message,
+                model_id,
+                provider_id,
+            } => {
+                let result = self.execute(|runtime| {
+                    runtime.send_message(session_id, message, model_id, provider_id)
+                });
+                RuntimeResponse::SendMessage(result)
+            }
+            RuntimeRequest::SaveSettings { settings } => {
+                let result = self.execute(|runtime| runtime.save_settings(settings));
+                RuntimeResponse::SaveSettings(result)
+            }
+            RuntimeRequest::GetChatHistory { session_id } => {
+                let result = self.execute(|runtime| runtime.get_chat_history(session_id.clone()));
+                RuntimeResponse::ChatHistory { session_id, result }
+            }
+            RuntimeRequest::GetSessionSnapshot { session_id } => {
+                let result =
+                    self.execute(|runtime| runtime.get_session_snapshot(session_id.clone()));
+                RuntimeResponse::SessionSnapshot {
+                    session_id,
+                    result: Box::new(result),
+                }
+            }
+            RuntimeRequest::GetCurrentTip { session_id } => {
+                let result = self.execute(|runtime| runtime.get_tip(session_id.clone()));
+                RuntimeResponse::CurrentTip { session_id, result }
+            }
+            RuntimeRequest::UndoLastUserMessage { session_id } => {
+                let result =
+                    self.execute(|runtime| runtime.undo_last_user_message(session_id.clone()));
+                RuntimeResponse::UndoLastUserMessage { session_id, result }
+            }
+            RuntimeRequest::LoadSession {
+                load_id,
+                session_id,
+            } => {
+                let result = self.execute(|runtime| runtime.load_session(session_id.clone()));
+                RuntimeResponse::LoadSession {
+                    load_id,
+                    session_id,
+                    result,
+                }
+            }
+            RuntimeRequest::ListSessions => {
+                let result = self.execute(|runtime| runtime.list_sessions());
+                RuntimeResponse::Sessions(result)
+            }
+            RuntimeRequest::ListUserInputHistory { limit } => {
+                let result = self.execute(|runtime| runtime.list_user_input_history(limit));
+                RuntimeResponse::UserInputHistory(result)
+            }
+            RuntimeRequest::DeleteSession { session_id } => {
+                let result = self.execute(|runtime| runtime.delete_session(session_id.clone()));
+                RuntimeResponse::DeleteSession { session_id, result }
+            }
+            RuntimeRequest::ApproveScript {
+                session_id,
+                execution_id,
+            } => {
+                let result = self.execute(|runtime| {
+                    runtime.approve_script(session_id.clone(), execution_id.clone())
+                });
+                RuntimeResponse::ApproveScript {
+                    session_id,
+                    execution_id,
+                    result,
+                }
+            }
+            RuntimeRequest::DenyScript {
+                session_id,
+                execution_id,
+            } => {
+                let result = self.execute(|runtime| {
+                    runtime.deny_script(session_id.clone(), execution_id.clone())
+                });
+                RuntimeResponse::DenyScript {
+                    session_id,
+                    execution_id,
+                    result,
+                }
+            }
+            RuntimeRequest::CancelStream { session_id } => {
+                let result = self.execute(|runtime| runtime.cancel_stream(session_id));
+                RuntimeResponse::CancelStream(result)
+            }
+            RuntimeRequest::ContinueSession { session_id } => {
+                let result = self.execute(|runtime| runtime.continue_session(session_id));
+                RuntimeResponse::ContinueSession(result)
             }
         }
-        RuntimeRequest::LoadSession { session_id } => RuntimeResponse::LoadSession {
-            session_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::ListSessions => RuntimeResponse::Sessions(Err(error.clone())),
-        RuntimeRequest::ListUserInputHistory { .. } => {
-            RuntimeResponse::UserInputHistory(Err(error.clone()))
-        }
-        RuntimeRequest::DeleteSession { session_id } => RuntimeResponse::DeleteSession {
-            session_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::ApproveScript {
-            session_id,
-            execution_id,
-        } => RuntimeResponse::ApproveScript {
-            session_id,
-            execution_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::DenyScript {
-            session_id,
-            execution_id,
-        } => RuntimeResponse::DenyScript {
-            session_id,
-            execution_id,
-            result: Err(error.clone()),
-        },
-        RuntimeRequest::CancelStream { .. } => RuntimeResponse::CancelStream(Err(error.clone())),
-        RuntimeRequest::ContinueSession { .. } => RuntimeResponse::ContinueSession(Err(error)),
-    };
-
-    let _ = res_tx.send(response);
+    }
 }
 
 #[cfg(test)]

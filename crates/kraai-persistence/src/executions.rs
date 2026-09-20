@@ -11,6 +11,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use ulid::Ulid;
 
+use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
 use crate::{atomic_write, sync_parent_directory};
 
@@ -100,7 +101,7 @@ pub trait ScriptExecutionStore: Send + Sync {
         &self,
         id: &ScriptExecutionId,
         stream: ScriptOutputStream,
-        bytes: &[u8],
+        bytes: Vec<u8>,
     ) -> Result<()>;
 
     async fn finish(
@@ -141,11 +142,7 @@ impl FileScriptExecutionStore {
             .with_context(|| format!("Failed to parse script execution record: {path:?}"))
     }
 
-    async fn persist_record(
-        &self,
-        execution_dir: &Path,
-        record: &ScriptExecutionRecord,
-    ) -> Result<()> {
+    async fn persist_record(execution_dir: &Path, record: &ScriptExecutionRecord) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(record)
             .context("Failed to serialize script execution record")?;
         atomic_write(&execution_dir.join(RECORD_FILE), &bytes).await
@@ -157,7 +154,7 @@ impl FileScriptExecutionStore {
         expected: &[ScriptExecutionPhase],
         target: ScriptExecutionPhase,
     ) -> Result<ScriptExecutionRecord> {
-        let _guard = self.execution_locks.lock(id).await;
+        let guard = self.execution_locks.lock(id).await;
         let mut record = self.load_record(id).await?;
         require_phase(&record, expected)?;
         record.phase = target;
@@ -165,55 +162,66 @@ impl FileScriptExecutionStore {
         if target == ScriptExecutionPhase::Running {
             record.started_at_millis = Some(record.updated_at_millis);
         }
-        self.persist_record(&self.execution_dir(id)?, &record)
-            .await?;
-        Ok(record)
+        let execution_dir = self.execution_dir(id)?;
+        complete_commit(
+            guard,
+            async move {
+                Self::persist_record(&execution_dir, &record).await?;
+                Ok(record)
+            },
+            "Script execution commit task failed",
+        )
+        .await
     }
 }
 
 #[async_trait::async_trait]
 impl ScriptExecutionStore for FileScriptExecutionStore {
     async fn create(&self, execution: NewScriptExecution) -> Result<ScriptExecutionRecord> {
-        let _guard = self.execution_locks.lock(&execution.id).await;
-        fs::create_dir_all(&self.executions_dir)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to create script executions directory: {:?}",
-                    self.executions_dir
-                )
-            })?;
-        let execution_dir = self.execution_dir(&execution.id)?;
-        fs::create_dir(&execution_dir).await.with_context(|| {
-            format!("Failed to create unique script execution directory: {execution_dir:?}")
-        })?;
-        sync_parent_directory(&self.executions_dir).await?;
+        let guard = self.execution_locks.lock(&execution.id).await;
+        let executions_dir = self.executions_dir.clone();
+        let execution_dir = self.execution_dir(&execution.id);
+        complete_commit(
+            guard,
+            async move {
+                fs::create_dir_all(&executions_dir).await.with_context(|| {
+                    format!("Failed to create script executions directory: {executions_dir:?}")
+                })?;
+                let execution_dir = execution_dir?;
+                fs::create_dir(&execution_dir).await.with_context(|| {
+                    format!("Failed to create unique script execution directory: {execution_dir:?}")
+                })?;
+                sync_parent_directory(&executions_dir).await?;
 
-        atomic_write(&execution_dir.join(SOURCE_FILE), &execution.source).await?;
-        atomic_write(&execution_dir.join(STDOUT_FILE), &[]).await?;
-        atomic_write(&execution_dir.join(STDERR_FILE), &[]).await?;
-        let timestamp = now_millis();
-        let record = ScriptExecutionRecord {
-            id: execution.id,
-            result_message_id: MessageId::new(Ulid::generate()),
-            session_id: execution.session_id,
-            source_message_id: execution.source_message_id,
-            call_id: execution.call_id,
-            profile: execution.profile,
-            requested_capabilities: execution.requested_capabilities,
-            effective_capabilities: execution.effective_capabilities,
-            timeout: execution.timeout,
-            phase: ScriptExecutionPhase::Prepared,
-            status: None,
-            created_at_millis: timestamp,
-            started_at_millis: None,
-            updated_at_millis: timestamp,
-            exit_code: None,
-            sandbox_denied: false,
-            error: None,
-        };
-        self.persist_record(&execution_dir, &record).await?;
-        Ok(record)
+                atomic_write(&execution_dir.join(SOURCE_FILE), &execution.source).await?;
+                atomic_write(&execution_dir.join(STDOUT_FILE), &[]).await?;
+                atomic_write(&execution_dir.join(STDERR_FILE), &[]).await?;
+                let timestamp = now_millis();
+                let record = ScriptExecutionRecord {
+                    id: execution.id,
+                    result_message_id: MessageId::new(Ulid::generate()),
+                    session_id: execution.session_id,
+                    source_message_id: execution.source_message_id,
+                    call_id: execution.call_id,
+                    profile: execution.profile,
+                    requested_capabilities: execution.requested_capabilities,
+                    effective_capabilities: execution.effective_capabilities,
+                    timeout: execution.timeout,
+                    phase: ScriptExecutionPhase::Prepared,
+                    status: None,
+                    created_at_millis: timestamp,
+                    started_at_millis: None,
+                    updated_at_millis: timestamp,
+                    exit_code: None,
+                    sandbox_denied: false,
+                    error: None,
+                };
+                Self::persist_record(&execution_dir, &record).await?;
+                Ok(record)
+            },
+            "Script execution commit task failed",
+        )
+        .await
     }
 
     async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>> {
@@ -317,12 +325,12 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         &self,
         id: &ScriptExecutionId,
         stream: ScriptOutputStream,
-        bytes: &[u8],
+        bytes: Vec<u8>,
     ) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
-        let _guard = self.execution_locks.lock(id).await;
+        let guard = self.execution_locks.lock(id).await;
         let record = self.load_record(id).await?;
         require_phase(&record, &[ScriptExecutionPhase::Running])?;
         let file_name = match stream {
@@ -330,24 +338,33 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
             ScriptOutputStream::Stderr => STDERR_FILE,
         };
         let path = self.execution_dir(id)?.join(file_name);
-        let mut output = fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .await
-            .with_context(|| format!("Failed to open script output for append: {path:?}"))?;
-        output
-            .write_all(bytes)
-            .await
-            .with_context(|| format!("Failed to append script output: {path:?}"))?;
-        output
-            .flush()
-            .await
-            .with_context(|| format!("Failed to flush script output: {path:?}"))?;
-        output
-            .sync_data()
-            .await
-            .with_context(|| format!("Failed to sync script output: {path:?}"))?;
-        Ok(())
+        complete_commit(
+            guard,
+            async move {
+                let mut output = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .await
+                    .with_context(|| {
+                        format!("Failed to open script output for append: {path:?}")
+                    })?;
+                output
+                    .write_all(&bytes)
+                    .await
+                    .with_context(|| format!("Failed to append script output: {path:?}"))?;
+                output
+                    .flush()
+                    .await
+                    .with_context(|| format!("Failed to flush script output: {path:?}"))?;
+                output
+                    .sync_data()
+                    .await
+                    .with_context(|| format!("Failed to sync script output: {path:?}"))?;
+                Ok(())
+            },
+            "Script execution commit task failed",
+        )
+        .await
     }
 
     async fn finish(
@@ -355,22 +372,29 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         id: &ScriptExecutionId,
         completion: ScriptExecutionCompletion,
     ) -> Result<ScriptExecutionRecord> {
-        let _guard = self.execution_locks.lock(id).await;
+        let guard = self.execution_locks.lock(id).await;
         let mut record = self.load_record(id).await?;
         require_completion_transition(record.phase, completion.status, id)?;
 
         let execution_dir = self.execution_dir(id)?;
-        atomic_write(&execution_dir.join(STDOUT_FILE), &completion.stdout).await?;
-        atomic_write(&execution_dir.join(STDERR_FILE), &completion.stderr).await?;
+        complete_commit(
+            guard,
+            async move {
+                atomic_write(&execution_dir.join(STDOUT_FILE), &completion.stdout).await?;
+                atomic_write(&execution_dir.join(STDERR_FILE), &completion.stderr).await?;
 
-        record.phase = ScriptExecutionPhase::Finished;
-        record.status = Some(completion.status);
-        record.exit_code = completion.exit_code;
-        record.sandbox_denied = completion.sandbox_denied;
-        record.error = completion.error;
-        record.updated_at_millis = now_millis();
-        self.persist_record(&execution_dir, &record).await?;
-        Ok(record)
+                record.phase = ScriptExecutionPhase::Finished;
+                record.status = Some(completion.status);
+                record.exit_code = completion.exit_code;
+                record.sandbox_denied = completion.sandbox_denied;
+                record.error = completion.error;
+                record.updated_at_millis = now_millis();
+                Self::persist_record(&execution_dir, &record).await?;
+                Ok(record)
+            },
+            "Script execution commit task failed",
+        )
+        .await
     }
 }
 
@@ -436,159 +460,4 @@ fn now_millis() -> u64 {
     clippy::unwrap_used,
     reason = "persistence tests use direct assertions for fixture setup and stored artifacts"
 )]
-mod tests {
-    use super::*;
-    use kraai_types::{SandboxCapability, ToolCallId};
-    use ulid::Ulid;
-
-    fn test_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-executions-{name}-{}", Ulid::generate()))
-    }
-
-    fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
-        NewScriptExecution {
-            id: id.clone(),
-            session_id: String::from("session"),
-            source_message_id: MessageId::new("message"),
-            call_id: ToolCallId::new("call-1"),
-            profile: ScriptProfileSnapshot {
-                id: String::from("coding"),
-                commands: Vec::new(),
-                permissions: kraai_types::SandboxPermissionSet::new([
-                    SandboxCapability::WorkspaceRead,
-                ])
-                .unwrap(),
-                permission_rules: kraai_types::CapabilityPermissionRules::default(),
-                escalation_policy: kraai_types::EscalationPolicy::Prompt,
-                environment: kraai_types::EnvironmentPolicy::AllowList,
-                nushell_startup: kraai_types::NushellStartup::Clean,
-                path: kraai_types::PathPolicy::Inherit,
-            },
-            source: b"1 + 1".to_vec(),
-            requested_capabilities: SandboxCapabilities::default(),
-            effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-                .unwrap(),
-            timeout: Some(Duration::from_secs(10)),
-        }
-    }
-
-    #[tokio::test]
-    async fn execution_timing_starts_at_running_and_survives_reopen() {
-        let data_dir = test_dir("execution-timing");
-        let store = FileScriptExecutionStore::new(&data_dir);
-        for run in [false, true] {
-            let id = ScriptExecutionId::new(Ulid::generate());
-            let prepared = store.create(execution(&id)).await.unwrap();
-            assert_eq!(prepared.started_at_millis, None);
-            assert_eq!(prepared.elapsed_millis(), None);
-            let waiting = store.mark_awaiting_approval(&id).await.unwrap();
-            assert_eq!(waiting.started_at_millis, None);
-            let started = if run {
-                let running = store.mark_running(&id).await.unwrap();
-                assert_eq!(running.started_at_millis, Some(running.updated_at_millis));
-                assert!(store.mark_running(&id).await.is_err());
-                running.started_at_millis
-            } else {
-                None
-            };
-            store
-                .finish(
-                    &id,
-                    ScriptExecutionCompletion {
-                        status: if run {
-                            ScriptExecutionStatus::Completed
-                        } else {
-                            ScriptExecutionStatus::Denied
-                        },
-                        exit_code: run.then_some(0),
-                        sandbox_denied: false,
-                        error: None,
-                        stdout: Vec::new(),
-                        stderr: Vec::new(),
-                    },
-                )
-                .await
-                .unwrap();
-            let reopened = FileScriptExecutionStore::new(&data_dir);
-            let mut record = reopened.get(&id).await.unwrap().unwrap();
-            assert_eq!(record.started_at_millis, started);
-            record.created_at_millis = 1;
-            if let Some(started) = started {
-                record.updated_at_millis = started + 125;
-                assert_eq!(record.elapsed_millis(), Some(125));
-                record.updated_at_millis = started.saturating_sub(1);
-                assert_eq!(record.elapsed_millis(), Some(0));
-            } else {
-                assert_eq!(record.elapsed_millis(), None);
-            }
-        }
-        let _ = fs::remove_dir_all(data_dir).await;
-    }
-
-    #[tokio::test]
-    async fn output_reads_wait_for_both_streams_to_finish_replacement() {
-        let data_dir = test_dir("output-read-lock");
-        let id = ScriptExecutionId::new(Ulid::generate());
-        let store = FileScriptExecutionStore::new(&data_dir);
-        store.create(execution(&id)).await.unwrap();
-        let execution_dir = store.execution_dir(&id).unwrap();
-        let guard = store.execution_locks.lock(&id).await;
-        atomic_write(&execution_dir.join(STDOUT_FILE), b"final stdout")
-            .await
-            .unwrap();
-
-        let mut output = Box::pin(store.read_output(&id));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(25), output.as_mut())
-                .await
-                .is_err()
-        );
-
-        atomic_write(&execution_dir.join(STDERR_FILE), b"final stderr")
-            .await
-            .unwrap();
-        drop(guard);
-        let output = output.await.unwrap();
-        assert_eq!(output.stdout, b"final stdout");
-        assert_eq!(output.stderr, b"final stderr");
-        fs::remove_dir_all(data_dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn output_is_written_before_terminal_record_is_exposed() {
-        let data_dir = test_dir("terminal-output");
-        let id = ScriptExecutionId::new(Ulid::generate());
-        let store = FileScriptExecutionStore::new(&data_dir);
-        store.create(execution(&id)).await.unwrap();
-        store.mark_running(&id).await.unwrap();
-        store
-            .append_output(&id, ScriptOutputStream::Stdout, b"partial")
-            .await
-            .unwrap();
-        let prefix = store.read_output(&id).await.unwrap();
-        assert_eq!(prefix.stdout, b"partial");
-        store
-            .finish(
-                &id,
-                ScriptExecutionCompletion {
-                    status: ScriptExecutionStatus::Completed,
-                    exit_code: Some(0),
-                    sandbox_denied: false,
-                    error: None,
-                    stdout: b"ok\0binary".to_vec(),
-                    stderr: b"warning".to_vec(),
-                },
-            )
-            .await
-            .unwrap();
-
-        let reopened = FileScriptExecutionStore::new(&data_dir);
-        let record = reopened.get(&id).await.unwrap().unwrap();
-        let output = reopened.read_output(&id).await.unwrap();
-        assert_eq!(record.phase, ScriptExecutionPhase::Finished);
-        assert_eq!(record.status, Some(ScriptExecutionStatus::Completed));
-        assert_eq!(output.stdout, b"ok\0binary");
-        assert_eq!(output.stderr, b"warning");
-        let _ = fs::remove_dir_all(data_dir).await;
-    }
-}
+mod tests;

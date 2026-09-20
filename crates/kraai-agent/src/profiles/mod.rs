@@ -25,13 +25,13 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
-    pub fn summary(&self) -> AgentProfileSummary {
+    pub fn into_summary(self) -> AgentProfileSummary {
         AgentProfileSummary {
-            id: self.id.clone(),
-            display_name: self.display_name.clone(),
-            description: self.description.clone(),
-            commands: self.commands.clone(),
-            capabilities: self.permissions.capabilities().clone(),
+            id: self.id,
+            display_name: self.display_name,
+            description: self.description,
+            commands: self.commands,
+            capabilities: self.permissions.into_capabilities(),
             escalation_policy: self.escalation_policy,
             environment: self.environment,
             nushell_startup: self.nushell_startup,

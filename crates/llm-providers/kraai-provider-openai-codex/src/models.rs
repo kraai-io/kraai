@@ -64,23 +64,45 @@ impl DiscoveredModels {
     }
 
     pub(crate) fn list(&self, configs: &BTreeMap<ModelId, ConfiguredModelMetadata>) -> Vec<Model> {
-        let mut models = BTreeMap::new();
+        let mut models = Vec::new();
         for entry in self
             .entries
             .values()
             .filter(|entry| entry.visibility == ModelVisibility::List)
         {
             if entry.supported_reasoning_levels.is_empty() {
-                let model = Self::listed_model(entry, None, configs);
-                models.insert(model.id.clone(), model);
+                models.push(Self::listed_model(entry, None, configs));
             } else {
                 for level in &entry.supported_reasoning_levels {
-                    let model = Self::listed_model(entry, Some(&level.effort), configs);
-                    models.insert(model.id.clone(), model);
+                    models.push(Self::listed_model(entry, Some(&level.effort), configs));
                 }
             }
         }
-        models.into_values().collect()
+        models.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+        models
+    }
+
+    pub(crate) fn get(
+        &self,
+        id: &ModelId,
+        configs: &BTreeMap<ModelId, ConfiguredModelMetadata>,
+    ) -> Option<Model> {
+        let raw = id.as_str();
+        if let Some(entry) = self.entries.get(raw) {
+            return (entry.visibility == ModelVisibility::List
+                && entry.supported_reasoning_levels.is_empty())
+            .then(|| Self::listed_model(entry, None, configs));
+        }
+        raw.rmatch_indices('-').find_map(|(index, _)| {
+            let entry = self.entries.get(raw.get(..index)?)?;
+            let effort = raw.get(index.saturating_add(1)..)?;
+            (entry.visibility == ModelVisibility::List
+                && entry
+                    .supported_reasoning_levels
+                    .iter()
+                    .any(|level| level.effort == effort))
+            .then(|| Self::listed_model(entry, Some(effort), configs))
+        })
     }
 
     fn listed_model(

@@ -157,6 +157,7 @@ impl RuntimeCore {
             tokio::task::spawn_blocking(move || kraai_agent::discover_skill_read_roots(&workspace))
                 .await?;
         let mut runtime_roots = self
+            .config
             .script_runtime_roots
             .clone()
             .unwrap_or_else(configured_runtime_roots);
@@ -166,7 +167,6 @@ impl RuntimeCore {
             session_id: session_id.clone(),
             source_message_id,
             call_id,
-            profile: turn.profile.clone(),
             source: script.source,
             workspace_root: turn.workspace_dir,
             requested_capabilities: script.requested_capabilities,
@@ -174,7 +174,7 @@ impl RuntimeCore {
             timeout: script.timeout,
             environment: script_environment(&turn.profile)?,
             runtime_roots,
-            active_commands: turn.profile.commands.clone(),
+            profile: turn.profile,
         };
         self.prepare_script_execution(&request).await?;
 
@@ -233,16 +233,17 @@ impl RuntimeCore {
             .await
             .script_turn_context(session_id)?;
         let id = ScriptExecutionId::new(Ulid::generate());
+        let effective_capabilities = turn.profile.permissions.capabilities().clone();
         self.execution_store
             .create(NewScriptExecution {
                 id: id.clone(),
                 session_id: session_id.to_string(),
                 source_message_id,
                 call_id,
-                profile: turn.profile.clone(),
+                profile: turn.profile,
                 source: invalid.source,
                 requested_capabilities: invalid.requested_capabilities,
-                effective_capabilities: turn.profile.permissions.capabilities().clone(),
+                effective_capabilities,
                 timeout: invalid.timeout,
             })
             .await?;
@@ -364,6 +365,7 @@ impl RuntimeCore {
         session_id: String,
         execution_id: ScriptExecutionId,
     ) -> Result<()> {
+        let _preparation = self.session_preparations.begin(&session_id).await;
         let pending = self.take_pending_script(&session_id, &execution_id).await?;
         self.start_prepared_script(session_id, pending.request)
             .await
@@ -399,6 +401,7 @@ impl RuntimeCore {
             {
                 Ok(completed) => {
                     let _state_guard = runtime.session_state_barrier.read().await;
+                    let _preparation = runtime.session_preparations.begin(&task_session_id).await;
                     runtime
                         .active_script_tasks
                         .lock()
@@ -413,6 +416,7 @@ impl RuntimeCore {
                 }
                 Err(error) => {
                     let _state_guard = runtime.session_state_barrier.read().await;
+                    let _preparation = runtime.session_preparations.begin(&task_session_id).await;
                     runtime
                         .active_script_tasks
                         .lock()
@@ -468,6 +472,7 @@ impl RuntimeCore {
         session_id: String,
         execution_id: ScriptExecutionId,
     ) -> Result<()> {
+        let _preparation = self.session_preparations.begin(&session_id).await;
         let pending = self.take_pending_script(&session_id, &execution_id).await?;
         self.event_tx.resume_timer(&session_id);
         let result = async {

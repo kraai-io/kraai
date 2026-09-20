@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_types::{Message, MessageId};
@@ -8,6 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::FileCompactionStore;
 use crate::atomic_file::atomic_write_with_outcome;
+use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
 
 /// Trait for storing and retrieving messages
@@ -42,7 +44,7 @@ pub trait MessageStore: Send + Sync {
 /// File-based message store with hot cache and cold storage
 pub struct FileMessageStore {
     /// Hot cache for frequently accessed messages
-    hot: RwLock<HashMap<MessageId, Message>>,
+    hot: Arc<RwLock<HashMap<MessageId, Message>>>,
     message_locks: KeyedLocks<MessageId>,
     /// Base directory for cold storage
     cold_dir: PathBuf,
@@ -53,7 +55,7 @@ impl FileMessageStore {
     pub fn new(data_dir: &Path) -> Self {
         let cold_dir = data_dir.join("messages");
         Self {
-            hot: RwLock::new(HashMap::new()),
+            hot: Arc::new(RwLock::new(HashMap::new())),
             message_locks: KeyedLocks::default(),
             cold_dir,
             compactions: FileCompactionStore::new(data_dir),
@@ -122,10 +124,9 @@ impl MessageStore for FileMessageStore {
         };
 
         // Add to hot cache
-        {
-            let mut hot = self.hot.write().await;
-            hot.insert(id.clone(), msg.clone());
-        }
+        let cached = msg.clone();
+        let previous = self.hot.write().await.insert(id.clone(), cached);
+        drop(previous);
 
         Ok(Some(msg))
     }
@@ -146,49 +147,60 @@ impl MessageStore for FileMessageStore {
     }
 
     async fn save(&self, message: &Message) -> Result<()> {
-        let _guard = self.message_locks.lock(&message.id).await;
+        let guard = self.message_locks.lock(&message.id).await;
         self.ensure_dir().await?;
 
         let path = self.message_path(&message.id)?;
         let content = serde_json::to_string_pretty(message)
             .with_context(|| format!("Failed to serialize message: {}", message.id))?;
 
-        async {
-            let outcome = atomic_write_with_outcome(&path, content.as_bytes()).await?;
-            {
-                let mut hot = self.hot.write().await;
-                hot.insert(message.id.clone(), message.clone());
-            }
-            outcome.into_result()
-        }
+        let message = message.clone();
+        let hot = Arc::clone(&self.hot);
+        complete_commit(
+            guard,
+            async move {
+                async {
+                    let outcome = atomic_write_with_outcome(&path, content.as_bytes()).await?;
+                    let previous = hot.write().await.insert(message.id.clone(), message);
+                    drop(previous);
+                    outcome.into_result()
+                }
+                .await
+                .with_context(|| format!("Failed to write message file: {path:?}"))
+            },
+            "Message commit task failed",
+        )
         .await
-        .with_context(|| format!("Failed to write message file: {path:?}"))
     }
 
     async fn unload(&self, id: &MessageId) {
         let _guard = self.message_locks.lock(id).await;
-        let mut hot = self.hot.write().await;
-        hot.remove(id);
+        let removed = self.hot.write().await.remove(id);
+        drop(removed);
     }
 
     async fn delete(&self, id: &MessageId) -> Result<()> {
-        let _guard = self.message_locks.lock(id).await;
-        self.compactions.delete(id).await?;
-        // Remove from hot cache
-        {
-            let mut hot = self.hot.write().await;
-            hot.remove(id);
-        }
-
-        // Remove from cold storage
+        let guard = self.message_locks.lock(id).await;
         let path = self.message_path(id)?;
-        if path.exists() {
-            fs::remove_file(&path)
-                .await
-                .with_context(|| format!("Failed to delete message file: {:?}", path))?;
-        }
-
-        Ok(())
+        let id = id.clone();
+        let hot = Arc::clone(&self.hot);
+        let compactions = self.compactions.clone();
+        complete_commit(
+            guard,
+            async move {
+                compactions.delete(&id).await?;
+                let removed = hot.write().await.remove(&id);
+                drop(removed);
+                if path.exists() {
+                    fs::remove_file(&path)
+                        .await
+                        .with_context(|| format!("Failed to delete message file: {:?}", path))?;
+                }
+                Ok(())
+            },
+            "Message commit task failed",
+        )
+        .await
     }
 
     async fn exists(&self, id: &MessageId) -> Result<bool> {
@@ -237,6 +249,117 @@ impl MessageStore for FileMessageStore {
 mod tests {
     use super::*;
     use kraai_types::{ConversationItem, MessageStatus};
+
+    #[tokio::test]
+    async fn cancelled_delete_finishes_after_removing_the_compaction_checkpoint() {
+        let directory = crate::test_support::test_dir("message-delete-compaction-cancelled");
+        let store = Arc::new(FileMessageStore::new(&directory));
+        let message = Message {
+            id: MessageId::new("message"),
+            parent_id: None,
+            content: ConversationItem::User {
+                text: String::from("hello"),
+            },
+            status: MessageStatus::Complete,
+            agent_profile_id: None,
+            generation: None,
+        };
+        store.save(&message).await.unwrap();
+        store
+            .compactions
+            .save(&crate::CompactionCheckpoint {
+                covered_through: message.id.clone(),
+                previous_boundary: None,
+                summary: String::from("Completed work"),
+                model_id: kraai_types::ModelId::new("model"),
+                provider_id: kraai_types::ProviderId::new("provider"),
+                prompt_version: 1,
+                usage: None,
+            })
+            .await
+            .unwrap();
+
+        let cached = store.hot.read().await;
+        let caller = tokio::spawn({
+            let store = Arc::clone(&store);
+            let id = message.id.clone();
+            async move { store.delete(&id).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while store.compactions.get(&message.id).await.unwrap().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        drop(cached);
+
+        let guard = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            store.message_locks.lock(&message.id),
+        )
+        .await
+        .unwrap();
+        assert!(!store.exists(&message.id).await.unwrap());
+        assert!(!store.hot.read().await.contains_key(&message.id));
+        drop(guard);
+        assert!(store.get(&message.id).await.unwrap().is_none());
+        fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_save_publishes_the_committed_message_before_releasing_its_lock() {
+        let directory = std::env::temp_dir().join(format!(
+            "kraai-message-cancelled-{}",
+            ulid::Ulid::generate()
+        ));
+        let store = Arc::new(FileMessageStore::new(&directory));
+        let mut message = Message {
+            id: MessageId::new("message"),
+            parent_id: None,
+            content: ConversationItem::User {
+                text: String::from("initial"),
+            },
+            status: MessageStatus::Complete,
+            agent_profile_id: None,
+            generation: None,
+        };
+        store.save(&message).await.unwrap();
+        message.content = ConversationItem::User {
+            text: String::from("replacement"),
+        };
+        let path = store.message_path(&message.id).unwrap();
+        let expected = serde_json::to_string_pretty(&message).unwrap();
+        let cached = store.hot.read().await;
+        let caller = tokio::spawn({
+            let store = Arc::clone(&store);
+            let message = message.clone();
+            async move { store.save(&message).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while fs::read_to_string(&path).await.unwrap() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        drop(cached);
+
+        let guard = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            store.message_locks.lock(&message.id),
+        )
+        .await
+        .unwrap();
+        let loaded = store.get(&message.id).await.unwrap().unwrap();
+        assert_eq!(loaded.content, message.content);
+        drop(guard);
+        fs::remove_dir_all(directory).await.unwrap();
+    }
 
     #[tokio::test]
     async fn ancestry_reads_validate_complete_messages_without_populating_hot_cache() {

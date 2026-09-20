@@ -33,7 +33,6 @@ ulid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-serde.workspace = true
 
 [features]
 typescript = [

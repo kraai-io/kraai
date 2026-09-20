@@ -1,9 +1,11 @@
 mod basic;
 mod compaction;
 mod concurrency;
+mod deletion;
 mod denial;
 mod harness;
 mod host_failure;
 mod queue;
+mod script_recovery;
 mod scripts;
 mod usage_cancellation;

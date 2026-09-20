@@ -13,7 +13,7 @@ async fn request_parser_preserves_header_octets_and_rejects_invalid_syntax() -> 
                     && value.as_bytes() == b"\xc2\xa0opaque-\xff\xc2\xa0"
             })
         );
-        ensure!(request.body == b"{}");
+        ensure!(request.body.as_ref() == b"{}");
         for raw in [
             b"POST /v1/responses HTTP/1.1 extra\r\n\r\n".as_slice(),
             b"PO\xffST /v1/responses HTTP/1.1\r\n\r\n",
@@ -88,11 +88,15 @@ async fn parse_raw_request(raw: &[u8]) -> Result<ParsedRequest> {
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::credentials::codex_allowed_paths;
+use super::request::{MAX_HEADER_BYTES, find_header_end};
 use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use color_eyre::eyre::ensure;
-use kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions;
+use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions};
+use reqwest::header::HeaderValue;
+use tokio::io::AsyncReadExt;
 
 #[tokio::test]
 async fn listener_failure_drains_tasks_and_accounts_for_unrecorded_requests() -> Result<()> {
@@ -574,7 +578,7 @@ async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()>
                 HeaderValue::from_static("application/json"),
             ),
         ],
-        body: b"{}".to_vec(),
+        body: b"{}".to_vec().into(),
     };
     let (mut downstream, downstream_peer) = tokio::io::duplex(64);
     drop(downstream_peer);

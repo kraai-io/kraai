@@ -17,16 +17,23 @@ pub struct ChatCompletionStreamOptions {
 
 #[derive(Debug, Serialize)]
 pub struct RequestMessage {
-    pub role: String,
+    pub role: &'static str,
     pub content: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionChunk {
     #[serde(default)]
+    pub error: Option<ChatCompletionError>,
+    #[serde(default)]
     pub choices: Vec<ChatCompletionChunkChoice>,
     #[serde(default)]
     pub usage: Option<ChatCompletionUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatCompletionError {
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -7,9 +7,9 @@ use kraai_types::{AssistantPhase, ModelId, ProviderId};
 
 use crate::config::{DynamicConfig, DynamicValue, ModelConfig};
 use crate::definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
-use crate::http_retry::ProviderRequestContext;
 use crate::provider::{Model, Provider, ProviderRequest};
 use crate::registry::ProviderFactory;
+use crate::request_context::ProviderRequestContext;
 use crate::stream::ProviderStreamEvent;
 
 pub(crate) struct MockProvider {

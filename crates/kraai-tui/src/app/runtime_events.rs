@@ -2,6 +2,25 @@ use super::*;
 
 impl App {
     pub(super) fn handle_runtime_event(&mut self, event: Event) {
+        self.apply_runtime_event(event, true);
+    }
+
+    pub(super) fn apply_runtime_event(&mut self, event: Event, apply_state: bool) {
+        if !apply_state
+            && !matches!(
+                &event,
+                Event::SessionError { .. }
+                    | Event::StreamStart { .. }
+                    | Event::StreamChunk { .. }
+                    | Event::StreamComplete { .. }
+                    | Event::StreamError { .. }
+                    | Event::ContinuationFailed { .. }
+                    | Event::ScriptApprovalRequested { .. }
+            )
+        {
+            return;
+        }
+
         match event {
             Event::RequestUsageUpdated {
                 session_id,
@@ -49,6 +68,9 @@ impl App {
                     self.ci_output_needs_newline = false;
                     self.ci_turn_completion_pending = false;
                 }
+                if !apply_state {
+                    return;
+                }
                 self.state.is_streaming = true;
                 self.state.retry_waiting = false;
                 self.state.profile_locked = true;
@@ -75,7 +97,7 @@ impl App {
                         return;
                     }
                 }
-                if !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
+                if apply_state && !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
                     self.request_stream_history_sync(&session_id, Instant::now());
                 }
             }
@@ -89,12 +111,14 @@ impl App {
                     limit: INPUT_HISTORY_LIMIT,
                 });
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.is_streaming = false;
-                    self.state.retry_waiting = false;
-                    self.state.statusline_animation_frame = 0;
-                    self.last_statusline_animation_tick = None;
-                    self.last_stream_history_request = None;
-                    self.stream_event_content.remove(&message_id);
+                    if apply_state {
+                        self.state.is_streaming = false;
+                        self.state.retry_waiting = false;
+                        self.state.statusline_animation_frame = 0;
+                        self.last_statusline_animation_tick = None;
+                        self.last_stream_history_request = None;
+                        self.stream_event_content.remove(&message_id);
+                    }
                     self.request_sync_for_session(&session_id);
                     if self.is_ci_mode() {
                         self.finish_ci_output_line();
@@ -114,14 +138,17 @@ impl App {
                 error,
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.is_streaming = false;
-                    self.state.retry_waiting = false;
-                    self.state.statusline_animation_frame = 0;
-                    self.last_statusline_animation_tick = None;
-                    self.last_stream_history_request = None;
-                    self.stream_event_content
-                        .remove(&MessageId::new(message_id));
-                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
+                    if apply_state {
+                        self.state.is_streaming = false;
+                        self.state.retry_waiting = false;
+                        self.state.statusline_animation_frame = 0;
+                        self.last_statusline_animation_tick = None;
+                        self.last_stream_history_request = None;
+                        self.stream_event_content
+                            .remove(&MessageId::new(message_id));
+                        self.state.profile_lock_stale_after_terminal_event =
+                            self.state.profile_locked;
+                    }
                     self.set_error(format!("Stream error: {error}"));
                     self.request_sync_for_session(&session_id);
                 }
@@ -177,12 +204,15 @@ impl App {
             }
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
-                    self.state.is_streaming = false;
-                    self.state.retry_waiting = false;
-                    self.state.statusline_animation_frame = 0;
-                    self.last_statusline_animation_tick = None;
-                    self.last_stream_history_request = None;
-                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
+                    if apply_state {
+                        self.state.is_streaming = false;
+                        self.state.retry_waiting = false;
+                        self.state.statusline_animation_frame = 0;
+                        self.last_statusline_animation_tick = None;
+                        self.last_stream_history_request = None;
+                        self.state.profile_lock_stale_after_terminal_event =
+                            self.state.profile_locked;
+                    }
                     self.set_error(format!("Continuation failed: {error}"));
                     self.request_sync_for_session(&session_id);
                 } else {
@@ -202,8 +232,8 @@ impl App {
                 }
             }
             Event::OpenAiCodexAuthUpdated { status } => {
-                self.apply_openai_codex_auth_status(map_openai_codex_auth_status(status));
-                if self.state.mode == UiMode::ProvidersMenu
+                if self.apply_openai_codex_auth_status(map_openai_codex_auth_status(status))
+                    && self.state.mode == UiMode::ProvidersMenu
                     && matches!(self.state.providers_view, ProvidersView::Detail)
                     && pending_auth_target(&self.state.openai_codex_auth).is_none()
                 {
@@ -219,6 +249,9 @@ impl App {
                     self.fail_ci(String::from(
                         "CI mode cannot answer a script capability escalation prompt",
                     ));
+                    return;
+                }
+                if !apply_state {
                     return;
                 }
                 self.state.pending_script = Some(script);

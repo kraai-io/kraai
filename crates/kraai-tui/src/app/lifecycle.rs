@@ -42,7 +42,7 @@ impl App {
     pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
         let event_rx = spawn_event_bridge(runtime.clone());
         let (runtime_tx, runtime_rx) = spawn_runtime_bridge(runtime);
-        let state = AppState::from_startup_options(startup_options.clone());
+        let state = AppState::from_startup_options(&startup_options);
 
         Self {
             event_rx,
@@ -297,18 +297,21 @@ impl App {
                     return;
                 }
                 self.last_runtime_event_sequence = event.sequence;
-                if let Some(session_id) = event.event.session_id() {
+                let covered_by_snapshot = if let Some(session_id) = event.event.session_id() {
                     self.last_session_event_sequences
                         .insert(session_id.to_string(), event.sequence);
-                    if self
-                        .session_snapshot_sequences
+                    self.session_snapshot_sequences
                         .get(session_id)
                         .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)
-                    {
-                        return;
-                    }
+                } else {
+                    false
+                };
+                if covered_by_snapshot {
+                    self.apply_runtime_event(event.event, false);
+                } else {
+                    self.handle_runtime_event(event.event);
                 }
-                self.handle_runtime_event(event.event);
+                self.maybe_finish_ci_run();
             }
             RuntimeEventBridgeMessage::Lagged(skipped) => {
                 self.state.cost_recovery_list_pending = true;

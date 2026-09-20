@@ -21,11 +21,13 @@ use ulid::Ulid;
 
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
+mod ancestry;
 mod intercepted;
 mod model_context;
 mod prompts;
 mod sessions;
 mod snapshot;
+mod stream_requests;
 mod streaming;
 mod usage;
 
@@ -46,8 +48,12 @@ const AGENTS_MD_FILE_NAME: &str = "AGENTS.md";
 const SESSION_TITLE_MAX_CHARS: usize = 60;
 
 fn title_from_user_prompt(prompt: &str) -> Option<String> {
-    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title: String = normalized.chars().take(SESSION_TITLE_MAX_CHARS).collect();
+    let title: String = prompt
+        .split_whitespace()
+        .flat_map(|word| std::iter::once(' ').chain(word.chars()))
+        .skip(1)
+        .take(SESSION_TITLE_MAX_CHARS)
+        .collect();
     if title.is_empty() { None } else { Some(title) }
 }
 
@@ -96,7 +102,7 @@ struct SessionRuntimeState {
     pending_workspace_dir: Option<PathBuf>,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
-    active_turn_profile: Option<AgentProfile>,
+    active_turn_profile: Option<Arc<AgentProfile>>,
 }
 
 impl SessionRuntimeState {
@@ -130,6 +136,7 @@ struct StreamingMessageState {
     previous_tip: Option<MessageId>,
     previous_title: Option<String>,
     message: Message,
+    cancellation_result_id: Option<MessageId>,
     text_item_ids: HashMap<String, usize>,
     request_started_at: u64,
     unpriced_attempts: u32,

@@ -5,7 +5,7 @@ use futures::{StreamExt, stream, stream::BoxStream};
 use kraai_provider_core::{ProviderStreamEvent, SseEvent};
 use kraai_types::{AssistantPhase, ToolCallId};
 
-use crate::wire::{ResponsesStreamEvent, ResponsesUsage};
+use crate::wire::{ResponsesError, ResponsesStreamEvent, ResponsesUsage};
 
 pub(crate) fn adapt_responses_stream(
     source: BoxStream<'static, Result<SseEvent>>,
@@ -21,6 +21,16 @@ pub(crate) fn adapt_responses_stream(
                 let event = match source.next().await {
                     Some(Ok(SseEvent::Data(payload))) => {
                         match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
+                            Ok(event) if event.kind == "error" => {
+                                let error = match serde_json::from_str::<ResponsesError>(&payload) {
+                                    Ok(error) => eyre!(
+                                        "OpenAI response stream failed: {}",
+                                        format_response_error(error)
+                                    ),
+                                    Err(error) => eyre!(error),
+                                };
+                                return Some((Err(error), (source, true, phases)));
+                            }
                             Ok(event) => event,
                             Err(error) => {
                                 return Some((Err(eyre!(error)), (source, true, phases)));
@@ -147,15 +157,19 @@ fn parse_phase(phase: Option<&str>) -> AssistantPhase {
 
 fn format_response_failure(response: crate::wire::ResponsesCompletedResponse) -> String {
     if let Some(error) = response.error {
-        return match error.code {
-            Some(code) => format!("{code}: {}", error.message),
-            None => error.message,
-        };
+        return format_response_error(error);
     }
     response.incomplete_details.map_or_else(
         || String::from("no failure details were provided"),
         |details| details.to_string(),
     )
+}
+
+fn format_response_error(error: ResponsesError) -> String {
+    match error.code {
+        Some(code) => format!("{code}: {}", error.message),
+        None => error.message,
+    }
 }
 
 fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
@@ -257,6 +271,55 @@ mod tests {
         .unwrap();
 
         assert!(event.is_some_and(|result| result.is_err()));
+    }
+
+    #[tokio::test]
+    async fn responses_stream_preserves_error_event_details_after_partial_text() {
+        for code in [r#""server_error""#, "null"] {
+            let source = stream::iter(vec![
+                Ok(SseEvent::Data(String::from(
+                    r#"{"type":"response.output_text.delta","item_id":"msg-1","delta":"partial"}"#,
+                ))),
+                Ok(SseEvent::Data(format!(
+                    r#"{{"type":"error","code":{code},"message":"upstream failed","param":null,"sequence_number":2}}"#,
+                ))),
+            ])
+            .boxed();
+            let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+
+            assert!(matches!(
+                events.first(),
+                Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
+            ));
+            let error = events.get(1).unwrap().as_ref().unwrap_err().to_string();
+            let detail = if code == "null" {
+                "upstream failed"
+            } else {
+                "server_error: upstream failed"
+            };
+            assert_eq!(error, format!("OpenAI response stream failed: {detail}"));
+            assert_eq!(events.len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_error_event_terminates_without_waiting_for_transport() {
+        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
+            r#"{"type":"error","message":"request failed"}"#,
+        )))])
+        .chain(stream::pending())
+        .boxed();
+        let mut events = adapt_responses_stream(source);
+        let error = tokio::time::timeout(Duration::from_secs(1), events.next())
+            .await
+            .expect("error event must not wait for transport EOF")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "OpenAI response stream failed: request failed"
+        );
+        assert!(events.next().await.is_none());
     }
 
     #[tokio::test]
