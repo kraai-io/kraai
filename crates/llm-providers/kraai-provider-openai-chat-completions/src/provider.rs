@@ -175,7 +175,11 @@ fn adapt_chat_completion_stream(
     reported_costs: bool,
 ) -> BoxStream<'static, Result<ProviderStreamEvent>> {
     stream::unfold(
-        (source, VecDeque::new(), false),
+        (
+            source,
+            VecDeque::<Result<ProviderStreamEvent>>::new(),
+            false,
+        ),
         move |(mut source, mut pending, finished)| async move {
             if finished {
                 return None;
@@ -183,7 +187,8 @@ fn adapt_chat_completion_stream(
 
             loop {
                 if let Some(event) = pending.pop_front() {
-                    return Some((event, (source, pending, false)));
+                    let failed = event.is_err();
+                    return Some((event, (source, pending, failed)));
                 }
 
                 match source.next().await {
@@ -218,6 +223,16 @@ fn events_from_chunk(
     reported_costs: bool,
 ) -> Vec<Result<ProviderStreamEvent>> {
     let mut events = Vec::with_capacity(2);
+    let incomplete_reason = chunk
+        .choices
+        .iter()
+        .find_map(|choice| {
+            choice
+                .finish_reason
+                .as_deref()
+                .filter(|reason| !matches!(*reason, "stop" | "tool_calls" | "function_call"))
+        })
+        .map(str::to_owned);
 
     if let Some(delta) = chunk
         .choices
@@ -235,6 +250,11 @@ fn events_from_chunk(
         .and_then(|usage| normalize_usage(usage, reported_costs))
     {
         events.push(Ok(ProviderStreamEvent::Usage(usage)));
+    }
+    if let Some(reason) = incomplete_reason {
+        events.push(Err(eyre!(
+            "Chat completions response did not complete successfully: {reason}"
+        )));
     }
 
     events
@@ -688,5 +708,54 @@ mod tests {
         .unwrap();
 
         assert!(event.is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_incomplete_finish_reasons_and_preserves_usage() {
+        for reason in ["length", "content_filter", "unknown_failure"] {
+            let source = stream::iter(vec![
+                Ok(SseEvent::Data(String::from(
+                    r#"{"choices":[{"delta":{"content":"Partial summary"}}]}"#,
+                ))),
+                Ok(SseEvent::Data(format!(
+                    r#"{{"choices":[{{"delta":{{}},"finish_reason":"{reason}"}}],"usage":{{"prompt_tokens":2,"completion_tokens":1}}}}"#,
+                ))),
+                Ok(SseEvent::Done),
+            ]).boxed();
+            let events = adapt_chat_completion_stream(source, false)
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(events.len(), 3);
+            assert!(matches!(
+                events.first(),
+                Some(Ok(ProviderStreamEvent::TextDelta { .. }))
+            ));
+            assert!(matches!(
+                events.get(1),
+                Some(Ok(ProviderStreamEvent::Usage(_)))
+            ));
+            assert!(events.get(2).is_some_and(|event| {
+                event
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains(reason))
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_accepts_successful_text_and_tool_finish_reasons() {
+        for reason in ["stop", "tool_calls", "function_call"] {
+            let source = stream::iter(vec![
+                Ok(SseEvent::Data(format!(
+                    r#"{{"choices":[{{"delta":{{"content":"complete"}},"finish_reason":"{reason}"}}]}}"#,
+                ))),
+                Ok(SseEvent::Done),
+            ]).boxed();
+            let events = adapt_chat_completion_stream(source, false)
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(events.len(), 1);
+            assert!(events.iter().all(Result::is_ok));
+        }
     }
 }

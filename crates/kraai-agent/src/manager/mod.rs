@@ -22,6 +22,7 @@ use ulid::Ulid;
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
 mod intercepted;
+mod model_context;
 mod prompts;
 mod sessions;
 mod snapshot;
@@ -65,6 +66,7 @@ pub struct PendingStreamRequest {
     pub provider_request: ProviderRequest,
     pub script_tool_transport: ScriptToolTransport,
     pub context_notifications: Vec<String>,
+    pub context_compaction: Option<crate::ContextCompaction>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

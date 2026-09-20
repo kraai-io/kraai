@@ -1,4 +1,5 @@
 mod common;
+mod compaction;
 mod intercepted;
 mod prompts;
 mod sessions;

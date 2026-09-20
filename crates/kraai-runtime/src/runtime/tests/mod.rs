@@ -1,4 +1,5 @@
 mod basic;
+mod compaction;
 mod concurrency;
 mod denial;
 mod harness;

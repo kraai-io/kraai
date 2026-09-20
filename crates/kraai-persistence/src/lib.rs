@@ -11,6 +11,7 @@ use tokio::fs;
 use tokio::sync::{Mutex, RwLock};
 
 mod atomic_file;
+mod compaction;
 mod context;
 mod executions;
 mod keyed_locks;
@@ -23,6 +24,7 @@ pub(crate) use atomic_file::sync_parent_directory;
 #[cfg(test)]
 use atomic_file::temp_write_path;
 use atomic_file::{AtomicWriteOutcome, atomic_write_with_outcome};
+pub use compaction::{CompactionCheckpoint, FileCompactionStore};
 pub use messages::{FileMessageStore, MessageStore};
 pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};
 pub use usage::{FileRequestUsageStore, RequestUsageStore};
@@ -717,7 +719,7 @@ mod tests {
     async fn deleting_session_removes_only_unique_messages() {
         with_test_store(
             "delete-unique-messages",
-            |message_store, session_store, _| async move {
+            |message_store, session_store, data_dir| async move {
                 let root = message("root", None, "root");
                 let shared = message("shared", Some(&root.id), "shared");
                 let a_tip = message("a-tip", Some(&shared.id), "a");
@@ -725,6 +727,21 @@ mod tests {
 
                 for msg in [&root, &shared, &a_tip, &b_tip] {
                     message_store.save(msg).await.unwrap();
+                }
+                let compactions = FileCompactionStore::new(&data_dir);
+                for boundary in [&shared.id, &a_tip.id] {
+                    compactions
+                        .save(&CompactionCheckpoint {
+                            covered_through: boundary.clone(),
+                            previous_boundary: None,
+                            summary: String::from("Completed work"),
+                            model_id: kraai_types::ModelId::new("model"),
+                            provider_id: kraai_types::ProviderId::new("provider"),
+                            prompt_version: 1,
+                            usage: None,
+                        })
+                        .await
+                        .unwrap();
                 }
 
                 session_store
@@ -742,6 +759,8 @@ mod tests {
                 assert!(message_store.exists(&b_tip.id).await.unwrap());
                 assert!(message_store.exists(&shared.id).await.unwrap());
                 assert!(message_store.exists(&root.id).await.unwrap());
+                assert!(compactions.get(&a_tip.id).await.unwrap().is_none());
+                assert!(compactions.get(&shared.id).await.unwrap().is_some());
             },
         )
         .await;
