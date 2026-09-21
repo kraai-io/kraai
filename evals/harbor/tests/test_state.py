@@ -107,6 +107,36 @@ class StateTests(Fixture):
         with self.assertRaisesRegex(ValueError, "refusing to rerun"):
             progress(self.args.job_dir, self.tasks, 2)
 
+    def test_wrong_shaped_results_are_rejected_without_moving_or_changing_them(self):
+        from kraai_harbor.plan import attempt_targets
+
+        prepare_run(self.args, self.tasks)
+        path = self.trial("one", "one") / "result.json"
+        valid = json.loads(path.read_text())
+        invalid = [None, [], 1, "result", {}, {"finished_at": "2026-09-20"}]
+        for field, values in {
+            "task_name": [None, 1, [], "", "tasks/"],
+            "finished_at": [False, 1, {}, ""],
+            "exception_info": [[], "error", False, {"exception_type": []}],
+            "verifier_result": [[], "result", False, {"rewards": []}, {"rewards": 0}],
+        }.items():
+            invalid.extend({**valid, field: value} for value in values)
+        for result in invalid:
+            with self.subTest(result=result):
+                path.write_text(json.dumps(result))
+                before = path.read_bytes()
+                for action in (
+                    lambda: progress(self.args.job_dir, self.tasks, 2),
+                    lambda: attempt_targets(self.args.job_dir, self.tasks, 2),
+                    lambda: archive_interrupted(self.args.job_dir),
+                ):
+                    with self.assertRaises(ValueError) as caught:
+                        action()
+                    self.assertIn(str(path), str(caught.exception))
+                    self.assertIn("refusing to rerun", str(caught.exception))
+                    self.assertEqual(path.read_bytes(), before)
+                self.assertFalse(self.root.joinpath("job.interrupted").exists())
+
     def test_adapter_initialization_failure_is_archived_without_counting_an_attempt(self):
         prepare_run(self.args, self.tasks)
         trial = self.args.job_dir / "initialization-failed"

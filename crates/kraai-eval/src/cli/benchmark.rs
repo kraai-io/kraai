@@ -66,6 +66,10 @@ pub(super) struct BenchmarkArgs {
 pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
     let dataset = dataset_version(&args.dataset)?;
     ensure!(
+        !args.status || args.output_dir.is_some() || args.model.is_some() || args.oracle,
+        "--status requires --output-dir or --model unless --oracle is used"
+    );
+    ensure!(
         args.task_name
             .iter()
             .all(|name| !name.is_empty() && !name.contains(['*', '?', '['])),

@@ -58,15 +58,38 @@ def run_identity(args) -> dict:
     }
 
 
+def load_saved_result(path: Path) -> dict:
+    try:
+        result = json.loads(path.read_text())
+        if not isinstance(result, dict):
+            raise ValueError("expected an object")
+        name = result.get("task_name")
+        if not isinstance(name, str) or not name.split("/")[-1].strip():
+            raise ValueError("expected a nonempty task_name")
+        finished = result.get("finished_at")
+        if finished is not None and (not isinstance(finished, str) or not finished.strip()):
+            raise ValueError("expected a timestamp or null for finished_at")
+        for field in ("exception_info", "verifier_result"):
+            value = result.get(field)
+            if value is not None and not isinstance(value, dict):
+                raise ValueError(f"expected an object or null for {field}")
+        exception_type = (result.get("exception_info") or {}).get("exception_type")
+        if exception_type is not None and not isinstance(exception_type, str):
+            raise ValueError("expected a string for exception_type")
+        rewards = (result.get("verifier_result") or {}).get("rewards")
+        if rewards is not None and not isinstance(rewards, dict):
+            raise ValueError("expected an object or null for rewards")
+        return result
+    except (ValueError, OSError) as error:
+        raise ValueError(
+            f"Cannot read saved trial {path}; refusing to rerun it: {error}"
+        ) from error
+
+
 def completed_trials(job: Path) -> list[dict]:
     results = []
     for path in sorted(job.glob("*/result.json")):
-        try:
-            result = json.loads(path.read_text())
-        except (ValueError, OSError) as error:
-            raise ValueError(
-                f"Cannot read saved trial {path}; refusing to rerun it"
-            ) from error
+        result = load_saved_result(path)
         exception = result.get("exception_info") or {}
         if (
             not result.get("finished_at")
@@ -111,7 +134,7 @@ def archive_interrupted(job: Path) -> None:
         ):
             continue
         path = trial / "result.json"
-        result = json.loads(path.read_text()) if path.exists() else None
+        result = load_saved_result(path) if path.exists() else None
         exception = (result or {}).get("exception_info") or {}
         if (
             result

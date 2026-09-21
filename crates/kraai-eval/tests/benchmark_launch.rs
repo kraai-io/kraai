@@ -77,7 +77,11 @@ fn terminal_bench_selection_is_pinned_and_attempts_reuse_the_same_directory() ->
         ensure!(plan.get("task_count").and_then(serde_json::Value::as_u64) == Some(count.parse()?));
         directories.push(plan.get("job_dir").cloned());
     }
-    ensure!(directories.first() == directories.last());
+    ensure!(
+        directories
+            .iter()
+            .all(|directory| Some(directory) == directories.first())
+    );
     Ok(())
 }
 
@@ -96,6 +100,41 @@ fn task_count_cannot_be_combined_with_a_different_selection_mode() -> Result<()>
             .args(selection)
             .output()?;
         ensure!(!output.status.success());
+    }
+    Ok(())
+}
+
+#[test]
+fn status_requires_a_model_or_directory_except_for_oracle() -> Result<()> {
+    for selection in [
+        vec![],
+        vec!["--oracle"],
+        vec!["--output-dir", "saved-job"],
+        vec!["--model", "test-model"],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-eval"));
+        command
+            .args(["benchmark", "terminal-bench", "--status", "--dry-run"])
+            .args(&selection);
+        if selection.contains(&"--model") {
+            command.arg("--runner").arg(std::env::current_exe()?);
+        }
+        let output = command
+            .env("KRAAI_EVAL_HARBOR", std::env::temp_dir())
+            .output()?;
+        if selection.is_empty() {
+            ensure!(!output.status.success());
+            ensure!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("--status requires --output-dir or --model")
+            );
+        } else {
+            ensure!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
     Ok(())
 }
