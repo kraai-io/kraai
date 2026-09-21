@@ -86,7 +86,7 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
         .map(HarnessProfile::load)
         .transpose()?
         .unwrap_or_else(HarnessProfile::kraai);
-    if !args.oracle {
+    if !args.oracle && !args.status {
         ensure!(
             profile.proxy != ProxyKind::None,
             "public harness comparisons require a model proxy for usage accounting"

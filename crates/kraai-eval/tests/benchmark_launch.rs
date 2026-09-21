@@ -181,3 +181,55 @@ fn runner_changes_separate_cached_benchmark_versions() -> Result<()> {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn status_skips_execution_profile_checks_but_runs_preserve_them() -> Result<()> {
+    let root =
+        std::env::temp_dir().join(format!("kraai-status-profile-{}", ulid::Ulid::generate()));
+    fs::create_dir(&root)?;
+    let profile_path = root.join("harness.toml");
+    let mut profile = kraai_eval::HarnessProfile::kraai();
+    profile.sanitize_kraai_provider = false;
+    profile.args.clear();
+    for (proxy, provider_args, expected_error) in [
+        (kraai_eval::ProxyKind::None, vec![], "require a model proxy"),
+        (
+            kraai_eval::ProxyKind::Openai,
+            vec!["--provider", "test"],
+            "provider flags require a Kraai profile",
+        ),
+        (
+            kraai_eval::ProxyKind::Openai,
+            vec!["--provider-config", "missing.toml"],
+            "provider flags require a Kraai profile",
+        ),
+    ] {
+        profile.proxy = proxy;
+        fs::write(&profile_path, toml::to_string(&profile)?)?;
+        for status in [true, false] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-eval"));
+            command
+                .args(["benchmark", "terminal-bench", "--dry-run", "--harness"])
+                .arg(&profile_path)
+                .arg("--output-dir")
+                .arg(root.join("saved-job"))
+                .args(&provider_args)
+                .env("KRAAI_EVAL_HARBOR", &root);
+            if status {
+                command.arg("--status");
+            } else {
+                command.args(["--model", "test-model", "--task-count", "1"]);
+            }
+            let output = command.output()?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if status {
+                ensure!(output.status.success(), "{stderr}");
+            } else {
+                ensure!(!output.status.success());
+                ensure!(stderr.contains(expected_error), "{stderr}");
+            }
+        }
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
