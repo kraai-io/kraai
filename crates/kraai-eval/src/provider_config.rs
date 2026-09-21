@@ -55,6 +55,9 @@ impl KraaiProviderConfigRequest {
             String::from("proxy_token_env"),
             DynamicValue::String(String::from(PROXY_TOKEN_ENV)),
         );
+        provider
+            .config
+            .insert(String::from("allow_http_proxy"), DynamicValue::Bool(true));
         let provider_id = provider.id.clone();
         let models = config
             .models
@@ -122,7 +125,7 @@ mod tests {
         let prepared = request.prepare()?;
         let digest = prepared.digest()?;
         let expected: ProviderManagerConfig = toml::from_str(
-            "[[provider]]\nid = 'original'\ntype = 'openai-codex'\nbase_url = 'http://eval-proxy.invalid/backend-api'\nproxy_token_env = 'KRAAI_EVAL_CODEX_PROXY_TOKEN'\n[[model]]\nid = 'model'\nprovider_id = 'original'\nname = ' Original Model '\n",
+            "[[provider]]\nid = 'original'\ntype = 'openai-codex'\nbase_url = 'http://eval-proxy.invalid/backend-api'\nproxy_token_env = 'KRAAI_EVAL_CODEX_PROXY_TOKEN'\nallow_http_proxy = true\n[[model]]\nid = 'model'\nprovider_id = 'original'\nname = ' Original Model '\n",
         )?;
         ensure!(
             digest

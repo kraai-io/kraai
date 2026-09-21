@@ -4,7 +4,7 @@ use clap::Args;
 use color_eyre::eyre::{Result, ensure};
 use kraai_eval::{AccountingSummary, PricingOptions, SuiteResult};
 
-#[derive(Debug, Clone, Default, Args)]
+#[derive(Debug, Clone, Default, Args, serde::Serialize)]
 pub(super) struct PricingArgs {
     #[arg(
         long,

@@ -57,11 +57,12 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
                     .join("auth.json"),
             ),
         )?),
-        client: build_codex_http_client(true, &base_url)?,
+        client: build_codex_http_client(true, false, &base_url)?,
         models: RwLock::new(DiscoveredModels::default()),
         model_configs: BTreeMap::new(),
         base_url,
         proxy_token: Some("test-token".into()),
+        allow_http_proxy: false,
     })
 }
 
@@ -93,7 +94,7 @@ fn backend_transport_validation_allows_https_and_only_loopback_http_proxies() {
         ("http://127.0.0.1.example.com/backend-api", false, false),
     ] {
         for (proxy_token, allowed) in [(false, subscription_allowed), (true, proxy_allowed)] {
-            assert_eq!(valid_backend_url(url, proxy_token), allowed, "{url}");
+            assert_eq!(valid_backend_url(url, proxy_token, false), allowed, "{url}");
             let mut config =
                 DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
             if proxy_token {
@@ -193,7 +194,7 @@ async fn subscription_redirect_policy_rejects_cross_origin_https_targets() -> Re
     ] {
         let (base_url, server) = redirect_server(target).await?;
         let client = streaming_http_client_builder()
-            .redirect(codex_redirect_policy(false, origin.clone()))
+            .redirect(codex_redirect_policy(false, false, origin.clone()))
             .build()?;
         let result = client
             .get(base_url)
@@ -222,7 +223,7 @@ async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<(
 
 #[tokio::test]
 async fn subscription_client_rejects_http_requests() -> Result<()> {
-    let result = build_codex_http_client(false, DEFAULT_CHATGPT_BACKEND_URL)?
+    let result = build_codex_http_client(false, false, DEFAULT_CHATGPT_BACKEND_URL)?
         .get("http://127.0.0.1:1/backend-api/codex/models")
         .send()
         .await;
@@ -342,4 +343,28 @@ async fn pricing_uses_discovered_base_model_for_reasoning_variants() -> Result<(
         ModelId::new("gpt-6-astra")
     );
     Ok(())
+}
+
+#[test]
+fn private_http_proxy_requires_explicit_opt_in_and_proxy_authentication() {
+    for address in ["192.168.1.10", "10.88.0.1", "169.254.1.2", "[fd00::1]"] {
+        let url = format!("http://{address}:1234/backend-api");
+        assert!(!valid_backend_url(&url, true, false));
+        assert!(!valid_backend_url(&url, false, true));
+        assert!(valid_backend_url(&url, true, true));
+        let mut config = DynamicConfig::from([
+            ("base_url".into(), DynamicValue::String(url)),
+            ("allow_http_proxy".into(), DynamicValue::Bool(true)),
+            (
+                "proxy_token_env".into(),
+                DynamicValue::String("TEST_PROXY_TOKEN".into()),
+            ),
+        ]);
+        assert!(OpenAiCodexFactory::validate_provider_config(&config).is_empty());
+        config.remove("proxy_token_env");
+        assert!(!OpenAiCodexFactory::validate_provider_config(&config).is_empty());
+    }
+    for url in ["http://example.com", "http://8.8.8.8", "http://0.0.0.0"] {
+        assert!(!valid_backend_url(url, true, true));
+    }
 }

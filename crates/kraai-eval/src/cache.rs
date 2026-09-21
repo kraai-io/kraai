@@ -188,7 +188,7 @@ fn hydrate_accounting(path: &Path, result: &mut RunResult) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn path_segment(value: &str, fallback: &str) -> String {
+pub fn path_segment(value: &str, fallback: &str) -> String {
     let mut segment = String::new();
     let mut previous_was_separator = false;
     for character in value.trim().chars().take(96) {
@@ -213,11 +213,21 @@ pub(crate) fn path_segment(value: &str, fallback: &str) -> String {
 }
 
 pub fn hash_file(path: &Path) -> Result<String> {
+    file_digest(path, true)
+}
+
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+    file_digest(path, false)
+}
+
+fn file_digest(path: &Path, prefix_length: bool) -> Result<String> {
     require_file(path)?;
     let mut file = fs::File::open(path)?;
     let length = file.metadata()?.len();
     let mut hasher = Sha256::new();
-    hasher.update(length.to_le_bytes());
+    if prefix_length {
+        hasher.update(length.to_le_bytes());
+    }
     let mut buffer = [0_u8; 8192];
     let mut bytes_read = 0_u64;
     loop {
@@ -235,7 +245,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
             .ok_or_else(|| color_eyre::eyre::eyre!("file read exceeded hash buffer"))?;
         hasher.update(chunk);
     }
-    if bytes_read != length {
+    if prefix_length && bytes_read != length {
         return Ok(hash_chunks(&[fs::read(path)?]));
     }
     Ok(finish_hash(hasher))
@@ -326,6 +336,18 @@ mod tests {
         ensure!(!temporary.exists());
         ensure!(fs::read(&output)? == b"replacement");
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_checksum_uses_standard_sha256() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("kraai-sha256-{}", ulid::Ulid::generate()));
+        fs::write(&path, b"abc")?;
+        let digest = sha256_file(&path)?;
+        let cached = hash_file(&path)?;
+        fs::remove_file(&path)?;
+        ensure!(digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        ensure!(digest != cached);
         Ok(())
     }
 

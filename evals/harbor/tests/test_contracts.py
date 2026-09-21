@@ -250,6 +250,10 @@ class DriverTests(Fixture):
             command[command.index("--include-task-name") + 1], "hello-world"
         )
 
+    def test_terminal_bench_four_uses_namespaced_harbor_task_names(self):
+        command = build_command(self.arguments(dataset="terminal-bench/terminal-bench@4.0.0", task_name=["session-window-debug"]))
+        self.assertEqual(command[command.index("--include-task-name") + 1], "terminal-bench/session-window-debug")
+
     def test_task_globs_and_unpinned_datasets_are_rejected(self):
         for changes in (
             {"task_name": ["*"]},
