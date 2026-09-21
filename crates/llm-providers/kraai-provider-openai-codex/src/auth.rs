@@ -440,7 +440,6 @@ impl OpenAiCodexAuthController {
         {
             let mut guard = self.inner.state.lock().await;
             guard.auth = None;
-            guard.pending = None;
             guard.error = Some(error);
         }
         delete_auth_file(&self.inner.config.auth_path)?;

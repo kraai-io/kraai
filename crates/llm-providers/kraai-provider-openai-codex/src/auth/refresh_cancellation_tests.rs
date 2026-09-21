@@ -1,7 +1,16 @@
 use super::*;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-async fn paused_rotating_server() -> (
+#[derive(Clone, Copy)]
+enum RefreshOutcome {
+    Rotated,
+    Unauthorized,
+    AccountChanged,
+}
+
+async fn paused_rotating_server(
+    first_outcome: RefreshOutcome,
+) -> (
     String,
     oneshot::Receiver<()>,
     oneshot::Sender<()>,
@@ -45,15 +54,26 @@ async fn paused_rotating_server() -> (
             let (status, body) = if first {
                 received.take().unwrap().send(()).unwrap();
                 released.take().unwrap().await.unwrap();
-                (
-                    "200 OK",
-                    serde_json::json!({
-                        "id_token": fake_jwt("refreshed@example.com", "pro", "workspace_123"),
-                        "access_token": "access-rotated",
-                        "refresh_token": "refresh-rotated",
-                    })
-                    .to_string(),
-                )
+                match first_outcome {
+                    RefreshOutcome::Unauthorized => {
+                        ("401 Unauthorized", String::from("refresh token expired"))
+                    }
+                    RefreshOutcome::Rotated | RefreshOutcome::AccountChanged => {
+                        let account_id = match first_outcome {
+                            RefreshOutcome::AccountChanged => "workspace_changed",
+                            _ => "workspace_123",
+                        };
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "id_token": fake_jwt("refreshed@example.com", "pro", account_id),
+                                "access_token": "access-rotated",
+                                "refresh_token": "refresh-rotated",
+                            })
+                            .to_string(),
+                        )
+                    }
+                }
             } else {
                 (
                     "401 Unauthorized",
@@ -84,7 +104,8 @@ async fn cancelling_a_refresh_caller_preserves_rotated_credentials() {
         &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
     )
     .unwrap();
-    let (issuer, received, release, requests, _server) = paused_rotating_server().await;
+    let (issuer, received, release, requests, _server) =
+        paused_rotating_server(RefreshOutcome::Rotated).await;
     let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
         return;
     };
@@ -127,7 +148,8 @@ async fn logout_after_cancelled_refresh_cannot_restore_credentials() {
         &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
     )
     .unwrap();
-    let (issuer, received, release, requests, _server) = paused_rotating_server().await;
+    let (issuer, received, release, requests, _server) =
+        paused_rotating_server(RefreshOutcome::Rotated).await;
     let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
         return;
     };
@@ -190,4 +212,90 @@ async fn cancelled_refresh_still_times_out_and_releases_the_file_lock() {
         result.unwrap().unwrap().state,
         OpenAiCodexLoginState::SignedOut
     );
+}
+
+async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
+    for login_state in [
+        OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            auth_url: String::from("https://example.invalid"),
+        }),
+        OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+            verification_url: String::from("https://example.invalid"),
+            user_code: String::from("ABCD"),
+        }),
+    ] {
+        for cancel_caller in [false, true] {
+            let path = temp_auth_path();
+            persist_auth_file(
+                &path,
+                &stored_auth("user@example.com", "pro", "workspace_123", unix_now()),
+            )
+            .unwrap();
+            let (issuer, received, release, requests, _server) =
+                paused_rotating_server(outcome).await;
+            let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
+                return;
+            };
+            let expected = controller.get_request_auth().await.unwrap();
+            let caller = {
+                let controller = controller.clone();
+                tokio::spawn(async move { controller.refresh_request_auth(&expected).await })
+            };
+            tokio::time::timeout(Duration::from_secs(5), received)
+                .await
+                .unwrap()
+                .unwrap();
+
+            let mut updates = controller.subscribe();
+            let (finish_login, login_finished) = oneshot::channel();
+            controller
+                .install_login_task(login_state.clone(), async move {
+                    login_finished.await.map_err(io::Error::other)
+                })
+                .await;
+            if cancel_caller {
+                caller.abort();
+            }
+            release.send(()).unwrap();
+            let status = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(5), caller)
+                .await
+                .unwrap();
+            if cancel_caller {
+                assert!(matches!(result, Err(error) if error.is_cancelled()));
+            } else {
+                assert!(result.unwrap().is_err());
+            }
+            assert_eq!(status.state, login_state);
+            assert!(load_auth_file(&path).unwrap().is_none());
+
+            let new_auth = stored_auth("new@example.com", "pro", "workspace_new", unix_now());
+            assert!(finish_login.send(new_auth.clone()).is_ok());
+            let status = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+            assert!(status.error.is_none());
+            let current = controller.get_request_auth().await.unwrap();
+            let persisted = load_auth_file(&path).unwrap().unwrap();
+            assert_eq!(current.generation, new_auth.generation);
+            assert_eq!(persisted.generation, new_auth.generation);
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn unauthorized_refresh_preserves_newer_login() {
+    refresh_failure_preserves_newer_logins(RefreshOutcome::Unauthorized).await;
+}
+
+#[tokio::test]
+async fn account_changed_refresh_preserves_newer_login() {
+    refresh_failure_preserves_newer_logins(RefreshOutcome::AccountChanged).await;
 }
