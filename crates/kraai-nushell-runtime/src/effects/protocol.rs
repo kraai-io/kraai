@@ -235,7 +235,7 @@ mod tests {
         }
 
         let execution_id = ScriptExecutionId::new("execution");
-        let secret = [7; 32];
+        let secret = rand::random::<[u8; 32]>();
         let payload = InvalidPayload;
         let expected = match serde_json::to_vec(&UnsignedFrame {
             execution_id: &execution_id,

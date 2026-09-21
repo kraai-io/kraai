@@ -145,10 +145,7 @@ async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Res
     assert!(sessions.get(&session_id).await?.unwrap().tip_id.is_none());
     let recovered = harness.runtime.recover_script_executions().await;
     let history = harness.handle.get_chat_history(session_id).await?;
-    assert!(
-        history.is_empty(),
-        "replayed an undone script result: {history:?}; recovery outcome: {recovered:?}"
-    );
+    assert!(history.is_empty(), "replayed an undone script result");
     recovered?;
     harness.shutdown().await;
     Ok(())
