@@ -101,10 +101,14 @@ fn rejects_relative_executable() {
 fn sandbox_denial_keywords_are_detected() {
     assert!(is_likely_sandbox_denied(
         Some(1),
-        "",
-        "Read-only file system"
+        b"",
+        b"Read-only file system"
     ));
-    assert!(!is_likely_sandbox_denied(Some(0), "", "permission denied"));
+    assert!(!is_likely_sandbox_denied(
+        Some(0),
+        b"",
+        b"permission denied"
+    ));
 }
 
 #[tokio::test]

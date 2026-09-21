@@ -113,6 +113,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
 }
 
 struct ControllerState {
+    status_sequence: u64,
     auth: Option<StoredAuth>,
     pending: Option<PendingLogin>,
     error: Option<String>,
@@ -156,6 +157,7 @@ impl OpenAiCodexAuthController {
             inner: std::sync::Arc::new(Inner {
                 client,
                 state: Mutex::new(ControllerState {
+                    status_sequence: 0,
                     auth,
                     pending: None,
                     error,
@@ -303,7 +305,7 @@ impl OpenAiCodexAuthController {
         expected_auth: &OpenAiCodexRequestAuth,
     ) -> io::Result<OpenAiCodexRequestAuth> {
         let _refresh_guard = self.inner.refresh_gate.lock().await;
-        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
 
         let disk_auth = load_auth_file(&self.inner.config.auth_path)?;
         let (old_auth, state_changed) = {
@@ -330,6 +332,22 @@ impl OpenAiCodexAuthController {
             return Ok(request_auth(&old_auth));
         }
 
+        let controller = self.clone();
+        let expected_auth = expected_auth.clone();
+        tokio::spawn(async move {
+            let result = controller.refresh_tokens(old_auth, &expected_auth).await;
+            drop(file_lock);
+            result
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
+    async fn refresh_tokens(
+        &self,
+        old_auth: StoredAuth,
+        expected_auth: &OpenAiCodexRequestAuth,
+    ) -> io::Result<OpenAiCodexRequestAuth> {
         let refresh_response = self
             .inner
             .client
@@ -403,22 +421,25 @@ impl OpenAiCodexAuthController {
         };
         let request_auth = request_auth(&stored);
 
-        persist_auth_file(&self.inner.config.auth_path, &stored)?;
-        {
-            let mut guard = self.inner.state.lock().await;
-            guard.auth = Some(stored);
-            guard.error = None;
-        }
+        self.persist_auth_locked(stored).await?;
         let _ = self.emit_status().await;
 
         Ok(request_auth)
+    }
+
+    async fn persist_auth_locked(&self, auth: StoredAuth) -> io::Result<()> {
+        let mut guard = self.inner.state.lock().await;
+        persist_auth_file(&self.inner.config.auth_path, &auth)?;
+        guard.auth = Some(auth);
+        guard.error = None;
+        drop(guard);
+        Ok(())
     }
 
     async fn clear_auth_with_error_locked(&self, error: String) -> io::Result<()> {
         {
             let mut guard = self.inner.state.lock().await;
             guard.auth = None;
-            guard.pending = None;
             guard.error = Some(error);
         }
         delete_auth_file(&self.inner.config.auth_path)?;
@@ -508,22 +529,19 @@ impl OpenAiCodexAuthController {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
         let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
-        persist_auth_file(&self.inner.config.auth_path, &auth)?;
-        let mut guard = self.inner.state.lock().await;
-        guard.auth = Some(auth);
-        guard.error = None;
-        drop(guard);
-        Ok(())
+        self.persist_auth_locked(auth).await
     }
 
     async fn snapshot_status(&self) -> OpenAiCodexAuthStatus {
-        let guard = self.inner.state.lock().await;
-        status_from_state(&guard)
+        let mut guard = self.inner.state.lock().await;
+        status_from_state(&mut guard)
     }
 
     async fn emit_status(&self) -> io::Result<OpenAiCodexAuthStatus> {
-        let status = self.snapshot_status().await;
+        let mut guard = self.inner.state.lock().await;
+        let status = status_from_state(&mut guard);
         let _ = self.inner.updates.send(status.clone());
+        drop(guard);
         Ok(status)
     }
 
@@ -539,7 +557,8 @@ impl OpenAiCodexAuthController {
     }
 }
 
-fn status_from_state(state: &ControllerState) -> OpenAiCodexAuthStatus {
+fn status_from_state(state: &mut ControllerState) -> OpenAiCodexAuthStatus {
+    state.status_sequence = state.status_sequence.saturating_add(1);
     let (login_state, email, plan_type, account_id, last_refresh_unix) =
         if let Some(pending) = &state.pending {
             (
@@ -577,6 +596,7 @@ fn status_from_state(state: &ControllerState) -> OpenAiCodexAuthStatus {
         };
 
     OpenAiCodexAuthStatus {
+        sequence: state.status_sequence,
         state: login_state,
         email,
         plan_type,

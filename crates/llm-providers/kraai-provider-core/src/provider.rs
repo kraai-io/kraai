@@ -4,7 +4,7 @@ use kraai_types::{ConversationItem, ModelId, ProviderId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ModelConfig;
-use crate::http_retry::ProviderRequestContext;
+use crate::request_context::ProviderRequestContext;
 use crate::stream::ProviderStreamEvent;
 
 #[async_trait::async_trait]

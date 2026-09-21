@@ -12,7 +12,7 @@ declare_kraai_command! {
     /// Removes files from fresh context injection on subsequent model turns.
     pub struct CloseFilesCommand;
     metadata: kraai_command_catalog::CLOSE_FILES;
-    signature: Signature::build("kraai-close-files")
+    signature: Signature::build(Self::METADATA.name)
         .rest(
             "paths",
             SyntaxShape::String,

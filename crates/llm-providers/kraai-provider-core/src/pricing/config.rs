@@ -98,8 +98,8 @@ pub fn validate_pricing_config(config: &DynamicConfig) -> Vec<ValidationError> {
 }
 
 pub fn pricing_fields(model: bool) -> Vec<FieldDefinition> {
-    let fields: Vec<(&str, &str)> = if model {
-        vec![
+    let fields: &[(&str, &str)] = if model {
+        &[
             ("price_input", "Input USD / million tokens"),
             ("price_output", "Output USD / million tokens"),
             ("price_cache_read", "Cache read USD / million tokens"),
@@ -107,9 +107,9 @@ pub fn pricing_fields(model: bool) -> Vec<FieldDefinition> {
             ("price_reasoning", "Reasoning USD / million tokens"),
         ]
     } else {
-        vec![("pricing_provider", "models.dev provider ID")]
+        &[("pricing_provider", "models.dev provider ID")]
     };
-    fields.into_iter().map(|(key, label)| FieldDefinition {
+    fields.iter().map(|&(key, label)| FieldDefinition {
         key: key.into(), label: label.into(), value_kind: FieldValueKind::String,
         required: false, secret: false, default_value: None,
         help_text: Some(if model { "Decimal USD rate, for example 2.50. Input and output are both required. Missing cache rates leave cached requests unpriced." } else { "Optional provider ID for custom endpoints. Otherwise match the API base URL." }.into()),

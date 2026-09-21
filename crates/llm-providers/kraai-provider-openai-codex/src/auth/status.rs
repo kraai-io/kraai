@@ -27,14 +27,28 @@ pub enum OpenAiCodexLoginState {
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Serialize, Deserialize)]
 pub struct OpenAiCodexAuthStatus {
+    #[serde(skip)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub sequence: u64,
     pub state: OpenAiCodexLoginState,
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub account_id: Option<String>,
     pub last_refresh_unix: Option<u64>,
     pub error: Option<String>,
+}
+
+impl PartialEq for OpenAiCodexAuthStatus {
+    fn eq(&self, other: &Self) -> bool {
+        self.state == other.state
+            && self.email == other.email
+            && self.plan_type == other.plan_type
+            && self.account_id == other.account_id
+            && self.last_refresh_unix == other.last_refresh_unix
+            && self.error == other.error
+    }
 }
 
 #[cfg(test)]
@@ -68,6 +82,7 @@ mod tests {
             ),
         ] {
             let status = OpenAiCodexAuthStatus {
+                sequence: 42,
                 state,
                 email: Some(String::from("user@example.com")),
                 plan_type: None,
@@ -85,6 +100,9 @@ mod tests {
                 "error": null,
             });
             assert_eq!(serialized, expected);
+            let mut later = status.clone();
+            later.sequence += 1;
+            assert_eq!(status, later);
             assert_eq!(
                 serde_json::from_value::<OpenAiCodexAuthStatus>(serialized)?,
                 status

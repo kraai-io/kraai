@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }

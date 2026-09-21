@@ -258,9 +258,14 @@ impl Provider for OpenAiCodexProvider {
         self.models.read().await.list(&self.model_configs)
     }
 
+    async fn get_model(&self, model_id: &ModelId) -> Option<Model> {
+        self.models.read().await.get(model_id, &self.model_configs)
+    }
+
     async fn cache_models(&self) -> Result<()> {
         let models = self.fetch_models().await?;
-        *self.models.write().await = models;
+        let previous = std::mem::replace(&mut *self.models.write().await, models);
+        drop(previous);
         Ok(())
     }
 
@@ -331,29 +336,23 @@ impl OpenAiCodexProvider {
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
-        if provider_request.script_tool.is_none() {
-            return Err(eyre!("OpenAI Codex request omitted the Kraai script tool"));
-        }
+        let tool = provider_request
+            .script_tool
+            .ok_or_else(|| eyre!("OpenAI Codex request omitted the Kraai script tool"))?;
         let normalized = normalize_conversation(provider_request.messages);
         let resolved_model = self.models.read().await.resolve(model_id)?;
-        let tools: Vec<ResponsesCustomTool> = provider_request
-            .script_tool
-            .into_iter()
-            .map(|tool| ResponsesCustomTool {
-                kind: "custom",
-                name: tool.name,
-                description: tool.description,
-            })
-            .collect();
-        let has_script_tool = !tools.is_empty();
         let request = ResponsesRequest {
             model: resolved_model.api_model,
             instructions: normalized.instructions,
             input: normalized.input,
             reasoning: resolved_model.reasoning,
-            tools,
-            tool_choice: has_script_tool.then_some("auto"),
-            parallel_tool_calls: has_script_tool.then_some(false),
+            tools: [ResponsesCustomTool {
+                kind: "custom",
+                name: tool.name,
+                description: tool.description,
+            }],
+            tool_choice: Some("auto"),
+            parallel_tool_calls: Some(false),
             stream: true,
             store: false,
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),

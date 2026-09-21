@@ -1,5 +1,6 @@
+use std::fmt::Write as _;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail};
@@ -94,8 +95,11 @@ impl ResultStore {
             let output = path.with_file_name("request-accounting.json");
             let temporary =
                 path.with_file_name(format!("request-accounting-{}.tmp", ulid::Ulid::generate()));
-            fs::write(&temporary, serde_json::to_vec_pretty(&accounting)?)?;
-            fs::rename(&temporary, &output).wrap_err("replace cached request accounting")?;
+            replace_cached_accounting(
+                &temporary,
+                &output,
+                &serde_json::to_vec_pretty(&accounting)?,
+            )?;
             proxy.accounting = Some(accounting);
             proxy.accounting_error = None;
         } else {
@@ -142,6 +146,22 @@ impl ResultStore {
         fs::rename(staging, &self.final_dir).wrap_err("atomically commit evaluation result")?;
         Ok(())
     }
+}
+
+fn replace_cached_accounting(temporary: &Path, output: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)?;
+    let written = file.write_all(contents);
+    drop(file);
+    let result = written
+        .map_err(Into::into)
+        .and_then(|()| fs::rename(temporary, output).wrap_err("replace cached request accounting"));
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 pub fn load_run_result(path: &Path) -> Result<RunResult> {
@@ -246,17 +266,68 @@ pub(crate) fn hash_chunks(chunks: &[impl AsRef<[u8]>]) -> String {
 }
 
 fn finish_hash(hasher: Sha256) -> String {
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    encode_hex(&hasher.finalize())
+}
+
+pub(crate) fn encode_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use color_eyre::eyre::ensure;
+
+    #[test]
+    fn cached_accounting_preserves_existing_temporary_files() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-accounting-collision-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let temporary = root.join("accounting.tmp");
+        let output = root.join("accounting.json");
+        fs::write(&temporary, b"another writer")?;
+        fs::write(&output, b"original")?;
+        let result = replace_cached_accounting(&temporary, &output, b"replacement");
+        ensure!(result.is_err());
+        ensure!(fs::read(&temporary)? == b"another writer");
+        ensure!(fs::read(&output)? == b"original");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn cached_accounting_cleans_failed_publication_and_replaces_successfully() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-accounting-replace-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let temporary = root.join("accounting.tmp");
+        let output = root.join("accounting.json");
+        fs::create_dir(&output)?;
+        fs::write(output.join("retained"), b"original")?;
+        let result = replace_cached_accounting(&temporary, &output, b"replacement");
+        ensure!(
+            result.err().map(|error| error.to_string()).as_deref()
+                == Some("replace cached request accounting"),
+            "publication error lost its context"
+        );
+        ensure!(!temporary.exists());
+        ensure!(fs::read(output.join("retained"))? == b"original");
+        fs::remove_dir_all(&output)?;
+        fs::write(&output, b"original")?;
+        replace_cached_accounting(&temporary, &output, b"replacement")?;
+        ensure!(!temporary.exists());
+        ensure!(fs::read(&output)? == b"replacement");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn streamed_file_hash_preserves_length_prefixed_identity() -> Result<()> {

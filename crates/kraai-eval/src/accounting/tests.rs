@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::*;
+use crate::UsageMetrics;
 use color_eyre::eyre::{Result, ensure};
 
 fn fixture() -> Result<(std::path::PathBuf, PricingOptions)> {
@@ -166,6 +167,8 @@ fn frozen_pricing_survives_source_configuration_removal() -> Result<()> {
     let (root, options) = fixture()?;
     let frozen = options.freeze()?;
     fs::remove_file(root.join("prices.toml"))?;
+    let frozen = frozen.clone().freeze()?;
+    frozen.validate()?;
     let path = root.join("proxy.events.jsonl");
     fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
     let result = analyze_requests(&path, 1, &frozen)?;

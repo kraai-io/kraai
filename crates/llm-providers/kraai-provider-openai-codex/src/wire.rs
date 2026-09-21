@@ -9,8 +9,7 @@ pub struct ResponsesRequest {
     pub input: Vec<ResponsesRequestItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ResponsesReasoning>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<ResponsesCustomTool>,
+    pub tools: [ResponsesCustomTool; 1],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +143,14 @@ mod tests {
     use crate::messages::ResponsesRequestItem;
     use serde_json::json;
 
+    fn script_tool() -> ResponsesCustomTool {
+        ResponsesCustomTool {
+            kind: "custom",
+            name: String::from("kraai_nushell"),
+            description: String::from("Execute Nushell"),
+        }
+    }
+
     #[test]
     fn responses_request_serializes_prompt_cache_key_when_present() {
         let request = ResponsesRequest {
@@ -151,7 +158,7 @@ mod tests {
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
-            tools: Vec::new(),
+            tools: [script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
             stream: true,
@@ -171,7 +178,7 @@ mod tests {
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
-            tools: Vec::new(),
+            tools: [script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
             stream: true,
@@ -182,7 +189,6 @@ mod tests {
         let serialized = serde_json::to_value(request).expect("serialized request");
 
         assert!(serialized.get("prompt_cache_key").is_none());
-        assert!(serialized.get("tools").is_none());
         assert!(serialized.get("tool_choice").is_none());
         assert!(serialized.get("parallel_tool_calls").is_none());
     }
@@ -197,11 +203,7 @@ mod tests {
                 effort: "high".to_string(),
                 context: "current_turn",
             }),
-            tools: vec![ResponsesCustomTool {
-                kind: "custom",
-                name: "kraai_nushell".to_string(),
-                description: "Execute Nushell".to_string(),
-            }],
+            tools: [script_tool()],
             tool_choice: Some("auto"),
             parallel_tool_calls: Some(false),
             stream: true,
@@ -211,6 +213,15 @@ mod tests {
 
         let serialized = serde_json::to_value(request).expect("serialized request");
 
+        assert_eq!(
+            serialized,
+            json!({
+                "model": "gpt-5.6-sol", "instructions": "instructions", "input": [],
+                "reasoning": {"effort": "high", "context": "current_turn"},
+                "tools": [{"type": "custom", "name": "kraai_nushell", "description": "Execute Nushell"}],
+                "tool_choice": "auto", "parallel_tool_calls": false, "stream": true, "store": false,
+            })
+        );
         assert_eq!(serialized["tools"].as_array().map(Vec::len), Some(1));
         assert_eq!(
             serialized["tools"][0],

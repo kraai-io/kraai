@@ -61,11 +61,7 @@ impl<'a> ChatHistory<'a> {
         let mut wrapped = Vec::new();
         let mut first_visual_line = true;
 
-        let source_lines: Vec<&str> = if text.is_empty() {
-            vec![""]
-        } else {
-            text.lines().collect()
-        };
+        let source_lines = text.lines().chain(text.is_empty().then_some(""));
 
         for source_line in source_lines {
             let mut remaining = source_line;
@@ -163,24 +159,16 @@ impl<'a> ChatHistory<'a> {
             return;
         }
 
-        let mut styled_graphemes = Vec::new();
-        for span in spans {
-            for grapheme in
+        let mut styled_graphemes = spans
+            .iter()
+            .flat_map(|span| {
                 unicode_segmentation::UnicodeSegmentation::graphemes(span.text.as_str(), true)
-            {
-                styled_graphemes.push((grapheme, span.style));
-            }
-        }
-
-        let mut idx = 0usize;
-        let total = styled_graphemes.len();
+                    .map(move |grapheme| (grapheme, span.style))
+            })
+            .peekable();
         let mut first_visual_line = true;
 
         loop {
-            if idx >= total && total > 0 {
-                break;
-            }
-
             let prefix = if first_visual_line {
                 first_prefix
             } else {
@@ -205,42 +193,33 @@ impl<'a> ChatHistory<'a> {
                 break;
             }
 
-            let mut take_count = 0;
+            let mut consumed = false;
             let mut used_width = 0;
-            while idx + take_count < total {
-                let Some((grapheme, _)) = styled_graphemes.get(idx + take_count) else {
-                    break;
-                };
+            while let Some(&(grapheme, style)) = styled_graphemes.peek() {
                 let grapheme_width = display_width(grapheme);
                 if used_width + grapheme_width > available {
                     break;
                 }
                 used_width += grapheme_width;
-                take_count += 1;
+                styled_graphemes.next();
+                consumed = true;
+                if let Some(last) = line_spans.last_mut()
+                    && last.style == style
+                {
+                    last.text.push_str(grapheme);
+                    continue;
+                }
+                line_spans.push(RenderedSpan {
+                    text: grapheme.to_string(),
+                    style,
+                });
             }
 
-            if take_count > 0 {
-                for (grapheme, style) in styled_graphemes
-                    .get(idx..idx + take_count)
-                    .unwrap_or_default()
-                {
-                    if let Some(last) = line_spans.last_mut()
-                        && last.style == *style
-                    {
-                        last.text.push_str(grapheme);
-                        continue;
-                    }
-                    line_spans.push(RenderedSpan {
-                        text: (*grapheme).to_string(),
-                        style: *style,
-                    });
-                }
-                idx += take_count;
-            } else if idx < total {
+            if !consumed {
                 // A grapheme wider than the remaining line cannot be rendered
                 // without exceeding the viewport. Consume it while retaining
                 // the fitting prefix so the visible view matches the buffer.
-                idx += 1;
+                styled_graphemes.next();
             }
 
             lines.push(RenderedLine {
@@ -249,7 +228,7 @@ impl<'a> ChatHistory<'a> {
             });
 
             first_visual_line = false;
-            if total == 0 || idx >= total {
+            if styled_graphemes.peek().is_none() {
                 break;
             }
         }
@@ -636,6 +615,62 @@ mod tests {
         let wrapped = ChatHistory::wrap_with_prefix("你好你好", 4, "", "");
         assert_eq!(wrapped, ["你好", "你好"]);
         assert!(wrapped.iter().all(|line| display_width(line) <= 4));
+    }
+
+    #[test]
+    fn wraps_styled_graphemes_across_span_and_line_boundaries() {
+        let plain = Style::default();
+        let emphasis = plain.fg(Color::Yellow);
+        let spans = [
+            RenderedSpan {
+                text: String::from("ab"),
+                style: plain,
+            },
+            RenderedSpan {
+                text: String::new(),
+                style: emphasis,
+            },
+            RenderedSpan {
+                text: String::from("你e\u{301}"),
+                style: emphasis,
+            },
+            RenderedSpan {
+                text: String::from("👩‍💻z"),
+                style: plain,
+            },
+        ];
+        let mut lines = Vec::new();
+        ChatHistory::push_wrapped_spans(&mut lines, &spans, 4, plain, ">", " ");
+        assert_eq!(
+            lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
+            [">ab", " 你e\u{301}", " 👩‍💻z"],
+        );
+        assert_eq!(lines[1].spans[1].style, emphasis);
+        assert_eq!(lines[1].spans[1].text, "你e\u{301}");
+        assert_eq!(lines[2].spans.len(), 1);
+    }
+
+    #[test]
+    fn styled_wrapping_retains_empty_prefix_and_overwide_grapheme_behavior() {
+        let style = Style::default();
+        let spans = [RenderedSpan {
+            text: String::from("你a"),
+            style,
+        }];
+        for (width, expected) in [(0, vec![]), (1, vec![">"]), (2, vec![">", " a"])] {
+            let mut lines = Vec::new();
+            ChatHistory::push_wrapped_spans(&mut lines, &spans, width, style, ">", " ");
+            assert_eq!(
+                lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let mut empty = Vec::new();
+        ChatHistory::push_wrapped_spans(&mut empty, &[], 3, style, ">", " ");
+        assert_eq!(
+            empty.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
+            [">"]
+        );
     }
 
     #[test]

@@ -38,10 +38,11 @@ impl<'a> TextInput<'a> {
         }
     }
 
+    #[cfg(test)]
     fn wrap_text(content: &str, max_width: usize) -> Vec<String> {
         Self::wrap_segments(content, max_width)
             .into_iter()
-            .map(|segment| segment.text)
+            .map(|segment| segment.text(content))
             .collect()
     }
 
@@ -88,9 +89,10 @@ impl<'a> TextInput<'a> {
     fn wrap_segments(content: &str, max_width: usize) -> Vec<WrappedSegment> {
         if max_width == 0 {
             return vec![WrappedSegment {
-                text: String::new(),
+                prefix: "",
                 start: 0,
                 end: 0,
+                rendered_end: 0,
             }];
         }
 
@@ -111,15 +113,20 @@ impl<'a> TextInput<'a> {
 
             if source_line.is_empty() {
                 wrapped.push(WrappedSegment {
-                    text: prefix.to_string(),
+                    prefix,
                     start: line_start,
                     end: line_start,
+                    rendered_end: line_start,
                 });
             } else if available == 0 {
                 wrapped.push(WrappedSegment {
-                    text: prefix.chars().take(max_width).collect(),
+                    prefix: prefix
+                        .char_indices()
+                        .nth(max_width)
+                        .map_or(prefix, |(end, _)| &prefix[..end]),
                     start: line_start,
                     end: line_start,
+                    rendered_end: line_start,
                 });
             } else {
                 let mut segment_start = line_start;
@@ -130,7 +137,6 @@ impl<'a> TextInput<'a> {
                     if grapheme_width > available {
                         if segment_start < grapheme_start {
                             wrapped.push(wrapped_segment(
-                                content,
                                 segment_start,
                                 grapheme_start,
                                 grapheme_start,
@@ -141,7 +147,6 @@ impl<'a> TextInput<'a> {
 
                         let segment_end = grapheme_start + grapheme.len();
                         wrapped.push(wrapped_segment(
-                            content,
                             grapheme_start,
                             segment_end,
                             grapheme_start,
@@ -156,7 +161,6 @@ impl<'a> TextInput<'a> {
                     if segment_width > 0 && segment_width + grapheme_width > available {
                         let segment_end = grapheme_start;
                         wrapped.push(wrapped_segment(
-                            content,
                             segment_start,
                             segment_end,
                             segment_end,
@@ -171,7 +175,6 @@ impl<'a> TextInput<'a> {
 
                 if segment_start < line_end {
                     wrapped.push(wrapped_segment(
-                        content,
                         segment_start,
                         line_end,
                         line_end,
@@ -193,9 +196,10 @@ impl<'a> TextInput<'a> {
 
         if wrapped.is_empty() {
             wrapped.push(WrappedSegment {
-                text: PROMPT.to_string(),
+                prefix: PROMPT,
                 start: 0,
                 end: 0,
+                rendered_end: 0,
             });
         }
 
@@ -204,14 +208,14 @@ impl<'a> TextInput<'a> {
 
     pub fn get_height(&self, max_width: u16) -> u16 {
         let content_width = max_width.saturating_sub(H_PADDING * 2) as usize;
-        (Self::wrap_text(&self.input, content_width)
+        (Self::wrap_segments(&self.input, content_width)
             .len()
             .max(1)
             .min(u16::MAX as usize) as u16)
             .saturating_add(V_PADDING * 2)
     }
 
-    fn viewport(&self, area: Rect) -> (Vec<String>, usize, usize, usize) {
+    fn viewport(&self, area: Rect) -> (Vec<WrappedSegment>, usize, usize, usize) {
         let width = area.width.saturating_sub(H_PADDING * 2) as usize;
         let segments = Self::wrap_segments(&self.input, width);
         let row = segments
@@ -236,12 +240,7 @@ impl<'a> TextInput<'a> {
             .unwrap_or(0);
         let visible = area.height.saturating_sub(V_PADDING * 2).max(1) as usize;
         let offset = row.saturating_sub(visible.saturating_sub(1));
-        (
-            segments.into_iter().map(|segment| segment.text).collect(),
-            offset,
-            row,
-            column,
-        )
+        (segments, offset, row, column)
     }
 
     pub fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
@@ -275,13 +274,13 @@ impl<'a> Widget for TextInput<'a> {
         }
         let (lines, offset, _, _) = self.viewport(area);
         let visible = area.height.saturating_sub(V_PADDING * 2).max(1) as usize;
-        for (i, line) in lines.iter().skip(offset).take(visible).enumerate() {
+        for (i, segment) in lines.iter().skip(offset).take(visible).enumerate() {
             let y = area.y + V_PADDING.min(area.height.saturating_sub(1)) + i as u16;
             if y < area.y + area.height {
                 buf.set_stringn(
                     area.x + H_PADDING,
                     y,
-                    line,
+                    segment.text(&self.input),
                     area.width.saturating_sub(H_PADDING * 2) as usize,
                     INPUT_STYLE,
                 );
@@ -292,18 +291,24 @@ impl<'a> Widget for TextInput<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WrappedSegment {
-    text: String,
+    prefix: &'static str,
     start: usize,
     end: usize,
+    rendered_end: usize,
+}
+
+impl WrappedSegment {
+    fn text(&self, content: &str) -> String {
+        format!("{}{}", self.prefix, &content[self.start..self.rendered_end])
+    }
 }
 
 fn wrapped_segment(
-    content: &str,
     start: usize,
     end: usize,
     rendered_end: usize,
     line_start: usize,
-    first_prefix: &str,
+    first_prefix: &'static str,
 ) -> WrappedSegment {
     let prefix = if start == line_start {
         first_prefix
@@ -311,9 +316,10 @@ fn wrapped_segment(
         CONTINUATION_PREFIX
     };
     WrappedSegment {
-        text: format!("{prefix}{}", &content[start..rendered_end]),
+        prefix,
         start,
         end,
+        rendered_end,
     }
 }
 
@@ -412,5 +418,32 @@ mod tests {
 
         assert!(navigation.can_move_down);
         assert_eq!(navigation.cursor_below, input.len());
+    }
+
+    #[test]
+    fn multiline_layout_preserves_blank_lines_and_cursor_viewport() {
+        let input = "a\n\n你e\u{301}👩‍💻\n";
+        assert_eq!(
+            TextInput::wrap_text(input, 6),
+            ["❯ a", "  ", "  你e\u{301}", "  👩‍💻", "  "],
+        );
+        let area = Rect::new(2, 3, 8, 4);
+        let widget = TextInput::new(input, input.len());
+        assert_eq!(widget.get_height(area.width), 7);
+        assert_eq!(widget.get_cursor_position(area), (5, 5));
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        assert_eq!(buffer[(5, 4)].symbol(), "👩‍💻");
+        assert_eq!(buffer[(5, 5)].symbol(), " ");
+    }
+
+    #[test]
+    fn narrow_layout_preserves_prefixes_and_skips_overwide_graphemes() {
+        let input = "你a你b";
+        assert_eq!(TextInput::wrap_text(input, 0), [""]);
+        assert_eq!(TextInput::wrap_text(input, 1), ["❯"]);
+        assert_eq!(TextInput::wrap_text(input, 2), ["❯ "]);
+        assert_eq!(TextInput::wrap_text(input, 3), ["❯ ", "  a", "  ", "  b"]);
+        assert_eq!(TextInput::wrap_text("\na\n", 1), ["❯ ", " ", "  "]);
     }
 }

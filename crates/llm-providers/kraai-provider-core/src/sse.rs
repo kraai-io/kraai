@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -30,8 +32,7 @@ where
     B: AsRef<[u8]>,
 {
     let mut buffer = Vec::new();
-    let mut event_lines: Vec<String> = Vec::new();
-    let mut event_bytes = 0_usize;
+    let mut event_data = None;
 
     loop {
         let chunk = tokio::select! {
@@ -49,13 +50,18 @@ where
             }
         };
 
-        buffer.extend_from_slice(chunk.as_ref());
+        let chunk = chunk.as_ref();
+        let scanned = buffer.len();
+        buffer.extend_from_slice(chunk);
 
         let mut consumed = 0;
-        for line in buffer.split_inclusive(|byte| *byte == b'\n') {
-            if !line.ends_with(b"\n") {
-                break;
+        let mut remaining = buffer.as_slice();
+        for (offset, byte) in chunk.iter().enumerate() {
+            if *byte != b'\n' {
+                continue;
             }
+            let line_end = scanned + offset + 1;
+            let (line, tail) = remaining.split_at(line_end - consumed);
             if line.len() - 1 > MAX_SSE_EVENT_BYTES {
                 let _ = tx
                     .send(Err(eyre!(
@@ -64,8 +70,9 @@ where
                     .await;
                 return;
             }
-            consumed += line.len();
-            match process_line(&tx, line.to_vec(), &mut event_lines, &mut event_bytes).await {
+            consumed = line_end;
+            remaining = tail;
+            match process_line(&tx, line, &mut event_data).await {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {
@@ -74,7 +81,9 @@ where
                 }
             }
         }
-        drop(buffer.drain(..consumed));
+        if consumed != 0 {
+            drop(buffer.drain(..consumed));
+        }
 
         if buffer.len() > MAX_SSE_EVENT_BYTES {
             let _ = tx
@@ -87,7 +96,7 @@ where
     }
 
     if !buffer.is_empty() {
-        match process_line(&tx, buffer, &mut event_lines, &mut event_bytes).await {
+        match process_line(&tx, &buffer, &mut event_data).await {
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => {
@@ -97,56 +106,53 @@ where
         }
     }
 
-    let _ = flush_event(&tx, &mut event_lines).await;
+    let _ = flush_event(&tx, &mut event_data).await;
 }
 
 async fn process_line(
     tx: &mpsc::Sender<Result<SseEvent>>,
-    mut line: Vec<u8>,
-    event_lines: &mut Vec<String>,
-    event_bytes: &mut usize,
+    line: &[u8],
+    event_data: &mut Option<String>,
 ) -> Result<bool> {
-    if matches!(line.last(), Some(b'\n')) {
-        line.pop();
-    }
-    if matches!(line.last(), Some(b'\r')) {
-        line.pop();
-    }
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
 
     if line.is_empty() {
-        let result = flush_event(tx, event_lines).await;
-        if result.is_ok() {
-            *event_bytes = 0;
-        }
-        return result;
+        return flush_event(tx, event_data).await;
     }
 
-    let line = String::from_utf8(line).map_err(|error| eyre!(error))?;
+    let line = std::str::from_utf8(line)
+        .map(Cow::Borrowed)
+        .or_else(|_error| String::from_utf8(line.to_vec()).map(Cow::Owned))
+        .map_err(|error| eyre!(error))?;
     if let Some(data) = line.strip_prefix("data:") {
         let data = data.trim_start();
-        *event_bytes = event_bytes
-            .saturating_add(usize::from(!event_lines.is_empty()))
+        let event_bytes = event_data
+            .as_ref()
+            .map_or(0, |payload| payload.len().saturating_add(1))
             .saturating_add(data.len());
-        if *event_bytes > MAX_SSE_EVENT_BYTES {
+        if event_bytes > MAX_SSE_EVENT_BYTES {
             return Err(eyre!(
                 "SSE event exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"
             ));
         }
-        event_lines.push(data.to_string());
+        if let Some(payload) = event_data {
+            payload.push('\n');
+            payload.push_str(data);
+        } else {
+            *event_data = Some(data.to_string());
+        }
     }
     Ok(false)
 }
 
 async fn flush_event(
     tx: &mpsc::Sender<Result<SseEvent>>,
-    event_lines: &mut Vec<String>,
+    event_data: &mut Option<String>,
 ) -> Result<bool> {
-    if event_lines.is_empty() {
+    let Some(payload) = event_data.take() else {
         return Ok(false);
-    }
-
-    let payload = event_lines.join("\n");
-    event_lines.clear();
+    };
 
     if payload == "[DONE]" {
         tx.send(Ok(SseEvent::Done))
@@ -174,6 +180,134 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
     use std::time::Duration;
+
+    async fn collect_chunks(payload: &[u8], chunk_size: usize) -> Vec<Result<SseEvent>> {
+        let (tx, mut rx) = mpsc::channel(16);
+        let chunks = payload.chunks(chunk_size).map(Ok::<_, reqwest::Error>);
+        forward_sse_events(stream::iter(chunks), tx).await;
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn fragmented_empty_data_and_whitespace_keep_event_boundaries() -> Result<()> {
+        let payload = "\n: keepalive\r\ndata:\n\ndata:\ndata:\n\n\
+            data: \u{2003}\t hello  \r\nignored: value\n\ndata: final\r";
+        for chunk_size in 1..=payload.len() {
+            let events = collect_chunks(payload.as_bytes(), chunk_size)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                events,
+                vec![
+                    SseEvent::Data(String::new()),
+                    SseEvent::Data(String::from("\n")),
+                    SseEvent::Data(String::from("hello  ")),
+                    SseEvent::Data(String::from("final")),
+                ],
+                "chunk size {chunk_size}",
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn done_discards_invalid_and_oversized_trailing_data() -> Result<()> {
+        let mut payload = b"data: first\n\ndata: [DONE]\n\n".to_vec();
+        payload.extend(std::iter::repeat_n(0xff, MAX_SSE_EVENT_BYTES + 1));
+        for chunk_size in [1, 4096, payload.len()] {
+            let events = collect_chunks(&payload, chunk_size)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                events,
+                vec![SseEvent::Data(String::from("first")), SseEvent::Done],
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_keeps_original_error_bytes_after_line_ending_removal() {
+        for ending in [b"\r\n".as_slice(), b"\r", b""] {
+            let mut payload = b": invalid \xff".to_vec();
+            payload.extend_from_slice(ending);
+            for chunk_size in 1..=payload.len() {
+                let events = collect_chunks(&payload, chunk_size).await;
+                assert_eq!(events.len(), 1);
+                let error = events
+                    .first()
+                    .expect("one error")
+                    .as_ref()
+                    .expect_err("invalid UTF-8 should fail");
+                let error = error
+                    .downcast_ref::<std::string::FromUtf8Error>()
+                    .expect("original owned UTF-8 error type");
+                assert_eq!(error.as_bytes(), b": invalid \xff");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn line_limit_counts_carriage_return_and_excludes_newline() -> Result<()> {
+        let data = "x".repeat(MAX_SSE_EVENT_BYTES - "data:".len());
+        for ending in ["", "\n", "\r\n"] {
+            let payload = format!("data:{data}{ending}");
+            for chunk_size in [7, 4096, payload.len()] {
+                let mut events = collect_chunks(payload.as_bytes(), chunk_size).await;
+                assert_eq!(events.len(), 1);
+                let event = events.pop().expect("one event");
+                if ending == "\r\n" {
+                    assert_eq!(
+                        event.expect_err("CR exceeds line limit").to_string(),
+                        format!("SSE line exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"),
+                    );
+                } else {
+                    assert_eq!(event?, SseEvent::Data(data.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiline_limit_counts_separators_and_resets_after_dispatch() -> Result<()> {
+        let first = "x".repeat(MAX_SSE_EVENT_BYTES / 2);
+        let second = "y".repeat(MAX_SSE_EVENT_BYTES - first.len() - 1);
+        for extra in ["", "z"] {
+            let payload = format!("data:{first}\ndata:{second}{extra}\n\ndata:\n\n");
+            for chunk_size in [31, 4096, payload.len()] {
+                let events = collect_chunks(payload.as_bytes(), chunk_size).await;
+                if extra.is_empty() {
+                    let events = events.into_iter().collect::<Result<Vec<_>>>()?;
+                    assert_eq!(
+                        events,
+                        vec![
+                            SseEvent::Data(format!("{first}\n{second}")),
+                            SseEvent::Data(String::new()),
+                        ],
+                    );
+                } else {
+                    assert_eq!(events.len(), 1);
+                    assert_eq!(
+                        events
+                            .into_iter()
+                            .next()
+                            .expect("one error")
+                            .expect_err("separator exceeds event limit")
+                            .to_string(),
+                        format!("SSE event exceeds the {MAX_SSE_EVENT_BYTES}-byte limit"),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn dropping_receiver_releases_pending_transport() -> Result<()> {

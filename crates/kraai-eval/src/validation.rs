@@ -71,7 +71,7 @@ pub fn validate_task(path: &Path) -> Result<TaskValidation> {
                     .map(|dependencies| dependencies.home.clone()),
                 metrics_output: None,
                 script_executions_dir: None,
-                resource_limits: Some(crate::resource_limits(task)),
+                resource_limits: Some(crate::runner::resource_limits(task)),
             })?);
         }
         Ok(outcomes)
@@ -122,10 +122,10 @@ impl PreparedValidation {
         let workspace = self.root.0.join(name);
         copy_tree(&self.base, &workspace)?;
         for patch in patches {
-            crate::apply_patch(&workspace, &resolve_private_path(&self.task_dir, patch)?)?;
+            crate::runner::apply_patch(&workspace, &resolve_private_path(&self.task_dir, patch)?)?;
         }
         if let Some(patch) = &self.task.grader.hidden_patch {
-            crate::apply_patch(&workspace, &resolve_private_path(&self.task_dir, patch)?)?;
+            crate::runner::apply_patch(&workspace, &resolve_private_path(&self.task_dir, patch)?)?;
         }
         Ok(workspace)
     }

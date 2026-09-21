@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use kraai_sandbox::{ExecutionOutput, LaunchPlan, OutputEvent, PrivateTempConfig};
@@ -78,6 +77,7 @@ pub async fn execute(
         )))
     })?;
     let execution_id = plan.execution_id.clone();
+    let timeout = plan.timeout;
     let secret = rand::random::<[u8; 32]>();
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
@@ -126,14 +126,15 @@ pub async fn execute(
     launch.execution_started = Some(execution_rx);
 
     let effect_execution_id = execution_id.clone();
-    let transport_connected = Arc::new(AtomicBool::new(false));
-    let connected_for_task = transport_connected.clone();
+    let execution_started = Arc::new(OnceLock::new());
+    let started_for_task = execution_started.clone();
     let mut effect_task = AbortOnDropHandle::new(tokio::spawn(async move {
         let transport = transport::accept(listener, spawned_rx)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
-        connected_for_task.store(true, Ordering::Release);
-        let _ = execution_tx.send(tokio::time::Instant::now());
+        let started = tokio::time::Instant::now();
+        let _ = started_for_task.set(started);
+        let _ = execution_tx.send(started);
         let (effect_reader, mut effect_writer) = tokio::io::split(transport);
         write_request(&mut effect_writer, &host_request)
             .await
@@ -171,12 +172,18 @@ pub async fn execute(
                 output.termination,
                 kraai_sandbox::Termination::Exited { .. }
             ) {
-                if !transport_connected.load(Ordering::Acquire) && !effect_task.is_finished() {
+                if execution_started.get().is_none() && !effect_task.is_finished() {
                     effect_task.abort();
                     Err(RuntimeError::Transport(String::from(
                         "Nushell host exited before connecting to the private transport",
                     )))
                 } else {
+                    let deadline = async {
+                        let Some(started) = execution_started.get() else {
+                            return std::future::pending::<()>().await;
+                        };
+                        tokio::time::sleep_until(*started + timeout).await;
+                    };
                     tokio::select! {
                         biased;
                         () = cancellation.cancelled() => {
@@ -184,6 +191,11 @@ pub async fn execute(
                             Ok(())
                         }
                         result = &mut effect_task => channel_result(result),
+                        () = deadline => {
+                            effect_task.abort();
+                            output.termination = kraai_sandbox::Termination::TimedOut;
+                            Ok(())
+                        }
                     }
                 }
             } else {

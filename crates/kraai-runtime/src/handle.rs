@@ -12,139 +12,14 @@ use crate::{
     SessionContextUsage, SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
+mod command;
 mod events;
 mod lifecycle;
+#[cfg(test)]
+mod tests;
+pub(crate) use command::Command;
 pub(crate) use events::RuntimeEventSender;
 pub(crate) use lifecycle::RuntimeLifecycle;
-
-/// Internal commands sent to the runtime
-pub(crate) enum Command {
-    ListModels {
-        response: oneshot::Sender<RuntimeResult<HashMap<String, Vec<Model>>>>,
-    },
-    ListProviderDefinitions {
-        response: oneshot::Sender<RuntimeResult<Vec<ProviderDefinition>>>,
-    },
-    GetSettings {
-        response: oneshot::Sender<RuntimeResult<SettingsDocument>>,
-    },
-    ListAgentProfiles {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<AgentProfilesState>>,
-    },
-    GetAgentProfileCatalog {
-        workspace_dir: Option<String>,
-        response: oneshot::Sender<RuntimeResult<AgentProfileCatalog>>,
-    },
-    SetSessionProfile {
-        session_id: String,
-        profile_id: String,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    SaveSettings {
-        settings: SettingsDocument,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    CreateSession {
-        request: CreateSessionRequest,
-        response: oneshot::Sender<RuntimeResult<String>>,
-    },
-    SendMessage {
-        session_id: String,
-        message: String,
-        model_id: ModelId,
-        provider_id: ProviderId,
-        response: oneshot::Sender<RuntimeResult<SubmitMessageOutcome>>,
-    },
-    StartQueuedMessages {
-        session_id: String,
-    },
-    LoadConfig,
-    LoadSession {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<bool>>,
-    },
-    ListSessions {
-        response: oneshot::Sender<RuntimeResult<Vec<Session>>>,
-    },
-    ListUserInputHistory {
-        limit: usize,
-        response: oneshot::Sender<RuntimeResult<Vec<String>>>,
-    },
-    DeleteSession {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    GetWorkspaceState {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<WorkspaceState>>>,
-    },
-    SetWorkspaceDir {
-        session_id: String,
-        workspace_dir: String,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    GetTip {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<String>>>,
-    },
-    UndoLastUserMessage {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<String>>>,
-    },
-    GetChatHistory {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<BTreeMap<MessageId, kraai_types::Message>>>,
-    },
-    GetSessionSnapshot {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<SessionSnapshot>>,
-    },
-    GetSessionContextUsage {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<SessionContextUsage>>>,
-    },
-    GetPendingScript {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<crate::PendingScriptInfo>>>,
-    },
-    ApproveScript {
-        session_id: String,
-        execution_id: ScriptExecutionId,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    DenyScript {
-        session_id: String,
-        execution_id: ScriptExecutionId,
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    CancelStream {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<bool>>,
-    },
-    ContinueSession {
-        session_id: String,
-        response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
-    },
-    GetOpenAiCodexAuthStatus {
-        response: oneshot::Sender<RuntimeResult<OpenAiCodexAuthStatus>>,
-    },
-    StartOpenAiCodexBrowserLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    StartOpenAiCodexDeviceCodeLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    CancelOpenAiCodexLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    LogoutOpenAiCodexAuth {
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    Shutdown {
-        response: Option<oneshot::Sender<RuntimeResult<()>>>,
-    },
-}
 
 /// Handle to the runtime for sending commands
 ///
@@ -169,6 +44,18 @@ impl RuntimeHandle {
 
     fn response_channel_closed() -> RuntimeError {
         RuntimeError::unavailable("runtime response channel is closed")
+    }
+
+    async fn request<T: Send>(
+        &self,
+        build: impl FnOnce(oneshot::Sender<RuntimeResult<T>>) -> Command + Send,
+    ) -> RuntimeResult<T> {
+        let (response, result) = oneshot::channel();
+        self.command_tx
+            .send(build(response))
+            .await
+            .map_err(|_| Self::command_channel_closed())?;
+        result.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
@@ -203,61 +90,41 @@ impl RuntimeHandle {
 
     /// List available models from all providers
     pub async fn list_models(&self) -> RuntimeResult<HashMap<String, Vec<Model>>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ListModels { response: tx })
+        self.request(|response| Command::ListModels { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn list_provider_definitions(&self) -> RuntimeResult<Vec<ProviderDefinition>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ListProviderDefinitions { response: tx })
+        self.request(|response| Command::ListProviderDefinitions { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     /// Get the editable settings document.
     pub async fn get_settings(&self) -> RuntimeResult<SettingsDocument> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetSettings { response: tx })
+        self.request(|response| Command::GetSettings { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn list_agent_profiles(
         &self,
         session_id: String,
     ) -> RuntimeResult<AgentProfilesState> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ListAgentProfiles {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::ListAgentProfiles {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_agent_profile_catalog(
         &self,
         workspace_dir: Option<String>,
     ) -> RuntimeResult<AgentProfileCatalog> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetAgentProfileCatalog {
-                workspace_dir,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetAgentProfileCatalog {
+            workspace_dir,
+            response,
+        })
+        .await
     }
 
     pub async fn set_session_profile(
@@ -265,29 +132,18 @@ impl RuntimeHandle {
         session_id: String,
         profile_id: String,
     ) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SetSessionProfile {
-                session_id,
-                profile_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::SetSessionProfile {
+            session_id,
+            profile_id,
+            response,
+        })
+        .await
     }
 
     /// Save the editable settings document and reload providers.
     pub async fn save_settings(&self, settings: SettingsDocument) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SaveSettings {
-                settings,
-                response: tx,
-            })
+        self.request(|response| Command::SaveSettings { settings, response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn create_session(&self) -> RuntimeResult<String> {
@@ -299,15 +155,8 @@ impl RuntimeHandle {
         &self,
         request: CreateSessionRequest,
     ) -> RuntimeResult<String> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::CreateSession {
-                request,
-                response: tx,
-            })
+        self.request(|response| Command::CreateSession { request, response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     /// Send a message to the agent
@@ -324,18 +173,14 @@ impl RuntimeHandle {
         let provider_id = ProviderId::try_new(provider_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid provider_id: {error}"))
         })?;
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SendMessage {
-                session_id,
-                message,
-                model_id,
-                provider_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::SendMessage {
+            session_id,
+            message,
+            model_id,
+            provider_id,
+            response,
+        })
+        .await
     }
 
     /// Get the chat history as a tree
@@ -343,105 +188,70 @@ impl RuntimeHandle {
         &self,
         session_id: String,
     ) -> RuntimeResult<BTreeMap<MessageId, kraai_types::Message>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetChatHistory {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetChatHistory {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_session_snapshot(&self, session_id: String) -> RuntimeResult<SessionSnapshot> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetSessionSnapshot {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetSessionSnapshot {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_session_context_usage(
         &self,
         session_id: String,
     ) -> RuntimeResult<Option<SessionContextUsage>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetSessionContextUsage {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetSessionContextUsage {
+            session_id,
+            response,
+        })
+        .await
     }
 
     /// Load a session by ID
     pub async fn load_session(&self, session_id: String) -> RuntimeResult<bool> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::LoadSession {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::LoadSession {
+            session_id,
+            response,
+        })
+        .await
     }
 
     /// List all sessions
     pub async fn list_sessions(&self) -> RuntimeResult<Vec<Session>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ListSessions { response: tx })
+        self.request(|response| Command::ListSessions { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn list_user_input_history(&self, limit: usize) -> RuntimeResult<Vec<String>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ListUserInputHistory {
-                limit,
-                response: tx,
-            })
+        self.request(|response| Command::ListUserInputHistory { limit, response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     /// Delete a session by ID
     pub async fn delete_session(&self, session_id: String) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::DeleteSession {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::DeleteSession {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_workspace_state(
         &self,
         session_id: String,
     ) -> RuntimeResult<Option<WorkspaceState>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetWorkspaceState {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetWorkspaceState {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn set_workspace_dir(
@@ -449,59 +259,43 @@ impl RuntimeHandle {
         session_id: String,
         workspace_dir: String,
     ) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SetWorkspaceDir {
-                session_id,
-                workspace_dir,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::SetWorkspaceDir {
+            session_id,
+            workspace_dir,
+            response,
+        })
+        .await
     }
 
     /// Get the current tip message ID for a session.
     pub async fn get_tip(&self, session_id: String) -> RuntimeResult<Option<String>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetTip {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetTip {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn undo_last_user_message(
         &self,
         session_id: String,
     ) -> RuntimeResult<Option<String>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::UndoLastUserMessage {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::UndoLastUserMessage {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_pending_script(
         &self,
         session_id: String,
     ) -> RuntimeResult<Option<crate::PendingScriptInfo>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetPendingScript {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::GetPendingScript {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn approve_script(
@@ -512,104 +306,68 @@ impl RuntimeHandle {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid execution_id: {error}"))
         })?;
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ApproveScript {
-                session_id,
-                execution_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::ApproveScript {
+            session_id,
+            execution_id,
+            response,
+        })
+        .await
     }
 
     pub async fn deny_script(&self, session_id: String, execution_id: String) -> RuntimeResult<()> {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid execution_id: {error}"))
         })?;
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::DenyScript {
-                session_id,
-                execution_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::DenyScript {
+            session_id,
+            execution_id,
+            response,
+        })
+        .await
     }
 
     /// Cancel the active stream for a session.
     pub async fn cancel_stream(&self, session_id: String) -> RuntimeResult<bool> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::CancelStream {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::CancelStream {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn continue_session(
         &self,
         session_id: String,
     ) -> RuntimeResult<ContinueSessionOutcome> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::ContinueSession {
-                session_id,
-                response: tx,
-            })
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
+        self.request(|response| Command::ContinueSession {
+            session_id,
+            response,
+        })
+        .await
     }
 
     pub async fn get_openai_codex_auth_status(&self) -> RuntimeResult<OpenAiCodexAuthStatus> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::GetOpenAiCodexAuthStatus { response: tx })
+        self.request(|response| Command::GetOpenAiCodexAuthStatus { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn start_openai_codex_browser_login(&self) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::StartOpenAiCodexBrowserLogin { response: tx })
+        self.request(|response| Command::StartOpenAiCodexBrowserLogin { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn start_openai_codex_device_code_login(&self) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::StartOpenAiCodexDeviceCodeLogin { response: tx })
+        self.request(|response| Command::StartOpenAiCodexDeviceCodeLogin { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn cancel_openai_codex_login(&self) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::CancelOpenAiCodexLogin { response: tx })
+        self.request(|response| Command::CancelOpenAiCodexLogin { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 
     pub async fn logout_openai_codex_auth(&self) -> RuntimeResult<()> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::LogoutOpenAiCodexAuth { response: tx })
+        self.request(|response| Command::LogoutOpenAiCodexAuth { response })
             .await
-            .map_err(|_| Self::command_channel_closed())?;
-        rx.await.map_err(|_| Self::response_channel_closed())?
     }
 }

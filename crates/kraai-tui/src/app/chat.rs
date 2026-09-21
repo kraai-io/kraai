@@ -300,8 +300,21 @@ impl App {
 
     pub(super) fn start_new_chat(&mut self) {
         self.state.pending_submit = None;
+        self.state.pending_session_load_id = None;
         self.reset_chat_session(None, "Started new chat");
         self.request(RuntimeRequest::GetAgentProfileCatalog);
+    }
+
+    pub(super) fn load_session(&mut self, session_id: String) {
+        let load_id = self.state.next_session_load_id;
+        self.state.next_session_load_id = load_id.wrapping_add(1);
+        if self.request(RuntimeRequest::LoadSession {
+            load_id,
+            session_id,
+        }) == RuntimeRequestDelivery::Delivered
+        {
+            self.state.pending_session_load_id = Some(load_id);
+        }
     }
 
     pub(super) fn dispatch_send_message(
@@ -377,6 +390,7 @@ impl App {
         self.runtime_bridge_connected = false;
         self.runtime_bridge_error.get_or_insert(message.clone());
         self.state.pending_submit = None;
+        self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
         self.stream_event_content.clear();

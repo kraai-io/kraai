@@ -7,8 +7,41 @@ struct LimitedWrites {
     remaining: AtomicUsize,
 }
 
+impl LimitedWrites {
+    fn consume_write(&self) -> Result<()> {
+        self.remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .map(|_| ())
+            .map_err(|_remaining| eyre!("injected session write failure"))
+    }
+}
+
 #[async_trait::async_trait]
 impl SessionStore for LimitedWrites {
+    async fn link_message_if_tip_matches(
+        &self,
+        session: &SessionMeta,
+        expected_tip: Option<&MessageId>,
+    ) -> Result<bool> {
+        self.consume_write()?;
+        self.inner
+            .link_message_if_tip_matches(session, expected_tip)
+            .await
+    }
+    async fn lock_message_mutation(&self, id: &MessageId) -> tokio::sync::OwnedMutexGuard<()> {
+        self.inner.lock_message_mutation(id).await
+    }
+    async fn delete_message_if_unreferenced(
+        &self,
+        id: &MessageId,
+        message_store: Arc<dyn MessageStore>,
+    ) -> Result<()> {
+        self.inner
+            .delete_message_if_unreferenced(id, message_store)
+            .await
+    }
     async fn list(&self) -> Result<Vec<SessionMeta>> {
         self.inner.list().await
     }
@@ -26,15 +59,7 @@ impl SessionStore for LimitedWrites {
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
     ) -> Result<bool> {
-        if self
-            .remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_err()
-        {
-            return Err(eyre!("injected session write failure"));
-        }
+        self.consume_write()?;
         self.inner.save_if_tip_matches(session, expected_tip).await
     }
 }

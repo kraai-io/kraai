@@ -145,6 +145,26 @@ async fn unsafe_backends_are_rejected_before_loading_auth_or_building_requests()
     Ok(())
 }
 
+#[tokio::test]
+async fn missing_script_tool_is_rejected_before_model_resolution_or_authentication() -> Result<()> {
+    let provider = provider(String::from("http://example.com/backend-api"))?;
+    let result = provider
+        .send_responses_request(
+            &ModelId::new("unknown-model"),
+            ProviderRequest {
+                messages: Vec::new(),
+                script_tool: None,
+            },
+            &ProviderRequestContext::default(),
+        )
+        .await;
+    assert_eq!(
+        result.err().map(|error| error.to_string()).as_deref(),
+        Some("OpenAI Codex request omitted the Kraai script tool")
+    );
+    Ok(())
+}
+
 async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

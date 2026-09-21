@@ -212,11 +212,7 @@ fn sync_parent_directory_sync(_parent: &Path) -> Result<()> {
 
 #[cfg(any(not(windows), test))]
 pub(crate) fn temp_write_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("state"));
-    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::generate()))
+    path.with_file_name(format!(".kraai-{}.tmp", Ulid::generate()))
 }
 
 #[cfg(all(test, not(windows)))]
@@ -271,3 +267,10 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "persistence tests use direct assertions for fixture and failure-path setup"
+)]
+mod write_tests;

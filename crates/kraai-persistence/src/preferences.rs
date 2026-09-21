@@ -1,7 +1,9 @@
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::atomic_file::atomic_write_sync;
 
@@ -49,16 +51,22 @@ impl WorkspacePreferencesStore {
     }
 
     fn preference_path(&self, workspace: &Path) -> PathBuf {
-        self.root.join(format!("{}.json", hex_path(workspace)))
+        let bytes = workspace.as_os_str().as_encoded_bytes();
+        let file_name = if bytes.len() <= (255 - ".json".len()) / 2 {
+            format!("{}.json", hex_bytes(bytes))
+        } else {
+            format!("sha256-{}.json", hex_bytes(&Sha256::digest(bytes)))
+        };
+        self.root.join(file_name)
     }
 }
 
-fn hex_path(path: &Path) -> String {
-    path.as_os_str()
-        .as_encoded_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -83,13 +91,9 @@ mod tests {
                 .canonicalize()
                 .expect("canonical workspace");
             let root = crate::agent_state_root().expect("session storage root");
-            let expected = root
-                .join("workspaces")
-                .join(format!("{}.json", hex_path(&workspace)));
-            assert_eq!(
-                WorkspacePreferencesStore::new(&root).preference_path(&workspace),
-                expected
-            );
+            let expected = root.join("workspaces");
+            let path = WorkspacePreferencesStore::new(&root).preference_path(&workspace);
+            assert_eq!(path.parent(), Some(expected.as_path()));
             return;
         }
 
@@ -134,6 +138,68 @@ mod tests {
 
         ensure!(persisted == serde_json::to_string_pretty(&preferences)?);
         ensure!(temporary == b"another writer");
+        Ok(())
+    }
+
+    #[test]
+    fn preference_keys_preserve_hex_paths_through_the_filename_boundary() {
+        let store = WorkspacePreferencesStore::new(Path::new("state"));
+        let short = PathBuf::from("a".repeat(125));
+        let long = PathBuf::from("a".repeat(126));
+        assert_eq!(
+            store.preference_path(&short),
+            store.root.join(format!("{}.json", "61".repeat(125)))
+        );
+        assert_eq!(
+            store.preference_path(&long),
+            store.root.join(
+                "sha256-36bcf9292589fe6ea3e82fefe3aab1b8ca8b8347ea5a14b23e470ecb3ad7c57b.json"
+            )
+        );
+    }
+
+    #[test]
+    fn preferences_round_trip_for_long_workspace_paths() -> Result<()> {
+        let root = test_root();
+        let workspace = root.join("workspace-component-".repeat(10));
+        let other_workspace = workspace.join("nested");
+        std::fs::create_dir_all(&other_workspace)?;
+        let store = WorkspacePreferencesStore::new(&root.join("state"));
+        let preferences = preferences_for_writer(1);
+        let other_preferences = preferences_for_writer(2);
+        store.save(&workspace, &preferences)?;
+        store.save(&other_workspace, &other_preferences)?;
+        let loaded = store.load(&workspace)?;
+        let other_loaded = store.load(&other_workspace)?;
+        std::fs::remove_dir_all(&root)?;
+        ensure!(loaded == preferences);
+        ensure!(other_loaded == other_preferences);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn long_preference_keys_distinguish_non_utf8_path_bytes() -> Result<()> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = test_root();
+        let store = WorkspacePreferencesStore::new(&root);
+        let path = |last| {
+            let mut bytes = vec![b'a'; 125];
+            bytes.push(last);
+            PathBuf::from(std::ffi::OsString::from_vec(bytes))
+        };
+        let first = path(0x80);
+        let second = path(0x81);
+        ensure!(first.to_string_lossy() == second.to_string_lossy());
+        ensure!(store.preference_path(&first) != store.preference_path(&second));
+        let first_preferences = preferences_for_writer(1);
+        let second_preferences = preferences_for_writer(2);
+        store.save(&first, &first_preferences)?;
+        store.save(&second, &second_preferences)?;
+        ensure!(store.load(&first)? == first_preferences);
+        ensure!(store.load(&second)? == second_preferences);
+        std::fs::remove_dir_all(root)?;
         Ok(())
     }
 

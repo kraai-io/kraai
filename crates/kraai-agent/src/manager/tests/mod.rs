@@ -1,5 +1,8 @@
+mod ancestry;
+mod cancellation;
 mod common;
 mod compaction;
+mod history;
 mod intercepted;
 mod prompts;
 mod sessions;

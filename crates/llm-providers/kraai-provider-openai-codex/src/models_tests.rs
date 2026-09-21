@@ -53,6 +53,50 @@ fn discovery_uses_remote_models_efforts_names_and_context() -> Result<()> {
 }
 
 #[test]
+fn listing_sorts_ids_across_interleaved_base_names_and_reasoning_variants() -> Result<()> {
+    let mut plain = model("a-j")?;
+    plain.supported_reasoning_levels.clear();
+    plain.default_reasoning_level = None;
+    let mut unicode = model("模型")?;
+    unicode.supported_reasoning_levels.clear();
+    unicode.default_reasoning_level = None;
+    let mut hidden = model("hidden")?;
+    hidden.visibility = ModelVisibility::Hide;
+    let models = DiscoveredModels::new(vec![model("z")?, unicode, plain, hidden, model("a")?])?;
+    let configs = BTreeMap::from([(
+        ModelId::new("a-j"),
+        ConfiguredModelMetadata {
+            name: Some(String::from("First by display name")),
+            max_context: Some(42),
+        },
+    )]);
+    let listed = models.list(&configs);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "a-future-effort",
+            "a-high",
+            "a-j",
+            "a-low",
+            "z-future-effort",
+            "z-high",
+            "z-low",
+            "模型",
+        ],
+    );
+    let configured = listed
+        .iter()
+        .find(|model| model.id.as_str() == "a-j")
+        .ok_or_else(|| eyre!("configured model missing"))?;
+    assert_eq!(configured.name, "First by display name");
+    assert_eq!(configured.max_context, Some(42));
+    Ok(())
+}
+
+#[test]
 fn hidden_models_resolve_without_appearing_in_the_picker() -> Result<()> {
     for value in ["hide", "none"] {
         let mut hidden = model("hidden-model")?;
@@ -132,6 +176,76 @@ fn model_configs_override_remote_metadata() -> Result<()> {
         .ok_or_else(|| eyre!("missing high variant"))?;
     assert_eq!(high.name, "Thorough");
     assert_eq!(high.max_context, Some(150000));
+    Ok(())
+}
+
+#[test]
+fn model_lookup_matches_listing_for_visibility_variants_and_overrides() -> Result<()> {
+    let mut base = model("model")?;
+    base.supported_reasoning_levels
+        .push(crate::wire::ReasoningLevel {
+            effort: String::from("mini-special"),
+        });
+    let mut plain = model("plain")?;
+    plain.default_reasoning_level = None;
+    plain.supported_reasoning_levels.clear();
+    plain.display_name.clear();
+    let mut hidden = model("hidden")?;
+    hidden.visibility = ModelVisibility::Hide;
+    let mut unlisted = model("unlisted")?;
+    unlisted.visibility = ModelVisibility::None;
+    let models = DiscoveredModels::new(vec![
+        base,
+        model("model-mini")?,
+        model("模型-🦀")?,
+        plain,
+        hidden,
+        unlisted,
+    ])?;
+    let overrides = BTreeMap::from([
+        (
+            ModelId::new("model"),
+            ConfiguredModelMetadata {
+                name: Some(String::from("Configured base")),
+                max_context: Some(200_000),
+            },
+        ),
+        (
+            ModelId::new("model-mini-special"),
+            ConfiguredModelMetadata {
+                name: Some(String::from("Configured effort")),
+                max_context: Some(150_000),
+            },
+        ),
+    ]);
+    for configs in [BTreeMap::new(), overrides] {
+        let listed = models.list(&configs);
+        let metadata = |model: Model| (model.id, model.name, model.max_context);
+        let ids = listed.iter().map(|model| model.id.clone()).chain(
+            [
+                "model",
+                "model-mini",
+                "model-invalid",
+                "model-mini-special-invalid",
+                "hidden",
+                "hidden-low",
+                "unlisted",
+                "unlisted-high",
+                "plain-low",
+                "missing",
+            ]
+            .into_iter()
+            .map(ModelId::new),
+        );
+        for id in ids {
+            let expected = listed.iter().find(|model| model.id == id).cloned();
+            assert_eq!(
+                models.get(&id, &configs).map(metadata),
+                expected.map(metadata),
+                "model ID {id:?}"
+            );
+        }
+    }
     Ok(())
 }
 

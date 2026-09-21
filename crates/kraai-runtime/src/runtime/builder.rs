@@ -11,7 +11,7 @@ use kraai_provider_openai_codex::{
 };
 use tokio::sync::{Mutex, RwLock, mpsc};
 
-use super::core::{RuntimeCore, emit_event};
+use super::core::{RuntimeConfig, RuntimeCore, emit_event};
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
 use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle};
@@ -305,11 +305,13 @@ impl RuntimeBuilder {
             session_state_barrier: Arc::new(RwLock::new(())),
             stopping: Arc::default(),
             openai_codex_auth,
-            provider_config_path,
-            nushell_host_path: host_options.nushell_host_path,
-            script_runtime_roots: host_options.script_runtime_roots,
-            use_current_executable_as_nushell_host: host_options
-                .use_current_executable_as_nushell_host,
+            config: Arc::new(RuntimeConfig {
+                provider_config_path,
+                nushell_host_path: host_options.nushell_host_path,
+                script_runtime_roots: host_options.script_runtime_roots,
+                use_current_executable_as_nushell_host: host_options
+                    .use_current_executable_as_nushell_host,
+            }),
             startup_tx,
         };
 

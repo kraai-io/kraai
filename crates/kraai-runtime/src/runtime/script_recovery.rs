@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet, hash_map::Entry};
+
 use color_eyre::eyre::Result;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{ScriptExecutionPhase, ScriptExecutionStatus};
+use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus};
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
@@ -13,9 +15,35 @@ impl RuntimeCore {
             return Ok(());
         }
         let sessions = self.agent_manager.read().await.list_session_ids().await?;
+        let mut sources: HashMap<String, HashSet<MessageId>> = HashMap::new();
+        for record in &records {
+            if sessions.contains(&record.session_id) {
+                sources
+                    .entry(record.session_id.clone())
+                    .or_default()
+                    .insert(record.source_message_id.clone());
+            }
+        }
+        let mut histories: HashMap<String, HashSet<MessageId>> = HashMap::new();
         let mut continuations = Vec::new();
         for record in records {
             if !sessions.contains(&record.session_id) {
+                continue;
+            }
+            let history = match histories.entry(record.session_id.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(
+                    self.agent_manager
+                        .read()
+                        .await
+                        .reachable_message_ids(
+                            &record.session_id,
+                            sources.remove(&record.session_id).unwrap_or_default(),
+                        )
+                        .await?,
+                ),
+            };
+            if !history.contains(&record.source_message_id) {
                 continue;
             }
             let completed = if record.phase == kraai_types::ScriptExecutionPhase::Finished {

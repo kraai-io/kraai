@@ -53,7 +53,7 @@ pub(crate) async fn read_settings_document(
     registry: &ProviderRegistry,
 ) -> Result<SettingsDocument> {
     match load_provider_config(path).await? {
-        Some(config) => settings_from_provider_config(&config, registry),
+        Some(config) => settings_from_provider_config(config, registry),
         None => Ok(SettingsDocument::default()),
     }
 }
@@ -98,18 +98,18 @@ pub(crate) async fn write_settings_document(
 }
 
 fn settings_from_provider_config(
-    config: &ProviderManagerConfig,
+    config: ProviderManagerConfig,
     registry: &ProviderRegistry,
 ) -> Result<SettingsDocument> {
-    validate_provider_config(config, registry)?;
+    validate_provider_config(&config, registry)?;
     let providers = config
         .providers
-        .iter()
+        .into_iter()
         .map(provider_settings_from_config)
         .collect();
     let models = config
         .models
-        .iter()
+        .into_iter()
         .map(model_settings_from_config)
         .collect();
 
@@ -144,32 +144,26 @@ fn validate_provider_config(
     }
 }
 
-fn provider_settings_from_config(config: &ProviderConfig) -> ProviderSettings {
+fn provider_settings_from_config(config: ProviderConfig) -> ProviderSettings {
     ProviderSettings {
         id: config.id.to_string(),
-        type_id: config.type_id.clone(),
+        type_id: config.type_id,
         values: config
             .config
-            .iter()
-            .map(|(key, value)| FieldValueEntry {
-                key: key.clone(),
-                value: value.clone(),
-            })
+            .into_iter()
+            .map(|(key, value)| FieldValueEntry { key, value })
             .collect(),
     }
 }
 
-fn model_settings_from_config(config: &ModelConfig) -> ModelSettings {
+fn model_settings_from_config(config: ModelConfig) -> ModelSettings {
     ModelSettings {
         id: config.id.to_string(),
         provider_id: config.provider_id.to_string(),
         values: config
             .config
-            .iter()
-            .map(|(key, value)| FieldValueEntry {
-                key: key.clone(),
-                value: value.clone(),
-            })
+            .into_iter()
+            .map(|(key, value)| FieldValueEntry { key, value })
             .collect(),
     }
 }
@@ -411,11 +405,13 @@ provider_id = "none"
             providers: config
                 .providers
                 .iter()
+                .cloned()
                 .map(provider_settings_from_config)
                 .collect(),
             models: config
                 .models
                 .iter()
+                .cloned()
                 .map(model_settings_from_config)
                 .collect(),
         };

@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_types::{ConversationItem, Message, MessageGeneration, MessageId, MessageStatus};
 use ulid::Ulid;
 
-use crate::keyed_locks::KeyedLocks;
+use crate::commit::complete_commit;
 use crate::{MessageStore, SessionStore};
 
 fn current_unix_timestamp() -> u64 {
@@ -19,7 +19,6 @@ fn current_unix_timestamp() -> u64 {
 pub struct ConversationStore {
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
-    idempotent_appends: Arc<KeyedLocks<MessageId>>,
 }
 
 impl ConversationStore {
@@ -27,7 +26,6 @@ impl ConversationStore {
         Self {
             message_store,
             session_store,
-            idempotent_appends: Arc::new(KeyedLocks::default()),
         }
     }
 
@@ -98,7 +96,21 @@ impl ConversationStore {
         message_id: MessageId,
         request: AppendMessageRequest,
     ) -> Result<IdempotentAppendOutcome> {
-        let _guard = self.idempotent_appends.lock(&message_id).await;
+        let guard = self.session_store.lock_message_mutation(&message_id).await;
+        let store = self.clone();
+        complete_commit(
+            guard,
+            async move { store.append_idempotent_message(message_id, request).await },
+            "Idempotent append task failed",
+        )
+        .await
+    }
+
+    async fn append_idempotent_message(
+        &self,
+        message_id: MessageId,
+        request: AppendMessageRequest,
+    ) -> Result<IdempotentAppendOutcome> {
         let Some(existing) = self.message_store.get(&message_id).await? else {
             let appended = self.append_new_message(message_id, request).await?;
             return Ok(IdempotentAppendOutcome {
@@ -137,7 +149,7 @@ impl ConversationStore {
         session.updated_at = current_unix_timestamp();
         if !self
             .session_store
-            .save_if_tip_matches(&session, previous_tip.as_ref())
+            .link_message_if_tip_matches(&session, previous_tip.as_ref())
             .await?
         {
             return Err(eyre!(
@@ -195,6 +207,29 @@ impl ConversationStore {
         tip_id: Option<MessageId>,
         title: Option<String>,
     ) -> Result<()> {
+        let guard = self.session_store.lock_message_mutation(message_id).await;
+        let store = self.clone();
+        let session_id = session_id.to_string();
+        let message_id = message_id.clone();
+        complete_commit(
+            guard,
+            async move {
+                store
+                    .restore_message(&session_id, &message_id, tip_id, title)
+                    .await
+            },
+            "Message rollback task failed",
+        )
+        .await
+    }
+
+    async fn restore_message(
+        &self,
+        session_id: &str,
+        message_id: &MessageId,
+        tip_id: Option<MessageId>,
+        title: Option<String>,
+    ) -> Result<()> {
         let mut session = self
             .session_store
             .get(session_id)
@@ -220,7 +255,11 @@ impl ConversationStore {
         }
         // The session no longer references the abandoned message. Cleanup failure should leave an
         // orphan for later GC, not make callers believe the rollback itself failed.
-        if let Err(error) = self.message_store.delete(message_id).await {
+        if let Err(error) = self
+            .session_store
+            .delete_message_if_unreferenced(message_id, self.message_store.clone())
+            .await
+        {
             tracing::error!(
                 "Failed to delete abandoned message {message_id} after restoring session {session_id}: {error}"
             );
@@ -229,7 +268,11 @@ impl ConversationStore {
     }
 
     async fn delete_unreferenced_message(&self, message_id: &MessageId) {
-        if let Err(delete_error) = self.message_store.delete(message_id).await {
+        if let Err(delete_error) = self
+            .session_store
+            .delete_message_if_unreferenced(message_id, self.message_store.clone())
+            .await
+        {
             tracing::error!(
                 "Failed to delete unreferenced appended message {message_id}: {delete_error}"
             );
@@ -278,829 +321,4 @@ fn validate_idempotent_message(existing: &Message, request: &AppendMessageReques
     clippy::unwrap_used,
     reason = "turn persistence tests use direct assertions for fixture and failure-path setup"
 )]
-mod tests {
-    use super::*;
-    use crate::{FileMessageStore, FileSessionStore, SessionMeta};
-    use kraai_types::{AssistantItem, AssistantPhase, ChatRole, ToolCallId};
-    use std::collections::HashSet;
-    use std::future::Future;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{Barrier, Notify};
-
-    fn test_dir(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "agent-persistence-{name}-{nanos}-{}",
-            Ulid::generate()
-        ))
-    }
-
-    async fn with_test_store<T, F, Fut>(name: &str, f: F) -> T
-    where
-        F: FnOnce(Arc<FileMessageStore>, Arc<FileSessionStore>, PathBuf) -> Fut,
-        Fut: Future<Output = T>,
-    {
-        let data_dir = test_dir(name);
-        tokio::fs::create_dir_all(&data_dir).await.unwrap();
-        let message_store = Arc::new(FileMessageStore::new(&data_dir));
-        let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
-        let result = f(message_store, session_store, data_dir.clone()).await;
-        let _ = tokio::fs::remove_dir_all(&data_dir).await;
-        result
-    }
-
-    fn untitled_session(id: &str, tip_id: Option<&MessageId>, updated_at: u64) -> SessionMeta {
-        SessionMeta {
-            id: id.to_string(),
-            tip_id: tip_id.cloned(),
-            workspace_dir: PathBuf::from("/tmp/workspace"),
-            created_at: updated_at.saturating_sub(1),
-            updated_at,
-            title: None,
-            selected_profile_id: None,
-        }
-    }
-
-    struct FailOnSaveSessionStore {
-        inner: Arc<dyn SessionStore>,
-        should_fail: Arc<AtomicBool>,
-        commit_before_failure: bool,
-    }
-
-    struct FailOnDeleteMessageStore {
-        inner: Arc<dyn MessageStore>,
-        should_fail: Arc<AtomicBool>,
-    }
-
-    struct BarrierOnSaveMessageStore {
-        inner: Arc<dyn MessageStore>,
-        barrier: Arc<Barrier>,
-    }
-
-    struct PauseBeforeFirstSaveMessageStore {
-        inner: Arc<dyn MessageStore>,
-        pause_next_save: AtomicBool,
-        entered: Arc<Notify>,
-        resume: Arc<Notify>,
-    }
-
-    #[async_trait::async_trait]
-    impl MessageStore for PauseBeforeFirstSaveMessageStore {
-        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-            self.inner.get(id).await
-        }
-
-        async fn save(&self, message: &Message) -> Result<()> {
-            if self.pause_next_save.swap(false, Ordering::SeqCst) {
-                self.entered.notify_one();
-                self.resume.notified().await;
-            }
-            self.inner.save(message).await
-        }
-
-        async fn unload(&self, id: &MessageId) {
-            self.inner.unload(id).await;
-        }
-
-        async fn delete(&self, id: &MessageId) -> Result<()> {
-            self.inner.delete(id).await
-        }
-
-        async fn exists(&self, id: &MessageId) -> Result<bool> {
-            self.inner.exists(id).await
-        }
-
-        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_all_on_disk().await
-        }
-
-        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_hot().await
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl SessionStore for FailOnSaveSessionStore {
-        async fn list(&self) -> Result<Vec<SessionMeta>> {
-            self.inner.list().await
-        }
-
-        async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
-            self.inner.get(id).await
-        }
-
-        async fn save(&self, session: &SessionMeta) -> Result<()> {
-            if self.should_fail.load(Ordering::SeqCst) {
-                if self.commit_before_failure {
-                    self.inner.save(session).await?;
-                }
-                return Err(eyre!("intentional session save failure for {}", session.id));
-            }
-            self.inner.save(session).await
-        }
-
-        async fn save_if_tip_matches(
-            &self,
-            session: &SessionMeta,
-            expected_tip: Option<&MessageId>,
-        ) -> Result<bool> {
-            if self.should_fail.load(Ordering::SeqCst) {
-                if self.commit_before_failure {
-                    self.inner
-                        .save_if_tip_matches(session, expected_tip)
-                        .await?;
-                }
-                return Err(eyre!("intentional session save failure for {}", session.id));
-            }
-            self.inner.save_if_tip_matches(session, expected_tip).await
-        }
-
-        async fn delete(&self, id: &str) -> Result<()> {
-            self.inner.delete(id).await
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MessageStore for FailOnDeleteMessageStore {
-        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-            self.inner.get(id).await
-        }
-
-        async fn save(&self, message: &Message) -> Result<()> {
-            self.inner.save(message).await
-        }
-
-        async fn unload(&self, id: &MessageId) {
-            self.inner.unload(id).await;
-        }
-
-        async fn delete(&self, id: &MessageId) -> Result<()> {
-            if self.should_fail.load(Ordering::SeqCst) {
-                return Err(eyre!("intentional message delete failure for {id}"));
-            }
-            self.inner.delete(id).await
-        }
-
-        async fn exists(&self, id: &MessageId) -> Result<bool> {
-            self.inner.exists(id).await
-        }
-
-        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_all_on_disk().await
-        }
-
-        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_hot().await
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MessageStore for BarrierOnSaveMessageStore {
-        async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-            self.inner.get(id).await
-        }
-
-        async fn save(&self, message: &Message) -> Result<()> {
-            self.inner.save(message).await?;
-            self.barrier.wait().await;
-            Ok(())
-        }
-
-        async fn unload(&self, id: &MessageId) {
-            self.inner.unload(id).await;
-        }
-
-        async fn delete(&self, id: &MessageId) -> Result<()> {
-            self.inner.delete(id).await
-        }
-
-        async fn exists(&self, id: &MessageId) -> Result<bool> {
-            self.inner.exists(id).await
-        }
-
-        async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_all_on_disk().await
-        }
-
-        async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-            self.inner.list_hot().await
-        }
-    }
-
-    fn append_request(
-        session_id: &str,
-        role: ChatRole,
-        content: &str,
-        status: MessageStatus,
-        title_if_first_message: Option<&str>,
-    ) -> AppendMessageRequest {
-        let content = match role {
-            ChatRole::System => ConversationItem::System {
-                text: content.to_string(),
-            },
-            ChatRole::User => ConversationItem::User {
-                text: content.to_string(),
-            },
-            ChatRole::Assistant => ConversationItem::Assistant {
-                items: if content.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![AssistantItem::Text {
-                        phase: AssistantPhase::FinalAnswer,
-                        text: content.to_string(),
-                    }]
-                },
-            },
-            ChatRole::ToolCallResult => ConversationItem::ScriptResult {
-                call_id: ToolCallId::new("test-call"),
-                output: content.to_string(),
-            },
-        };
-        AppendMessageRequest {
-            session_id: session_id.to_string(),
-            content,
-            status,
-            agent_profile_id: None,
-            generation: None,
-            title_if_first_message: title_if_first_message.map(str::to_string),
-        }
-    }
-
-    #[tokio::test]
-    async fn append_message_saves_message_and_advances_session_tip() {
-        with_test_store(
-            "append-message-advances-tip",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let conversation_store =
-                    ConversationStore::new(message_store.clone(), session_store.clone());
-
-                let appended = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "hello",
-                        MessageStatus::Complete,
-                        Some("hello"),
-                    ))
-                    .await
-                    .unwrap();
-
-                assert_eq!(appended.previous_tip, None);
-                let message = message_store
-                    .get(&appended.message.id)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(message.parent_id, None);
-                assert_eq!(message.role(), ChatRole::User);
-                assert_eq!(message.content.text(), Some("hello"));
-
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                assert_eq!(stored_session.tip_id, Some(appended.message.id));
-                assert_eq!(stored_session.title.as_deref(), Some("hello"));
-                assert!(stored_session.updated_at >= 1);
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn append_message_keeps_existing_title_and_links_to_previous_tip() {
-        with_test_store(
-            "append-message-existing-title",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let conversation_store =
-                    ConversationStore::new(message_store.clone(), session_store.clone());
-
-                let first = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "first",
-                        MessageStatus::Complete,
-                        Some("first title"),
-                    ))
-                    .await
-                    .unwrap();
-                let second = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "second",
-                        MessageStatus::Complete,
-                        Some("second title"),
-                    ))
-                    .await
-                    .unwrap();
-
-                assert_eq!(second.previous_tip, Some(first.message.id.clone()));
-                assert_eq!(second.message.parent_id, Some(first.message.id.clone()));
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                assert_eq!(stored_session.tip_id, Some(second.message.id));
-                assert_eq!(stored_session.title.as_deref(), Some("first title"));
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn append_message_session_save_failure_retains_new_message_for_recovery() {
-        let data_dir = test_dir("append-message-save-failure");
-        tokio::fs::create_dir_all(&data_dir).await.unwrap();
-
-        let message_store: Arc<dyn MessageStore> = Arc::new(FileMessageStore::new(&data_dir));
-        let base_session_store: Arc<dyn SessionStore> =
-            Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
-        base_session_store
-            .save(&untitled_session("session", None, 1))
-            .await
-            .unwrap();
-
-        let should_fail = Arc::new(AtomicBool::new(true));
-        let failing_session_store: Arc<dyn SessionStore> = Arc::new(FailOnSaveSessionStore {
-            inner: base_session_store.clone(),
-            should_fail,
-            commit_before_failure: false,
-        });
-        let conversation_store =
-            ConversationStore::new(message_store.clone(), failing_session_store);
-
-        let error = conversation_store
-            .append_message(append_request(
-                "session",
-                ChatRole::User,
-                "will roll back",
-                MessageStatus::Complete,
-                Some("will roll back"),
-            ))
-            .await
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("intentional session save failure")
-        );
-        assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
-        assert_eq!(
-            base_session_store
-                .get("session")
-                .await
-                .unwrap()
-                .unwrap()
-                .tip_id,
-            None
-        );
-
-        let _ = tokio::fs::remove_dir_all(&data_dir).await;
-    }
-
-    #[tokio::test]
-    async fn append_message_preserves_linked_message_after_committed_save_error() {
-        with_test_store(
-            "append-message-committed-error",
-            |message_store, session_store, data_dir| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let failing_store = Arc::new(FailOnSaveSessionStore {
-                    inner: session_store.clone(),
-                    should_fail: Arc::new(AtomicBool::new(true)),
-                    commit_before_failure: true,
-                });
-                let conversations = ConversationStore::new(message_store.clone(), failing_store);
-
-                let error = conversations
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "committed",
-                        MessageStatus::Complete,
-                        None,
-                    ))
-                    .await
-                    .unwrap_err();
-
-                assert!(
-                    error
-                        .to_string()
-                        .contains("intentional session save failure")
-                );
-                let reopened = FileSessionStore::new(&data_dir, message_store.clone());
-                reopened.load().await.unwrap();
-                let tip_id = reopened
-                    .get("session")
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .tip_id
-                    .unwrap();
-                assert!(message_store.exists(&tip_id).await.unwrap());
-                assert_eq!(
-                    message_store
-                        .get(&tip_id)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .content
-                        .text(),
-                    Some("committed")
-                );
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn concurrent_appends_do_not_silently_orphan_a_success() {
-        with_test_store(
-            "concurrent-appends",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let synchronized_messages: Arc<dyn MessageStore> =
-                    Arc::new(BarrierOnSaveMessageStore {
-                        inner: message_store.clone(),
-                        barrier: Arc::new(Barrier::new(2)),
-                    });
-                let conversations =
-                    ConversationStore::new(synchronized_messages, session_store.clone());
-
-                let first = tokio::spawn({
-                    let conversations = conversations.clone();
-                    async move {
-                        conversations
-                            .append_message(append_request(
-                                "session",
-                                ChatRole::User,
-                                "first",
-                                MessageStatus::Complete,
-                                None,
-                            ))
-                            .await
-                    }
-                });
-                let second = tokio::spawn({
-                    let conversations = conversations.clone();
-                    async move {
-                        conversations
-                            .append_message(append_request(
-                                "session",
-                                ChatRole::User,
-                                "second",
-                                MessageStatus::Complete,
-                                None,
-                            ))
-                            .await
-                    }
-                });
-
-                let results = [first.await.unwrap(), second.await.unwrap()];
-                assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-                assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
-
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                let tip = stored_session.tip_id.unwrap();
-                assert!(message_store.exists(&tip).await.unwrap());
-                assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn concurrent_idempotent_appends_share_one_linked_message() {
-        with_test_store(
-            "concurrent-idempotent-appends",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let entered = Arc::new(Notify::new());
-                let resume = Arc::new(Notify::new());
-                let synchronized_messages: Arc<dyn MessageStore> =
-                    Arc::new(PauseBeforeFirstSaveMessageStore {
-                        inner: message_store.clone(),
-                        pause_next_save: AtomicBool::new(true),
-                        entered: entered.clone(),
-                        resume: resume.clone(),
-                    });
-                let conversations =
-                    ConversationStore::new(synchronized_messages, session_store.clone());
-                let retry_conversations = conversations.clone();
-                let message_id = MessageId::new(Ulid::generate());
-                let request = || {
-                    append_request(
-                        "session",
-                        ChatRole::ToolCallResult,
-                        "result",
-                        MessageStatus::Complete,
-                        None,
-                    )
-                };
-                let mut first = std::pin::pin!(
-                    conversations.append_message_idempotent(message_id.clone(), request())
-                );
-                tokio::select! {
-                    result = first.as_mut() => panic!("Append finished before saving: {result:?}"),
-                    _ = entered.notified() => {}
-                }
-                let mut second = std::pin::pin!(
-                    retry_conversations.append_message_idempotent(message_id.clone(), request())
-                );
-                assert!(
-                    second
-                        .as_mut()
-                        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
-                        .is_pending()
-                );
-                resume.notify_one();
-
-                let (first, second) = tokio::join!(first, second);
-                assert!(first.unwrap().linked_now);
-                assert!(!second.unwrap().linked_now);
-                assert_eq!(
-                    session_store.get("session").await.unwrap().unwrap().tip_id,
-                    Some(message_id.clone())
-                );
-                assert!(message_store.exists(&message_id).await.unwrap());
-                assert_eq!(message_store.list_all_on_disk().await.unwrap().len(), 1);
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn idempotent_history_search_rejects_parent_cycles() {
-        with_test_store(
-            "idempotent-history-cycle",
-            |message_store, session_store, _| async move {
-                let first_id = MessageId::new("cycle-first");
-                let second_id = MessageId::new("cycle-second");
-                for (id, parent_id) in [
-                    (first_id.clone(), second_id.clone()),
-                    (second_id, first_id.clone()),
-                ] {
-                    message_store
-                        .save(&Message {
-                            id,
-                            parent_id: Some(parent_id),
-                            content: ConversationItem::User {
-                                text: String::from("cycle"),
-                            },
-                            status: MessageStatus::Complete,
-                            agent_profile_id: None,
-                            generation: None,
-                        })
-                        .await
-                        .unwrap();
-                }
-                let conversations = ConversationStore::new(message_store, session_store);
-                let error = conversations
-                    .message_is_in_history(Some(first_id), &MessageId::new("missing"))
-                    .await
-                    .unwrap_err();
-                assert!(
-                    error
-                        .to_string()
-                        .contains("cycle repeats message cycle-first")
-                );
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn append_and_rollback_race_cannot_restore_over_newer_tip() {
-        with_test_store(
-            "append-rollback-race",
-            |_message_store, session_store, _| async move {
-                let abandoned_id = MessageId::new("abandoned");
-                let newer_id = MessageId::new("newer");
-                let original = untitled_session("session", Some(&abandoned_id), 1);
-                session_store.save(&original).await.unwrap();
-
-                let mut append_update = original.clone();
-                append_update.tip_id = Some(newer_id.clone());
-                let mut stale_rollback = original;
-                stale_rollback.tip_id = None;
-
-                assert!(
-                    session_store
-                        .save_if_tip_matches(&append_update, Some(&abandoned_id))
-                        .await
-                        .unwrap()
-                );
-                assert!(
-                    !session_store
-                        .save_if_tip_matches(&stale_rollback, Some(&abandoned_id))
-                        .await
-                        .unwrap()
-                );
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                assert_eq!(stored_session.tip_id, Some(newer_id));
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn restore_tip_title_and_delete_message_requires_abandoned_message_to_be_tip() {
-        with_test_store(
-            "restore-tip-guard",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let conversation_store =
-                    ConversationStore::new(message_store.clone(), session_store.clone());
-                let root = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "root",
-                        MessageStatus::Complete,
-                        Some("root title"),
-                    ))
-                    .await
-                    .unwrap();
-                let streaming = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::Assistant,
-                        "",
-                        MessageStatus::Streaming {
-                            stream_id: kraai_types::StreamId::new(Ulid::generate()),
-                        },
-                        None,
-                    ))
-                    .await
-                    .unwrap();
-
-                let error = conversation_store
-                    .restore_tip_title_and_delete_message(
-                        "session",
-                        &root.message.id,
-                        root.previous_tip.clone(),
-                        root.previous_title.clone(),
-                    )
-                    .await
-                    .unwrap_err();
-                assert!(error.to_string().contains("tip is not abandoned message"));
-                assert!(message_store.exists(&root.message.id).await.unwrap());
-
-                conversation_store
-                    .restore_appended_message("session", &streaming)
-                    .await
-                    .unwrap();
-
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                assert_eq!(stored_session.tip_id, Some(root.message.id.clone()));
-                assert_eq!(stored_session.title.as_deref(), Some("root title"));
-                assert!(!message_store.exists(&streaming.message.id).await.unwrap());
-                assert!(message_store.exists(&root.message.id).await.unwrap());
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn restore_tip_title_succeeds_when_abandoned_message_cleanup_fails() {
-        with_test_store(
-            "restore-tip-delete-failure",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let should_fail = Arc::new(AtomicBool::new(true));
-                let failing_message_store: Arc<dyn MessageStore> =
-                    Arc::new(FailOnDeleteMessageStore {
-                        inner: message_store.clone(),
-                        should_fail,
-                    });
-                let conversation_store =
-                    ConversationStore::new(failing_message_store, session_store.clone());
-                let root = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::User,
-                        "root",
-                        MessageStatus::Complete,
-                        Some("root title"),
-                    ))
-                    .await
-                    .unwrap();
-                let streaming = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::Assistant,
-                        "",
-                        MessageStatus::Streaming {
-                            stream_id: kraai_types::StreamId::new(Ulid::generate()),
-                        },
-                        None,
-                    ))
-                    .await
-                    .unwrap();
-
-                conversation_store
-                    .restore_appended_message("session", &streaming)
-                    .await
-                    .unwrap();
-
-                let stored_session = session_store.get("session").await.unwrap().unwrap();
-                assert_eq!(stored_session.tip_id, Some(root.message.id));
-                assert_eq!(stored_session.title.as_deref(), Some("root title"));
-                assert!(message_store.exists(&streaming.message.id).await.unwrap());
-            },
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn idempotent_append_links_orphan_once_and_recognizes_history() {
-        with_test_store(
-            "idempotent-append",
-            |message_store, session_store, _| async move {
-                session_store
-                    .save(&untitled_session("session", None, 1))
-                    .await
-                    .unwrap();
-                let conversation_store =
-                    ConversationStore::new(message_store.clone(), session_store.clone());
-                let root = conversation_store
-                    .append_message(append_request(
-                        "session",
-                        ChatRole::Assistant,
-                        "script",
-                        MessageStatus::Complete,
-                        None,
-                    ))
-                    .await
-                    .unwrap();
-                let result_id = MessageId::new(Ulid::generate());
-                message_store
-                    .save(&Message {
-                        id: result_id.clone(),
-                        parent_id: Some(root.message.id),
-                        content: ConversationItem::ScriptResult {
-                            call_id: ToolCallId::new("test-call"),
-                            output: String::from("result"),
-                        },
-                        status: MessageStatus::Complete,
-                        agent_profile_id: Some(String::from("coding")),
-                        generation: None,
-                    })
-                    .await
-                    .unwrap();
-                let request = || AppendMessageRequest {
-                    session_id: String::from("session"),
-                    content: ConversationItem::ScriptResult {
-                        call_id: ToolCallId::new("test-call"),
-                        output: String::from("result"),
-                    },
-                    status: MessageStatus::Complete,
-                    agent_profile_id: Some(String::from("coding")),
-                    generation: None,
-                    title_if_first_message: None,
-                };
-
-                let recovered = conversation_store
-                    .append_message_idempotent(result_id.clone(), request())
-                    .await
-                    .unwrap();
-                assert!(recovered.linked_now);
-                assert_eq!(
-                    session_store.get("session").await.unwrap().unwrap().tip_id,
-                    Some(result_id.clone())
-                );
-
-                let retry = conversation_store
-                    .append_message_idempotent(result_id, request())
-                    .await
-                    .unwrap();
-                assert!(!retry.linked_now);
-            },
-        )
-        .await;
-    }
-}
+mod tests;

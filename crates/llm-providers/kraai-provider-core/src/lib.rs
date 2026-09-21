@@ -11,6 +11,7 @@ mod pricing;
 pub use pricing::{PriceQuote, Pricing, ProviderPricingCatalog, ProviderPricingPolicy};
 mod provider;
 mod registry;
+mod request_context;
 mod sse;
 mod stream;
 
@@ -25,13 +26,11 @@ pub use http_client::{
     build_finite_http_client, build_streaming_http_client, finite_request,
     streaming_http_client_builder,
 };
-pub use http_retry::{
-    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderRequestContext, ProviderRetryEvent,
-    ProviderRetryObserver, send_with_retry,
-};
+pub use http_retry::{DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, send_with_retry};
 pub use manager::ProviderManager;
 pub use model_metadata::ConfiguredModelMetadata;
 pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition, ScriptToolTransport};
 pub use registry::{ProviderFactory, ProviderRegistry};
+pub use request_context::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
 pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};
 pub use stream::ProviderStreamEvent;

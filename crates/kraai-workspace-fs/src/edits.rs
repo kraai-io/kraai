@@ -15,6 +15,9 @@ pub fn apply_exact_edits(
     contents: &str,
     edits: &[ExactTextEdit],
 ) -> Result<String, WorkspaceFsError> {
+    if edits.is_empty() {
+        return Ok(contents.to_owned());
+    }
     let lines = index_lines(contents);
     let mut pending = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {

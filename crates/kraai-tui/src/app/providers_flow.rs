@@ -333,7 +333,10 @@ impl App {
         }
     }
 
-    pub(super) fn apply_openai_codex_auth_status(&mut self, status: ProviderAuthStatus) {
+    pub(super) fn apply_openai_codex_auth_status(&mut self, status: ProviderAuthStatus) -> bool {
+        if status.sequence < self.state.openai_codex_auth.sequence {
+            return false;
+        }
         let previous_target = pending_auth_target(&self.state.openai_codex_auth).map(str::to_owned);
         let next_target = pending_auth_target(&status).map(str::to_owned);
         let next_state = status.state;
@@ -367,6 +370,7 @@ impl App {
                 },
             };
         }
+        true
     }
 
     pub(super) fn retry_open_pending_auth_target(&mut self) {

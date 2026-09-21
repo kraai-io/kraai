@@ -13,7 +13,7 @@ use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
-use super::super::core::RuntimeCore;
+use super::super::core::{RuntimeConfig, RuntimeCore};
 use crate::handle::{Command, RuntimeEventSender};
 use crate::{Event, EventCallback, RuntimeHandle};
 
@@ -397,10 +397,12 @@ path = \"inherit\"\n",
             session_state_barrier: Arc::new(RwLock::new(())),
             stopping: Arc::default(),
             openai_codex_auth,
-            provider_config_path: data_dir.join("providers.toml"),
-            use_current_executable_as_nushell_host: false,
-            nushell_host_path: None,
-            script_runtime_roots: None,
+            config: Arc::new(RuntimeConfig {
+                provider_config_path: data_dir.join("providers.toml"),
+                use_current_executable_as_nushell_host: false,
+                nushell_host_path: None,
+                script_runtime_roots: None,
+            }),
             startup_tx,
         };
 

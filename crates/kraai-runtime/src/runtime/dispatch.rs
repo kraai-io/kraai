@@ -47,7 +47,7 @@ impl RuntimeCore {
             max_context: usage.max_context,
             usage: usage.usage,
         });
-        let streaming = active_stream || reader.streaming;
+        let streaming = active_stream || data.streaming;
 
         let activity = if pending_script.is_some() {
             SessionActivity::AwaitingApproval
@@ -59,11 +59,11 @@ impl RuntimeCore {
             SessionActivity::Idle
         };
         let session = Session {
-            profile_locked: reader.profile_locked,
+            profile_locked: data.profile_locked,
             waiting_for_approval: pending_script.is_some(),
             is_streaming: streaming,
             is_running,
-            ..Session::from_session_meta(reader.session)
+            ..Session::from_session_meta(data.session)
         };
 
         Ok(SessionSnapshot {
@@ -114,8 +114,11 @@ impl RuntimeCore {
             Command::GetSettings { response } => {
                 respond(
                     response,
-                    read_settings_document(&self.provider_config_path, &self.provider_registry)
-                        .await,
+                    read_settings_document(
+                        &self.config.provider_config_path,
+                        &self.provider_registry,
+                    )
+                    .await,
                 );
             }
             Command::ListAgentProfiles {
@@ -263,6 +266,7 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
+                let _preparation = self.session_preparations.begin(&session_id).await;
                 if self.has_active_script_tasks(&session_id).await
                     || self
                         .pending_script_approvals

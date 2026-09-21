@@ -9,6 +9,7 @@ use kraai_types::MessageId;
 use tokio::sync::Notify;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
+use super::queue::SessionPreparation;
 use super::stream_driver::{CompletedStreamOutput, StreamDriveResult};
 use crate::api::Event;
 use crate::{ContinueSessionOutcome, RuntimeError, RuntimeResult};
@@ -36,6 +37,18 @@ impl RuntimeCore {
         let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         };
+        self.continue_prepared_session(session_id, preparation)
+            .await
+    }
+
+    async fn continue_prepared_session(
+        &self,
+        session_id: String,
+        preparation: SessionPreparation,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
+        if self.is_stopping() {
+            return Ok(ContinueSessionOutcome::NothingToContinue);
+        }
         if self
             .pending_script_approvals
             .lock()
@@ -125,7 +138,11 @@ impl RuntimeCore {
         let runtime = self.clone();
         tokio::spawn(async move {
             let _state_guard = runtime.session_state_barrier.read().await;
-            if let Err(error) = runtime.start_continuation(session_id.clone()).await {
+            let preparation = runtime.session_preparations.begin(&session_id).await;
+            if let Err(error) = runtime
+                .continue_prepared_session(session_id.clone(), preparation)
+                .await
+            {
                 emit_event(
                     &runtime.event_tx,
                     Event::ContinuationFailed {
@@ -146,14 +163,12 @@ impl RuntimeCore {
         mut request: PendingStreamRequest,
     ) {
         let context_notifications = std::mem::take(&mut request.context_notifications);
-        let runtime = self.clone();
+        let task_runtime = self.clone();
         let start_gate = Arc::new(Notify::new());
         let request_session_id = session_id.clone();
         let request_message_id = request.message_id.clone();
         let active_message_id = request_message_id.clone();
         let terminal_message_id = request_message_id.clone();
-        let task_runtime = runtime.clone();
-
         let task = self.stream_tasks.spawn({
             let start_gate = start_gate.clone();
             async move {
@@ -173,6 +188,10 @@ impl RuntimeCore {
                 });
 
                 let _state_guard = task_runtime.session_state_barrier.read().await;
+                let _preparation = task_runtime
+                    .session_preparations
+                    .begin(&request_session_id)
+                    .await;
                 let stream_was_active = task_runtime
                     .clear_active_stream(&request_session_id, &active_message_id)
                     .await;
@@ -502,7 +521,9 @@ impl RuntimeCore {
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
         let state_guard = self.session_state_barrier.read().await;
+        let preparation = self.session_preparations.begin(&session_id).await;
         let Some(active_stream) = self.take_active_stream(&session_id).await else {
+            drop(preparation);
             drop(state_guard);
             return Ok(self.cancel_active_script(&session_id).await);
         };
@@ -510,8 +531,18 @@ impl RuntimeCore {
         let cancelled_stream = {
             let mut agent = self.agent_manager.write().await;
             active_stream.abort_handle.abort();
+            let cancelled_script_output = kraai_script_protocol::render_tool_call_result(
+                kraai_script_protocol::ToolCallResultView {
+                    status: kraai_types::ScriptExecutionStatus::Cancelled,
+                    exit_code: None,
+                    elapsed_millis: None,
+                    stdout: &[],
+                    stderr: &[],
+                    diagnostic: Some("Script was cancelled before execution"),
+                },
+            );
             let cancelled = match agent
-                .cancel_streaming_message(&active_stream.message_id)
+                .cancel_streaming_message(&active_stream.message_id, &cancelled_script_output)
                 .await
             {
                 Ok(cancelled) => cancelled,

@@ -4,6 +4,12 @@ use base64::Engine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+#[path = "state_tests.rs"]
+mod state_tests;
+
+#[path = "refresh_cancellation_tests.rs"]
+mod refresh_cancellation_tests;
+
 #[test]
 fn request_auth_applies_subscription_headers_without_exposing_fields() {
     let auth = OpenAiCodexRequestAuth {
@@ -302,7 +308,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
 }
 
 #[tokio::test]
-async fn invalidated_login_cannot_recreate_auth_after_waiting_for_file_lock() {
+async fn refresh_failure_preserves_login_waiting_for_file_lock() {
     let Some(controller) = auth_controller_or_skip() else {
         return;
     };
@@ -316,22 +322,17 @@ async fn invalidated_login_cannot_recreate_auth_after_waiting_for_file_lock() {
             std::future::pending(),
         )
         .await;
-    let (id, task) = {
+    let id = {
         let state = controller.inner.state.lock().await;
         let pending = state.pending.as_ref().unwrap();
-        let task = (pending.id.clone(), pending.task.abort_handle());
+        pending.task.abort();
+        let id = pending.id.clone();
         drop(state);
-        task
+        id
     };
-    let mut completion = std::pin::pin!(controller.finish_login_attempt(
-        id,
-        Ok(stored_auth(
-            "user@example.com",
-            "pro",
-            "workspace_123",
-            unix_now()
-        )),
-    ));
+    let auth = stored_auth("user@example.com", "pro", "workspace_123", unix_now());
+    let generation = auth.generation.clone();
+    let mut completion = std::pin::pin!(controller.finish_login_attempt(id, Ok(auth)));
     assert!(futures::poll!(&mut completion).is_pending());
     assert!(controller.inner.login_gate.try_lock().is_err());
 
@@ -339,17 +340,22 @@ async fn invalidated_login_cannot_recreate_auth_after_waiting_for_file_lock() {
         .clear_auth_with_error_locked(String::from("refresh rejected"))
         .await
         .unwrap();
-    task.abort();
     drop(file_lock);
     tokio::time::timeout(Duration::from_secs(2), completion)
         .await
         .unwrap();
 
-    assert!(!path.exists());
     let status = controller.get_status().await;
-    assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
-    assert_eq!(status.error.as_deref(), Some("refresh rejected"));
-    assert!(controller.get_request_auth().await.is_err());
+    assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+    assert!(status.error.is_none());
+    assert_eq!(
+        controller.get_request_auth().await.unwrap().generation,
+        generation
+    );
+    assert_eq!(
+        load_auth_file(&path).unwrap().unwrap().generation,
+        generation
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

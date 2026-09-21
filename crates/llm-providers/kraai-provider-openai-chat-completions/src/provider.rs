@@ -1,15 +1,15 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use color_eyre::eyre::{Result, eyre};
-use futures::{StreamExt, stream, stream::BoxStream};
+use futures::stream::BoxStream;
 use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
     ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
-    ProviderRequestContext, ProviderStreamEvent, SseEvent, build_streaming_http_client,
-    finite_request, send_with_retry, stream_sse_data,
+    ProviderRequestContext, ProviderStreamEvent, build_streaming_http_client, finite_request,
+    send_with_retry, stream_sse_data,
 };
-use kraai_types::{AssistantPhase, ModelId, ProviderId};
+use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
 use tokio::sync::RwLock;
 
@@ -18,10 +18,8 @@ use crate::messages::normalize_chat_messages;
 use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
-use crate::usage::normalize_usage;
-use crate::wire::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse,
-};
+use crate::streaming::adapt_chat_completion_stream;
+use crate::wire::{ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse};
 
 pub struct ChatCompletionsProvider<P> {
     id: ProviderId,
@@ -170,96 +168,6 @@ where
     }
 }
 
-fn adapt_chat_completion_stream(
-    source: BoxStream<'static, Result<SseEvent>>,
-    reported_costs: bool,
-) -> BoxStream<'static, Result<ProviderStreamEvent>> {
-    stream::unfold(
-        (
-            source,
-            VecDeque::<Result<ProviderStreamEvent>>::new(),
-            false,
-        ),
-        move |(mut source, mut pending, finished)| async move {
-            if finished {
-                return None;
-            }
-
-            loop {
-                if let Some(event) = pending.pop_front() {
-                    let failed = event.is_err();
-                    return Some((event, (source, pending, failed)));
-                }
-
-                match source.next().await {
-                    Some(Ok(SseEvent::Data(payload))) => {
-                        pending.extend(
-                            serde_json::from_str::<ChatCompletionChunk>(&payload)
-                                .map(|chunk| events_from_chunk(chunk, reported_costs))
-                                .unwrap_or_else(|error| vec![Err(eyre!(error))]),
-                        );
-                    }
-                    Some(Ok(SseEvent::Done)) => return None,
-                    Some(Err(error)) => {
-                        return Some((Err(error), (source, pending, true)));
-                    }
-                    None => {
-                        return Some((
-                            Err(eyre!(
-                                "Chat completions stream ended before the [DONE] marker"
-                            )),
-                            (source, pending, true),
-                        ));
-                    }
-                }
-            }
-        },
-    )
-    .boxed()
-}
-
-fn events_from_chunk(
-    chunk: ChatCompletionChunk,
-    reported_costs: bool,
-) -> Vec<Result<ProviderStreamEvent>> {
-    let mut events = Vec::with_capacity(2);
-    let incomplete_reason = chunk
-        .choices
-        .iter()
-        .find_map(|choice| {
-            choice
-                .finish_reason
-                .as_deref()
-                .filter(|reason| !matches!(*reason, "stop" | "tool_calls" | "function_call"))
-        })
-        .map(str::to_owned);
-
-    if let Some(delta) = chunk
-        .choices
-        .into_iter()
-        .find_map(|choice| choice.delta.content)
-    {
-        events.push(Ok(ProviderStreamEvent::TextDelta {
-            item_id: String::from("chat-completions-message"),
-            phase: AssistantPhase::FinalAnswer,
-            delta,
-        }));
-    }
-    if let Some(usage) = chunk
-        .usage
-        .and_then(|usage| normalize_usage(usage, reported_costs))
-    {
-        events.push(Ok(ProviderStreamEvent::Usage(usage)));
-    }
-    if let Some(reason) = incomplete_reason {
-        events.push(Err(eyre!(
-            "Chat completions response did not complete successfully: {reason}"
-        )));
-    }
-
-    events
-}
-
 async fn ensure_success_response(operation: &str, response: Response) -> Result<Response> {
     let status = response.status();
     if status.is_success() {
@@ -359,7 +267,6 @@ impl ProviderFactory for OpenAiFactory {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
     reason = "provider tests use direct assertions for local HTTP fixtures"
@@ -371,6 +278,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use futures::StreamExt;
     use kraai_provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -539,32 +447,56 @@ mod tests {
         assert_eq!(retries[0].reason, "HTTP 429 Too Many Requests");
     }
 
-    #[test]
-    fn normalize_usage_splits_cache_and_reasoning_tokens() {
-        let usage = normalize_usage(
-            crate::wire::ChatCompletionUsage {
-                cost: None,
-                cost_details: None,
-                prompt_tokens: 120,
-                completion_tokens: 45,
-                total_tokens: Some(165),
-                prompt_tokens_details: Some(crate::wire::PromptTokenDetails {
-                    cached_tokens: Some(20),
-                    cache_write_tokens: None,
-                }),
-                completion_tokens_details: Some(crate::wire::CompletionTokenDetails {
-                    reasoning_tokens: Some(5),
-                }),
-            },
-            false,
-        )
-        .expect("usage should normalize");
-
-        assert_eq!(usage.total_tokens, 165);
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 40);
-        assert_eq!(usage.reasoning_tokens, 5);
-        assert_eq!(usage.cache_read_tokens, 20);
+    #[tokio::test]
+    async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
+        let address = spawn_server(vec![ScriptedResponse::Status {
+            status_line: "200 OK",
+            body: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+                "data: {\"error\":{\"code\":502,\"message\":\"Provider disconnected\"},\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ),
+        }])
+        .await;
+        let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
+            id: ProviderId::new("fixture"),
+            client: Client::builder().tls_certs_only([]).build().unwrap(),
+            base_url: format!("http://{address}"),
+            auth: ApiKeyAuth::resolve(&BTreeMap::from([(
+                String::from("api_key"),
+                DynamicValue::from("test-key"),
+            )]))
+            .unwrap(),
+            only_listed_models: false,
+            cached_models: RwLock::new(BTreeMap::new()),
+            model_configs: BTreeMap::new(),
+            _profile: PhantomData,
+        };
+        let events = provider
+            .generate_reply_stream(
+                &ModelId::new("fixture-model"),
+                ProviderRequest {
+                    messages: vec![kraai_types::ConversationItem::User {
+                        text: String::from("hello"),
+                    }],
+                    script_tool: None,
+                },
+                &ProviderRequestContext::default(),
+            )
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(matches!(
+            events.first(),
+            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
+        ));
+        assert!(events.get(1).is_some_and(|event| {
+            event
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("Provider disconnected"))
+        }));
+        assert_eq!(events.len(), 2);
     }
 
     #[tokio::test]
@@ -639,123 +571,6 @@ mod tests {
             }
             assert!(provider.cache_models().await.is_err());
             assert_eq!(metadata(provider.list_models().await), expected);
-        }
-    }
-
-    #[test]
-    fn mixed_stream_chunk_preserves_text_before_usage() {
-        let chunk = serde_json::from_str::<ChatCompletionChunk>(
-            r#"{
-                "choices":[{"delta":{"content":"hello"}}],
-                "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
-            }"#,
-        )
-        .unwrap();
-
-        let events = events_from_chunk(chunk, false)
-            .into_iter()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert_eq!(
-            events,
-            vec![
-                ProviderStreamEvent::TextDelta {
-                    item_id: String::from("chat-completions-message"),
-                    phase: AssistantPhase::FinalAnswer,
-                    delta: String::from("hello"),
-                },
-                ProviderStreamEvent::Usage(kraai_types::TokenUsage {
-                    total_tokens: 3,
-                    input_tokens: 2,
-                    output_tokens: 1,
-                    reasoning_tokens: 0,
-                    cache_read_tokens: 0,
-                    ..Default::default()
-                }),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_rejects_eof_before_done_marker() {
-        let source = stream::iter(vec![Ok(SseEvent::Data(String::from(
-            r#"{"choices":[{"delta":{"content":"partial"}}]}"#,
-        )))])
-        .boxed();
-        let events = adapt_chat_completion_stream(source, false)
-            .collect::<Vec<_>>()
-            .await;
-
-        assert!(matches!(
-            events.first(),
-            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
-        ));
-        assert!(events.get(1).is_some_and(Result::is_err));
-    }
-
-    #[tokio::test]
-    async fn stream_stops_at_done_without_waiting_for_eof() {
-        let source = stream::iter(vec![Ok(SseEvent::Done)])
-            .chain(stream::pending())
-            .boxed();
-
-        let event = tokio::time::timeout(
-            Duration::from_secs(1),
-            adapt_chat_completion_stream(source, false).next(),
-        )
-        .await
-        .unwrap();
-
-        assert!(event.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_rejects_incomplete_finish_reasons_and_preserves_usage() {
-        for reason in ["length", "content_filter", "unknown_failure"] {
-            let source = stream::iter(vec![
-                Ok(SseEvent::Data(String::from(
-                    r#"{"choices":[{"delta":{"content":"Partial summary"}}]}"#,
-                ))),
-                Ok(SseEvent::Data(format!(
-                    r#"{{"choices":[{{"delta":{{}},"finish_reason":"{reason}"}}],"usage":{{"prompt_tokens":2,"completion_tokens":1}}}}"#,
-                ))),
-                Ok(SseEvent::Done),
-            ]).boxed();
-            let events = adapt_chat_completion_stream(source, false)
-                .collect::<Vec<_>>()
-                .await;
-            assert_eq!(events.len(), 3);
-            assert!(matches!(
-                events.first(),
-                Some(Ok(ProviderStreamEvent::TextDelta { .. }))
-            ));
-            assert!(matches!(
-                events.get(1),
-                Some(Ok(ProviderStreamEvent::Usage(_)))
-            ));
-            assert!(events.get(2).is_some_and(|event| {
-                event
-                    .as_ref()
-                    .is_err_and(|error| error.to_string().contains(reason))
-            }));
-        }
-    }
-
-    #[tokio::test]
-    async fn stream_accepts_successful_text_and_tool_finish_reasons() {
-        for reason in ["stop", "tool_calls", "function_call"] {
-            let source = stream::iter(vec![
-                Ok(SseEvent::Data(format!(
-                    r#"{{"choices":[{{"delta":{{"content":"complete"}},"finish_reason":"{reason}"}}]}}"#,
-                ))),
-                Ok(SseEvent::Done),
-            ]).boxed();
-            let events = adapt_chat_completion_stream(source, false)
-                .collect::<Vec<_>>()
-                .await;
-            assert_eq!(events.len(), 1);
-            assert!(events.iter().all(Result::is_ok));
         }
     }
 }

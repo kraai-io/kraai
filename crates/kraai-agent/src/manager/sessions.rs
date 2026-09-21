@@ -112,8 +112,8 @@ impl AgentManager {
             AgentProfilesState {
                 profiles: resolved
                     .profiles
-                    .iter()
-                    .map(AgentProfile::summary)
+                    .into_iter()
+                    .map(AgentProfile::into_summary)
                     .collect(),
                 warnings: resolved.warnings,
                 selected_profile_id,
@@ -165,7 +165,7 @@ impl AgentManager {
         let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
         state.last_model = Some(generation.model_id);
         state.last_provider = Some(generation.provider_id);
-        state.active_turn_profile = Some(profile);
+        state.active_turn_profile = Some(Arc::new(profile));
         Ok(())
     }
 
@@ -189,6 +189,18 @@ impl AgentManager {
         let Some(tip) = self.message_store.get(&tip_id).await? else {
             return Ok(session);
         };
+        if tip.status == MessageStatus::Complete
+            && let ConversationItem::ScriptResult { call_id, .. } = &tip.content
+            && let Some(parent_id) = &tip.parent_id
+            && let Some(mut parent) = self.message_store.get(parent_id).await?
+            && matches!(parent.status, MessageStatus::Streaming { .. })
+            && matches!(&parent.content, ConversationItem::Assistant { items }
+                if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: parent_call, .. }
+                    if parent_call == call_id)))
+        {
+            parent.status = MessageStatus::Complete;
+            self.message_store.save(&parent).await?;
+        }
         if !matches!(tip.status, MessageStatus::Streaming { .. }) {
             return Ok(session);
         }
@@ -251,12 +263,14 @@ impl AgentManager {
                 continue;
             };
 
-            for message in self.get_history_context(&tip_id).await?.into_iter().rev() {
+            let mut limit_reached = false;
+            self.visit_history_context(&tip_id, |message| {
                 if history.len() >= limit {
-                    return Ok(history);
+                    limit_reached = true;
+                    return;
                 }
                 if message.role() != ChatRole::User {
-                    continue;
+                    return;
                 }
 
                 let content = message
@@ -268,6 +282,10 @@ impl AgentManager {
                 if !content.is_empty() {
                     history.push(content);
                 }
+            })
+            .await?;
+            if limit_reached {
+                return Ok(history);
             }
         }
 
@@ -306,8 +324,8 @@ impl AgentManager {
         Ok(AgentProfilesState {
             profiles: resolved
                 .profiles
-                .iter()
-                .map(AgentProfile::summary)
+                .into_iter()
+                .map(AgentProfile::into_summary)
                 .collect(),
             warnings: resolved.warnings,
             selected_profile_id: session.selected_profile_id,

@@ -68,3 +68,48 @@ fn missed_initial_config_and_failed_startup_still_finish_synchronizing() {
         assert_eq!(harness.app.startup_sync, StartupSync::Complete);
     }
 }
+
+#[test]
+fn startup_message_waits_for_all_selections_and_is_submitted_once() {
+    let mut harness = test_harness();
+    let message = String::from("  initial question\nwith a second line  ");
+    harness.app.startup_options.message = Some(message.clone());
+
+    for selection in 0..4 {
+        harness.app.maybe_send_startup_message();
+        assert!(harness.drain_requests().is_empty());
+        assert!(!harness.app.startup_message_sent);
+        assert_eq!(harness.app.startup_options.message.as_ref(), Some(&message));
+        match selection {
+            0 => harness.app.state.config_loaded = true,
+            1 => harness.app.state.selected_provider_id = Some(String::from("provider")),
+            2 => harness.app.state.selected_model_id = Some(String::from("model")),
+            _ => harness.app.state.selected_profile_id = Some(String::from("plan")),
+        }
+    }
+
+    harness.app.state.is_streaming = true;
+    harness.app.maybe_send_startup_message();
+    assert!(harness.drain_requests().is_empty());
+    assert!(!harness.app.startup_message_sent);
+    harness.app.state.is_streaming = false;
+
+    harness.app.maybe_send_startup_message();
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::CreateSession { profile_id, .. }]
+            if profile_id.as_deref() == Some("plan")
+    ));
+    assert_eq!(
+        harness
+            .app
+            .state
+            .pending_submit
+            .as_ref()
+            .map(|submit| &submit.message),
+        Some(&message),
+    );
+    assert!(harness.app.startup_message_sent);
+    harness.app.maybe_send_startup_message();
+    assert!(harness.drain_requests().is_empty());
+}

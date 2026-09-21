@@ -157,6 +157,26 @@ fn title_from_user_prompt_flattens_newlines() {
     assert!(!title.contains('\r'));
 }
 
+#[test]
+fn title_from_user_prompt_preserves_unicode_whitespace_and_truncation_boundaries() {
+    for (prompt, expected) in [
+        (String::new(), None),
+        (String::from(" \t\r\n\u{2003}\u{a0}"), None),
+        (
+            String::from("\t é \u{2003}模型\u{a0}🦀\n"),
+            Some(String::from("é 模型 🦀")),
+        ),
+        (
+            format!("{} next", "é".repeat(59)),
+            Some(format!("{} ", "é".repeat(59))),
+        ),
+        (format!("{}\nnext", "🦀".repeat(60)), Some("🦀".repeat(60))),
+        ("word \t".repeat(100_000), Some("word ".repeat(12))),
+    ] {
+        assert_eq!(title_from_user_prompt(&prompt), expected);
+    }
+}
+
 #[tokio::test]
 async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;

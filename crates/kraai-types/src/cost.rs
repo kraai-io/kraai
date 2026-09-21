@@ -129,21 +129,25 @@ impl std::fmt::Display for CostSummary {
         if self.overflow {
             return f.write_str("cost overflow");
         }
-        let mut parts = Vec::new();
-        if self.reported != 0 || self.unknown == 0 {
-            parts.push(format!(
+        let show_amount = self.reported != 0 || self.unknown == 0;
+        if show_amount {
+            write!(
+                f,
                 "{}{}",
                 if self.estimated { "~" } else { "" },
                 self.amount
-            ));
+            )?;
         }
         if self.unknown != 0 {
-            parts.push(String::from("$unknown"));
+            if show_amount {
+                f.write_str(" + ")?;
+            }
+            f.write_str("$unknown")?;
         }
         if self.upstream.0 != 0 {
-            parts.push(format!("~{} upstream", self.upstream));
+            write!(f, " + ~{} upstream", self.upstream)?;
         }
-        f.write_str(&parts.join(" + "))
+        Ok(())
     }
 }
 
@@ -183,6 +187,52 @@ mod tests {
         assert_eq!(Usd::from_dollars(0.0), Some(Usd(0)));
         assert_eq!(Usd(1).to_string(), "<$0.0001");
         assert_eq!(Usd(123_450_000).to_string(), "$0.1235");
+    }
+
+    #[test]
+    fn summary_formats_known_unknown_upstream_and_overflow_costs() {
+        for (reported, unknown, upstream, estimated, overflow, expected) in [
+            (0, 0, 0, false, false, "$0.0000"),
+            (0, 0, 1, false, false, "$0.0000 + ~<$0.0001 upstream"),
+            (0, 1, 0, true, false, "$unknown"),
+            (
+                0,
+                1,
+                50_000_000,
+                true,
+                false,
+                "$unknown + ~$0.0500 upstream",
+            ),
+            (1, 0, 0, false, false, "$0.0000"),
+            (
+                1,
+                0,
+                50_000_000,
+                true,
+                false,
+                "~$0.0000 + ~$0.0500 upstream",
+            ),
+            (
+                1,
+                1,
+                50_000_000,
+                false,
+                false,
+                "$0.0000 + $unknown + ~$0.0500 upstream",
+            ),
+            (1, 1, 50_000_000, true, true, "cost overflow"),
+        ] {
+            let summary = CostSummary {
+                reported,
+                unknown,
+                upstream: Usd(upstream),
+                estimated,
+                overflow,
+                ..Default::default()
+            };
+            assert_eq!(summary.to_string(), expected);
+            assert_eq!(format!("{summary:>80.1}"), expected);
+        }
     }
 
     #[test]

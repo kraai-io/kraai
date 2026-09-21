@@ -9,6 +9,7 @@ mod script_environment;
 mod script_execution;
 mod script_recovery;
 mod scripts;
+mod state_effects;
 mod stream_driver;
 mod streaming;
 

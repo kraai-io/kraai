@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use kraai_types::{SandboxCapabilities, SandboxCapability};
 
 use crate::duration::parse_duration;
@@ -25,11 +23,11 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
         })?;
     let attributes = parse_fields(fields)?;
     let timeout = attributes
-        .get("timeout")
+        .timeout
         .ok_or(ProtocolError::MissingTimeout)
-        .and_then(|value| parse_duration(value))?;
+        .and_then(parse_duration)?;
     let requested_capabilities = attributes
-        .get("permissions")
+        .permissions
         .map(|value| parse_permissions(value).map_err(ProtocolError::InvalidPermissions))
         .transpose()?
         .unwrap_or_default();
@@ -37,38 +35,42 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     let source_start = header_start + header_end;
     let source = input[source_start..]
         .trim_start_matches(['\r', '\n'])
-        .as_bytes()
-        .to_vec();
+        .as_bytes();
     if source.iter().all(u8::is_ascii_whitespace) {
         return Err(ProtocolError::EmptyScript);
     }
 
     Ok(ScriptBlock {
         input: input.to_string(),
-        source,
+        source: source.to_vec(),
         timeout,
         requested_capabilities,
     })
 }
 
-fn parse_fields(input: &str) -> Result<BTreeMap<String, String>, ProtocolError> {
-    let mut attributes = BTreeMap::new();
+#[derive(Default)]
+struct ScriptMetadata<'a> {
+    timeout: Option<&'a str>,
+    permissions: Option<&'a str>,
+}
+
+fn parse_fields(input: &str) -> Result<ScriptMetadata<'_>, ProtocolError> {
+    let mut attributes = ScriptMetadata::default();
     for field in input.split_ascii_whitespace() {
         let (name, value) = field.split_once('=').ok_or_else(|| {
             ProtocolError::MalformedMetadata(format!("field '{field}' is missing '='"))
         })?;
-        if !matches!(name, "timeout" | "permissions") {
-            return Err(ProtocolError::UnknownAttribute(name.to_string()));
-        }
+        let attribute = match name {
+            "timeout" => &mut attributes.timeout,
+            "permissions" => &mut attributes.permissions,
+            _ => return Err(ProtocolError::UnknownAttribute(name.to_string())),
+        };
         if value.is_empty() {
             return Err(ProtocolError::MalformedMetadata(format!(
                 "field '{name}' is empty"
             )));
         }
-        if attributes
-            .insert(name.to_string(), value.to_string())
-            .is_some()
-        {
+        if attribute.replace(value).is_some() {
             return Err(ProtocolError::DuplicateAttribute(name.to_string()));
         }
     }
@@ -139,5 +141,45 @@ mod tests {
         assert!(parse_script_input("# kraai timeout=1sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec timeout=2sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec mystery=x\necho hi").is_err());
+    }
+
+    #[test]
+    fn metadata_errors_preserve_field_and_validation_order() {
+        for (input, expected) in [
+            (
+                "# timeout=invalid timeout=\necho hi",
+                ProtocolError::MalformedMetadata(String::from("field 'timeout' is empty")),
+            ),
+            (
+                "# timeout=invalid unknown=\necho hi",
+                ProtocolError::UnknownAttribute(String::from("unknown")),
+            ),
+            (
+                "# timeout=invalid timeout=1sec\necho hi",
+                ProtocolError::DuplicateAttribute(String::from("timeout")),
+            ),
+            (
+                "# permissions=invalid permissions=network timeout=1sec\necho hi",
+                ProtocolError::DuplicateAttribute(String::from("permissions")),
+            ),
+            (
+                "# permissions=invalid timeout=10s\necho hi",
+                ProtocolError::InvalidTimeout(String::from("unknown Nushell duration unit 's'")),
+            ),
+            (
+                "# permissions=invalid\necho hi",
+                ProtocolError::MissingTimeout,
+            ),
+            (
+                "# timeout=invalid missing\necho hi",
+                ProtocolError::MalformedMetadata(String::from("field 'missing' is missing '='")),
+            ),
+            (
+                "# timeout=1sec permissions=unknown\n \t",
+                ProtocolError::InvalidPermissions(String::from("unknown capability 'unknown'")),
+            ),
+        ] {
+            assert_eq!(parse_script_input(input), Err(expected), "{input:?}");
+        }
     }
 }

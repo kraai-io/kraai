@@ -1,4 +1,4 @@
-use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
+use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, ToolCallId};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -14,7 +14,7 @@ pub struct ResponsesRequestMessage {
     #[serde(rename = "type")]
     kind: &'static str,
     role: &'static str,
-    content: Vec<MessageContentItem>,
+    content: [MessageContentItem; 1],
     #[serde(skip_serializing_if = "Option::is_none")]
     phase: Option<&'static str>,
 }
@@ -30,7 +30,7 @@ struct MessageContentItem {
 pub struct ResponsesCustomToolCall {
     #[serde(rename = "type")]
     kind: &'static str,
-    call_id: String,
+    call_id: ToolCallId,
     name: String,
     input: String,
 }
@@ -39,7 +39,7 @@ pub struct ResponsesCustomToolCall {
 pub struct ResponsesCustomToolCallOutput {
     #[serde(rename = "type")]
     kind: &'static str,
-    call_id: String,
+    call_id: ToolCallId,
     output: String,
 }
 
@@ -50,10 +50,16 @@ pub struct NormalizedResponsesInput {
 
 pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResponsesInput {
     let mut messages = messages.into_iter().peekable();
-    let mut instructions = Vec::new();
+    let mut instructions: Option<String> = None;
     while matches!(messages.peek(), Some(ConversationItem::System { .. })) {
         if let Some(ConversationItem::System { text }) = messages.next() {
-            instructions.push(text);
+            match &mut instructions {
+                Some(instructions) => {
+                    instructions.push_str("\n\n");
+                    instructions.push_str(&text);
+                }
+                None => instructions = Some(text),
+            }
         }
     }
     let mut input = Vec::new();
@@ -94,7 +100,7 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResp
                         } => input.push(ResponsesRequestItem::CustomToolCall(
                             ResponsesCustomToolCall {
                                 kind: "custom_tool_call",
-                                call_id: call_id.to_string(),
+                                call_id,
                                 name,
                                 input: tool_input,
                             },
@@ -106,7 +112,7 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResp
                 input.push(ResponsesRequestItem::CustomToolCallOutput(
                     ResponsesCustomToolCallOutput {
                         kind: "custom_tool_call_output",
-                        call_id: call_id.to_string(),
+                        call_id,
                         output,
                     },
                 ));
@@ -115,7 +121,7 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResp
     }
 
     NormalizedResponsesInput {
-        instructions: instructions.join("\n\n"),
+        instructions: instructions.unwrap_or_default(),
         input,
     }
 }
@@ -129,7 +135,7 @@ fn text_message(
     ResponsesRequestMessage {
         kind: "message",
         role,
-        content: vec![MessageContentItem {
+        content: [MessageContentItem {
             kind: content_kind,
             text,
         }],
@@ -153,6 +159,41 @@ mod tests {
     use super::*;
     use kraai_types::ToolCallId;
     use serde_json::json;
+
+    #[test]
+    fn leading_system_messages_preserve_empty_segments_and_stop_at_history() {
+        for (prefixes, expected) in [
+            (vec![], ""),
+            (vec![""], ""),
+            (vec!["", ""], "\n\n"),
+            (vec!["", "second", ""], "\n\nsecond\n\n"),
+            (vec![" first\n", "第二段"], " first\n\n\n第二段"),
+        ] {
+            let prefix_messages = prefixes.into_iter().map(|text| ConversationItem::System {
+                text: text.to_string(),
+            });
+            let normalized = normalize_conversation(
+                prefix_messages
+                    .chain([
+                        ConversationItem::User {
+                            text: String::from("boundary"),
+                        },
+                        ConversationItem::System {
+                            text: String::from("later instructions"),
+                        },
+                    ])
+                    .collect(),
+            );
+            assert_eq!(normalized.instructions, expected);
+            assert_eq!(
+                serde_json::to_value(normalized.input).expect("serialized input"),
+                json!([
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "boundary"}]},
+                    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "later instructions"}]},
+                ])
+            );
+        }
+    }
 
     #[test]
     fn normalizes_typed_cross_provider_history() {

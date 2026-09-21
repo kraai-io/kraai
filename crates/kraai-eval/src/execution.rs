@@ -4,16 +4,19 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::Result;
 
+use crate::event_log::{EventLog, unix_timestamp_ms};
 use crate::provider_config::PreparedKraaiProviderConfig;
+use crate::runner::{
+    apply_patch, expand_runner_command, outcome_json, process_record, resource_limits,
+    set_progress, write_process_logs,
+};
 use crate::sandbox::{self, SandboxRequest, run_sandboxed};
 use crate::workspace::{
     self, capture_submission, commit_fixture, materialize_base, replay_submission,
 };
 use crate::{
-    EvaluationMetrics, EventLog, ExperimentIdentity, HarnessMetrics, NetworkPolicy, RunRequest,
-    RunResult, RunStatus, SandboxRecord, TaskManifest, apply_patch, cargo_dependencies,
-    expand_runner_command, manifest, outcome_json, process_record, proxy, resource_limits,
-    set_progress, unix_timestamp_ms, write_process_logs,
+    EvaluationMetrics, ExperimentIdentity, HarnessMetrics, NetworkPolicy, RunRequest, RunResult,
+    RunStatus, SandboxRecord, TaskManifest, cargo_dependencies, manifest, proxy,
 };
 
 pub(crate) struct Execution<'a> {

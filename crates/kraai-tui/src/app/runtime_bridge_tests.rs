@@ -256,3 +256,65 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
     tokio::time::timeout(timeout, runtime.shutdown()).await??;
     Ok(())
 }
+
+#[tokio::test]
+async fn failed_executor_preserves_response_ids_and_startup_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let config = root.path().join("providers.toml");
+    std::fs::write(&config, "")?;
+    let runtime = kraai_runtime::RuntimeBuilder::new()
+        .storage_root(root.path().to_path_buf())
+        .provider_config_path(config)
+        .build();
+    let failure = RuntimeError::unavailable("failed to create tokio runtime: injected");
+    let bridge = RequestBridge {
+        runtime: runtime.clone(),
+        executor: Err(failure.clone()),
+    };
+    let attempted = std::cell::Cell::new(false);
+    let result = bridge.execute(|_| {
+        attempted.set(true);
+        ready(Ok(()))
+    });
+    assert!(!attempted.get());
+    assert_eq!(result, Err(failure.clone()));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::SetSessionProfile {
+            session_id: "invalid/session".into(),
+            profile_id: String::new(),
+        }),
+        RuntimeResponse::SetSessionProfile { session_id, profile_id, result }
+            if session_id == "invalid/session" && profile_id.is_empty() && result == Err(failure.clone())
+    ));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::GetSessionSnapshot { session_id: "missing".into() }),
+        RuntimeResponse::SessionSnapshot { session_id, result }
+            if session_id == "missing" && result.as_ref().as_ref().err() == Some(&failure)
+    ));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::ApproveScript {
+            session_id: "session".into(), execution_id: "invalid/execution".into(),
+        }),
+        RuntimeResponse::ApproveScript { session_id, execution_id, result }
+            if session_id == "session" && execution_id == "invalid/execution" && result == Err(failure.clone())
+    ));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::GetOpenAiCodexAuthStatus),
+        RuntimeResponse::OpenAiCodexAuthStatus(Err(error)) if error == failure
+    ));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::LoadSession {
+            load_id: 42,
+            session_id: "invalid/session".into(),
+        }),
+        RuntimeResponse::LoadSession { load_id: 42, session_id, result }
+            if session_id == "invalid/session" && result == Err(failure.clone())
+    ));
+    assert!(matches!(
+        bridge.dispatch(RuntimeRequest::FinishStartupSync),
+        RuntimeResponse::StartupSyncComplete
+    ));
+    runtime.shutdown().await?;
+    Ok(())
+}
