@@ -155,6 +155,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         commands: vec![
             String::from("kraai-open-files"),
             String::from("kraai-close-files"),
+            String::from("kraai-web-search"),
         ],
         permissions: SandboxPermissionSet::new([read_capability, SandboxCapability::Network])
             .expect("valid plan capabilities"),
@@ -173,6 +174,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         commands: vec![
             String::from("kraai-open-files"),
             String::from("kraai-close-files"),
+            String::from("kraai-web-search"),
             String::from("kraai-edit-file"),
         ],
         permissions: SandboxPermissionSet::new([
@@ -474,7 +476,7 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "coding")
             .unwrap();
-        assert_eq!(plan.commands.len(), 2);
+        assert_eq!(plan.commands.len(), 3);
         assert!(
             plan.permissions
                 .capabilities()
@@ -486,7 +488,7 @@ mod tests {
                 .capabilities()
                 .contains(SandboxCapability::WorkspaceWrite)
         );
-        assert_eq!(coding.commands.len(), 3);
+        assert_eq!(coding.commands.len(), 4);
         assert!(
             coding
                 .permissions

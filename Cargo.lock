@@ -2906,6 +2906,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-command-web-search"
+version = "0.1.0"
+dependencies = [
+ "kraai-command-catalog",
+ "kraai-command-core",
+ "kraai-types",
+ "nu-engine",
+ "nu-protocol",
+]
+
+[[package]]
 name = "kraai-eval"
 version = "0.1.0"
 dependencies = [
@@ -2936,14 +2947,17 @@ dependencies = [
 name = "kraai-nushell-runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "hmac",
  "kraai-command-catalog",
  "kraai-command-close-files",
  "kraai-command-core",
  "kraai-command-edit-file",
  "kraai-command-open-files",
+ "kraai-command-web-search",
  "kraai-sandbox",
  "kraai-types",
+ "kraai-web",
  "nix 0.31.3",
  "nu-cli",
  "nu-cmd-lang",
@@ -3138,6 +3152,17 @@ dependencies = [
  "serde",
  "serde_json",
  "ts-rs",
+]
+
+[[package]]
+name = "kraai-web"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kraai-types",
+ "reqwest 0.13.5",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

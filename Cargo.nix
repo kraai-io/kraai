@@ -103,6 +103,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-command-web-search" = rec {
+      packageId = "kraai-command-web-search";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-command-web-search";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-eval" = rec {
       packageId = "kraai-eval";
       build = internal.buildRustCrateWithFeatures {
@@ -217,6 +227,16 @@ rec {
       packageId = "kraai-types";
       build = internal.buildRustCrateWithFeatures {
         packageId = "kraai-types";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "kraai-web" = rec {
+      packageId = "kraai-web";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-web";
       };
 
       # Debug support which might change between releases.
@@ -8817,6 +8837,36 @@ rec {
         ];
 
       };
+      "kraai-command-web-search" = rec {
+        crateName = "kraai-command-web-search";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-web-search; };
+        libName = "kraai_command_web_search";
+        dependencies = [
+          {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
+          }
+          {
+            name = "kraai-command-core";
+            packageId = "kraai-command-core";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "nu-engine";
+            packageId = "nu-engine";
+          }
+          {
+            name = "nu-protocol";
+            packageId = "nu-protocol";
+          }
+        ];
+
+      };
       "kraai-eval" = rec {
         crateName = "kraai-eval";
         version = "0.1.0";
@@ -8942,6 +8992,10 @@ rec {
             packageId = "hmac";
           }
           {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
+          }
+          {
             name = "kraai-command-close-files";
             packageId = "kraai-command-close-files";
           }
@@ -8958,12 +9012,20 @@ rec {
             packageId = "kraai-command-open-files";
           }
           {
+            name = "kraai-command-web-search";
+            packageId = "kraai-command-web-search";
+          }
+          {
             name = "kraai-sandbox";
             packageId = "kraai-sandbox";
           }
           {
             name = "kraai-types";
             packageId = "kraai-types";
+          }
+          {
+            name = "kraai-web";
+            packageId = "kraai-web";
           }
           {
             name = "nix";
@@ -9036,6 +9098,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
           {
             name = "kraai-command-catalog";
             packageId = "kraai-command-catalog";
@@ -9696,6 +9762,38 @@ rec {
           "typescript" = [ "dep:ts-rs" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
+      };
+      "kraai-web" = rec {
+        crateName = "kraai-web";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-web; };
+        libName = "kraai_web";
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "reqwest";
+            packageId = "reqwest 0.13.5";
+            features = [ "json" "stream" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+        ];
+
       };
       "kraai-workspace-fs" = rec {
         crateName = "kraai-workspace-fs";

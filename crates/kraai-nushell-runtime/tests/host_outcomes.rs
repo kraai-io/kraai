@@ -86,7 +86,7 @@ async fn channel_failure(cancel: bool, during_request: bool) -> TestResult {
         let expected = if during_request {
             matches!(result, Err(RuntimeError::RequestChannel(_)))
         } else {
-            matches!(result, Err(RuntimeError::EffectChannel(_)))
+            matches!(result, Err(RuntimeError::HostChannel(_)))
         };
         if !expected {
             return Err(format!("internal cancellation hid a channel failure: {result:?}").into());

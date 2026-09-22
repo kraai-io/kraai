@@ -9,6 +9,8 @@ mod permissions;
 mod policy;
 mod profile;
 mod script;
+mod web;
+pub use web::{WebSearchRequest, WebSearchResponse};
 
 pub use command::{CommandExample, CommandMetadata};
 pub use context_state::{
