@@ -9,7 +9,7 @@ pub struct ResponsesRequest {
     pub input: Vec<ResponsesRequestItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ResponsesReasoning>,
-    pub tools: [ResponsesCustomTool; 1],
+    pub tools: Vec<ResponsesCustomTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,7 +158,7 @@ mod tests {
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
-            tools: [script_tool()],
+            tools: vec![script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
             stream: true,
@@ -178,7 +178,7 @@ mod tests {
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
             reasoning: None,
-            tools: [script_tool()],
+            tools: vec![script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
             stream: true,
@@ -203,7 +203,7 @@ mod tests {
                 effort: "high".to_string(),
                 context: "current_turn",
             }),
-            tools: [script_tool()],
+            tools: vec![script_tool()],
             tool_choice: Some("auto"),
             parallel_tool_calls: Some(false),
             stream: true,

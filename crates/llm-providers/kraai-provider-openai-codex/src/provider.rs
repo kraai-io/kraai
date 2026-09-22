@@ -387,9 +387,16 @@ impl OpenAiCodexProvider {
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
-        let tool = provider_request
+        let has_tool = provider_request.script_tool.is_some();
+        let tools = provider_request
             .script_tool
-            .ok_or_else(|| eyre!("OpenAI Codex request omitted the Kraai script tool"))?;
+            .into_iter()
+            .map(|tool| ResponsesCustomTool {
+                kind: "custom",
+                name: tool.name,
+                description: tool.description,
+            })
+            .collect();
         let normalized = normalize_conversation(provider_request.messages);
         let resolved_model = self.models.read().await.resolve(model_id)?;
         let request = ResponsesRequest {
@@ -397,13 +404,9 @@ impl OpenAiCodexProvider {
             instructions: normalized.instructions,
             input: normalized.input,
             reasoning: resolved_model.reasoning,
-            tools: [ResponsesCustomTool {
-                kind: "custom",
-                name: tool.name,
-                description: tool.description,
-            }],
-            tool_choice: Some("auto"),
-            parallel_tool_calls: Some(false),
+            tools,
+            tool_choice: Some(if has_tool { "auto" } else { "none" }),
+            parallel_tool_calls: has_tool.then_some(false),
             stream: true,
             store: false,
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
