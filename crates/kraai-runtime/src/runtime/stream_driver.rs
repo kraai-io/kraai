@@ -107,7 +107,7 @@ impl RuntimeCore {
                         },
                     );
                     return StreamDriveResult::FailedToStart {
-                        error: error.to_string(),
+                        error: format!("{error:#}"),
                     };
                 }
             }

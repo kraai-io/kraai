@@ -6,7 +6,9 @@
 use super::*;
 use crate::auth::OpenAiCodexAuthControllerOptions;
 use color_eyre::eyre::ensure;
+use futures::TryStreamExt;
 use kraai_provider_core::ScriptToolDefinition;
+use kraai_types::{AssistantPhase, ConversationItem, TokenUsage};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,7 +40,8 @@ async fn server(
                     }
                 }
                 requests.push(String::from_utf8(bytes)?);
-                let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let content_type = if body.starts_with("data:") { "text/event-stream" } else { "application/json" };
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 stream.write_all(response.as_bytes()).await?;
             }
             Ok::<_, color_eyre::Report>(requests)
@@ -147,22 +150,119 @@ async fn unsafe_backends_are_rejected_before_loading_auth_or_building_requests()
 }
 
 #[tokio::test]
-async fn missing_script_tool_is_rejected_before_model_resolution_or_authentication() -> Result<()> {
-    let provider = provider(String::from("http://example.com/backend-api"))?;
-    let result = provider
-        .send_responses_request(
-            &ModelId::new("unknown-model"),
-            ProviderRequest {
-                messages: Vec::new(),
-                script_tool: None,
-            },
-            &ProviderRequestContext::default(),
-        )
-        .await;
-    assert_eq!(
-        result.err().map(|error| error.to_string()).as_deref(),
-        Some("OpenAI Codex request omitted the Kraai script tool")
-    );
+async fn tool_free_summaries_stream_text_and_usage_through_authenticated_requests() -> Result<()> {
+    let models = json!({"models": [{
+        "slug": "summary-model",
+        "display_name": "Summary Model",
+        "visibility": "list",
+        "default_reasoning_level": "low",
+        "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
+    }]})
+    .to_string();
+    let summary = "Routing fixed. Validate the remaining changes.";
+    let events = [
+        json!({"type": "response.output_text.delta", "item_id": "summary", "delta": summary}),
+        json!({"type": "response.completed", "response": {"usage": {
+            "input_tokens": 100, "output_tokens": 20,
+            "input_tokens_details": {"cached_tokens": 40},
+            "output_tokens_details": {"reasoning_tokens": 5}
+        }}}),
+    ]
+    .into_iter()
+    .map(|event| format!("data: {event}\n\n"))
+    .collect::<String>();
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        ("200 OK", events.clone()),
+        ("200 OK", events),
+    ])
+    .await?;
+    let provider = provider(base_url)?;
+    provider.cache_models().await?;
+    for cache_key in [None, Some("summary-session")] {
+        let context = cache_key.map_or_else(ProviderRequestContext::default, |key| {
+            ProviderRequestContext::with_prompt_cache_key(key.into())
+        });
+        let events = provider
+            .generate_reply_stream(
+                &ModelId::new("summary-model-low"),
+                ProviderRequest {
+                    messages: vec![
+                        ConversationItem::System {
+                            text: "Summarize the conversation. Do not execute tools.".into(),
+                        },
+                        ConversationItem::User {
+                            text:
+                                "Previous summary:\n\nAdditional conversation data:\nRouting fixed."
+                                    .into(),
+                        },
+                    ],
+                    script_tool: None,
+                },
+                &context,
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::TextDelta {
+                    item_id: "summary".into(),
+                    phase: AssistantPhase::FinalAnswer,
+                    delta: summary.into(),
+                },
+                ProviderStreamEvent::Usage(TokenUsage {
+                    total_tokens: 120,
+                    input_tokens: 60,
+                    output_tokens: 15,
+                    reasoning_tokens: 5,
+                    cache_read_tokens: 40,
+                    ..TokenUsage::default()
+                }),
+            ]
+        );
+    }
+    let requests = server.await??;
+    assert_eq!(requests.len(), 3);
+    for (request, cache_key) in requests.iter().skip(1).zip([None, Some("summary-session")]) {
+        assert!(request.starts_with("POST /backend-api/codex/responses HTTP/1.1\r\n"));
+        let (headers, body) = request
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| eyre!("missing request body"))?;
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer test-token\r\n"));
+        assert!(headers.contains("accept: text/event-stream"));
+        assert_eq!(
+            headers
+                .lines()
+                .find_map(|line| line.strip_prefix("session_id: ")),
+            cache_key
+        );
+        let body: Value = serde_json::from_str(body)?;
+        assert_eq!(body.get("model"), Some(&json!("summary-model")));
+        assert_eq!(
+            body.get("instructions"),
+            Some(&json!("Summarize the conversation. Do not execute tools."))
+        );
+        assert_eq!(
+            body.get("input"),
+            Some(&json!([{
+                "type": "message", "role": "user", "content": [{
+                    "type": "input_text", "text": "Previous summary:\n\nAdditional conversation data:\nRouting fixed."
+                }]
+            }]))
+        );
+        assert_eq!(body.get("tools"), Some(&json!([])));
+        assert_eq!(body.get("tool_choice"), Some(&json!("none")));
+        assert!(body.get("parallel_tool_calls").is_none());
+        assert_eq!(body.get("stream"), Some(&json!(true)));
+        assert_eq!(body.get("store"), Some(&json!(false)));
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(Value::as_str),
+            cache_key
+        );
+    }
     Ok(())
 }
 
@@ -313,6 +413,8 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
             .and_then(Value::as_array)
             .is_some_and(|tools| !tools.is_empty())
     );
+    assert_eq!(body.get("tool_choice"), Some(&json!("auto")));
+    assert_eq!(body.get("parallel_tool_calls"), Some(&json!(false)));
     Ok(())
 }
 

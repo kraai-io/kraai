@@ -13,13 +13,71 @@ use tokio_util::sync::CancellationToken;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::Event;
 
-struct StalledSummarizer {
+struct TestSummarizer {
+    fail: bool,
     entered: CancellationToken,
     dropped: CancellationToken,
 }
 
+#[tokio::test]
+async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<()> {
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(TestSummarizer {
+            fail: true,
+            entered: CancellationToken::new(),
+            dropped: CancellationToken::new(),
+        }),
+    );
+    let harness = RuntimeTestHarness::new_with_parts(providers)
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let (request, providers) = {
+        let mut agent = harness.runtime.agent_manager.write().await;
+        let previous = agent
+            .prepare_start_stream(
+                &session_id,
+                "old detail ".repeat(9000),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        agent.complete_message(&previous.message_id).await?;
+        agent.clear_active_turn(&session_id);
+        let request = agent
+            .prepare_start_stream(
+                &session_id,
+                String::from("continue"),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await?;
+        (request, agent.cloned_provider_manager())
+    };
+    let result = super::super::core::RuntimeCore::drive_stream(
+        session_id,
+        request,
+        providers,
+        harness.runtime.agent_manager.clone(),
+        harness.runtime.event_tx.clone(),
+        harness.runtime.session_state_barrier.clone(),
+    )
+    .await;
+    let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
+        return Err(color_eyre::eyre::eyre!(
+            "expected compaction failure, got {result:?}"
+        ));
+    };
+    assert!(error.contains("original request exceeds the input budget"));
+    assert!(error.contains("summary provider rejected request"));
+    harness.shutdown().await;
+    Ok(())
+}
+
 #[async_trait]
-impl Provider for StalledSummarizer {
+impl Provider for TestSummarizer {
     fn get_provider_id(&self) -> ProviderId {
         ProviderId::new("mock")
     }
@@ -51,6 +109,9 @@ impl Provider for StalledSummarizer {
         });
         if is_summary {
             assert!(request.script_tool.is_none());
+            if self.fail {
+                return Err(color_eyre::eyre::eyre!("summary provider rejected request"));
+            }
             let _drop_guard = self.dropped.clone().drop_guard();
             self.entered.cancel();
             std::future::pending::<()>().await;
@@ -73,7 +134,8 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
     let mut providers = ProviderManager::new();
     providers.register_provider(
         ProviderId::new("mock"),
-        Box::new(StalledSummarizer {
+        Box::new(TestSummarizer {
+            fail: false,
             entered: entered.clone(),
             dropped: dropped.clone(),
         }),
@@ -146,7 +208,8 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
     let mut providers = ProviderManager::new();
     providers.register_provider(
         ProviderId::new("mock"),
-        Box::new(StalledSummarizer {
+        Box::new(TestSummarizer {
+            fail: false,
             entered: entered.clone(),
             dropped: dropped.clone(),
         }),
