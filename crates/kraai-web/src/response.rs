@@ -2,10 +2,11 @@ use kraai_types::WebSearchResponse;
 use serde_json::Value;
 
 pub(super) fn decode(body: &str, max_chars: usize) -> Result<WebSearchResponse, String> {
+    let body = body.strip_prefix('\u{feff}').unwrap_or(body);
     if body.trim_start().starts_with('{') {
         return decode_message(body, max_chars)?.ok_or_else(missing_result);
     }
-    let normalized = body.replace("\r\n", "\n");
+    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
     for event in normalized.split("\n\n") {
         let data = event
             .lines()
@@ -112,6 +113,30 @@ mod tests {
             decode(body, 100).map(|result| result.content),
             Ok(String::from("found"))
         );
+    }
+
+    #[test]
+    fn reads_sse_with_each_line_ending() {
+        let body = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\ndata: \"result\":{\"content\":[{\"type\":\"text\",\"text\":\"found\"}]}}\n\n";
+        for ending in ["\n", "\r\n", "\r"] {
+            assert_eq!(
+                decode(&body.replace('\n', ending), 100).map(|result| result.content),
+                Ok(String::from("found")),
+                "line ending: {ending:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_sse_with_a_leading_bom() {
+        let body = "\u{feff}data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"found\"}]}}\n\n";
+        for ending in ["\n", "\r\n", "\r"] {
+            assert_eq!(
+                decode(&body.replace('\n', ending), 100).map(|result| result.content),
+                Ok(String::from("found")),
+                "line ending: {ending:?}"
+            );
+        }
     }
 
     #[test]
