@@ -6,6 +6,27 @@ from harbor.models.trial.config import TaskConfig, TrialConfig
 
 
 class NativeResumeTests(unittest.TestCase):
+    def test_priority_change_reuses_completed_attempts_in_the_new_order(self):
+        from kraai_harbor.datasets import TERMINAL_BENCH, order_tasks
+
+        names = ["shadow-relay", "cad-model", "freecad-platform-drawing"]
+        completed = {
+            name: TrialConfig(task=TaskConfig(path=Path("/tasks") / name), trial_name=name)
+            for name in names
+        }
+        job = object.__new__(Job)
+        job._existing_trial_configs = list(completed.values())
+        ranked = order_tasks(TERMINAL_BENCH, names)
+        job._trial_configs = [
+            completed[name].model_copy(update={"trial_name": f"{name}-{attempt}"})
+            for name in ranked for attempt in range(2)
+        ]
+        job._init_remaining_trial_configs()
+        self.assertEqual(
+            [trial.task.path.name for trial in job._remaining_trial_configs], ranked
+        )
+        self.assertEqual(len(job._remaining_trial_configs), 3)
+
     def test_native_reconciliation_preserves_each_completed_attempt(self):
         one = TrialConfig(
             task=TaskConfig(path=Path("/tasks/one")), trial_name="one-old"
@@ -48,7 +69,7 @@ class IncrementalPlanTests(unittest.IsolatedAsyncioTestCase):
         from harbor.models.agent.context import AgentContext
         from harbor.models.trial.result import AgentInfo
         from datetime import datetime, timezone
-        from kraai_harbor.plan import reconcile_job
+        from kraai_harbor.plan import prepare_initial_config, reconcile_job
         from kraai_harbor.state import archive_interrupted
 
         with tempfile.TemporaryDirectory() as directory:
@@ -66,7 +87,12 @@ class IncrementalPlanTests(unittest.IsolatedAsyncioTestCase):
                 job_name="job", jobs_dir=root, tasks=tasks[:5],
                 agents=[AgentConfig(name="oracle")],
             )
+            args = argparse.Namespace(job_dir=root, dataset="fixture@1", registry_path=None)
+            with patch("kraai_harbor.plan.DatasetConfig.get_task_configs", new=AsyncMock(return_value=tasks[:5][::-1])):
+                initial = await prepare_initial_config(args, [f"task-{i}" for i in range(5)])
+            config.tasks = JobConfig.model_validate_json(initial.read_text()).tasks
             job = await Job.create(config)
+            self.assertEqual([trial.task for trial in job._remaining_trial_configs], tasks[:5])
             job._write_job_lock()
             (job.job_dir / "config.json").write_text(config.model_dump_json())
             saved = {}

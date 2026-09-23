@@ -254,6 +254,27 @@ class DriverTests(Fixture):
         command = build_command(self.arguments(dataset="terminal-bench/terminal-bench@4.0.0", task_name=["session-window-debug"]))
         self.assertEqual(command[command.index("--include-task-name") + 1], "terminal-bench/session-window-debug")
 
+    def test_ordered_config_reaches_harbor_without_dataset_overrides(self):
+        from unittest.mock import AsyncMock, patch
+        from typer.testing import CliRunner
+        from harbor.cli.main import app
+        from harbor.models.trial.config import TaskConfig
+
+        tasks = [TaskConfig(name=f"terminal-bench/{name}", ref="4.0.0")
+                 for name in ["shadow-relay", "cad-model"]]
+        path = self.root / "plan.json"
+        path.write_text(json.dumps({"tasks": [task.model_dump(mode="json") for task in tasks]}))
+        args = self.arguments(registry_path=self.root / "unused-registry.json")
+        command = build_command(args, path)
+        with patch("harbor.job.Job.create", new=AsyncMock(side_effect=RuntimeError("stop before execution"))) as create, patch("harbor.environments.factory.EnvironmentFactory.run_preflight"):
+            CliRunner().invoke(app, command[3:])
+        create.assert_awaited_once()
+        config = create.call_args.args[0]
+        self.assertEqual(config.tasks, tasks)
+        self.assertEqual(config.datasets, [])
+        self.assertEqual(config.n_attempts, 2)
+        self.assertEqual(config.n_concurrent_trials, 1)
+
     def test_task_globs_and_unpinned_datasets_are_rejected(self):
         for changes in (
             {"task_name": ["*"]},

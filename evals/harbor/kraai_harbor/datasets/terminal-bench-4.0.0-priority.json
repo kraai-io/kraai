@@ -1,0 +1,342 @@
+{
+  "source": "https://www.tbench.ai/?benchmark=4.0",
+  "leaderboard_row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+  "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+  "agent": "codex",
+  "agent_version": "0.151.0",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "low",
+  "ranking": "pass_rate / mean_trial_seconds, descending; ties by mean_trial_seconds then task name",
+  "tasks": {
+    "atrx-vep-crispr": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 384.750418
+    },
+    "batched-eval-parity": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 1050.677574
+    },
+    "biped-contact-dynamics": {
+      "attempts": 5,
+      "passes": 3,
+      "mean_trial_seconds": 870.046393
+    },
+    "bun-sourcemap-leak": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 636.907155
+    },
+    "cad-model": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 438.445445
+    },
+    "cargo-flight-dispatch": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 347.222517
+    },
+    "coq-block-bound": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 536.927499
+    },
+    "ctr-optimization": {
+      "attempts": 5,
+      "passes": 2,
+      "mean_trial_seconds": 17469.285197
+    },
+    "cumulative-layout-shift": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 3105.70132
+    },
+    "data-anonymization": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 1633.580957
+    },
+    "distributed-dedup": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 1592.074788
+    },
+    "embedding-drift-monitor": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 416.600497
+    },
+    "fin-saccr-rwa": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1182.076626
+    },
+    "foodstuff-beta-activity": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 257.604421
+    },
+    "formal-crypto": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1198.295147
+    },
+    "fp8-rmsnorm-gemm": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1770.327904
+    },
+    "freecad-impeller": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 728.753648
+    },
+    "freecad-platform-drawing": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 315.891105
+    },
+    "freecad-spring-clip": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 871.696741
+    },
+    "freight-dispatch-shift": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 885.666039
+    },
+    "glycan-ms2-elucidation": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 222.548735
+    },
+    "gsea-proteomics": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 586.4095
+    },
+    "heat-pump-warranty": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 794.503771
+    },
+    "hof-topology-interpenetration": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 491.833239
+    },
+    "html-js-filter": {
+      "attempts": 5,
+      "passes": 1,
+      "mean_trial_seconds": 494.739444
+    },
+    "interleaved-vigenere": {
+      "attempts": 5,
+      "passes": 3,
+      "mean_trial_seconds": 461.127878
+    },
+    "intrastat-meldung": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 742.663714
+    },
+    "jax-speedrun-gpu": {
+      "attempts": 5,
+      "passes": 3,
+      "mean_trial_seconds": 24538.367263
+    },
+    "ks-solver-cpp": {
+      "attempts": 5,
+      "passes": 2,
+      "mean_trial_seconds": 1248.590227
+    },
+    "kv-live-surgery": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 767.581008
+    },
+    "lake-temp-glm": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 2341.545666
+    },
+    "layout-config-recreation": {
+      "attempts": 5,
+      "passes": 1,
+      "mean_trial_seconds": 1781.896774
+    },
+    "layout-config-recreation2": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 839.004371
+    },
+    "legacy-utility-triage": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 1766.819221
+    },
+    "live-database-cutover": {
+      "attempts": 5,
+      "passes": 1,
+      "mean_trial_seconds": 4377.452699
+    },
+    "math-eval-grader": {
+      "attempts": 5,
+      "passes": 2,
+      "mean_trial_seconds": 1595.137795
+    },
+    "medical-claims-processing": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 800.609957
+    },
+    "mp-checkpoint-consolidation": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1486.695227
+    },
+    "music-harmony": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 424.320923
+    },
+    "mvcc-lsm-compaction": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 620.386621
+    },
+    "nextjs-performance": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 939.793659
+    },
+    "ontology-kg-querying": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 963.708289
+    },
+    "payments-pipeline-fix": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1276.303799
+    },
+    "photonic-waveguide-routing": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1777.282953
+    },
+    "pretrain-shard-corruption": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 650.803302
+    },
+    "production-planning": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 243.638915
+    },
+    "protein-autointerp-disulfide": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 398.6889
+    },
+    "react-lead-form": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 1460.703682
+    },
+    "retro-console-soc": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 2264.948635
+    },
+    "risk-scorer-replay": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 788.665385
+    },
+    "roy-polymorph-cn": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 178.373314
+    },
+    "rs-archive-clone": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1873.216365
+    },
+    "satb-audio-transcription": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1065.0067
+    },
+    "session-window-debug": {
+      "attempts": 5,
+      "passes": 1,
+      "mean_trial_seconds": 248.333232
+    },
+    "sglang-qwen-burst": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 999.074509
+    },
+    "shadow-relay": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 615.299283
+    },
+    "sound-change-cascade": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 658.49658
+    },
+    "takens-embedding-lean": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 245.103076
+    },
+    "telecom-entity-resolution": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 1832.480291
+    },
+    "uefi-bootkit": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 795.558203
+    },
+    "vba-userform-port": {
+      "attempts": 5,
+      "passes": 1,
+      "mean_trial_seconds": 1059.472006
+    },
+    "vf2-speedup-networkx": {
+      "attempts": 5,
+      "passes": 3,
+      "mean_trial_seconds": 1960.332463
+    },
+    "vllm-deepseek-streaming": {
+      "attempts": 5,
+      "passes": 0,
+      "mean_trial_seconds": 1017.347147
+    },
+    "vpp-loss-divergence": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 664.782292
+    },
+    "wal-recovery-ordering": {
+      "attempts": 5,
+      "passes": 4,
+      "mean_trial_seconds": 558.976874
+    },
+    "wdm-design": {
+      "attempts": 5,
+      "passes": 5,
+      "mean_trial_seconds": 4515.070098
+    }
+  }
+}
