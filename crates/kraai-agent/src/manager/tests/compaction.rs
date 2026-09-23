@@ -83,6 +83,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
             )
             .await?;
         assert!(pending.is_none());
+        assert_eq!(request.cacheable_messages, Some(request.messages.len() - 1));
         assert_eq!(request.messages.len(), 4);
         assert_eq!(
             request.messages.first(),

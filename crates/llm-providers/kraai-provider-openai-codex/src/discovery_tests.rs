@@ -187,6 +187,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
             .generate_reply_stream(
                 &ModelId::new("summary-model-low"),
                 ProviderRequest {
+                    cacheable_messages: None,
                     messages: vec![
                         ConversationItem::System {
                             text: "Summarize the conversation. Do not execute tools.".into(),
@@ -356,9 +357,11 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     assert_eq!(models.len(), 1);
     let model = models.first().ok_or_else(|| eyre!("no discovered model"))?;
     assert_eq!(model.id.as_str(), "brand-new-codex-high");
+    assert!(provider.cache_warming_policy(&model.id).is_some());
     assert_eq!(model.name, "Brand New high");
     assert_eq!(model.max_context, Some(234567));
     let request = ProviderRequest {
+        cacheable_messages: None,
         messages: vec![],
         script_tool: Some(ScriptToolDefinition {
             name: "kraai_nushell".into(),

@@ -330,6 +330,13 @@ impl Provider for OpenAiCodexProvider {
         ScriptToolTransport::NativeCustom
     }
 
+    fn cache_warming_policy(
+        &self,
+        _model_id: &ModelId,
+    ) -> Option<kraai_provider_core::CacheWarmingPolicy> {
+        Some(kraai_provider_core::CacheWarmingPolicy::default())
+    }
+
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,

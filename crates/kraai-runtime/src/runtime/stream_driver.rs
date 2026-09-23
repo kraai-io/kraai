@@ -62,21 +62,21 @@ impl RuntimeCore {
             context_notifications: _,
             context_compaction,
         } = request;
+        let usage_event_tx = event_tx.clone();
+        let usage_session_id = session_id.clone();
+        let on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> =
+            Arc::new(move |request| {
+                emit_event(
+                    &usage_event_tx,
+                    Event::RequestUsageUpdated {
+                        session_id: usage_session_id.clone(),
+                        request: Box::new(request),
+                    },
+                );
+            });
         if let Some(compaction) = context_compaction {
-            let usage_event_tx = event_tx.clone();
-            let usage_session_id = session_id.clone();
-            let compaction = compaction.observe_usage(
-                session_state_barrier.clone(),
-                Arc::new(move |request| {
-                    emit_event(
-                        &usage_event_tx,
-                        Event::RequestUsageUpdated {
-                            session_id: usage_session_id.clone(),
-                            request: Box::new(request),
-                        },
-                    );
-                }),
-            );
+            let compaction =
+                compaction.observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone());
             emit_event(
                 &event_tx,
                 Event::ContextStateChanged {
@@ -110,6 +110,41 @@ impl RuntimeCore {
                         error: format!("{error:#}"),
                     };
                 }
+            }
+        }
+        let warmup = match providers.prepare_cache_warmup(
+            &provider_id,
+            &model_id,
+            &session_id,
+            &provider_request,
+        ) {
+            Ok(warmup) => warmup,
+            Err(error) => {
+                return StreamDriveResult::FailedToStart {
+                    error: error.to_string(),
+                };
+            }
+        };
+        if let Some(warmup) = warmup {
+            let store = agent_manager.read().await.request_usage_store();
+            let recorder = kraai_agent::AuxiliaryUsageRecorder {
+                store,
+                session_id: session_id.clone(),
+                barrier: Some(session_state_barrier.clone()),
+                on_usage: Some(on_auxiliary_usage),
+            };
+            if let Err(error) = super::cache_warming::warm_cache(
+                &providers,
+                &provider_id,
+                &model_id,
+                warmup,
+                recorder,
+            )
+            .await
+            {
+                return StreamDriveResult::FailedToStart {
+                    error: error.to_string(),
+                };
             }
         }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(

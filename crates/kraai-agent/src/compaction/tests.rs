@@ -3,6 +3,7 @@ use color_eyre::eyre::ensure;
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
+use kraai_types::MessageId;
 use kraai_types::{MessageStatus, TokenUsage, ToolCallId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -162,6 +163,7 @@ async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> 
     ensure!(outcome.compacted);
     ensure!(outcome.request.messages.first() == context.original.messages.first());
     ensure!(outcome.request.messages.last() == context.original.messages.last());
+    ensure!(outcome.request.cacheable_messages == Some(outcome.request.messages.len() - 1));
     ensure!(calls.load(Ordering::SeqCst) > 1);
     ensure!(
         outcome

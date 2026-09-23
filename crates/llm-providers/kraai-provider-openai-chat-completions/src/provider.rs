@@ -422,6 +422,7 @@ mod tests {
             .generate_reply_stream(
                 &ModelId::new("gpt-4.1-mini"),
                 ProviderRequest {
+                    cacheable_messages: None,
                     messages: vec![kraai_types::ConversationItem::User {
                         text: String::from("hello"),
                     }],
@@ -476,6 +477,7 @@ mod tests {
             .generate_reply_stream(
                 &ModelId::new("fixture-model"),
                 ProviderRequest {
+                    cacheable_messages: None,
                     messages: vec![kraai_types::ConversationItem::User {
                         text: String::from("hello"),
                     }],

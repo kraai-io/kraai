@@ -4,8 +4,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{CompactionCheckpoint, FileCompactionStore, RequestUsageStore};
 use kraai_provider_core::{ProviderManager, ProviderRequest};
 use kraai_types::{
-    AssistantItem, AssistantPhase, ConversationItem, Message, MessageId, ModelId, ProviderId,
-    RequestUsage,
+    AssistantItem, AssistantPhase, ConversationItem, Message, ModelId, ProviderId, RequestUsage,
 };
 
 mod summary;
@@ -117,6 +116,7 @@ pub(crate) fn assemble(
         messages.push(summary_item(&checkpoint.summary));
     }
     messages.extend(history.iter().map(|message| message.content.clone()));
+    let cacheable_messages = (!suffix.is_empty()).then_some(messages.len());
     if !suffix.is_empty() {
         messages.push(ConversationItem::System {
             text: suffix.to_string(),
@@ -125,6 +125,7 @@ pub(crate) fn assemble(
     ProviderRequest {
         messages,
         script_tool: tool,
+        cacheable_messages,
     }
 }
 
@@ -298,6 +299,9 @@ impl ContextCompaction {
         );
         if let Some(pinned) = pinned {
             request.messages.insert(1, pinned);
+            if let Some(boundary) = &mut request.cacheable_messages {
+                *boundary += 1;
+            }
         }
         let target = self.fixed_cost().saturating_add(
             input_limit(self.max_context)

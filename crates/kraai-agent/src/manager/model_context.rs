@@ -82,6 +82,9 @@ impl AgentManager {
         );
         if let Some(user) = &pinned_user {
             request.messages.insert(1, user.clone());
+            if let Some(boundary) = &mut request.cacheable_messages {
+                *boundary += 1;
+            }
         }
         let compaction = max_context
             .filter(|limit| {
