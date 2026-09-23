@@ -269,6 +269,7 @@ mod tests {
             .compactions
             .save(&crate::CompactionCheckpoint {
                 covered_through: message.id.clone(),
+                superseded_usage: vec![message.id.clone()],
                 previous_boundary: None,
                 summary: String::from("Completed work"),
                 model_id: kraai_types::ModelId::new("model"),
