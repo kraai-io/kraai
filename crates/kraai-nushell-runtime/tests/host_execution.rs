@@ -687,3 +687,6 @@ async fn skill_reads_return_text_without_context_effects() -> Result<(), Box<dyn
     );
     Ok(())
 }
+
+#[path = "host_execution/web_search.rs"]
+mod web_search;

@@ -8,12 +8,15 @@ version = "0.1.0"
 
 [dependencies]
 hmac = { workspace = true }
+kraai-command-catalog.workspace = true
 kraai-command-close-files = { workspace = true }
 kraai-command-core = { workspace = true }
 kraai-command-edit-file = { workspace = true }
 kraai-command-open-files = { workspace = true }
+kraai-command-web-search.workspace = true
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
+kraai-web.workspace = true
 nu-cli = { workspace = true }
 nu-cmd-lang = { workspace = true }
 nu-command = { workspace = true }
@@ -43,4 +46,5 @@ name = "kraai-nushell-host"
 path = "src/bin/kraai-nushell-host.rs"
 
 [dev-dependencies]
+async-trait.workspace = true
 kraai-command-catalog = { workspace = true }

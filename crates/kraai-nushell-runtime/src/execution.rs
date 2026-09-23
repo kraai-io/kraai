@@ -10,7 +10,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::effects::{RejectStateEffects, StateEffectHandler, serve_effects};
+use crate::effects::{RejectStateEffects, StateEffectHandler};
+use crate::host_calls::serve;
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
 use crate::transport;
 use crate::wire::write_request;
@@ -29,6 +30,7 @@ pub struct ScriptExecutionPlan {
     pub nushell_startup: NushellStartup,
     pub output_events: Option<UnboundedSender<OutputEvent>>,
     pub private_temp: PrivateTempConfig,
+    pub web_search: Arc<dyn kraai_web::WebSearch>,
     pub state_effect_handler: Arc<dyn StateEffectHandler>,
 }
 
@@ -55,6 +57,7 @@ impl ScriptExecutionPlan {
             nushell_startup: NushellStartup::Clean,
             output_events: None,
             private_temp: PrivateTempConfig::default(),
+            web_search: Arc::new(kraai_web::ExaSearch::default()),
             state_effect_handler: Arc::new(RejectStateEffects),
         }
     }
@@ -125,36 +128,38 @@ pub async fn execute(
     let (execution_tx, execution_rx) = tokio::sync::oneshot::channel();
     launch.execution_started = Some(execution_rx);
 
-    let effect_execution_id = execution_id.clone();
+    let channel_execution_id = execution_id.clone();
     let execution_started = Arc::new(OnceLock::new());
     let started_for_task = execution_started.clone();
-    let mut effect_task = AbortOnDropHandle::new(tokio::spawn(async move {
+    let mut channel_task = AbortOnDropHandle::new(tokio::spawn(async move {
         let transport = transport::accept(listener, spawned_rx)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
         let started = tokio::time::Instant::now();
         let _ = started_for_task.set(started);
         let _ = execution_tx.send(started);
-        let (effect_reader, mut effect_writer) = tokio::io::split(transport);
-        write_request(&mut effect_writer, &host_request)
+        let (channel_reader, mut channel_writer) = tokio::io::split(transport);
+        write_request(&mut channel_writer, &host_request)
             .await
             .map_err(|error| ChannelError::Request(error.to_string()))?;
-        serve_effects(
-            effect_reader,
-            effect_writer,
-            effect_execution_id,
+        serve(
+            channel_reader,
+            channel_writer,
+            channel_execution_id,
             secret,
             plan.state_effect_handler,
+            plan.web_search,
+            &host_request.active_commands,
         )
         .await
-        .map_err(|error| ChannelError::Effects(error.to_string()))
+        .map_err(|error| ChannelError::Host(error.to_string()))
     }));
     let host_cancellation = cancellation.child_token();
     let output = kraai_sandbox::run(launch, host_cancellation.clone());
     tokio::pin!(output);
     let (output, channel) = tokio::select! {
         biased;
-        result = &mut effect_task => {
+        result = &mut channel_task => {
             let result = channel_result(result);
             if result.is_err() {
                 host_cancellation.cancel();
@@ -172,8 +177,8 @@ pub async fn execute(
                 output.termination,
                 kraai_sandbox::Termination::Exited { .. }
             ) {
-                if execution_started.get().is_none() && !effect_task.is_finished() {
-                    effect_task.abort();
+                if execution_started.get().is_none() && !channel_task.is_finished() {
+                    channel_task.abort();
                     Err(RuntimeError::Transport(String::from(
                         "Nushell host exited before connecting to the private transport",
                     )))
@@ -187,19 +192,19 @@ pub async fn execute(
                     tokio::select! {
                         biased;
                         () = cancellation.cancelled() => {
-                            effect_task.abort();
+                            channel_task.abort();
                             Ok(())
                         }
-                        result = &mut effect_task => channel_result(result),
+                        result = &mut channel_task => channel_result(result),
                         () = deadline => {
-                            effect_task.abort();
+                            channel_task.abort();
                             output.termination = kraai_sandbox::Termination::TimedOut;
                             Ok(())
                         }
                     }
                 }
             } else {
-                effect_task.abort();
+                channel_task.abort();
                 Ok(())
             };
             if cancellation.is_cancelled() {
@@ -214,7 +219,7 @@ pub async fn execute(
             })
         }
         Err(error) => {
-            effect_task.abort();
+            channel_task.abort();
             Err(RuntimeError::Sandbox(error))
         }
     }
@@ -228,14 +233,14 @@ fn channel_result(
         .map_err(|error| match error {
             ChannelError::Accept(message) => RuntimeError::Transport(message),
             ChannelError::Request(message) => RuntimeError::RequestChannel(message),
-            ChannelError::Effects(message) => RuntimeError::EffectChannel(message),
+            ChannelError::Host(message) => RuntimeError::HostChannel(message),
         })
 }
 
 enum ChannelError {
     Accept(String),
     Request(String),
-    Effects(String),
+    Host(String),
 }
 
 #[derive(Debug)]
@@ -243,7 +248,7 @@ pub enum RuntimeError {
     Transport(String),
     RequestChannel(String),
     ChannelTask(String),
-    EffectChannel(String),
+    HostChannel(String),
     Sandbox(kraai_sandbox::SandboxError),
 }
 
@@ -253,7 +258,7 @@ impl std::fmt::Display for RuntimeError {
             Self::Transport(message) => write!(f, "unable to create host transport: {message}"),
             Self::RequestChannel(message) => write!(f, "unable to send host request: {message}"),
             Self::ChannelTask(message) => write!(f, "host channel task failed: {message}"),
-            Self::EffectChannel(message) => write!(f, "state effect channel failed: {message}"),
+            Self::HostChannel(message) => write!(f, "host channel failed: {message}"),
             Self::Sandbox(error) => write!(f, "unable to execute Nushell host: {error}"),
         }
     }

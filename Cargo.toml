@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "crates/kraai-agent",
+  "crates/kraai-web",
+  "crates/commands/kraai-command-web-search",
   "crates/commands/kraai-command-open-files",
   "crates/commands/kraai-command-close-files",
   "crates/commands/kraai-command-edit-file",
@@ -40,6 +42,7 @@ kraai-command-close-files = { path = "crates/commands/kraai-command-close-files"
 kraai-command-core = { path = "crates/kraai-command-core" }
 kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
 kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
+kraai-command-web-search = { path = "crates/commands/kraai-command-web-search" }
 kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }
 kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
@@ -49,6 +52,7 @@ kraai-runtime = { path = "crates/kraai-runtime" }
 kraai-sandbox = { path = "crates/kraai-sandbox" }
 kraai-script-protocol = { path = "crates/kraai-script-protocol" }
 kraai-types = { path = "crates/kraai-types" }
+kraai-web = { path = "crates/kraai-web" }
 kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }
 tempfile = "3.27.0"
 

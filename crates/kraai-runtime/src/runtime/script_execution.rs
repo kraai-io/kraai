@@ -261,7 +261,7 @@ fn completion_from_runtime_error(
         ) => ScriptExecutionStatus::FailedToStart,
         RuntimeError::RequestChannel(_)
         | RuntimeError::ChannelTask(_)
-        | RuntimeError::EffectChannel(_)
+        | RuntimeError::HostChannel(_)
         | RuntimeError::Sandbox(SandboxError::Wait(_)) => ScriptExecutionStatus::RuntimeError,
     };
     let mut diagnostic = error.to_string();

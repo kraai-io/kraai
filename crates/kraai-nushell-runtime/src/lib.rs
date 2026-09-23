@@ -4,6 +4,7 @@ mod commands;
 mod effects;
 mod execution;
 mod host;
+mod host_calls;
 pub mod request;
 mod transport;
 mod wire;
@@ -44,12 +45,12 @@ pub fn run_host_process() -> i32 {
         report_host_error(error);
         return 70;
     }
-    let effect_client = std::sync::Arc::new(effects::DescriptorEffectClient::from_transport(
+    let host_client = std::sync::Arc::new(host_calls::DescriptorClient::from_transport(
         request.execution_id.clone(),
         request.event_secret,
         transport,
     ));
-    let context = kraai_command_core::CommandContext::new(effect_client);
+    let context = kraai_command_core::CommandContext::new(host_client.clone(), host_client);
     let registry = match commands::command_registry(context) {
         Ok(registry) => registry,
         Err(error) => {

@@ -129,6 +129,13 @@ impl std::fmt::Display for CommandRegistryError {
 
 impl std::error::Error for CommandRegistryError {}
 
+pub trait WebSearchClient: Send + Sync {
+    fn search(
+        &self,
+        request: kraai_types::WebSearchRequest,
+    ) -> Result<kraai_types::WebSearchResponse, String>;
+}
+
 pub trait StateEffectClient: Send + Sync {
     fn apply(
         &self,
@@ -139,12 +146,23 @@ pub trait StateEffectClient: Send + Sync {
 
 #[derive(Clone)]
 pub struct CommandContext {
+    web_search: Arc<dyn WebSearchClient>,
     state_effects: Arc<dyn StateEffectClient>,
 }
 
 impl CommandContext {
-    pub fn new(state_effects: Arc<dyn StateEffectClient>) -> Self {
-        Self { state_effects }
+    pub fn new(
+        state_effects: Arc<dyn StateEffectClient>,
+        web_search: Arc<dyn WebSearchClient>,
+    ) -> Self {
+        Self {
+            state_effects,
+            web_search,
+        }
+    }
+
+    pub fn web_search(&self) -> &dyn WebSearchClient {
+        self.web_search.as_ref()
     }
 
     pub fn state_effects(&self) -> &dyn StateEffectClient {

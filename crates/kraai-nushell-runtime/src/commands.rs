@@ -5,8 +5,9 @@ pub(crate) fn command_registry(
 ) -> Result<CommandRegistry, CommandRegistryError> {
     let open_files = kraai_command_open_files::OpenFilesCommand::registration(context.clone())?;
     let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
-    let edit_file = kraai_command_edit_file::EditFileCommand::registration(context)?;
-    CommandRegistry::new([open_files, close_files, edit_file])
+    let edit_file = kraai_command_edit_file::EditFileCommand::registration(context.clone())?;
+    let web_search = kraai_command_web_search::WebSearchCommand::registration(context)?;
+    CommandRegistry::new([open_files, close_files, edit_file, web_search])
 }
 
 #[cfg(test)]
@@ -31,13 +32,25 @@ mod tests {
         }
     }
 
+    impl kraai_command_core::WebSearchClient for UnusedEffects {
+        fn search(
+            &self,
+            _: kraai_types::WebSearchRequest,
+        ) -> Result<kraai_types::WebSearchResponse, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
+
     #[test]
     #[expect(
         clippy::panic_in_result_fn,
         reason = "catalog consistency test propagates setup errors and asserts the command contract"
     )]
     fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
-        let registry = command_registry(CommandContext::new(Arc::new(UnusedEffects)))?;
+        let registry = command_registry(CommandContext::new(
+            Arc::new(UnusedEffects),
+            Arc::new(UnusedEffects),
+        ))?;
         assert_eq!(
             registry.command_ids().collect::<BTreeSet<_>>(),
             kraai_command_catalog::command_ids().collect::<BTreeSet<_>>()

@@ -28,15 +28,15 @@ fn frame_mac<T: Serialize>(
     sequence: u64,
     payload: &T,
     secret: &[u8; 32],
-) -> Result<HmacSha256, EffectProtocolError> {
+) -> Result<HmacSha256, HostProtocolError> {
     let bytes = serde_json::to_vec(&UnsignedFrame {
         execution_id,
         sequence,
         payload,
     })
-    .map_err(EffectProtocolError::Serialize)?;
+    .map_err(HostProtocolError::Serialize)?;
     let mut hmac = HmacSha256::new_from_slice(secret)
-        .map_err(|error| EffectProtocolError::Authentication(error.to_string()))?;
+        .map_err(|error| HostProtocolError::Authentication(error.to_string()))?;
     hmac.update(&bytes);
     Ok(hmac)
 }
@@ -46,7 +46,7 @@ fn signed_frame<'a, T: Serialize>(
     sequence: u64,
     payload: &'a T,
     secret: &[u8; 32],
-) -> Result<AuthenticatedFrame<&'a T>, EffectProtocolError> {
+) -> Result<AuthenticatedFrame<&'a T>, HostProtocolError> {
     let hmac = frame_mac(execution_id, sequence, payload, secret)?;
     let mac: [u8; 32] = hmac.finalize().into_bytes().into();
     Ok(AuthenticatedFrame {
@@ -61,13 +61,13 @@ pub(super) fn verify_frame<T: Serialize>(
     frame: &AuthenticatedFrame<T>,
     execution_id: &ScriptExecutionId,
     secret: &[u8; 32],
-) -> Result<(), EffectProtocolError> {
+) -> Result<(), HostProtocolError> {
     if &frame.execution_id != execution_id {
-        return Err(EffectProtocolError::ExecutionId);
+        return Err(HostProtocolError::ExecutionId);
     }
     let hmac = frame_mac(&frame.execution_id, frame.sequence, &frame.payload, secret)?;
     hmac.verify_slice(&frame.mac)
-        .map_err(|_error| EffectProtocolError::Authentication(String::from("invalid frame MAC")))
+        .map_err(|_error| HostProtocolError::Authentication(String::from("invalid frame MAC")))
 }
 
 pub(super) fn write_authenticated_sync<T: Serialize>(
@@ -76,26 +76,26 @@ pub(super) fn write_authenticated_sync<T: Serialize>(
     sequence: u64,
     payload: &T,
     secret: &[u8; 32],
-) -> Result<(), EffectProtocolError> {
+) -> Result<(), HostProtocolError> {
     let frame = signed_frame(execution_id, sequence, payload, secret)?;
-    let bytes = serde_json::to_vec(&frame).map_err(EffectProtocolError::Serialize)?;
+    let bytes = serde_json::to_vec(&frame).map_err(HostProtocolError::Serialize)?;
     write_length_sync(writer, bytes.len())?;
-    writer.write_all(&bytes).map_err(EffectProtocolError::Io)?;
-    writer.flush().map_err(EffectProtocolError::Io)
+    writer.write_all(&bytes).map_err(HostProtocolError::Io)?;
+    writer.flush().map_err(HostProtocolError::Io)
 }
 
 pub(super) fn read_authenticated_sync<T: DeserializeOwned + Serialize>(
     reader: &mut impl Read,
     execution_id: &ScriptExecutionId,
     secret: &[u8; 32],
-) -> Result<(u64, T), EffectProtocolError> {
+) -> Result<(u64, T), HostProtocolError> {
     let length = read_length_sync(reader)?;
     let mut bytes = vec![0_u8; length];
     reader
         .read_exact(&mut bytes)
-        .map_err(EffectProtocolError::Io)?;
+        .map_err(HostProtocolError::Io)?;
     let frame: AuthenticatedFrame<T> =
-        serde_json::from_slice(&bytes).map_err(EffectProtocolError::Deserialize)?;
+        serde_json::from_slice(&bytes).map_err(HostProtocolError::Deserialize)?;
     verify_frame(&frame, execution_id, secret)?;
     Ok((frame.sequence, frame.payload))
 }
@@ -106,45 +106,45 @@ pub(super) async fn write_authenticated_async<T: Serialize + Send + Sync>(
     sequence: u64,
     payload: &T,
     secret: &[u8; 32],
-) -> Result<(), EffectProtocolError> {
+) -> Result<(), HostProtocolError> {
     let frame = signed_frame(execution_id, sequence, payload, secret)?;
-    let bytes = serde_json::to_vec(&frame).map_err(EffectProtocolError::Serialize)?;
-    let length = u32::try_from(bytes.len()).map_err(|_error| EffectProtocolError::FrameTooLarge)?;
+    let bytes = serde_json::to_vec(&frame).map_err(HostProtocolError::Serialize)?;
+    let length = u32::try_from(bytes.len()).map_err(|_error| HostProtocolError::FrameTooLarge)?;
     writer
         .write_all(&length.to_be_bytes())
         .await
-        .map_err(EffectProtocolError::Io)?;
+        .map_err(HostProtocolError::Io)?;
     writer
         .write_all(&bytes)
         .await
-        .map_err(EffectProtocolError::Io)?;
-    writer.flush().await.map_err(EffectProtocolError::Io)
+        .map_err(HostProtocolError::Io)?;
+    writer.flush().await.map_err(HostProtocolError::Io)
 }
 
 pub(super) async fn read_frame_async<T: DeserializeOwned>(
     reader: &mut (impl AsyncRead + Unpin),
-) -> Result<Option<AuthenticatedFrame<T>>, EffectProtocolError> {
+) -> Result<Option<AuthenticatedFrame<T>>, HostProtocolError> {
     let mut length = [0_u8; 4];
     match reader.read(&mut length[..1]).await {
         Ok(0) => return Ok(None),
         Ok(_) => {}
         Err(error) if is_clean_channel_close(&error) => return Ok(None),
-        Err(error) => return Err(EffectProtocolError::Io(error)),
+        Err(error) => return Err(HostProtocolError::Io(error)),
     }
     reader
         .read_exact(&mut length[1..])
         .await
-        .map_err(EffectProtocolError::Io)?;
+        .map_err(HostProtocolError::Io)?;
     let length = usize::try_from(u32::from_be_bytes(length))
-        .map_err(|_error| EffectProtocolError::FrameTooLarge)?;
+        .map_err(|_error| HostProtocolError::FrameTooLarge)?;
     let mut bytes = vec![0_u8; length];
     reader
         .read_exact(&mut bytes)
         .await
-        .map_err(EffectProtocolError::Io)?;
+        .map_err(HostProtocolError::Io)?;
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(EffectProtocolError::Deserialize)
+        .map_err(HostProtocolError::Deserialize)
 }
 
 fn is_clean_channel_close(error: &std::io::Error) -> bool {
@@ -154,23 +154,23 @@ fn is_clean_channel_close(error: &std::io::Error) -> bool {
     )
 }
 
-fn write_length_sync(writer: &mut impl Write, length: usize) -> Result<(), EffectProtocolError> {
-    let length = u32::try_from(length).map_err(|_error| EffectProtocolError::FrameTooLarge)?;
+fn write_length_sync(writer: &mut impl Write, length: usize) -> Result<(), HostProtocolError> {
+    let length = u32::try_from(length).map_err(|_error| HostProtocolError::FrameTooLarge)?;
     writer
         .write_all(&length.to_be_bytes())
-        .map_err(EffectProtocolError::Io)
+        .map_err(HostProtocolError::Io)
 }
 
-fn read_length_sync(reader: &mut impl Read) -> Result<usize, EffectProtocolError> {
+fn read_length_sync(reader: &mut impl Read) -> Result<usize, HostProtocolError> {
     let mut length = [0_u8; 4];
     reader
         .read_exact(&mut length)
-        .map_err(EffectProtocolError::Io)?;
-    usize::try_from(u32::from_be_bytes(length)).map_err(|_error| EffectProtocolError::FrameTooLarge)
+        .map_err(HostProtocolError::Io)?;
+    usize::try_from(u32::from_be_bytes(length)).map_err(|_error| HostProtocolError::FrameTooLarge)
 }
 
 #[derive(Debug)]
-pub(crate) enum EffectProtocolError {
+pub(crate) enum HostProtocolError {
     Io(std::io::Error),
     Serialize(serde_json::Error),
     Deserialize(serde_json::Error),
@@ -182,33 +182,33 @@ pub(crate) enum EffectProtocolError {
     FrameTooLarge,
 }
 
-impl std::fmt::Display for EffectProtocolError {
+impl std::fmt::Display for HostProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(error) => write!(f, "state effect channel I/O failed: {error}"),
-            Self::Serialize(error) => write!(f, "state effect serialization failed: {error}"),
-            Self::Deserialize(error) => write!(f, "state effect deserialization failed: {error}"),
+            Self::Io(error) => write!(f, "host channel I/O failed: {error}"),
+            Self::Serialize(error) => write!(f, "host serialization failed: {error}"),
+            Self::Deserialize(error) => write!(f, "host deserialization failed: {error}"),
             Self::Authentication(message) => {
-                write!(f, "state effect authentication failed: {message}")
+                write!(f, "host authentication failed: {message}")
             }
-            Self::ExecutionId => write!(f, "state effect execution id did not match"),
+            Self::ExecutionId => write!(f, "host execution id did not match"),
             Self::Sequence { expected, received } => write!(
                 f,
-                "state effect sequence {received} did not match expected {expected}"
+                "host sequence {received} did not match expected {expected}"
             ),
             Self::PayloadSequence { frame, payload } => write!(
                 f,
-                "state effect payload sequence {payload} did not match frame sequence {frame}"
+                "host payload sequence {payload} did not match frame sequence {frame}"
             ),
-            Self::SequenceExhausted => write!(f, "state effect sequence exhausted"),
+            Self::SequenceExhausted => write!(f, "host sequence exhausted"),
             Self::FrameTooLarge => {
-                write!(f, "state effect frame exceeds the protocol length range")
+                write!(f, "host frame exceeds the protocol length range")
             }
         }
     }
 }
 
-impl std::error::Error for EffectProtocolError {}
+impl std::error::Error for HostProtocolError {}
 
 #[cfg(test)]
 #[expect(
@@ -217,7 +217,7 @@ impl std::error::Error for EffectProtocolError {}
 )]
 mod tests {
     use super::{
-        AuthenticatedFrame, EffectProtocolError, UnsignedFrame, signed_frame, verify_frame,
+        AuthenticatedFrame, HostProtocolError, UnsignedFrame, signed_frame, verify_frame,
         write_authenticated_async, write_authenticated_sync,
     };
     use hmac::{Hmac, KeyInit, Mac};
@@ -253,7 +253,7 @@ mod tests {
             write_authenticated_async(&mut asynchronous, &execution_id, 1, &payload, &secret).await,
         ];
         for result in results {
-            let Err(EffectProtocolError::Serialize(error)) = result else {
+            let Err(HostProtocolError::Serialize(error)) = result else {
                 return Err("writer did not preserve serialization error".into());
             };
             assert_eq!(error.to_string(), expected);
@@ -269,10 +269,9 @@ mod tests {
         };
         assert!(matches!(
             verify_frame(&frame, &ScriptExecutionId::new("other"), &secret),
-            Err(EffectProtocolError::ExecutionId),
+            Err(HostProtocolError::ExecutionId),
         ));
-        let Err(EffectProtocolError::Serialize(error)) =
-            verify_frame(&frame, &execution_id, &secret)
+        let Err(HostProtocolError::Serialize(error)) = verify_frame(&frame, &execution_id, &secret)
         else {
             return Err("verification did not preserve serialization error".into());
         };
@@ -296,17 +295,17 @@ mod tests {
         frame.payload.error = Some(String::from("forged"));
         assert!(matches!(
             verify_frame(&frame, &execution_id, &secret),
-            Err(EffectProtocolError::Authentication(_))
+            Err(HostProtocolError::Authentication(_))
         ));
 
         let frame = signed_frame(&execution_id, 1, &payload, &secret)?;
         assert!(matches!(
             verify_frame(&frame, &ScriptExecutionId::new("other"), &secret),
-            Err(EffectProtocolError::ExecutionId)
+            Err(HostProtocolError::ExecutionId)
         ));
         assert!(matches!(
             verify_frame(&frame, &execution_id, &secret.map(|byte| byte ^ 1)),
-            Err(EffectProtocolError::Authentication(_))
+            Err(HostProtocolError::Authentication(_))
         ));
         Ok(())
     }
