@@ -39,6 +39,7 @@ enum ScriptedChunkKind {
     NativeCall { call_id: String, input: String },
     Usage(TokenUsage),
     Error(String),
+    ErrorWithSource(String, String),
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +84,12 @@ impl ScriptedChunk {
     pub(super) fn error(error: impl Into<String>) -> Self {
         Self {
             kind: ScriptedChunkKind::Error(error.into()),
+        }
+    }
+
+    pub(super) fn error_with_source(error: &str, source: &str) -> Self {
+        Self {
+            kind: ScriptedChunkKind::ErrorWithSource(error.into(), source.into()),
         }
     }
 }
@@ -167,6 +174,9 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                     Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
                 }
                 ScriptedChunkKind::Error(error) => Err(eyre!(error)),
+                ScriptedChunkKind::ErrorWithSource(error, source) => {
+                    Err(eyre!(source).wrap_err(error))
+                }
             },
         ))))
     }

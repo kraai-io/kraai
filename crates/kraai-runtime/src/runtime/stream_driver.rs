@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use kraai_agent::PendingStreamRequest;
@@ -121,7 +121,7 @@ impl RuntimeCore {
             Ok(warmup) => warmup,
             Err(error) => {
                 return StreamDriveResult::FailedToStart {
-                    error: error.to_string(),
+                    error: format!("{error:#}"),
                 };
             }
         };
@@ -143,7 +143,7 @@ impl RuntimeCore {
             .await
             {
                 return StreamDriveResult::FailedToStart {
-                    error: error.to_string(),
+                    error: format!("{error:#}"),
                 };
             }
         }
@@ -177,20 +177,31 @@ impl RuntimeCore {
                 Ok(None) => {}
                 Err(error) => {
                     return StreamDriveResult::FailedToStart {
-                        error: error.to_string(),
+                        error: format!("{error:#}"),
                     };
                 }
             }
         }
+        let request_started = Instant::now();
         let mut stream = match providers
-            .generate_reply_stream(provider_id, &model_id, provider_request, request_context)
+            .generate_reply_stream(
+                provider_id.clone(),
+                &model_id,
+                provider_request,
+                request_context,
+            )
             .await
         {
             Ok(stream) => stream,
             Err(error) => {
-                return StreamDriveResult::FailedToStart {
-                    error: error.to_string(),
-                };
+                let error = format!(
+                    "Provider request {message_id} failed to start after {} ms: {error:#}",
+                    request_started.elapsed().as_millis()
+                );
+                tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                    elapsed_ms = request_started.elapsed().as_millis(), error = %error,
+                    "Provider request failed to start");
+                return StreamDriveResult::FailedToStart { error };
             }
         };
 
@@ -412,7 +423,7 @@ impl RuntimeCore {
                         Ok(None) => return StreamDriveResult::Stopped,
                         Err(error) => {
                             return StreamDriveResult::FailedDuringStream {
-                                error: error.to_string(),
+                                error: format!("{error:#}"),
                             };
                         }
                     }
@@ -426,16 +437,17 @@ impl RuntimeCore {
                     }
                 }
                 Err(error) => {
+                    let error = format!(
+                        "Provider request {message_id} stream failed after {} ms: {error:#}",
+                        request_started.elapsed().as_millis()
+                    );
+                    tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                        elapsed_ms = request_started.elapsed().as_millis(), error = %error,
+                        completed_script = completed_boundary.is_some(), "Provider stream failed");
                     if completed_boundary.is_some() {
-                        tracing::warn!(
-                            error = %error,
-                            "Stopping provider stream drain after error"
-                        );
                         break;
                     }
-                    return StreamDriveResult::FailedDuringStream {
-                        error: error.to_string(),
-                    };
+                    return StreamDriveResult::FailedDuringStream { error };
                 }
             }
         }

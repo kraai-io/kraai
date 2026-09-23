@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use color_eyre::Result;
 use futures::StreamExt;
 use kraai_agent::AuxiliaryUsageRecorder;
@@ -17,6 +19,8 @@ pub(super) async fn warm_cache(
     let observer = recorder
         .start(providers, provider_id, model_id, "cache-warming")
         .await?;
+    let request_id = observer.snapshot().await.message_id;
+    let started = Instant::now();
     let context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
         observer.clone(),
         session_id,
@@ -33,7 +37,7 @@ pub(super) async fn warm_cache(
         {
             Ok(stream) => stream,
             Err(error) => {
-                tracing::warn!(error = %error, "Cache warming failed to start");
+                tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming failed to start");
                 return Ok(false);
             }
         };
@@ -46,7 +50,7 @@ pub(super) async fn warm_cache(
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    tracing::warn!(error = %error, "Cache warming stream failed");
+                    tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming stream failed");
                     return Ok(false);
                 }
             }
@@ -65,7 +69,7 @@ pub(super) async fn warm_cache(
             }
         }
         Err(error) => {
-            tracing::warn!(error = %error, "Cache warming timed out; continuing with the conversation")
+            tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming timed out; continuing with the conversation")
         }
     }
     Ok(())

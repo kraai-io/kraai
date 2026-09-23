@@ -1,4 +1,7 @@
+mod failures;
 mod routing;
+
+use super::forwarding::relay_response;
 
 #[tokio::test]
 async fn request_parser_preserves_header_octets_and_rejects_invalid_syntax() -> Result<()> {
@@ -99,7 +102,7 @@ use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
 #[tokio::test]
-async fn listener_failure_drains_tasks_and_accounts_for_unrecorded_requests() -> Result<()> {
+async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<()> {
     let root = std::env::temp_dir().join(format!(
         "kraai-eval-proxy-listener-error-{}",
         ulid::Ulid::generate()
@@ -189,7 +192,11 @@ async fn listener_failure_drains_tasks_and_accounts_for_unrecorded_requests() ->
         .lock()
         .map_err(|error| color_eyre::eyre::eyre!("fixture metrics mutex poisoned: {error}"))?
         .clone();
-    ensure!(captured.requests == 0 && captured.unrecorded_requests == 1);
+    ensure!(
+        captured.requests == 1
+            && captured.failed_requests == 1
+            && captured.unrecorded_requests == 0
+    );
     drop(state);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -479,13 +486,15 @@ price_output = "8"
     let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
     let _ = release_tx.send(());
     upstream_task.await??;
-    ensure!(metrics.requests == 2 && metrics.successful_requests == 1);
-    ensure!(metrics.unrecorded_requests == 1);
+    ensure!(
+        metrics.requests == 3 && metrics.successful_requests == 1 && metrics.failed_requests == 2
+    );
+    ensure!(metrics.unrecorded_requests == 0);
     let accounting = metrics
         .accounting
         .ok_or_else(|| color_eyre::eyre::eyre!("missing request accounting"))?;
     ensure!(accounting.priced_requests == 1 && accounting.context.samples == 1);
-    ensure!(accounting.unrecorded_requests == 1);
+    ensure!(accounting.unrecorded_requests == 0 && accounting.unpriced_requests == 1);
     ensure!(accounting.complete_cost().is_none() && accounting.complete_context().is_none());
     fs::remove_dir_all(root)?;
     Ok(())
@@ -587,20 +596,21 @@ async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()>
         Ok(b"completed\",\"response\":{\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10}}}\n\ndata: [DONE]\n\n".to_vec()),
     ]);
 
-    let relayed = relay_response(&mut downstream, DownstreamDelivery::Complete, body).await?;
-    let usage = record_usage_metrics(&state, &relayed.body)?;
-    let outcome = ForwardOutcome {
-        status: 200,
-        delivery: relayed.delivery,
-        usage,
-        response_cache_state: CacheState::default(),
-    };
+    let mut outcome = ForwardOutcome::rejected(200);
+    relay_response(&mut downstream, &mut outcome, body).await?;
+    outcome.usage = record_usage_metrics(&state, &outcome.body)?;
     ensure!(
         outcome.delivery == DownstreamDelivery::ClientDisconnected,
         "closed downstream was not detected"
     );
     record_request_metrics(&state, &outcome, Duration::from_millis(5))?;
-    write_event(&state, &request, &outcome, Duration::from_millis(5))?;
+    write_event(
+        &state,
+        &request,
+        "test-request",
+        &outcome,
+        Duration::from_millis(5),
+    )?;
 
     let captured = metrics
         .lock()
