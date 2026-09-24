@@ -439,16 +439,19 @@ impl OpenAiCodexProvider {
                 .filter(&mut request.input);
         }
         let response = self.post_responses(&request, request_context).await;
-        if response
+        if let Some(error) = response
             .as_ref()
             .err()
-            .is_some_and(|error| error.downcast_ref::<InvalidEncryptedContent>().is_some())
+            .and_then(|error| error.downcast_ref::<InvalidEncryptedContent>())
             && request
                 .input
                 .iter()
                 .any(|item| matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_)))
         {
-            self.rejected_reasoning.write().await.reject(&request.input);
+            self.rejected_reasoning
+                .write()
+                .await
+                .reject(&request.input, &error.0);
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });

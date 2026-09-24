@@ -479,7 +479,7 @@ fn private_http_proxy_requires_explicit_opt_in_and_proxy_authentication() {
 async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Result<()> {
     for reject_again in [false, true] {
         let rejection =
-            json!({"error":{"code":"invalid_encrypted_content","message":"account mismatch"}})
+            json!({"error":{"code":"invalid_encrypted_content","message":"The encrypted content for item rs-old could not be verified."}})
                 .to_string();
         let (base_url, server) = server(vec![
             ("200 OK", json!({"models":[{"slug":"plain","display_name":"Plain","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Low"}]},{"slug":"non-reasoning","display_name":"Plain","visibility":"list","supported_reasoning_levels":[]}]}).to_string()),
