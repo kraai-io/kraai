@@ -1,5 +1,5 @@
 use super::*;
-use crate::compaction::{ContextCompaction, assemble, estimate_request, input_limit};
+use crate::compaction::{ContextCompaction, assemble};
 use kraai_persistence::FileCompactionStore;
 
 impl AgentManager {
@@ -63,6 +63,16 @@ impl AgentManager {
             .filter(|(index, _)| *index < start)
             .map(|(_, message)| message.content.clone());
         let history: Vec<_> = history.into_iter().skip(start).collect();
+        let superseded_usage: HashSet<_> = previous
+            .iter()
+            .flat_map(|checkpoint| &checkpoint.superseded_usage)
+            .collect();
+        let used_context_tokens = history
+            .iter()
+            .rev()
+            .filter(|message| !superseded_usage.contains(&message.id))
+            .find_map(snapshot::message_context_usage)
+            .map(|context| context.usage.used_context_tokens());
         let mut request = assemble(
             &prompt.prefix,
             &prompt.suffix,
@@ -72,19 +82,15 @@ impl AgentManager {
         );
         if let Some(user) = &pinned_user {
             request.messages.insert(1, user.clone());
+            if let Some(boundary) = &mut request.cacheable_messages {
+                *boundary += 1;
+            }
         }
         let compaction = max_context
             .filter(|limit| {
-                let fixed = estimate_request(&assemble(
-                    &prompt.prefix,
-                    &prompt.suffix,
-                    None,
-                    &[],
-                    request.script_tool.clone(),
-                ));
-                let available = input_limit(*limit).saturating_sub(fixed);
-                estimate_request(&request).saturating_sub(fixed)
-                    >= available.saturating_mul(80) / 100
+                *limit > 0
+                    && used_context_tokens
+                        .is_some_and(|used| (used as u128) * 100 >= (*limit as u128) * 80)
             })
             .map(|max_context| ContextCompaction {
                 store,
@@ -97,6 +103,7 @@ impl AgentManager {
                 previous,
                 pinned_user,
                 max_context,
+                used_context_tokens: used_context_tokens.unwrap_or_default(),
                 on_usage: None,
                 usage_barrier: None,
             });

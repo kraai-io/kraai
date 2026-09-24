@@ -35,10 +35,12 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 
 #[derive(Clone, Debug)]
 enum ScriptedChunkKind {
+    Reasoning(serde_json::Value),
     Text { phase: AssistantPhase, text: String },
     NativeCall { call_id: String, input: String },
     Usage(TokenUsage),
     Error(String),
+    ErrorWithSource(String, String),
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +49,12 @@ pub(super) struct ScriptedChunk {
 }
 
 impl ScriptedChunk {
+    pub(super) fn reasoning(payload: serde_json::Value) -> Self {
+        Self {
+            kind: ScriptedChunkKind::Reasoning(payload),
+        }
+    }
+
     pub(super) fn plain(text: impl Into<String>) -> Self {
         Self {
             kind: ScriptedChunkKind::Text {
@@ -83,6 +91,12 @@ impl ScriptedChunk {
     pub(super) fn error(error: impl Into<String>) -> Self {
         Self {
             kind: ScriptedChunkKind::Error(error.into()),
+        }
+    }
+
+    pub(super) fn error_with_source(error: &str, source: &str) -> Self {
+        Self {
+            kind: ScriptedChunkKind::ErrorWithSource(error.into(), source.into()),
         }
     }
 }
@@ -149,6 +163,9 @@ impl kraai_provider_core::Provider for ScriptedProvider {
 
         Ok(Box::pin(stream::iter(script.into_iter().map(
             |chunk| match chunk.kind {
+                ScriptedChunkKind::Reasoning(payload) => {
+                    Ok(kraai_provider_core::ProviderStreamEvent::Reasoning { payload })
+                }
                 ScriptedChunkKind::Text { phase, text } => {
                     Ok(kraai_provider_core::ProviderStreamEvent::TextDelta {
                         item_id: String::from("scripted-message"),
@@ -167,6 +184,9 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                     Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
                 }
                 ScriptedChunkKind::Error(error) => Err(eyre!(error)),
+                ScriptedChunkKind::ErrorWithSource(error, source) => {
+                    Err(eyre!(source).wrap_err(error))
+                }
             },
         ))))
     }

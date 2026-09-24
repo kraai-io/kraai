@@ -63,10 +63,15 @@ fn fingerprint(bytes: &[u8]) -> String {
 #[derive(Serialize)]
 struct ProxyEvent<'a> {
     timestamp_ms: u128,
+    request_id: &'a str,
+    upstream_request_id: &'a Option<String>,
     method: &'a str,
     path: &'a str,
-    status: u16,
+    status: Option<u16>,
     delivery: DownstreamDelivery,
+    error: &'a Option<String>,
+    stage: &'a str,
+    response_bytes: usize,
     duration_ms: u128,
     usage: &'a Option<UsageMetrics>,
     routing_hint_derived: bool,
@@ -80,6 +85,7 @@ struct ProxyEvent<'a> {
 pub(super) fn write_event(
     state: &ProxyState,
     request: &ParsedRequest,
+    request_id: &str,
     outcome: &ForwardOutcome,
     duration: Duration,
 ) -> Result<()> {
@@ -97,10 +103,15 @@ pub(super) fn write_event(
     );
     let event = ProxyEvent {
         timestamp_ms,
+        request_id,
+        upstream_request_id: &outcome.upstream_request_id,
         method: &request.method,
         path: &request.path,
         status: outcome.status,
         delivery: outcome.delivery,
+        error: &outcome.error,
+        stage: outcome.stage,
+        response_bytes: outcome.body.len(),
         duration_ms: duration.as_millis(),
         usage: &outcome.usage,
         routing_hint_derived: derived_hint.is_some(),

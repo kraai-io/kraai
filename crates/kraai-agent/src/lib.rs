@@ -4,6 +4,8 @@ mod compaction;
 mod context_state;
 mod manager;
 mod profiles;
+mod request_usage;
+pub use request_usage::{AuxiliaryRequestUsage, AuxiliaryUsageRecorder};
 mod skills;
 
 pub use compaction::{CompactionOutcome, ContextCompaction};

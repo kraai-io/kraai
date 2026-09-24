@@ -6,6 +6,7 @@ from kraai_harbor.datasets import (
     TERMINAL_BENCH,
     default_registry,
     eligible_tasks,
+    order_tasks,
     select_tasks,
 )
 from kraai_harbor.state import archive_interrupted, prepare_run, progress, run_lock
@@ -127,7 +128,7 @@ class StateTests(Fixture):
                 before = path.read_bytes()
                 for action in (
                     lambda: progress(self.args.job_dir, self.tasks, 2),
-                    lambda: attempt_targets(self.args.job_dir, self.tasks, 2),
+                    lambda: attempt_targets(self.args.job_dir, self.tasks, 2, self.args.dataset),
                     lambda: archive_interrupted(self.args.job_dir),
                 ):
                     with self.assertRaises(ValueError) as caught:
@@ -189,6 +190,32 @@ class StateTests(Fixture):
         )
         with self.assertRaisesRegex(ValueError, "temporarily disabled"):
             eligible_tasks(TERMINAL_BENCH, available, ["jax-speedrun-gpu"])
+
+    def test_codex_priority_covers_release_and_extends_by_prefix(self):
+        registry = default_registry(TERMINAL_BENCH)
+        tasks = [task["name"] for task in json.loads(registry.read_text())[0]["tasks"]]
+        stats = json.loads(registry.with_name("terminal-bench-4.0.0-priority.json").read_text())["tasks"]
+        self.assertEqual(set(stats), set(tasks))
+        self.assertEqual(sum(row["attempts"] for row in stats.values()), 330)
+        self.assertEqual(sum(row["passes"] for row in stats.values()), 167)
+        for row in stats.values():
+            self.assertEqual(row["attempts"], 5)
+            self.assertGreater(row["mean_trial_seconds"], 0)
+            self.assertTrue(0 <= row["passes"] <= row["attempts"])
+        eligible = list(eligible_tasks(TERMINAL_BENCH, set(tasks), []))
+        first = select_tasks(TERMINAL_BENCH, eligible, 5)
+        self.assertEqual(first, [
+            "freecad-platform-drawing", "cad-model", "hof-topology-interpenetration",
+            "embedding-drift-monitor", "shadow-relay",
+        ])
+        self.assertEqual(first, select_tasks(TERMINAL_BENCH, eligible[::-1], 10)[:5])
+        ranked = order_tasks(TERMINAL_BENCH, tasks + ["unknown-task"])
+        self.assertEqual(ranked[-1], "unknown-task")
+        for faster in tasks:
+            for slower in tasks:
+                if (stats[faster]["passes"] >= stats[slower]["passes"]
+                    and stats[faster]["mean_trial_seconds"] < stats[slower]["mean_trial_seconds"]):
+                    self.assertLess(ranked.index(faster), ranked.index(slower))
 
     def test_long_running_task_is_disabled_before_sampling(self):
         with self.assertRaisesRegex(ValueError, "temporarily disabled"):

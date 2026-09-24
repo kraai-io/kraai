@@ -32,6 +32,10 @@ pub trait Provider: Send + Sync {
         ScriptToolTransport::TextEnvelope
     }
 
+    fn cache_warming_policy(&self, _model_id: &ModelId) -> Option<crate::CacheWarmingPolicy> {
+        None
+    }
+
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
@@ -56,6 +60,7 @@ pub struct ScriptToolDefinition {
 pub struct ProviderRequest {
     pub messages: Vec<ConversationItem>,
     pub script_tool: Option<ScriptToolDefinition>,
+    pub cacheable_messages: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

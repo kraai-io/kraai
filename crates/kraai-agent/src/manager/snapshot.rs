@@ -197,7 +197,7 @@ async fn visit_history(
     Ok(())
 }
 
-fn message_context_usage(message: &Message) -> Option<SessionContextUsage> {
+pub(super) fn message_context_usage(message: &Message) -> Option<SessionContextUsage> {
     (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
         .then_some(message.generation.as_ref())
         .flatten()

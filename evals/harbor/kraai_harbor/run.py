@@ -8,11 +8,12 @@ import sys
 from pathlib import Path
 
 from kraai_harbor.spec import RunnerSpec
-from kraai_harbor.plan import reconcile_job
+from kraai_harbor.plan import prepare_initial_config, reconcile_job
 from kraai_harbor.datasets import (
     default_registry,
     eligible_tasks,
     harbor_task_name,
+    order_tasks,
     select_tasks,
 )
 from kraai_harbor.state import (
@@ -48,10 +49,12 @@ async def preflight_tasks(
         dataset, {task.get_name() for task in metadata.task_ids}, requested
     )
     validate_requested_tasks(requested, available)
-    return sorted(requested or available)
+    return order_tasks(dataset, sorted(requested or available))
 
 
-def build_command(args: argparse.Namespace) -> list[str]:
+def build_command(
+    args: argparse.Namespace, task_config: Path | None = None
+) -> list[str]:
     if args.attempts < 1:
         raise ValueError("Attempts must be positive")
     count = getattr(args, "task_count", None)
@@ -80,8 +83,7 @@ def build_command(args: argparse.Namespace) -> list[str]:
         "-m",
         "harbor.cli.main",
         "run",
-        "--dataset",
-        args.dataset,
+        *(["--config", str(task_config)] if task_config else ["--dataset", args.dataset]),
         "--jobs-dir",
         str(job_dir.parent),
         "--job-name",
@@ -110,13 +112,13 @@ def build_command(args: argparse.Namespace) -> list[str]:
                 f"spec_path={job_dir / 'kraai-eval-spec.json'}",
             )
         )
-    for name in args.task_name:
+    for name in ([] if task_config else args.task_name):
         command.extend(("--include-task-name", harbor_task_name(args.dataset, name)))
     for path in args.docker_compose:
         command.extend(("--extra-docker-compose", str(path.resolve(strict=True))))
     for host in args.allow_agent_host:
         command.extend(("--allow-agent-host", host))
-    if getattr(args, "registry_path", None):
+    if task_config is None and getattr(args, "registry_path", None):
         command.extend(
             ("--registry-path", str(args.registry_path.resolve(strict=True)))
         )
@@ -171,6 +173,7 @@ def main() -> None:
         )
         args.task_count = None
         args.full_dataset = False
+        print("Preview selects the same tasks but Harbor may execute them in dataset order, not Kraai priority order.", file=sys.stderr)
         command = build_command(args)
         print(json.dumps(command, indent=2))
         return
@@ -203,6 +206,9 @@ def main() -> None:
                     "--job-path",
                     str(args.job_dir.resolve()),
                 ]
+            else:
+                task_config = asyncio.run(prepare_initial_config(selected, tasks))
+                command = build_command(selected, task_config)
             child = subprocess.Popen(
                 command, pass_fds=(lock.fileno(),), start_new_session=True
             )

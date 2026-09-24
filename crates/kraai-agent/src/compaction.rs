@@ -4,8 +4,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{CompactionCheckpoint, FileCompactionStore, RequestUsageStore};
 use kraai_provider_core::{ProviderManager, ProviderRequest};
 use kraai_types::{
-    AssistantItem, AssistantPhase, ConversationItem, Message, MessageId, ModelId, ProviderId,
-    RequestUsage,
+    AssistantItem, AssistantPhase, ConversationItem, Message, ModelId, ProviderId, RequestUsage,
 };
 
 mod summary;
@@ -26,6 +25,7 @@ pub struct ContextCompaction {
     pub(crate) previous: Option<CompactionCheckpoint>,
     pub(crate) pinned_user: Option<ConversationItem>,
     pub(crate) max_context: usize,
+    pub(crate) used_context_tokens: usize,
     pub(crate) on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
     pub(crate) usage_barrier: Option<Arc<tokio::sync::RwLock<()>>>,
 }
@@ -59,6 +59,7 @@ fn estimate_item(item: &ConversationItem) -> usize {
         ConversationItem::Assistant { items } => items
             .iter()
             .map(|item| match item {
+                AssistantItem::Reasoning { payload, .. } => estimate_text(&payload.to_string()),
                 AssistantItem::Text { text, .. } => estimate_text(text),
                 AssistantItem::ScriptCall {
                     call_id,
@@ -116,6 +117,7 @@ pub(crate) fn assemble(
         messages.push(summary_item(&checkpoint.summary));
     }
     messages.extend(history.iter().map(|message| message.content.clone()));
+    let cacheable_messages = (!suffix.is_empty()).then_some(messages.len());
     if !suffix.is_empty() {
         messages.push(ConversationItem::System {
             text: suffix.to_string(),
@@ -124,6 +126,7 @@ pub(crate) fn assemble(
     ProviderRequest {
         messages,
         script_tool: tool,
+        cacheable_messages,
     }
 }
 
@@ -227,18 +230,16 @@ impl ContextCompaction {
                 notification: String::from("Context compacted to the 30% history budget target."),
                 requests,
             }),
-            Err(error) if estimate_request(&self.original) <= input_limit(self.max_context) => {
-                Ok(CompactionOutcome {
-                    request: self.original.clone(),
-                    compacted: false,
-                    notification: format!(
-                        "Context compaction did not complete; continuing with existing context: {error}"
-                    ),
-                    requests,
-                })
-            }
+            Err(error) if self.used_context_tokens < self.max_context => Ok(CompactionOutcome {
+                request: self.original.clone(),
+                compacted: false,
+                notification: format!(
+                    "Context compaction did not complete; continuing with existing context: {error}"
+                ),
+                requests,
+            }),
             Err(error) => Err(error.wrap_err(
-                "Context compaction failed and the original request exceeds the input budget",
+                "Context compaction failed and reported usage has reached the model context limit",
             )),
         }
     }
@@ -264,6 +265,18 @@ impl ContextCompaction {
             .await?;
         let checkpoint = CompactionCheckpoint {
             covered_through: covered.id.clone(),
+            superseded_usage: self
+                .history
+                .iter()
+                .skip(cut)
+                .filter(|message| {
+                    message
+                        .generation
+                        .as_ref()
+                        .is_some_and(|generation| generation.usage.is_some())
+                })
+                .map(|message| message.id.clone())
+                .collect(),
             previous_boundary: self
                 .previous
                 .as_ref()
@@ -287,6 +300,9 @@ impl ContextCompaction {
         );
         if let Some(pinned) = pinned {
             request.messages.insert(1, pinned);
+            if let Some(boundary) = &mut request.cacheable_messages {
+                *boundary += 1;
+            }
         }
         let target = self.fixed_cost().saturating_add(
             input_limit(self.max_context)

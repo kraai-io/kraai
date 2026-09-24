@@ -33,8 +33,10 @@ fn interrupted_recovery_status_matches_the_last_phase() {
 
 #[tokio::test]
 async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<()> {
+    let reasoning = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque-ciphertext","summary":[]});
     let Some(harness) = RuntimeTestHarness::new_native(vec![
         vec![
+            ScriptedChunk::reasoning(reasoning.clone()),
             ScriptedChunk::commentary("I will inspect it."),
             ScriptedChunk::native_call(
                 "openai-call-1",
@@ -96,13 +98,23 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         .expect("assistant items");
     assert!(matches!(
         items.first(),
+        Some(AssistantItem::Reasoning { provider_id, payload }) if provider_id.as_str() == "mock-native" && payload == &reasoning
+    ));
+    assert!(
+        !assistant
+            .content
+            .display_text()
+            .contains("opaque-ciphertext")
+    );
+    assert!(matches!(
+        items.get(1),
         Some(AssistantItem::Text {
             phase: AssistantPhase::Commentary,
             text,
         }) if text == "I will inspect it."
     ));
     assert!(matches!(
-        items.get(1),
+        items.get(2),
         Some(AssistantItem::ScriptCall { call_id, name, input })
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
@@ -419,8 +431,9 @@ async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
 
 #[tokio::test]
 async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::error(
-        "transport failed before completed script",
+    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::error_with_source(
+        "error decoding response body",
+        "operation timed out",
     )]])
     .await
     else {
@@ -445,6 +458,11 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
             })
         })
         .await;
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::StreamError { session_id: event_session, message_id, error }
+            if event_session == &session_id && error.contains(message_id)
+                && error.contains("ms: error decoding response body: operation timed out"))
+    }));
     assert!(!events.iter().any(|event| {
         matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
     }));

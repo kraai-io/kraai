@@ -144,7 +144,7 @@ async fn restart_after_cancellation_failure(
         .filter_map(|item| match item {
             ConversationItem::Assistant { items } => items.iter().find_map(|item| match item {
                 AssistantItem::ScriptCall { call_id, .. } => Some(call_id),
-                AssistantItem::Text { .. } => None,
+                AssistantItem::Text { .. } | AssistantItem::Reasoning { .. } => None,
             }),
             _ => None,
         });

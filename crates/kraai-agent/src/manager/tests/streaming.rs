@@ -3,6 +3,91 @@ use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::Result;
 
 #[tokio::test]
+async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<()> {
+    use kraai_persistence::MessageStore;
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    let provider = ProviderId::new("mock");
+    let request = manager
+        .prepare_start_stream(
+            &session,
+            "start".into(),
+            ModelId::new("mock-model"),
+            provider.clone(),
+        )
+        .await?;
+    let payload = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque","summary":[]});
+    manager
+        .append_reasoning(&request.message_id, provider.clone(), payload.clone())
+        .await
+        .expect("reasoning");
+    let visible = manager
+        .append_text_chunk(
+            &request.message_id,
+            "answer",
+            AssistantPhase::FinalAnswer,
+            "Answer",
+        )
+        .await;
+    assert_eq!(visible.as_deref(), Some("Answer"));
+    manager.complete_message(&request.message_id).await?;
+    manager.clear_active_turn(&session);
+    let stored = kraai_persistence::FileMessageStore::new(&data_dir)
+        .get(&request.message_id)
+        .await?
+        .expect("saved message");
+    assert!(
+        matches!(stored.content.assistant_items().and_then(|items| items.first()), Some(AssistantItem::Reasoning { payload: actual, .. }) if actual == &payload)
+    );
+    assert_eq!(stored.content.display_text(), "Answer");
+    let next = manager
+        .prepare_start_stream(
+            &session,
+            "continue".into(),
+            ModelId::new("mock-model"),
+            provider,
+        )
+        .await?;
+    assert!(next.provider_request.messages.contains(&stored.content));
+    manager.abort_streaming_message(&next.message_id).await?;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session,
+            "start".into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    manager
+        .append_reasoning(
+            &request.message_id,
+            ProviderId::new("mock"),
+            serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque"}),
+        )
+        .await
+        .expect("reasoning");
+    manager
+        .cancel_streaming_message(&request.message_id, "cancelled")
+        .await?;
+    assert!(
+        !manager
+            .get_chat_history(&session)
+            .await?
+            .contains_key(&request.message_id)
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;

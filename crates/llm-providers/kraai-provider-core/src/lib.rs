@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod cache_warming;
+pub use cache_warming::{CacheWarmingPolicy, CacheWarmup};
+
 mod config;
 mod definition;
 mod error;

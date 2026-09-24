@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use kraai_agent::PendingStreamRequest;
@@ -62,21 +62,21 @@ impl RuntimeCore {
             context_notifications: _,
             context_compaction,
         } = request;
+        let usage_event_tx = event_tx.clone();
+        let usage_session_id = session_id.clone();
+        let on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> =
+            Arc::new(move |request| {
+                emit_event(
+                    &usage_event_tx,
+                    Event::RequestUsageUpdated {
+                        session_id: usage_session_id.clone(),
+                        request: Box::new(request),
+                    },
+                );
+            });
         if let Some(compaction) = context_compaction {
-            let usage_event_tx = event_tx.clone();
-            let usage_session_id = session_id.clone();
-            let compaction = compaction.observe_usage(
-                session_state_barrier.clone(),
-                Arc::new(move |request| {
-                    emit_event(
-                        &usage_event_tx,
-                        Event::RequestUsageUpdated {
-                            session_id: usage_session_id.clone(),
-                            request: Box::new(request),
-                        },
-                    );
-                }),
-            );
+            let compaction =
+                compaction.observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone());
             emit_event(
                 &event_tx,
                 Event::ContextStateChanged {
@@ -112,6 +112,38 @@ impl RuntimeCore {
                 }
             }
         }
+        let warmup = match providers.prepare_cache_warmup(
+            &provider_id,
+            &model_id,
+            &session_id,
+            &provider_request,
+        ) {
+            Ok(warmup) => warmup,
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
+                None
+            }
+        };
+        if let Some(warmup) = warmup {
+            let store = agent_manager.read().await.request_usage_store();
+            let recorder = kraai_agent::AuxiliaryUsageRecorder {
+                store,
+                session_id: session_id.clone(),
+                barrier: Some(session_state_barrier.clone()),
+                on_usage: Some(on_auxiliary_usage),
+            };
+            if let Err(error) = super::cache_warming::warm_cache(
+                &providers,
+                &provider_id,
+                &model_id,
+                warmup,
+                recorder,
+            )
+            .await
+            {
+                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
+            }
+        }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
                 session_id: session_id.clone(),
@@ -142,20 +174,31 @@ impl RuntimeCore {
                 Ok(None) => {}
                 Err(error) => {
                     return StreamDriveResult::FailedToStart {
-                        error: error.to_string(),
+                        error: format!("{error:#}"),
                     };
                 }
             }
         }
+        let request_started = Instant::now();
         let mut stream = match providers
-            .generate_reply_stream(provider_id, &model_id, provider_request, request_context)
+            .generate_reply_stream(
+                provider_id.clone(),
+                &model_id,
+                provider_request,
+                request_context,
+            )
             .await
         {
             Ok(stream) => stream,
             Err(error) => {
-                return StreamDriveResult::FailedToStart {
-                    error: error.to_string(),
-                };
+                let error = format!(
+                    "Provider request {message_id} failed to start after {} ms: {error:#}",
+                    request_started.elapsed().as_millis()
+                );
+                tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                    elapsed_ms = request_started.elapsed().as_millis(), error = %error,
+                    "Provider request failed to start");
+                return StreamDriveResult::FailedToStart { error };
             }
         };
 
@@ -191,6 +234,18 @@ impl RuntimeCore {
                 }
             }
             match chunk_result {
+                Ok(ProviderStreamEvent::Reasoning { payload }) => {
+                    let _state_guard = session_state_barrier.read().await;
+                    if agent_manager
+                        .read()
+                        .await
+                        .append_reasoning(&message_id, provider_id.clone(), payload)
+                        .await
+                        .is_none()
+                    {
+                        return StreamDriveResult::Stopped;
+                    }
+                }
                 Ok(ProviderStreamEvent::TextDelta {
                     item_id,
                     phase,
@@ -377,7 +432,7 @@ impl RuntimeCore {
                         Ok(None) => return StreamDriveResult::Stopped,
                         Err(error) => {
                             return StreamDriveResult::FailedDuringStream {
-                                error: error.to_string(),
+                                error: format!("{error:#}"),
                             };
                         }
                     }
@@ -391,16 +446,17 @@ impl RuntimeCore {
                     }
                 }
                 Err(error) => {
+                    let error = format!(
+                        "Provider request {message_id} stream failed after {} ms: {error:#}",
+                        request_started.elapsed().as_millis()
+                    );
+                    tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                        elapsed_ms = request_started.elapsed().as_millis(), error = %error,
+                        completed_script = completed_boundary.is_some(), "Provider stream failed");
                     if completed_boundary.is_some() {
-                        tracing::warn!(
-                            error = %error,
-                            "Stopping provider stream drain after error"
-                        );
                         break;
                     }
-                    return StreamDriveResult::FailedDuringStream {
-                        error: error.to_string(),
-                    };
+                    return StreamDriveResult::FailedDuringStream { error };
                 }
             }
         }

@@ -62,6 +62,7 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
         )?),
         client: build_codex_http_client(true, false, &base_url)?,
         models: RwLock::new(DiscoveredModels::default()),
+        rejected_reasoning: RwLock::new(RejectedReasoning::default()),
         model_configs: BTreeMap::new(),
         base_url,
         proxy_token: Some("test-token".into()),
@@ -187,6 +188,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
             .generate_reply_stream(
                 &ModelId::new("summary-model-low"),
                 ProviderRequest {
+                    cacheable_messages: None,
                     messages: vec![
                         ConversationItem::System {
                             text: "Summarize the conversation. Do not execute tools.".into(),
@@ -356,9 +358,11 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     assert_eq!(models.len(), 1);
     let model = models.first().ok_or_else(|| eyre!("no discovered model"))?;
     assert_eq!(model.id.as_str(), "brand-new-codex-high");
+    assert!(provider.cache_warming_policy(&model.id).is_some());
     assert_eq!(model.name, "Brand New high");
     assert_eq!(model.max_context, Some(234567));
     let request = ProviderRequest {
+        cacheable_messages: None,
         messages: vec![],
         script_tool: Some(ScriptToolDefinition {
             name: "kraai_nushell".into(),
@@ -469,4 +473,105 @@ fn private_http_proxy_requires_explicit_opt_in_and_proxy_authentication() {
     for url in ["http://example.com", "http://8.8.8.8", "http://0.0.0.0"] {
         assert!(!valid_backend_url(url, true, true));
     }
+}
+
+#[tokio::test]
+async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Result<()> {
+    for reject_again in [false, true] {
+        let rejection =
+            json!({"error":{"code":"invalid_encrypted_content","message":"The encrypted content for item rs-old could not be verified."}})
+                .to_string();
+        let (base_url, server) = server(vec![
+            ("200 OK", json!({"models":[{"slug":"plain","display_name":"Plain","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Low"}]},{"slug":"non-reasoning","display_name":"Plain","visibility":"list","supported_reasoning_levels":[]}]}).to_string()),
+            ("400 Bad Request", rejection.clone()),
+            (if reject_again { "400 Bad Request" } else { "200 OK" }, if reject_again { rejection } else { "data: [DONE]\n\n".into() }),
+            ("200 OK", "data: [DONE]\n\n".into()),
+            ("200 OK", "data: [DONE]\n\n".into()),
+        ]).await?;
+        let provider = provider(base_url)?;
+        provider.cache_models().await?;
+        let request = ProviderRequest {
+            cacheable_messages: None,
+            script_tool: None,
+            messages: vec![
+                ConversationItem::Assistant {
+                    items: vec![
+                        kraai_types::AssistantItem::Reasoning {
+                            provider_id: ProviderId::new("test-codex"),
+                            payload: json!({"type":"reasoning","id":"rs-old","encrypted_content":"old-account","summary":[]}),
+                        },
+                        kraai_types::AssistantItem::Text {
+                            phase: AssistantPhase::FinalAnswer,
+                            text: "Keep this answer".into(),
+                        },
+                    ],
+                },
+                ConversationItem::User {
+                    text: "Continue".into(),
+                },
+            ],
+        };
+        let response = provider
+            .generate_reply_stream(
+                &ModelId::new("plain"),
+                request.clone(),
+                &ProviderRequestContext::default(),
+            )
+            .await;
+        assert_eq!(response.is_err(), reject_again);
+        for model in ["plain", "non-reasoning"] {
+            let mut next = request.clone();
+            if model == "non-reasoning" {
+                for message in &mut next.messages {
+                    if let ConversationItem::Assistant { items } = message {
+                        for item in items {
+                            if let kraai_types::AssistantItem::Reasoning { payload, .. } = item {
+                                *payload = json!({"type":"reasoning","id":"rs-new","encrypted_content":"fresh","summary":[]});
+                            }
+                        }
+                    }
+                }
+            }
+            let _stream = provider
+                .generate_reply_stream(
+                    &ModelId::new(model),
+                    next,
+                    &ProviderRequestContext::default(),
+                )
+                .await?;
+        }
+        let requests = server.await??;
+        let bodies = requests
+            .iter()
+            .skip(1)
+            .map(|request| {
+                let (_, body) = request
+                    .split_once("\r\n\r\n")
+                    .ok_or_else(|| eyre!("missing body"))?;
+                Ok(serde_json::from_str::<Value>(body)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let original = bodies.first().ok_or_else(|| eyre!("missing original"))?;
+        let retried = bodies.get(1).ok_or_else(|| eyre!("missing retry"))?;
+        assert!(original.get("include").is_some());
+        let original_input = original["input"]
+            .as_array()
+            .ok_or_else(|| eyre!("missing input"))?;
+        assert_eq!(
+            retried["input"],
+            json!(original_input.iter().skip(1).collect::<Vec<_>>())
+        );
+        assert_eq!(requests.len(), 5);
+        for later in bodies.iter().skip(2) {
+            assert_eq!(later["input"], retried["input"]);
+        }
+        assert!(
+            bodies
+                .last()
+                .ok_or_else(|| eyre!("missing plain request"))?
+                .get("include")
+                .is_none()
+        );
+    }
+    Ok(())
 }

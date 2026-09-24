@@ -321,6 +321,7 @@ async fn deleting_session_removes_only_unique_messages() {
                 compactions
                     .save(&CompactionCheckpoint {
                         covered_through: boundary.clone(),
+                        superseded_usage: vec![boundary.clone()],
                         previous_boundary: None,
                         summary: String::from("Completed work"),
                         model_id: kraai_types::ModelId::new("model"),

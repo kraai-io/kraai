@@ -19,6 +19,7 @@ use tracing::{error, warn};
 use crate::auth::{OpenAiCodexAuthController, OpenAiCodexRequestAuth};
 use crate::messages::normalize_conversation;
 use crate::models::DiscoveredModels;
+use crate::rejected_reasoning::RejectedReasoning;
 use crate::streaming::adapt_responses_stream;
 use crate::wire::{ListModelsResponse, ResponsesCustomTool, ResponsesRequest};
 
@@ -274,6 +275,7 @@ impl OpenAiCodexFactory {
             auth: self.auth.clone(),
             client: build_codex_http_client(proxy_token.is_some(), allow_http_proxy, &base_url)?,
             models: RwLock::new(DiscoveredModels::default()),
+            rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
             base_url,
             proxy_token,
@@ -287,6 +289,7 @@ pub struct OpenAiCodexProvider {
     auth: Arc<OpenAiCodexAuthController>,
     client: Client,
     models: RwLock<DiscoveredModels>,
+    rejected_reasoning: RwLock<RejectedReasoning>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     base_url: String,
     proxy_token: Option<String>,
@@ -328,6 +331,13 @@ impl Provider for OpenAiCodexProvider {
 
     fn script_tool_transport(&self, _model_id: &ModelId) -> ScriptToolTransport {
         ScriptToolTransport::NativeCustom
+    }
+
+    fn cache_warming_policy(
+        &self,
+        _model_id: &ModelId,
+    ) -> Option<kraai_provider_core::CacheWarmingPolicy> {
+        Some(kraai_provider_core::CacheWarmingPolicy::default())
     }
 
     async fn generate_reply_stream(
@@ -397,9 +407,14 @@ impl OpenAiCodexProvider {
                 description: tool.description,
             })
             .collect();
-        let normalized = normalize_conversation(provider_request.messages);
+        let normalized = normalize_conversation(provider_request.messages, &self.id);
         let resolved_model = self.models.read().await.resolve(model_id)?;
-        let request = ResponsesRequest {
+        let include = if resolved_model.reasoning.is_some() {
+            vec!["reasoning.encrypted_content"]
+        } else {
+            Vec::new()
+        };
+        let mut request = ResponsesRequest {
             model: resolved_model.api_model,
             instructions: normalized.instructions,
             input: normalized.input,
@@ -409,14 +424,53 @@ impl OpenAiCodexProvider {
             parallel_tool_calls: has_tool.then_some(false),
             stream: true,
             store: false,
+            include,
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
 
+        if request.reasoning.is_none() {
+            request.input.retain(|item| {
+                !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
+            });
+        } else {
+            self.rejected_reasoning
+                .read()
+                .await
+                .filter(&mut request.input);
+        }
+        let response = self.post_responses(&request, request_context).await;
+        if let Some(error) = response
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<InvalidEncryptedContent>())
+            && request
+                .input
+                .iter()
+                .any(|item| matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_)))
+        {
+            self.rejected_reasoning
+                .write()
+                .await
+                .reject(&request.input, &error.0);
+            request.input.retain(|item| {
+                !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
+            });
+            warn!("Provider rejected encrypted reasoning; retrying once without reasoning history");
+            return self.post_responses(&request, request_context).await;
+        }
+        response
+    }
+
+    async fn post_responses(
+        &self,
+        request: &ResponsesRequest,
+        request_context: &ProviderRequestContext,
+    ) -> Result<Response> {
         self.send_authenticated_request("responses", request_context, |auth| {
             let builder = self
                 .authenticated_post(&self.endpoint("codex/responses"), auth)
                 .header(ACCEPT, responses_accept_header())
-                .json(&request);
+                .json(request);
             apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
         .await
@@ -508,6 +562,21 @@ async fn log_retryable_auth_failure(operation: &str, response: Response) {
     );
 }
 
+#[derive(Debug)]
+struct InvalidEncryptedContent(String);
+
+impl std::fmt::Display for InvalidEncryptedContent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "OpenAI Codex rejected encrypted reasoning: {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidEncryptedContent {}
+
 async fn ensure_success_response(operation: &str, response: Response) -> Result<Response> {
     let status = response.status();
     if status.is_success() {
@@ -526,6 +595,16 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
         body,
         "OpenAI Codex request failed"
     );
+    if status == StatusCode::BAD_REQUEST
+        && serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .as_ref()
+            .and_then(|value| value.pointer("/error/code"))
+            .and_then(serde_json::Value::as_str)
+            == Some("invalid_encrypted_content")
+    {
+        return Err(InvalidEncryptedContent(body).into());
+    }
     Err(eyre!(
         "OpenAI Codex {operation} failed with status {status} at {url}: {body}"
     ))
@@ -587,6 +666,7 @@ mod tests {
             auth: Arc::new(auth),
             client,
             models: RwLock::new(DiscoveredModels::default()),
+            rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,

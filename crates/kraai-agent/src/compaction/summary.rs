@@ -1,11 +1,9 @@
-use std::{pin::Pin, time::Duration};
+use std::time::Duration;
 
+use crate::{AuxiliaryRequestUsage, AuxiliaryUsageRecorder};
 use color_eyre::eyre::{Result, eyre};
 use futures::StreamExt;
-use kraai_provider_core::{
-    ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver, ProviderStreamEvent,
-};
-use kraai_types::TokenUsage;
+use kraai_provider_core::{ProviderRequestContext, ProviderStreamEvent};
 
 use super::*;
 
@@ -13,47 +11,6 @@ const SUMMARY_PROMPT: &str = "Summarize the conversation data for an agent conti
 const MAX_CHUNKS: usize = 64;
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(600);
 const SUMMARY_CALL_TIMEOUT: Duration = Duration::from_secs(120);
-
-struct UsageObserver {
-    store: Arc<dyn RequestUsageStore>,
-    session_id: String,
-    request: tokio::sync::Mutex<RequestUsage>,
-    on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
-    barrier: Option<Arc<tokio::sync::RwLock<()>>>,
-}
-
-impl UsageObserver {
-    async fn persist(&self, request: &RequestUsage) -> Result<()> {
-        let _guard = match &self.barrier {
-            Some(barrier) => Some(barrier.read().await),
-            None => None,
-        };
-        self.store.save(&self.session_id, request).await?;
-        if let Some(observer) = &self.on_usage {
-            observer(request.clone());
-        }
-        Ok(())
-    }
-}
-
-impl ProviderRetryObserver for UsageObserver {
-    fn on_retry_scheduled(&self, _event: &ProviderRetryEvent) {}
-
-    fn before_attempt(
-        &self,
-        attempts: u32,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            if attempts > 0 {
-                let mut request = self.request.lock().await;
-                request.unpriced_attempts = attempts;
-                self.persist(&request).await?;
-                drop(request);
-            }
-            Ok(())
-        })
-    }
-}
 
 impl ContextCompaction {
     pub(super) async fn summarize(
@@ -73,7 +30,18 @@ impl ContextCompaction {
             .unwrap_or_default();
         let records = source
             .iter()
-            .map(|message| serde_json::to_string(&message.content))
+            .map(|message| match &message.content {
+                ConversationItem::Assistant { items } => {
+                    serde_json::to_string(&ConversationItem::Assistant {
+                        items: items
+                            .iter()
+                            .filter(|item| !matches!(item, AssistantItem::Reasoning { .. }))
+                            .cloned()
+                            .collect(),
+                    })
+                }
+                content => serde_json::to_string(content),
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?
             .join("\n");
         let mut remaining = records.as_str();
@@ -106,6 +74,7 @@ impl ContextCompaction {
                 .get(..end)
                 .ok_or_else(|| eyre!("Invalid source chunk"))?;
             let request = ProviderRequest {
+                cacheable_messages: None,
                 messages: vec![
                     ConversationItem::System { text: instruction },
                     ConversationItem::User {
@@ -116,30 +85,15 @@ impl ContextCompaction {
                 ],
                 script_tool: None,
             };
-            let request_usage = RequestUsage {
-                message_id: MessageId::new(format!("compaction-{}", ulid::Ulid::generate())),
-                provider_id: provider_id.clone(),
-                model_id: model_id.clone(),
-                started_at: u64::try_from(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis(),
-                )
-                .unwrap_or(u64::MAX),
-                subscription: providers.is_subscription(provider_id),
-                unpriced_attempts: 0,
-                usage: None,
-            };
-            let observer = Arc::new(UsageObserver {
+            let observer = AuxiliaryUsageRecorder {
                 store: self.usage_store.clone(),
                 session_id: self.session_id.clone(),
-                request: tokio::sync::Mutex::new(request_usage.clone()),
                 on_usage: self.on_usage.clone(),
                 barrier: self.usage_barrier.clone(),
-            });
-            observer.persist(&request_usage).await?;
-            requests.push(request_usage);
+            }
+            .start(providers, provider_id, model_id, "compaction")
+            .await?;
+            requests.push(observer.snapshot().await);
             let context = ProviderRequestContext::with_retry_observer(observer.clone());
             let remaining_time = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining_time.is_zero() {
@@ -161,7 +115,7 @@ impl ContextCompaction {
             )
             .await;
             if let Some(request) = requests.last_mut() {
-                *request = observer.request.lock().await.clone();
+                *request = observer.snapshot().await;
             }
             summary =
                 result.map_err(|error| eyre!("Context summarization timed out: {error}"))??;
@@ -197,7 +151,7 @@ async fn collect_summary(
     request: ProviderRequest,
     context: ProviderRequestContext,
     budget: usize,
-    observer: &UsageObserver,
+    observer: &AuxiliaryRequestUsage,
 ) -> Result<String> {
     let mut stream = providers
         .generate_reply_stream(provider_id.clone(), model_id, request, context)
@@ -219,8 +173,8 @@ async fn collect_summary(
                     }
                 }
             }
-            ProviderStreamEvent::Usage(usage) => save_usage(observer, usage).await?,
-            ProviderStreamEvent::TextDelta { .. } => {}
+            ProviderStreamEvent::Usage(usage) => observer.save_usage(usage).await?,
+            ProviderStreamEvent::TextDelta { .. } | ProviderStreamEvent::Reasoning { .. } => {}
             ProviderStreamEvent::ScriptCall { .. } => {
                 invalid = true;
             }
@@ -232,12 +186,4 @@ async fn collect_summary(
         ));
     }
     Ok(text)
-}
-
-async fn save_usage(observer: &UsageObserver, usage: TokenUsage) -> Result<()> {
-    let mut request = observer.request.lock().await;
-    request.usage = Some(usage);
-    observer.persist(&request).await?;
-    drop(request);
-    Ok(())
 }

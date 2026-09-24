@@ -16,6 +16,8 @@ pub struct ResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     pub stream: bool,
     pub store: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
 }
@@ -116,19 +118,21 @@ pub struct ResponsesOutputTokenDetails {
     pub reasoning_tokens: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ResponseOutputItem {
     #[serde(rename = "type")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
 }
 
@@ -163,6 +167,7 @@ mod tests {
             parallel_tool_calls: None,
             stream: true,
             store: false,
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: Some("session-123".to_string()),
         };
 
@@ -183,6 +188,7 @@ mod tests {
             parallel_tool_calls: None,
             stream: true,
             store: false,
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: None,
         };
 
@@ -201,13 +207,14 @@ mod tests {
             input: Vec::<ResponsesRequestItem>::new(),
             reasoning: Some(ResponsesReasoning {
                 effort: "high".to_string(),
-                context: "current_turn",
+                context: "all_turns",
             }),
             tools: vec![script_tool()],
             tool_choice: Some("auto"),
             parallel_tool_calls: Some(false),
             stream: true,
             store: false,
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: None,
         };
 
@@ -217,9 +224,10 @@ mod tests {
             serialized,
             json!({
                 "model": "gpt-5.6-sol", "instructions": "instructions", "input": [],
-                "reasoning": {"effort": "high", "context": "current_turn"},
+                "reasoning": {"effort": "high", "context": "all_turns"},
                 "tools": [{"type": "custom", "name": "kraai_nushell", "description": "Execute Nushell"}],
                 "tool_choice": "auto", "parallel_tool_calls": false, "stream": true, "store": false,
+                "include": ["reasoning.encrypted_content"],
             })
         );
         assert_eq!(serialized["tools"].as_array().map(Vec::len), Some(1));
@@ -233,6 +241,6 @@ mod tests {
         );
         assert_eq!(serialized["tool_choice"], json!("auto"));
         assert_eq!(serialized["parallel_tool_calls"], json!(false));
-        assert_eq!(serialized["reasoning"]["context"], json!("current_turn"));
+        assert_eq!(serialized["reasoning"]["context"], json!("all_turns"));
     }
 }

@@ -44,6 +44,15 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                 ProviderId::new("mock"),
             )
             .await?;
+        agent
+            .set_streaming_message_usage(
+                &previous.message_id,
+                kraai_types::TokenUsage {
+                    input_tokens: 32768,
+                    ..Default::default()
+                },
+            )
+            .await?;
         agent.complete_message(&previous.message_id).await?;
         agent.clear_active_turn(&session_id);
         let request = agent
@@ -70,7 +79,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
             "expected compaction failure, got {result:?}"
         ));
     };
-    assert!(error.contains("original request exceeds the input budget"));
+    assert!(error.contains("reported usage has reached the model context limit"));
     assert!(error.contains("summary provider rejected request"));
     harness.shutdown().await;
     Ok(())
@@ -155,6 +164,15 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
                 ProviderId::new("mock"),
             )
             .await?;
+        agent
+            .set_streaming_message_usage(
+                &request.message_id,
+                kraai_types::TokenUsage {
+                    input_tokens: 27000,
+                    ..Default::default()
+                },
+            )
+            .await?;
         agent.complete_message(&request.message_id).await?;
         agent.clear_active_turn(&session_id);
     }
@@ -226,6 +244,15 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                 "old detail ".repeat(9000),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+            )
+            .await?;
+        agent
+            .set_streaming_message_usage(
+                &previous.message_id,
+                kraai_types::TokenUsage {
+                    input_tokens: 32768,
+                    ..Default::default()
+                },
             )
             .await?;
         agent.complete_message(&previous.message_id).await?;

@@ -19,6 +19,8 @@ pub(crate) struct MockProvider {
     pub(crate) cache_count: AtomicUsize,
     fail_cache: bool,
     cache_delay: Option<Duration>,
+    pub(crate) warming: Option<crate::CacheWarmingPolicy>,
+    pub(crate) usage: Option<kraai_types::TokenUsage>,
 }
 
 impl MockProvider {
@@ -34,6 +36,8 @@ impl MockProvider {
             cache_count: AtomicUsize::new(0),
             fail_cache: false,
             cache_delay: None,
+            warming: None,
+            usage: None,
         }
     }
 
@@ -70,6 +74,10 @@ impl Provider for MockProvider {
         Ok(())
     }
 
+    fn cache_warming_policy(&self, _model_id: &ModelId) -> Option<crate::CacheWarmingPolicy> {
+        self.warming
+    }
+
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
@@ -83,14 +91,15 @@ impl Provider for MockProvider {
             .map(kraai_types::ConversationItem::display_text)
             .unwrap_or_default();
         let response = format!("Streamed response to: {last_content}");
-        Ok(
-            futures::stream::iter(vec![Ok(ProviderStreamEvent::TextDelta {
-                item_id: String::from("mock-message"),
-                phase: AssistantPhase::FinalAnswer,
-                delta: response,
-            })])
-            .boxed(),
-        )
+        let mut events = vec![Ok(ProviderStreamEvent::TextDelta {
+            item_id: String::from("mock-message"),
+            phase: AssistantPhase::FinalAnswer,
+            delta: response,
+        })];
+        if let Some(usage) = &self.usage {
+            events.push(Ok(ProviderStreamEvent::Usage(usage.clone())));
+        }
+        Ok(futures::stream::iter(events).boxed())
     }
 }
 

@@ -8,6 +8,8 @@ use tokio::fs;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionCheckpoint {
     pub covered_through: MessageId,
+    #[serde(default)]
+    pub superseded_usage: Vec<MessageId>,
     pub previous_boundary: Option<MessageId>,
     pub summary: String,
     pub model_id: ModelId,
@@ -19,6 +21,9 @@ pub struct CompactionCheckpoint {
 impl CompactionCheckpoint {
     fn validate(&self) -> Result<()> {
         MessageId::try_new(self.covered_through.as_str()).map_err(|error| eyre!(error))?;
+        for message in &self.superseded_usage {
+            MessageId::try_new(message.as_str()).map_err(|error| eyre!(error))?;
+        }
         if let Some(previous) = &self.previous_boundary {
             MessageId::try_new(previous.as_str()).map_err(|error| eyre!(error))?;
             ensure!(
@@ -101,6 +106,7 @@ mod tests {
     fn checkpoint() -> CompactionCheckpoint {
         CompactionCheckpoint {
             covered_through: MessageId::new("boundary"),
+            superseded_usage: vec![MessageId::new("latest")],
             previous_boundary: Some(MessageId::new("previous")),
             summary: String::from("User requested a parser; the parser is implemented."),
             model_id: ModelId::new("model"),

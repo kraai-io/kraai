@@ -3,6 +3,7 @@ use color_eyre::eyre::ensure;
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
+use kraai_types::MessageId;
 use kraai_types::{MessageStatus, TokenUsage, ToolCallId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -33,6 +34,10 @@ impl Provider for Summarizer {
         _: &ProviderRequestContext,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent>>> {
         ensure!(request.script_tool.is_none());
+        let source = serde_json::to_string(&request.messages)?;
+        ensure!(!source.contains("system-only-marker"));
+        ensure!(!source.contains("pinned-only-marker"));
+        ensure!(!source.contains("encrypted-only-marker"));
         ensure!(estimate_request(&request) < input_limit(16384));
         self.calls.fetch_add(1, Ordering::SeqCst);
         if !self.delay.is_zero() {
@@ -79,19 +84,26 @@ fn text(id: &str, content: &str) -> Message {
 
 fn fixture(history: Vec<Message>) -> (ContextCompaction, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!("compaction-agent-{}", ulid::Ulid::generate()));
-    let original = assemble("instructions", "fresh file", None, &history, None);
+    let original = assemble(
+        "system-only-marker",
+        "pinned-only-marker",
+        None,
+        &history,
+        None,
+    );
     (
         ContextCompaction {
             store: FileCompactionStore::new(&root),
             usage_store: Arc::new(kraai_persistence::FileRequestUsageStore::new(&root)),
             session_id: "session".into(),
-            prefix: "instructions".into(),
-            suffix: "fresh file".into(),
+            prefix: "system-only-marker".into(),
+            suffix: "pinned-only-marker".into(),
             original,
             history,
             previous: None,
             pinned_user: None,
             max_context: 16384,
+            used_context_tokens: 14000,
             on_usage: None,
             usage_barrier: None,
         },
@@ -122,7 +134,7 @@ fn provider_with_delay(
 
 #[tokio::test]
 async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> {
-    let history = vec![
+    let mut history = vec![
         text("old", &"old detail ".repeat(12000)),
         message(
             "request",
@@ -132,12 +144,37 @@ async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> 
         ),
         text("recent", "Investigating"),
     ];
+    let reasoning = AssistantItem::Reasoning {
+        provider_id: ProviderId::new("test"),
+        payload: serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"encrypted-only-marker","summary":[]}),
+    };
+    for message in &mut history {
+        if let ConversationItem::Assistant { items } = &mut message.content {
+            items.insert(0, reasoning.clone());
+        }
+    }
+    history
+        .last_mut()
+        .ok_or_else(|| eyre!("Missing recent message"))?
+        .generation = Some(kraai_types::MessageGeneration {
+        provider_id: ProviderId::new("test"),
+        model_id: ModelId::new("test"),
+        max_context: Some(16384),
+        usage: Some(TokenUsage {
+            input_tokens: 14000,
+            ..Default::default()
+        }),
+    });
     let (context, root) = fixture(history);
     let (providers, calls) = provider("The user wants the parser fixed. Investigation is ongoing.");
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("test"))
         .await?;
     ensure!(outcome.compacted);
+    ensure!(outcome.request.messages.iter().any(|message| matches!(message, ConversationItem::Assistant { items } if items.contains(&reasoning))));
+    ensure!(outcome.request.messages.first() == context.original.messages.first());
+    ensure!(outcome.request.messages.last() == context.original.messages.last());
+    ensure!(outcome.request.cacheable_messages == Some(outcome.request.messages.len() - 1));
     ensure!(calls.load(Ordering::SeqCst) > 1);
     ensure!(
         outcome
@@ -152,7 +189,12 @@ async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> 
             |item| matches!(item, ConversationItem::User { text } if text == "Fix the parser")
         )
     );
-    ensure!(context.store.get(&MessageId::new("old")).await?.is_some());
+    let checkpoint = context
+        .store
+        .get(&MessageId::new("old"))
+        .await?
+        .ok_or_else(|| eyre!("Missing checkpoint"))?;
+    ensure!(checkpoint.superseded_usage == vec![MessageId::new("recent")]);
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
@@ -198,7 +240,7 @@ fn boundary_keeps_calls_and_results_together_and_preserves_old_user() -> Result<
 #[tokio::test]
 async fn invalid_summary_falls_back_only_when_original_fits_and_never_persists() -> Result<()> {
     let (context, root) = fixture(vec![
-        text("old", &"x".repeat(10000)),
+        text("old", &"x".repeat(90000)),
         text("tail", "recent"),
     ]);
     let (providers, _) = provider("");
@@ -208,10 +250,11 @@ async fn invalid_summary_falls_back_only_when_original_fits_and_never_persists()
     ensure!(!outcome.compacted);
     ensure!(context.store.get(&MessageId::new("old")).await?.is_none());
     ensure!(estimate_request(&outcome.request) == estimate_request(&context.original));
-    let (oversized, oversized_root) = fixture(vec![
-        text("old", &"x".repeat(90000)),
+    let (mut oversized, oversized_root) = fixture(vec![
+        text("old", &"x".repeat(10000)),
         text("tail", "recent"),
     ]);
+    oversized.used_context_tokens = oversized.max_context;
     ensure!(
         oversized
             .run(&providers, &ProviderId::new("test"), &ModelId::new("test"))
@@ -330,10 +373,11 @@ async fn giant_final_tool_result_can_be_fully_compacted_with_user_preserved() ->
 
 #[tokio::test(start_paused = true)]
 async fn successful_chunks_share_one_overall_deadline() -> Result<()> {
-    let (context, root) = fixture(vec![
+    let (mut context, root) = fixture(vec![
         text("old", &"old detail ".repeat(12000)),
         text("recent", "Investigating"),
     ]);
+    context.used_context_tokens = context.max_context;
     let (providers, calls) = provider_with_delay(
         "Investigation continues.",
         std::time::Duration::from_secs(110),
