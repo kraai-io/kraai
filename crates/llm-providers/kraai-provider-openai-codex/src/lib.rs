@@ -5,6 +5,7 @@ mod messages;
 mod models;
 mod pricing;
 mod provider;
+mod rejected_reasoning;
 mod streaming;
 mod wire;
 

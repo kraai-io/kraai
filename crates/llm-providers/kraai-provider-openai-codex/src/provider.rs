@@ -19,6 +19,7 @@ use tracing::{error, warn};
 use crate::auth::{OpenAiCodexAuthController, OpenAiCodexRequestAuth};
 use crate::messages::normalize_conversation;
 use crate::models::DiscoveredModels;
+use crate::rejected_reasoning::RejectedReasoning;
 use crate::streaming::adapt_responses_stream;
 use crate::wire::{ListModelsResponse, ResponsesCustomTool, ResponsesRequest};
 
@@ -274,6 +275,7 @@ impl OpenAiCodexFactory {
             auth: self.auth.clone(),
             client: build_codex_http_client(proxy_token.is_some(), allow_http_proxy, &base_url)?,
             models: RwLock::new(DiscoveredModels::default()),
+            rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
             base_url,
             proxy_token,
@@ -287,6 +289,7 @@ pub struct OpenAiCodexProvider {
     auth: Arc<OpenAiCodexAuthController>,
     client: Client,
     models: RwLock<DiscoveredModels>,
+    rejected_reasoning: RwLock<RejectedReasoning>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     base_url: String,
     proxy_token: Option<String>,
@@ -425,6 +428,16 @@ impl OpenAiCodexProvider {
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
 
+        if request.reasoning.is_none() {
+            request.input.retain(|item| {
+                !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
+            });
+        } else {
+            self.rejected_reasoning
+                .read()
+                .await
+                .filter(&mut request.input);
+        }
         let response = self.post_responses(&request, request_context).await;
         if response
             .as_ref()
@@ -435,6 +448,7 @@ impl OpenAiCodexProvider {
                 .iter()
                 .any(|item| matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_)))
         {
+            self.rejected_reasoning.write().await.reject(&request.input);
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });
@@ -649,6 +663,7 @@ mod tests {
             auth: Arc::new(auth),
             client,
             models: RwLock::new(DiscoveredModels::default()),
+            rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,

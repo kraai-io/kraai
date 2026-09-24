@@ -358,3 +358,35 @@ fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
     assert!(prepare(&manager, &request())?.is_some());
     Ok(())
 }
+
+#[test]
+fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
+    let cache = CacheWarming::default();
+    let provider = ProviderId::new("mock");
+    let model = ModelId::new("model");
+    let old = cache.state(&provider, &model, "old")?;
+    old.lock()
+        .map_err(|error| eyre!("state: {error}"))?
+        .last_used = Some(Instant::now() - Duration::from_secs(7200));
+    drop(old);
+    let _current = cache.state(&provider, &model, "current")?;
+    {
+        let mut sessions = cache
+            .sessions
+            .lock()
+            .map_err(|error| eyre!("sessions: {error}"))?;
+        assert_eq!(sessions.entries.len(), 2);
+        sessions.next_cleanup = Some(Instant::now());
+    }
+    let _next = cache.state(&provider, &model, "current")?;
+    assert_eq!(
+        cache
+            .sessions
+            .lock()
+            .map_err(|error| eyre!("sessions: {error}"))?
+            .entries
+            .len(),
+        1
+    );
+    Ok(())
+}

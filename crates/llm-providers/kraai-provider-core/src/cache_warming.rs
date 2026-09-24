@@ -38,7 +38,13 @@ impl Default for CacheWarmingPolicy {
 
 #[derive(Clone, Default)]
 pub(crate) struct CacheWarming {
-    sessions: Arc<Mutex<HashMap<CacheKey, SharedState>>>,
+    sessions: Arc<Mutex<Sessions>>,
+}
+
+#[derive(Default)]
+struct Sessions {
+    entries: HashMap<CacheKey, SharedState>,
+    next_cleanup: Option<Instant>,
 }
 
 type CacheKey = (ProviderId, ModelId, String);
@@ -216,16 +222,20 @@ impl CacheWarming {
             .sessions
             .lock()
             .map_err(|error| eyre!("Cache warming sessions poisoned: {error}"))?;
-        sessions.retain(|_, state| {
-            Arc::strong_count(state) > 1
-                || state.lock().is_ok_and(|state| {
-                    state.in_flight
-                        || state.last_used.is_some_and(|time| {
-                            now.duration_since(time) < Duration::from_secs(3600)
-                        })
-                })
-        });
+        if sessions.next_cleanup.is_none_or(|deadline| now >= deadline) {
+            sessions.next_cleanup = Some(now + Duration::from_secs(60));
+            sessions.entries.retain(|_, state| {
+                Arc::strong_count(state) > 1
+                    || state.try_lock().map_or(true, |state| {
+                        state.in_flight
+                            || state.last_used.is_some_and(|time| {
+                                now.duration_since(time) < Duration::from_secs(3600)
+                            })
+                    })
+            });
+        }
         let state = sessions
+            .entries
             .entry((provider_id.clone(), model_id.clone(), session_id.to_owned()))
             .or_default()
             .clone();
