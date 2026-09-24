@@ -79,6 +79,11 @@ pub enum AssistantPhase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantItem {
+    Reasoning {
+        provider_id: ProviderId,
+        #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+        payload: serde_json::Value,
+    },
     Text {
         phase: AssistantPhase,
         text: String,
@@ -137,13 +142,16 @@ impl ConversationItem {
 fn render_assistant_items(items: &[AssistantItem]) -> Cow<'_, str> {
     let mut rendered = Cow::Borrowed("");
     for item in items {
-        if matches!(item, AssistantItem::Text { text, .. } if text.is_empty()) {
+        if matches!(item, AssistantItem::Reasoning { .. })
+            || matches!(item, AssistantItem::Text { text, .. } if text.is_empty())
+        {
             continue;
         }
         if !rendered.is_empty() {
             rendered.to_mut().push_str("\n\n");
         }
         match item {
+            AssistantItem::Reasoning { .. } => {}
             AssistantItem::Text { text, .. } => {
                 if rendered.is_empty() {
                     rendered = Cow::Borrowed(text);

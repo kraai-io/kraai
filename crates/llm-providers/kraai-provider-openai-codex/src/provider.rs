@@ -404,7 +404,7 @@ impl OpenAiCodexProvider {
                 description: tool.description,
             })
             .collect();
-        let normalized = normalize_conversation(provider_request.messages);
+        let normalized = normalize_conversation(provider_request.messages, &self.id);
         let resolved_model = self.models.read().await.resolve(model_id)?;
         let request = ResponsesRequest {
             model: resolved_model.api_model,
@@ -416,6 +416,7 @@ impl OpenAiCodexProvider {
             parallel_tool_calls: has_tool.then_some(false),
             stream: true,
             store: false,
+            include: ["reasoning.encrypted_content"],
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
 

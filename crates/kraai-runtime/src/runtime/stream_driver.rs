@@ -237,6 +237,18 @@ impl RuntimeCore {
                 }
             }
             match chunk_result {
+                Ok(ProviderStreamEvent::Reasoning { payload }) => {
+                    let _state_guard = session_state_barrier.read().await;
+                    if agent_manager
+                        .read()
+                        .await
+                        .append_reasoning(&message_id, provider_id.clone(), payload)
+                        .await
+                        .is_none()
+                    {
+                        return StreamDriveResult::Stopped;
+                    }
+                }
                 Ok(ProviderStreamEvent::TextDelta {
                     item_id,
                     phase,

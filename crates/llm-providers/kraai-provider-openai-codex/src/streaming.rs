@@ -80,6 +80,20 @@ pub(crate) fn adapt_responses_stream(
                         }
                     }
                     "response.output_item.done" => {
+                        if let Some(item) = &event.item
+                            && item.kind == "reasoning"
+                            && item.extra.get("encrypted_content").is_some_and(|value| !value.is_null())
+                        {
+                            let result = if item.id.as_deref().is_none_or(str::is_empty)
+                                || item.extra.get("encrypted_content").and_then(serde_json::Value::as_str).is_none_or(str::is_empty)
+                            {
+                                Err(eyre!("OpenAI encrypted reasoning item is missing a valid id or encrypted content"))
+                            } else {
+                                serde_json::to_value(item).map(|payload| ProviderStreamEvent::Reasoning { payload }).map_err(Into::into)
+                            };
+                            let failed = result.is_err();
+                            return Some((result, (source, failed, phases)));
+                        }
                         if let Some(item) = event.item
                             && item.kind == "custom_tool_call"
                         {
@@ -213,6 +227,29 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn encrypted_reasoning_is_preserved_before_its_tool_call() {
+        let payload = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque-ciphertext", "summary":[], "status":"completed"});
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(serde_json::json!({"type":"response.output_item.added","item":{"type":"reasoning","id":"rs-1"}}).to_string())),
+            Ok(SseEvent::Data(serde_json::json!({"type":"response.output_item.done","item":payload}).to_string())),
+            Ok(SseEvent::Data(r#"{"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call-1","name":"kraai_nushell","input":"ls"}}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":15}}}}"#.into())),
+        ]).boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        assert_eq!(events.len(), 3);
+        assert!(
+            matches!(events.first(), Some(Ok(ProviderStreamEvent::Reasoning { payload: actual })) if actual == &payload)
+        );
+        assert!(matches!(
+            events.get(1),
+            Some(Ok(ProviderStreamEvent::ScriptCall { .. }))
+        ));
+        assert!(
+            matches!(events.get(2), Some(Ok(ProviderStreamEvent::Usage(usage))) if usage.reasoning_tokens == 15 && usage.input_tokens == 100)
+        );
+    }
 
     #[test]
     fn normalize_usage_splits_cache_and_reasoning_tokens() {

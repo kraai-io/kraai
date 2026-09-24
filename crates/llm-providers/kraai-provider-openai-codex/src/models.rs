@@ -169,7 +169,7 @@ impl DiscoveredModels {
             api_model: model.slug.clone(),
             reasoning: effort.map(|effort| ResponsesReasoning {
                 effort: effort.to_string(),
-                context: "current_turn",
+                context: "all_turns",
             }),
         })
     }

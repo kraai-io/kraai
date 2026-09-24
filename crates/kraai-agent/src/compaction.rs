@@ -59,6 +59,7 @@ fn estimate_item(item: &ConversationItem) -> usize {
         ConversationItem::Assistant { items } => items
             .iter()
             .map(|item| match item {
+                AssistantItem::Reasoning { payload, .. } => estimate_text(&payload.to_string()),
                 AssistantItem::Text { text, .. } => estimate_text(text),
                 AssistantItem::ScriptCall {
                     call_id,

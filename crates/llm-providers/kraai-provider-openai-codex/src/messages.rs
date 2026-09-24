@@ -1,9 +1,10 @@
-use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, ToolCallId};
+use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, ProviderId, ToolCallId};
 use serde::Serialize;
 
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ResponsesRequestItem {
+    Reasoning(serde_json::Value),
     Message(ResponsesRequestMessage),
     CustomToolCall(ResponsesCustomToolCall),
     CustomToolCallOutput(ResponsesCustomToolCallOutput),
@@ -48,7 +49,10 @@ pub struct NormalizedResponsesInput {
     pub input: Vec<ResponsesRequestItem>,
 }
 
-pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResponsesInput {
+pub fn normalize_conversation(
+    messages: Vec<ConversationItem>,
+    provider_id: &ProviderId,
+) -> NormalizedResponsesInput {
     let mut messages = messages.into_iter().peekable();
     let mut instructions: Option<String> = None;
     while matches!(messages.peek(), Some(ConversationItem::System { .. })) {
@@ -85,6 +89,14 @@ pub fn normalize_conversation(messages: Vec<ConversationItem>) -> NormalizedResp
             ConversationItem::Assistant { items } => {
                 for item in items {
                     match item {
+                        AssistantItem::Reasoning {
+                            provider_id: source,
+                            payload,
+                        } => {
+                            if source == *provider_id {
+                                input.push(ResponsesRequestItem::Reasoning(payload));
+                            }
+                        }
                         AssistantItem::Text { phase, text } => {
                             input.push(ResponsesRequestItem::Message(text_message(
                                 "assistant",
@@ -161,6 +173,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn encrypted_reasoning_replays_unchanged_only_to_its_provider() {
+        let provider = ProviderId::new("codex");
+        let payload =
+            json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque", "summary":[]});
+        let history = vec![ConversationItem::Assistant {
+            items: vec![
+                AssistantItem::Reasoning {
+                    provider_id: provider.clone(),
+                    payload: payload.clone(),
+                },
+                AssistantItem::Text {
+                    phase: AssistantPhase::FinalAnswer,
+                    text: "Answer".into(),
+                },
+            ],
+        }];
+        let input = serde_json::to_value(normalize_conversation(history.clone(), &provider).input)
+            .expect("input");
+        assert_eq!(input.get(0), Some(&payload));
+        assert_eq!(
+            input.get(1).and_then(|item| item.get("type")),
+            Some(&json!("message"))
+        );
+        let other = normalize_conversation(history.clone(), &ProviderId::new("other"));
+        assert_eq!(other.input.len(), 1);
+        assert_eq!(history.first().expect("history").display_text(), "Answer");
+    }
+
+    #[test]
     fn leading_system_messages_preserve_empty_segments_and_stop_at_history() {
         for (prefixes, expected) in [
             (vec![], ""),
@@ -183,6 +224,7 @@ mod tests {
                         },
                     ])
                     .collect(),
+                &ProviderId::new("codex"),
             );
             assert_eq!(normalized.instructions, expected);
             assert_eq!(
@@ -197,34 +239,37 @@ mod tests {
 
     #[test]
     fn normalizes_typed_cross_provider_history() {
-        let normalized = normalize_conversation(vec![
-            ConversationItem::System {
-                text: " System\n".to_string(),
-            },
-            ConversationItem::User {
-                text: "Task".to_string(),
-            },
-            ConversationItem::Assistant {
-                items: vec![
-                    AssistantItem::Text {
-                        phase: AssistantPhase::Commentary,
-                        text: "Checking.".to_string(),
-                    },
-                    AssistantItem::ScriptCall {
-                        call_id: ToolCallId::new("call-1"),
-                        name: "kraai_nushell".to_string(),
-                        input: "# timeout=10sec\nls".to_string(),
-                    },
-                ],
-            },
-            ConversationItem::ScriptResult {
-                call_id: ToolCallId::new("call-1"),
-                output: "result".to_string(),
-            },
-            ConversationItem::System {
-                text: "Current pinned files".to_string(),
-            },
-        ]);
+        let normalized = normalize_conversation(
+            vec![
+                ConversationItem::System {
+                    text: " System\n".to_string(),
+                },
+                ConversationItem::User {
+                    text: "Task".to_string(),
+                },
+                ConversationItem::Assistant {
+                    items: vec![
+                        AssistantItem::Text {
+                            phase: AssistantPhase::Commentary,
+                            text: "Checking.".to_string(),
+                        },
+                        AssistantItem::ScriptCall {
+                            call_id: ToolCallId::new("call-1"),
+                            name: "kraai_nushell".to_string(),
+                            input: "# timeout=10sec\nls".to_string(),
+                        },
+                    ],
+                },
+                ConversationItem::ScriptResult {
+                    call_id: ToolCallId::new("call-1"),
+                    output: "result".to_string(),
+                },
+                ConversationItem::System {
+                    text: "Current pinned files".to_string(),
+                },
+            ],
+            &ProviderId::new("codex"),
+        );
 
         assert_eq!(normalized.instructions, " System\n");
         assert_eq!(

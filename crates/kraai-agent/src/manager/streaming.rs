@@ -178,7 +178,11 @@ impl AgentManager {
         let item_index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
             index
         } else {
-            if !items.is_empty() && !chunk.is_empty() {
+            if items
+                .iter()
+                .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
+                && !chunk.is_empty()
+            {
                 visible.push_str("\n\n");
             }
             items.push(AssistantItem::Text {
@@ -205,6 +209,25 @@ impl AgentManager {
         Some(visible)
     }
 
+    pub async fn append_reasoning(
+        &self,
+        message_id: &MessageId,
+        provider_id: ProviderId,
+        payload: serde_json::Value,
+    ) -> Option<()> {
+        let mut streaming = self.streaming_messages.write().await;
+        let state = streaming.get_mut(message_id)?;
+        let ConversationItem::Assistant { items } = &mut state.message.content else {
+            return None;
+        };
+        items.push(AssistantItem::Reasoning {
+            provider_id,
+            payload,
+        });
+        drop(streaming);
+        Some(())
+    }
+
     pub async fn append_script_call(
         &self,
         message_id: &MessageId,
@@ -223,7 +246,14 @@ impl AgentManager {
         {
             return None;
         }
-        let separator = if items.is_empty() { "" } else { "\n\n" };
+        let separator = if items
+            .iter()
+            .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
+        {
+            "\n\n"
+        } else {
+            ""
+        };
         let visible = format!("{separator}<tool_call>\n{input}\n</tool_call>");
         items.push(AssistantItem::ScriptCall {
             call_id,
@@ -290,13 +320,17 @@ impl AgentManager {
             .message
             .content
             .assistant_items()
-            .is_some_and(|items| !items.is_empty());
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
+            });
         let persist_result = if persisted {
             async {
                 let call_id = state.message.content.assistant_items().and_then(|items| {
                     items.iter().find_map(|item| match item {
                         AssistantItem::ScriptCall { call_id, .. } => Some(call_id.clone()),
-                        AssistantItem::Text { .. } => None,
+                        AssistantItem::Text { .. } | AssistantItem::Reasoning { .. } => None,
                     })
                 });
                 if let Some(call_id) = call_id {

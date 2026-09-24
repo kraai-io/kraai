@@ -2,6 +2,9 @@ use kraai_types::{AssistantPhase, TokenUsage, ToolCallId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderStreamEvent {
+    Reasoning {
+        payload: serde_json::Value,
+    },
     TextDelta {
         item_id: String,
         phase: AssistantPhase,

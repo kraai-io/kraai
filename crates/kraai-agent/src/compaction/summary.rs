@@ -30,7 +30,18 @@ impl ContextCompaction {
             .unwrap_or_default();
         let records = source
             .iter()
-            .map(|message| serde_json::to_string(&message.content))
+            .map(|message| match &message.content {
+                ConversationItem::Assistant { items } => {
+                    serde_json::to_string(&ConversationItem::Assistant {
+                        items: items
+                            .iter()
+                            .filter(|item| !matches!(item, AssistantItem::Reasoning { .. }))
+                            .cloned()
+                            .collect(),
+                    })
+                }
+                content => serde_json::to_string(content),
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?
             .join("\n");
         let mut remaining = records.as_str();
@@ -163,7 +174,7 @@ async fn collect_summary(
                 }
             }
             ProviderStreamEvent::Usage(usage) => observer.save_usage(usage).await?,
-            ProviderStreamEvent::TextDelta { .. } => {}
+            ProviderStreamEvent::TextDelta { .. } | ProviderStreamEvent::Reasoning { .. } => {}
             ProviderStreamEvent::ScriptCall { .. } => {
                 invalid = true;
             }

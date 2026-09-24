@@ -37,6 +37,7 @@ impl Provider for Summarizer {
         let source = serde_json::to_string(&request.messages)?;
         ensure!(!source.contains("system-only-marker"));
         ensure!(!source.contains("pinned-only-marker"));
+        ensure!(!source.contains("encrypted-only-marker"));
         ensure!(estimate_request(&request) < input_limit(16384));
         self.calls.fetch_add(1, Ordering::SeqCst);
         if !self.delay.is_zero() {
@@ -143,6 +144,15 @@ async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> 
         ),
         text("recent", "Investigating"),
     ];
+    let reasoning = AssistantItem::Reasoning {
+        provider_id: ProviderId::new("test"),
+        payload: serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"encrypted-only-marker","summary":[]}),
+    };
+    for message in &mut history {
+        if let ConversationItem::Assistant { items } = &mut message.content {
+            items.insert(0, reasoning.clone());
+        }
+    }
     history
         .last_mut()
         .ok_or_else(|| eyre!("Missing recent message"))?
@@ -161,6 +171,7 @@ async fn compacts_oversized_history_in_chunks_and_records_usage() -> Result<()> 
         .run(&providers, &ProviderId::new("test"), &ModelId::new("test"))
         .await?;
     ensure!(outcome.compacted);
+    ensure!(outcome.request.messages.iter().any(|message| matches!(message, ConversationItem::Assistant { items } if items.contains(&reasoning))));
     ensure!(outcome.request.messages.first() == context.original.messages.first());
     ensure!(outcome.request.messages.last() == context.original.messages.last());
     ensure!(outcome.request.cacheable_messages == Some(outcome.request.messages.len() - 1));
