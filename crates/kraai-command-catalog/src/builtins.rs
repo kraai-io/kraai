@@ -39,7 +39,7 @@ command_metadata! {
     OPEN_FILES;
     id: "kraai-open-files";
     name: "kraai-open-files";
-    description: "Prefer this command when reading files for inspection or continued work. The file contents will be provided and 100% up to date every turn until you close the file. Use other methods for opening files only when file contents must be consumed immediately by a pipeline or transformed as data.";
+    description: "Open text files needed for inspection or continued work. Their current contents are read from disk and included in every subsequent model request until closed, consuming context each time. Open only files needed for the current step. After extracting the information you need or finishing work on a file, use kraai-close-files; reopen it if needed later. Use shell reads when contents must be consumed immediately by a pipeline or transformed as data.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [
         {
@@ -59,7 +59,7 @@ command_metadata! {
     CLOSE_FILES;
     id: "kraai-close-files";
     name: "kraai-close-files";
-    description: "Stop pinning one or more files in the context of future turns.";
+    description: "Stop including files in subsequent model requests to reduce context use. Close files after extracting needed information, finishing an edit, or moving to another part of the task, unless their contents are still needed. Preserve any facts needed later in your working notes before closing. This does not delete files or remove previous conversation history; use kraai-open-files to reopen them.";
     signature_help: "kraai-close-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [
         {

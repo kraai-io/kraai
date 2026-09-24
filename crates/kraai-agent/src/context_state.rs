@@ -59,8 +59,10 @@ fn refresh_pinned_files(
     for pinned in state.opened_files {
         match read_pinned_file(&pinned) {
             Ok(contents) => {
-                begin_file_section(&mut sections, &pinned);
-                append_text_with_line_numbers(&mut sections, &contents);
+                let mut numbered = String::with_capacity(contents.len());
+                append_text_with_line_numbers(&mut numbered, &contents);
+                begin_file_section(&mut sections, &pinned, Some(numbered.len().div_ceil(4)));
+                sections.push_str(&numbered);
                 sections.push_str("\n```");
             }
             Err(PinnedReadFailure::Remove(reason)) => {
@@ -74,7 +76,7 @@ fn refresh_pinned_files(
                 });
             }
             Err(PinnedReadFailure::Unavailable(error)) => {
-                begin_file_section(&mut sections, &pinned);
+                begin_file_section(&mut sections, &pinned, None);
                 let _ = write!(sections, "[temporarily unavailable: {error}]\n```");
             }
         }
@@ -102,13 +104,24 @@ fn refresh_pinned_files(
     )
 }
 
-fn begin_file_section(sections: &mut String, pinned: &PinnedFile) {
+fn begin_file_section(
+    sections: &mut String,
+    pinned: &PinnedFile,
+    approximate_tokens: Option<usize>,
+) {
     if sections.is_empty() {
-        sections.push_str("Opened Files\nThese files are pinned into context for this turn. They are freshly read from disk before every turn and are not cached. Treat them as the authoritative current on-disk contents. Prefer this section over cat, sed, nl, or similar shell inspection commands for these paths.\n\nFormat: <line>|<content>.\n\n");
+        sections.push_str("Opened Files\nThese files are freshly read from disk and included in every model request until closed. Treat them as the authoritative current on-disk contents. Prefer this section over repeated shell reads of these paths. Close files with kraai-close-files after extracting needed information, finishing an edit, or moving to other work, unless you still need their contents. You can reopen them later. Context estimates below use roughly one token per four UTF-8 bytes of line-numbered text; actual token counts and cache hits depend on the model.\n\nFormat: <line>|<content>.\n\n");
     } else {
         sections.push_str("\n\n");
     }
-    let _ = write!(sections, "File: {}\n```text\n", pinned.path.display());
+    let _ = writeln!(sections, "File: {}", pinned.path.display());
+    if let Some(tokens) = approximate_tokens {
+        let _ = writeln!(
+            sections,
+            "Approximate content context per request: {tokens} tokens"
+        );
+    }
+    sections.push_str("```text\n");
 }
 
 impl ContextState {
