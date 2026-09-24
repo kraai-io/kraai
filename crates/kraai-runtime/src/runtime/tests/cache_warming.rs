@@ -16,6 +16,7 @@ use super::harness::{RuntimeTestHarness, create_session_with_profile};
 
 #[derive(Clone, Copy)]
 enum WarmResult {
+    InvalidPolicy,
     Success,
     Failure,
     PartialFailure,
@@ -55,6 +56,11 @@ impl Provider for WarmingProvider {
     }
     fn cache_warming_policy(&self, _model: &ModelId) -> Option<CacheWarmingPolicy> {
         Some(CacheWarmingPolicy {
+            min_requests_between_warmups: if matches!(self.result, WarmResult::InvalidPolicy) {
+                0
+            } else {
+                2
+            },
             timeout: if matches!(self.result, WarmResult::Stall) {
                 Duration::from_millis(100)
             } else {
@@ -72,7 +78,7 @@ impl Provider for WarmingProvider {
         let first = {
             let mut calls = self.calls.lock().unwrap();
             calls.push((request, context.prompt_cache_key().map(str::to_owned)));
-            calls.len() == 1
+            calls.len() == 1 && !matches!(self.result, WarmResult::InvalidPolicy)
         };
         if first {
             self.entered.cancel();
@@ -82,7 +88,7 @@ impl Provider for WarmingProvider {
                 WarmResult::Stall | WarmResult::WaitForCancellation => {
                     return Ok(Box::pin(stream::pending()));
                 }
-                WarmResult::Success | WarmResult::PartialFailure => {}
+                WarmResult::Success | WarmResult::PartialFailure | WarmResult::InvalidPolicy => {}
             }
             context.retry_observer().unwrap().before_attempt(1).await?;
         }
@@ -293,6 +299,30 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
     let requests = store.load(&session).await?;
     assert_eq!(requests.len(), 1);
     assert!(requests.values().all(|request| request.usage.is_none()));
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> {
+    let (harness, session, request, calls, _) = fixture(WarmResult::InvalidPolicy).await?;
+    let providers = harness
+        .runtime
+        .agent_manager
+        .read()
+        .await
+        .cloned_provider_manager();
+    let result = RuntimeCore::drive_stream(
+        session,
+        request,
+        providers,
+        harness.runtime.agent_manager.clone(),
+        harness.runtime.event_tx.clone(),
+        harness.runtime.session_state_barrier.clone(),
+    )
+    .await;
+    assert!(matches!(result, StreamDriveResult::Completed(_)));
+    assert_eq!(calls.lock().unwrap().len(), 1);
     harness.shutdown().await;
     Ok(())
 }

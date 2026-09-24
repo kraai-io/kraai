@@ -473,3 +473,51 @@ fn private_http_proxy_requires_explicit_opt_in_and_proxy_authentication() {
         assert!(!valid_backend_url(url, true, true));
     }
 }
+
+#[tokio::test]
+async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Result<()> {
+    for reject_again in [false, true] {
+        let rejection =
+            json!({"error":{"code":"invalid_encrypted_content","message":"account mismatch"}})
+                .to_string();
+        let (base_url, server) = server(vec![
+            ("200 OK", json!({"models":[{"slug":"plain","display_name":"Plain","visibility":"list","supported_reasoning_levels":[]}]}).to_string()),
+            ("400 Bad Request", rejection.clone()),
+            (if reject_again { "400 Bad Request" } else { "200 OK" }, if reject_again { rejection } else { "data: [DONE]\n\n".into() }),
+        ]).await?;
+        let provider = provider(base_url)?;
+        provider.cache_models().await?;
+        let response = provider.generate_reply_stream(&ModelId::new("plain"), ProviderRequest {
+            cacheable_messages: None,
+            script_tool: None,
+            messages: vec![ConversationItem::Assistant { items: vec![
+                kraai_types::AssistantItem::Reasoning { provider_id: ProviderId::new("test-codex"), payload: json!({"type":"reasoning","id":"rs-old","encrypted_content":"old-account","summary":[]}) },
+                kraai_types::AssistantItem::Text { phase: AssistantPhase::FinalAnswer, text: "Keep this answer".into() },
+            ]}, ConversationItem::User { text: "Continue".into() }],
+        }, &ProviderRequestContext::default()).await;
+        assert_eq!(response.is_err(), reject_again);
+        let requests = server.await??;
+        let bodies = requests
+            .iter()
+            .skip(1)
+            .map(|request| {
+                let (_, body) = request
+                    .split_once("\r\n\r\n")
+                    .ok_or_else(|| eyre!("missing body"))?;
+                Ok(serde_json::from_str::<Value>(body)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let original = bodies.first().ok_or_else(|| eyre!("missing original"))?;
+        let retried = bodies.get(1).ok_or_else(|| eyre!("missing retry"))?;
+        assert!(original.get("include").is_none());
+        let original_input = original["input"]
+            .as_array()
+            .ok_or_else(|| eyre!("missing input"))?;
+        assert_eq!(
+            retried["input"],
+            json!(original_input.iter().skip(1).collect::<Vec<_>>())
+        );
+        assert_eq!(requests.len(), 3);
+    }
+    Ok(())
+}

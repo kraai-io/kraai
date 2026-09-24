@@ -79,6 +79,7 @@ pub enum AssistantPhase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantItem {
+    /// Opaque provider data retained in history and snapshots, not display text.
     Reasoning {
         provider_id: ProviderId,
         #[cfg_attr(feature = "typescript", ts(type = "unknown"))]

@@ -120,9 +120,8 @@ impl RuntimeCore {
         ) {
             Ok(warmup) => warmup,
             Err(error) => {
-                return StreamDriveResult::FailedToStart {
-                    error: format!("{error:#}"),
-                };
+                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
+                None
             }
         };
         if let Some(warmup) = warmup {
@@ -142,9 +141,7 @@ impl RuntimeCore {
             )
             .await
             {
-                return StreamDriveResult::FailedToStart {
-                    error: format!("{error:#}"),
-                };
+                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
             }
         }
         let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(

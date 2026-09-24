@@ -128,7 +128,7 @@ class StateTests(Fixture):
                 before = path.read_bytes()
                 for action in (
                     lambda: progress(self.args.job_dir, self.tasks, 2),
-                    lambda: attempt_targets(self.args.job_dir, self.tasks, 2),
+                    lambda: attempt_targets(self.args.job_dir, self.tasks, 2, self.args.dataset),
                     lambda: archive_interrupted(self.args.job_dir),
                 ):
                     with self.assertRaises(ValueError) as caught:

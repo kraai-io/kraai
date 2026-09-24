@@ -320,3 +320,41 @@ async fn real_stream_usage_updates_warming_feedback() -> Result<()> {
     assert!(prepare(&manager, &request())?.is_none());
     Ok(())
 }
+
+#[test]
+fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
+    let manager = manager();
+    prepare(&manager, &request())?
+        .ok_or_else(|| eyre!("missing warmup"))?
+        .complete(&TokenUsage {
+            input_tokens: 3000,
+            ..Default::default()
+        })?;
+    let context = crate::ProviderRequestContext::with_prompt_cache_key("session".into());
+    let observer = manager
+        .cache_usage_observer(
+            &ProviderId::new("mock"),
+            &ModelId::new("model"),
+            &request(),
+            &context,
+        )?
+        .ok_or_else(|| eyre!("missing observer"))?;
+    observer
+        .state
+        .lock()
+        .map_err(|error| eyre!("state lock: {error}"))?
+        .last_attempt = Some(Instant::now() - Duration::from_secs(600));
+    observer.observe(&TokenUsage {
+        cache_read_tokens: 3000,
+        input_tokens: 50,
+        ..Default::default()
+    })?;
+    assert!(prepare(&manager, &request())?.is_none());
+    observer
+        .state
+        .lock()
+        .map_err(|error| eyre!("state lock: {error}"))?
+        .last_prefix_use = Some(Instant::now() - Duration::from_secs(600));
+    assert!(prepare(&manager, &request())?.is_some());
+    Ok(())
+}

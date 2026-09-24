@@ -31,7 +31,7 @@ impl Default for CacheWarmingPolicy {
             min_requests_between_warmups: 2,
             max_requests_between_warmups: 5,
             refresh_after: Duration::from_secs(300),
-            timeout: Duration::from_secs(60),
+            timeout: Duration::from_secs(15),
         }
     }
 }
@@ -51,6 +51,7 @@ struct State {
     last_attempt_succeeded: bool,
     last_attempt: Option<Instant>,
     last_used: Option<Instant>,
+    last_prefix_use: Option<Instant>,
     requests: usize,
     in_flight: bool,
 }
@@ -150,6 +151,7 @@ impl ProviderManager {
             }
             let expired = entry
                 .last_attempt
+                .max(entry.last_prefix_use)
                 .is_none_or(|last| now.duration_since(last) >= policy.refresh_after);
             let changed = entry
                 .completed
@@ -248,6 +250,13 @@ impl CacheUsageObserver {
             .state
             .lock()
             .map_err(|error| eyre!("Cache warming state poisoned: {error}"))?;
+        if state
+            .completed
+            .as_ref()
+            .is_some_and(|completed| self.prefix.extends(&completed.prefix))
+        {
+            state.last_prefix_use = Some(Instant::now());
+        }
         let State {
             feedback,
             completed,

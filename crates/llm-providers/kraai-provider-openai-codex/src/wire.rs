@@ -16,7 +16,8 @@ pub struct ResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     pub stream: bool,
     pub store: bool,
-    pub include: [&'static str; 1],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
 }
@@ -166,7 +167,7 @@ mod tests {
             parallel_tool_calls: None,
             stream: true,
             store: false,
-            include: ["reasoning.encrypted_content"],
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: Some("session-123".to_string()),
         };
 
@@ -187,7 +188,7 @@ mod tests {
             parallel_tool_calls: None,
             stream: true,
             store: false,
-            include: ["reasoning.encrypted_content"],
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: None,
         };
 
@@ -213,7 +214,7 @@ mod tests {
             parallel_tool_calls: Some(false),
             stream: true,
             store: false,
-            include: ["reasoning.encrypted_content"],
+            include: vec!["reasoning.encrypted_content"],
             prompt_cache_key: None,
         };
 

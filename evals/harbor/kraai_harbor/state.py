@@ -105,7 +105,9 @@ def progress(job: Path, tasks: list[str], attempts: int) -> dict:
         task: {"completed": 0, "passed": 0, "failed": 0, "errors": 0} for task in tasks
     }
     for result in completed_trials(job):
-        task = result["task_name"].split("/")[-1]
+        task = result["task_name"]
+        if task not in counts:
+            task = task.removeprefix("terminal-bench/")
         if task not in counts:
             continue
         count = counts[task]

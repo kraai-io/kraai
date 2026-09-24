@@ -148,3 +148,31 @@ class IncrementalPlanTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, "Saved task inputs changed"):
                     await reconcile_job(args, selected)
             job._close_logger_handlers()
+
+
+class NamespacedResolutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preserves_namespaces_and_requested_order(self):
+        import argparse
+        from unittest.mock import AsyncMock, patch
+        from kraai_harbor.plan import resolve_tasks
+
+        tasks = [TaskConfig(name="org-a/task", ref="v1"), TaskConfig(name="org-b/task", ref="v1")]
+        args = argparse.Namespace(dataset="org/dataset@v1", registry_path=None)
+        with patch("kraai_harbor.plan.DatasetConfig.get_task_configs", new=AsyncMock(return_value=tasks[::-1])):
+            resolved = await resolve_tasks(args, ["org-a/task", "org-b/task"])
+        self.assertEqual(resolved, tasks)
+
+    async def test_namespaced_completed_attempts_remain_distinct(self):
+        from unittest.mock import patch
+        from kraai_harbor.plan import attempt_targets
+        from kraai_harbor.state import progress
+
+        results = [{"task_name": name, "verifier_result": {"rewards": {"reward": 1}}}
+                   for name in ["org-a/task", "org-b/task"]]
+        with patch("kraai_harbor.plan.completed_trials", return_value=results):
+            targets = attempt_targets(Path("unused"), ["org-a/task"], 2, "org/dataset@v1")
+        self.assertEqual(dict(targets), {"org-a/task": 2, "org-b/task": 1})
+        with patch("kraai_harbor.state.completed_trials", return_value=results):
+            counts = progress(Path("unused"), ["org-a/task", "org-b/task"], 2)
+        self.assertEqual(counts["tasks"]["org-a/task"]["remaining"], 1)
+        self.assertEqual(counts["tasks"]["org-b/task"]["remaining"], 1)

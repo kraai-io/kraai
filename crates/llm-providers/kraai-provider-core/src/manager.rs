@@ -240,8 +240,18 @@ impl ProviderManager {
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        let cache_observer =
-            self.cache_usage_observer(&provider_id, model_id, &request, &request_context)?;
+        let cache_observer = match self.cache_usage_observer(
+            &provider_id,
+            model_id,
+            &request,
+            &request_context,
+        ) {
+            Ok(observer) => observer,
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "Cache feedback unavailable; continuing with the conversation");
+                None
+            }
+        };
         let pricing_model = provider.pricing_model_id(model_id).await?;
         let stream = provider
             .generate_reply_stream(model_id, request, &request_context)

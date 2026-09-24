@@ -6,13 +6,14 @@ from harbor.models.job.lock import JobLock, build_job_lock
 from harbor.models.trial.config import TrialConfig
 from harbor.tasks.client import TaskClient
 
-from kraai_harbor.datasets import harbor_task_name, order_tasks
+from kraai_harbor.datasets import TERMINAL_BENCH, harbor_task_name, order_tasks
 from kraai_harbor.state import completed_trials, write_json
 
 
-def attempt_targets(job, selected, attempts):
+def attempt_targets(job, selected, attempts, dataset):
     targets = Counter(
-        result["task_name"].split("/")[-1] for result in completed_trials(job)
+        (result["task_name"].removeprefix("terminal-bench/") if dataset == TERMINAL_BENCH else result["task_name"])
+        for result in completed_trials(job)
     )
     for name in selected:
         targets[name] = max(targets[name], attempts)
@@ -29,10 +30,11 @@ async def resolve_tasks(args, names):
         task_names=[harbor_task_name(args.dataset, task) for task in names],
     )
     resolved = await dataset.get_task_configs()
-    by_name = {task.get_task_id().get_name().split("/")[-1]: task for task in resolved}
-    if set(by_name) != set(names):
+    by_name = {task.get_task_id().get_name(): task for task in resolved}
+    expected = {harbor_task_name(args.dataset, name) for name in names}
+    if set(by_name) != expected:
         raise ValueError("Could not resolve every saved and requested task")
-    return [by_name[name] for name in names]
+    return [by_name[harbor_task_name(args.dataset, name)] for name in names]
 
 
 async def prepare_initial_config(args, selected):
@@ -44,7 +46,7 @@ async def prepare_initial_config(args, selected):
 
 async def reconcile_job(args, selected):
     job = args.job_dir.resolve()
-    targets = attempt_targets(job, selected, args.attempts)
+    targets = attempt_targets(job, selected, args.attempts, args.dataset)
     config_path = job / "config.json"
     config = JobConfig.model_validate_json(config_path.read_text())
     names = order_tasks(args.dataset, list(targets))

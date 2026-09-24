@@ -173,6 +173,7 @@ def main() -> None:
         )
         args.task_count = None
         args.full_dataset = False
+        print("Preview selects the same tasks but Harbor may execute them in dataset order, not Kraai priority order.", file=sys.stderr)
         command = build_command(args)
         print(json.dumps(command, indent=2))
         return
