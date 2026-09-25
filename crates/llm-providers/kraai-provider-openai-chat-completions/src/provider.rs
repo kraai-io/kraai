@@ -180,6 +180,9 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
         .await
         .unwrap_or_else(|error| format!("<failed to read body: {error}>"));
 
+    if let Some(error) = kraai_provider_core::ProviderError::from_api_error(&body) {
+        return Err(error.into());
+    }
     Err(eyre!(
         "Chat completions {operation} failed with status {status} at {url}: {body}"
     ))

@@ -79,7 +79,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
             "expected compaction failure, got {result:?}"
         ));
     };
-    assert!(error.contains("reported usage has reached the model context limit"));
+    assert!(error.contains("Context compaction failed"));
     assert!(error.contains("summary provider rejected request"));
     harness.shutdown().await;
     Ok(())
@@ -114,7 +114,7 @@ impl Provider for TestSummarizer {
         _request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let is_summary = request.messages.iter().any(|message| {
-            matches!(message, ConversationItem::System { text } if text.contains("Summarize the conversation data"))
+            matches!(message, ConversationItem::User { text } if text.contains("CONTEXT CHECKPOINT COMPACTION"))
         });
         if is_summary {
             assert!(request.script_tool.is_none());

@@ -275,6 +275,7 @@ fn message_fingerprint(msg: &Message) -> u64 {
         }
         ConversationItem::ScriptResult { output, .. } => output.hash(&mut hasher),
         ConversationItem::Assistant { .. } => msg.display_text().hash(&mut hasher),
+        ConversationItem::Compaction { .. } => {}
     }
     hasher.finish()
 }

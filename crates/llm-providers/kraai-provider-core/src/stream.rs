@@ -2,6 +2,9 @@ use kraai_types::{AssistantPhase, TokenUsage, ToolCallId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderStreamEvent {
+    Compaction {
+        payload: serde_json::Value,
+    },
     Reasoning {
         payload: serde_json::Value,
     },

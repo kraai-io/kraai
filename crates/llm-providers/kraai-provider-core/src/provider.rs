@@ -36,6 +36,19 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    fn supports_native_compaction(&self, _model_id: &ModelId) -> bool {
+        false
+    }
+
+    async fn compact_stream(
+        &self,
+        _model_id: &ModelId,
+        _request: ProviderRequest,
+        _request_context: &ProviderRequestContext,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        color_eyre::eyre::bail!("Provider does not support native compaction")
+    }
+
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,

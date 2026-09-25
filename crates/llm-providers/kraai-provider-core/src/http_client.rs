@@ -89,7 +89,7 @@ mod tests {
             let _ = stream.read(&mut request).await;
             stream
                 .write_all(
-                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n",
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nd\r\ndata: hello\n\n\r\n",
                 )
                 .await
                 .unwrap();
@@ -106,10 +106,22 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let mut body = response.bytes_stream();
-        assert_eq!(body.next().await.unwrap().unwrap().as_ref(), b"hello");
+        let mut body = crate::stream_sse_data(response);
+        assert_eq!(
+            body.next().await.unwrap().unwrap(),
+            crate::SseEvent::Data("hello".into())
+        );
         let error = body.next().await.unwrap().unwrap_err();
 
-        assert!(error.is_timeout());
+        assert!(matches!(
+            error.downcast_ref::<crate::ProviderError>(),
+            Some(crate::ProviderError::StreamInterrupted(_))
+        ));
+        assert!(
+            error
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+        );
+        assert!(body.next().await.is_none());
     }
 }

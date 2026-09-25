@@ -234,6 +234,11 @@ impl RuntimeCore {
                 }
             }
             match chunk_result {
+                Ok(ProviderStreamEvent::Compaction { .. }) => {
+                    return StreamDriveResult::FailedDuringStream {
+                        error: "Unexpected compaction item in a conversation response".into(),
+                    };
+                }
                 Ok(ProviderStreamEvent::Reasoning { payload }) => {
                     let _state_guard = session_state_barrier.read().await;
                     if agent_manager

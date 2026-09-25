@@ -59,7 +59,10 @@ where
     Fut: Future<Output = reqwest::Result<Response>>,
 {
     let started = Instant::now();
-    let max_attempts = policy.max_attempts.max(1);
+    let max_attempts = policy
+        .max_attempts
+        .max(1)
+        .min(request_context.max_attempts().unwrap_or(u32::MAX));
     let mut unpriced_prior_attempts = 0;
 
     for attempt_number in 1..=max_attempts {

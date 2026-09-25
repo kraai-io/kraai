@@ -229,6 +229,37 @@ impl ProviderManager {
         Ok(provider.script_tool_transport(model_id))
     }
 
+    pub fn supports_native_compaction(
+        &self,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Result<bool> {
+        let provider = self
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
+        Ok(provider.supports_native_compaction(model_id))
+    }
+
+    pub async fn compact_stream(
+        &self,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+        request: ProviderRequest,
+        context: ProviderRequestContext,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        let provider = self
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
+        let pricing_model = provider.pricing_model_id(model_id).await?;
+        let stream = provider.compact_stream(model_id, request, &context).await?;
+        Ok(self
+            .pricing
+            .apply(provider_id, model_id, &pricing_model, stream)
+            .await)
+    }
+
     pub async fn generate_reply_stream(
         &self,
         provider_id: ProviderId,

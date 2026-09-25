@@ -271,7 +271,9 @@ mod tests {
                 covered_through: message.id.clone(),
                 superseded_usage: vec![message.id.clone()],
                 previous_boundary: None,
-                summary: String::from("Completed work"),
+                replacement: vec![kraai_types::ConversationItem::User {
+                    text: "Completed work".into(),
+                }],
                 model_id: kraai_types::ModelId::new("model"),
                 provider_id: kraai_types::ProviderId::new("provider"),
                 prompt_version: 1,

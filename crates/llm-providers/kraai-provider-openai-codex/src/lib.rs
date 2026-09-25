@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod compaction;
 mod messages;
 mod models;
 mod pricing;

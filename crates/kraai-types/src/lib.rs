@@ -101,10 +101,24 @@ pub enum AssistantItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConversationItem {
-    System { text: String },
-    User { text: String },
-    Assistant { items: Vec<AssistantItem> },
-    ScriptResult { call_id: ToolCallId, output: String },
+    Compaction {
+        provider_id: ProviderId,
+        #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+        payload: serde_json::Value,
+    },
+    System {
+        text: String,
+    },
+    User {
+        text: String,
+    },
+    Assistant {
+        items: Vec<AssistantItem>,
+    },
+    ScriptResult {
+        call_id: ToolCallId,
+        output: String,
+    },
 }
 
 impl ConversationItem {
@@ -112,7 +126,7 @@ impl ConversationItem {
         match self {
             Self::System { .. } => ChatRole::System,
             Self::User { .. } => ChatRole::User,
-            Self::Assistant { .. } => ChatRole::Assistant,
+            Self::Assistant { .. } | Self::Compaction { .. } => ChatRole::Assistant,
             Self::ScriptResult { .. } => ChatRole::ToolCallResult,
         }
     }
@@ -120,7 +134,7 @@ impl ConversationItem {
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::System { text } | Self::User { text } => Some(text),
-            Self::Assistant { .. } | Self::ScriptResult { .. } => None,
+            Self::Assistant { .. } | Self::ScriptResult { .. } | Self::Compaction { .. } => None,
         }
     }
 
@@ -136,6 +150,7 @@ impl ConversationItem {
             Self::System { text } | Self::User { text } => Cow::Borrowed(text),
             Self::Assistant { items } => render_assistant_items(items),
             Self::ScriptResult { output, .. } => Cow::Borrowed(output),
+            Self::Compaction { .. } => Cow::Borrowed(""),
         }
     }
 }

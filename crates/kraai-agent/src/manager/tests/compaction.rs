@@ -20,7 +20,12 @@ fn checkpoint(
         covered_through: boundary,
         superseded_usage: Vec::new(),
         previous_boundary: previous,
-        summary: summary.to_string(),
+        replacement: vec![ConversationItem::Assistant {
+            items: vec![AssistantItem::Text {
+                phase: kraai_types::AssistantPhase::FinalAnswer,
+                text: summary.to_string(),
+            }],
+        }],
         model_id: ModelId::new("mock-model"),
         provider_id: ProviderId::new("mock"),
         prompt_version: 1,
@@ -33,7 +38,12 @@ async fn context(manager: &AgentManager, session: &str) -> Result<Vec<Message>> 
         .get_tip(session)
         .await?
         .ok_or_else(|| eyre!("missing tip"))?;
-    manager.get_model_history(&tip).await
+    manager
+        .get_model_history(
+            &tip,
+            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+        )
+        .await
 }
 
 #[tokio::test]
@@ -80,6 +90,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
                 &prompt(prefix, suffix),
                 None,
                 None,
+                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             )
             .await?;
         assert!(pending.is_none());
@@ -165,6 +176,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
             &prompt("system", ""),
             None,
             None,
+            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
         )
         .await?;
     let serialized = serde_json::to_string(&request.messages)?;
@@ -199,6 +211,7 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
                 &prompt("system", "fresh files"),
                 None,
                 None,
+                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             )
             .await?;
         assert_eq!(
@@ -279,6 +292,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                 &system,
                 Some(tool.clone()),
                 Some(10_000),
+                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             )
             .await?;
         assert_eq!(pending.is_some(), expected);
@@ -291,6 +305,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                 &system,
                 None,
                 limit,
+                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             )
             .await?;
         assert!(pending.is_none());
@@ -317,6 +332,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
+            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
         )
         .await?;
     assert!(pending.is_none());
@@ -363,6 +379,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
+            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
         )
         .await?;
     assert!(pending.is_none());
@@ -379,9 +396,81 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
+            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
         )
         .await?;
     assert!(pending.is_some());
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    manager
+        .add_message(&session, ChatRole::User, "original task".into(), None)
+        .await?;
+    let boundary = manager
+        .add_message(
+            &session,
+            ChatRole::Assistant,
+            "original findings".into(),
+            None,
+        )
+        .await?;
+    let mut saved = checkpoint(boundary, None, "unused");
+    saved.replacement = vec![
+        ConversationItem::User {
+            text: "original task".into(),
+        },
+        ConversationItem::Compaction {
+            provider_id: ProviderId::new("mock"),
+            payload: serde_json::json!({"type":"compaction","encrypted_content":"opaque"}),
+        },
+    ];
+    FileCompactionStore::new(&data_dir).save(&saved).await?;
+    manager
+        .add_message(&session, ChatRole::User, "continue".into(), None)
+        .await?;
+    let tip = manager
+        .get_tip(&session)
+        .await?
+        .ok_or_else(|| eyre!("missing tip"))?;
+    for (provider, model, native) in [
+        ("mock", "mock-model", true),
+        ("other", "mock-model", false),
+        ("mock", "other-model", false),
+    ] {
+        let provider = ProviderId::new(provider);
+        let model = ModelId::new(model);
+        let history = manager.get_model_history(&tip, (&provider, &model)).await?;
+        let (request, _) = manager
+            .build_model_context(
+                &session,
+                history,
+                &prompt("instructions", "files"),
+                None,
+                None,
+                (&provider, &model),
+            )
+            .await?;
+        assert_eq!(
+            request
+                .messages
+                .iter()
+                .any(|item| matches!(item, ConversationItem::Compaction { .. })),
+            native
+        );
+        assert_eq!(
+            request
+                .messages
+                .iter()
+                .any(|item| item.display_text() == "original findings"),
+            !native
+        );
+        assert_eq!(request.messages.iter().filter(|item| matches!(item, ConversationItem::User { text } if text == "original task")).count(), 1);
+    }
     cleanup_dir(data_dir).await;
     Ok(())
 }

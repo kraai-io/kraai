@@ -51,7 +51,10 @@ impl AgentManager {
             }
         };
         let user_msg_id = user_message.message.id.clone();
-        let context = match self.get_model_history(&user_msg_id).await {
+        let context = match self
+            .get_model_history(&user_msg_id, (&provider_id, &model_id))
+            .await
+        {
             Ok(context) => context,
             Err(error) => {
                 self.clear_active_turn(session_id);
@@ -87,6 +90,7 @@ impl AgentManager {
                     &prompt,
                     script_tool_definition(script_tool_transport),
                     max_context,
+                    (&provider_id, &model_id),
                 )
                 .await?;
             Ok::<_, color_eyre::Report>((prompt, request, compaction))
@@ -195,7 +199,9 @@ impl AgentManager {
             return Ok(None);
         };
 
-        let context = self.get_model_history(&tip_id).await?;
+        let context = self
+            .get_model_history(&tip_id, (&provider_id, &model_id))
+            .await?;
         let script_tool_transport = self
             .providers
             .script_tool_transport(&provider_id, &model_id)?;
@@ -213,6 +219,7 @@ impl AgentManager {
                 &system_prompt,
                 script_tool_definition(script_tool_transport),
                 max_context,
+                (&provider_id, &model_id),
             )
             .await?;
 
