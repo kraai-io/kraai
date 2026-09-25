@@ -116,6 +116,10 @@ fn probe() {
         }
         "arguments" => {
             assert_eq!(
+                std::env::var("=C:").expect("hidden drive environment"),
+                r"C:\work"
+            );
+            assert_eq!(
                 std::env::var("MiXeD").expect("case insensitive environment"),
                 "spaces and unicode \u{1f426}"
             );
@@ -220,6 +224,7 @@ async fn concurrent_launches_preserve_workspace_isolation() {
 async fn captures_output_and_preserves_environment_values() {
     let fixture = Fixture::new();
     let mut plan = fixture.plan("arguments", &[SandboxCapability::WorkspaceRead]);
+    plan.environment.insert("=C:".into(), r"C:\work".into());
     plan.environment
         .insert("MiXeD".into(), "spaces and unicode \u{1f426}".into());
     let output = kraai_sandbox::run(plan, CancellationToken::new())

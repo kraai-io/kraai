@@ -78,7 +78,9 @@ pub(super) fn environment(environment: &BTreeMap<OsString, OsString>) -> io::Res
     for (name, value) in environment {
         let mut name = wide(name)?;
         name.pop();
-        if name.is_empty() || name.contains(&u16::from(b'=')) || name.len() > 32767 {
+        let visible_name = name.strip_prefix(&[u16::from(b'=')]).unwrap_or(&name);
+        if visible_name.is_empty() || visible_name.contains(&u16::from(b'=')) || name.len() > 32767
+        {
             return Err(invalid("invalid Windows environment variable name"));
         }
         entries.push((name, wide(value)?));
@@ -155,6 +157,37 @@ mod tests {
         ]);
         assert!(environment(&values).is_err());
         assert!(wide(OsStr::new("nul\0value")).is_err());
+    }
+
+    #[test]
+    fn preserves_hidden_environment_entries() {
+        let values = BTreeMap::from([
+            (OsString::from("=C:"), OsString::from(r"C:\work")),
+            (OsString::from("=D:"), OsString::from(r"D:\other")),
+            (OsString::from("=ExitCode"), OsString::from("0")),
+            (OsString::from("Path"), OsString::from(r"C:\Windows")),
+        ]);
+        assert_eq!(
+            environment(&values)
+                .map(|block| String::from_utf16_lossy(&block))
+                .ok(),
+            Some("=C:=C:\\work\0=D:=D:\\other\0=ExitCode=0\0Path=C:\\Windows\0\0".into()),
+        );
+        let aliases = BTreeMap::from([
+            (OsString::from("=C:"), OsString::from("first")),
+            (OsString::from("=c:"), OsString::from("second")),
+        ]);
+        assert!(environment(&aliases).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_names_embedded_equals_and_nuls() {
+        for name in ["", "=", "A=B", "=C:=bad", "==C:", "nul\0name"] {
+            let values = BTreeMap::from([(OsString::from(name), OsString::from("value"))]);
+            assert!(environment(&values).is_err(), "accepted {name:?}");
+        }
+        let values = BTreeMap::from([(OsString::from("=C:"), OsString::from("nul\0value"))]);
+        assert!(environment(&values).is_err());
     }
 
     #[test]
