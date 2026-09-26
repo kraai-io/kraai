@@ -1,3 +1,5 @@
+mod trajectory;
+
 use std::path::Path;
 
 use color_eyre::eyre::{Result, ensure};
@@ -117,7 +119,7 @@ impl Catalog {
         let accounting_usable = proxy
             .as_ref()
             .is_none_or(|proxy| proxy.accounting_error.is_none() && proxy.unrecorded_requests == 0);
-        let allow_harbor = !adapter && !proxy_path.exists();
+        let allow_harbor = !adapter && !proxy_path.exists() && proxy.is_none();
         let normalized = crate::harbor::metrics::trial_metrics(result, proxy, allow_harbor);
         let mut metrics = match normalized {
             Ok(normalized) => Metrics {
@@ -167,6 +169,9 @@ impl Catalog {
             .and_then(|value| serde_json::from_value::<HarnessMetrics>(value.clone()).ok())
             .or_else(|| self.optional_json(&directory.join("agent/kraai-metrics.json")));
         metrics.harness(harness.as_ref());
+        if allow_harbor {
+            self.hydrate_trajectory(directory, result, &mut metrics);
+        }
         metrics
     }
 }

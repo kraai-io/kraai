@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareTasks, defaultSelection, preserveSelection, summarize } from "../src/results.ts";
-import { metric } from "../src/format.ts";
+import { compareTasks, defaultSelection, preserveSelection, summarize, summarizeVersions } from "../src/results.ts";
+import { metric, versionStats } from "../src/format.ts";
 import { metricKeys } from "../src/types.ts";
 import type { Attempt, Metrics, Version } from "../src/types.ts";
 
@@ -72,19 +72,48 @@ test("comparison aggregates shared finished tasks while preserving the union tab
   assert.equal(comparison.tasks[0].summaries[1].metrics.cost_usd.value, null);
 });
 
-test("defaults choose latest Kraai versions and Codex, polling preserves intentional omissions", () => {
-  assert.deepEqual(defaultSelection(versions), ["current", "previous", "codex"]);
-  assert.deepEqual(preserveSelection(["previous", "", "codex"], [...versions].reverse()), ["previous", "", "codex"]);
-  assert.deepEqual(preserveSelection(["removed", "previous", "codex"], versions), ["", "previous", "codex"]);
+test("defaults choose latest Kraai and Codex, polling preserves chosen versions and omissions", () => {
+  assert.deepEqual(defaultSelection(versions), ["current", "codex"]);
+  assert.deepEqual(preserveSelection(["previous", ""], [...versions].reverse()), ["previous", ""]);
+  assert.deepEqual(preserveSelection(["removed", "codex"], versions), ["", "codex"]);
 });
 
-test("previous defaults to a different build even when current has multiple configurations", () => {
+test("missing baselines stay empty and other configurations do not add a comparison slot", () => {
   const duplicate = { ...versions[0], id: "current-other-config", latest_at_ms: 2 };
-  assert.deepEqual(defaultSelection([...versions, duplicate]), ["current", "previous", "codex"]);
-  assert.deepEqual(defaultSelection([versions[0], duplicate]), ["current", "", ""]);
+  assert.deepEqual(defaultSelection([...versions, duplicate]), ["current", "codex"]);
+  assert.deepEqual(defaultSelection([versions[0], duplicate]), ["current", ""]);
+  assert.deepEqual(defaultSelection([versions[2]]), ["", "codex"]);
 });
 
 test("unavailable and nonfinite metrics never display as numerical values", () => {
   for (const value of [null, undefined, NaN, Infinity]) assert.equal(metric(value, "cost_usd"), "Unavailable");
   assert.equal(metric(0, "cost_usd"), "$0.00");
+});
+
+test("version options summarize every finished task, count repeated tasks once, and retain attempt weighting", () => {
+  const summaries = summarizeVersions([
+    attempt("shared-pass", {}, { cost_usd: 3 }),
+    attempt("shared-fail", { status: "failed" }, { cost_usd: 6 }),
+    attempt("extra", { task: "only-current" }, { cost_usd: 3 }),
+    attempt("running", { task: "running", status: "running" }, { cost_usd: 100 }),
+    attempt("cancelled", { task: "cancelled", status: "interrupted" }, { cost_usd: 100 }),
+    attempt("baseline", { version_id: "codex" }, { cost_usd: 8 }),
+    attempt("other-model", { version_id: "not-available" }, { cost_usd: 1000 }),
+  ], versions);
+  assert.equal(summaries.size, versions.length);
+  assert.equal(versionStats(summaries.get("current")!), "2 tasks · 66.7% pass · $4.00/attempt");
+  assert.equal(versionStats(summaries.get("codex")!), "1 task · 100.0% pass · $8.00/attempt");
+  assert.equal(versionStats(summaries.get("previous")!), "0 tasks · No finished attempts");
+});
+
+test("version options identify partial cost records, missing costs, and zero costs", () => {
+  const summaries = summarizeVersions([
+    attempt("known", {}, { cost_usd: 0 }),
+    attempt("missing", { status: "error" }),
+    attempt("no-cost", { version_id: "codex", status: "failed" }),
+    attempt("pending", { version_id: "previous", status: "running" }),
+  ], versions);
+  assert.equal(versionStats(summaries.get("current")!), "1 task · 50.0% pass · $0.00/attempt · 1/2 costs recorded");
+  assert.equal(versionStats(summaries.get("codex")!), "1 task · 0.0% pass · cost unavailable");
+  assert.equal(versionStats(summaries.get("previous")!), "0 tasks · No finished attempts");
 });

@@ -115,6 +115,7 @@ pub(super) fn logs(root: &Path, directory: &Path) -> BTreeMap<String, PathBuf> {
     }
     let names = [
         "result.json",
+        "source.json",
         "events.jsonl",
         "proxy.events.jsonl",
         "harness-metrics.json",
@@ -129,6 +130,7 @@ pub(super) fn logs(root: &Path, directory: &Path) -> BTreeMap<String, PathBuf> {
         "agent/kraai-metrics.json",
         "agent/codex.txt",
         "agent/trajectory.json",
+        "agent/trajectory-metrics.json",
         "verifier/test-stdout.txt",
         "verifier/test-stderr.txt",
         "verifier/reward.txt",

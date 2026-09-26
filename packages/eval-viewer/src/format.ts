@@ -1,5 +1,5 @@
 import type { MetricKey, Status, Version } from "./types.ts";
-import type { Summary } from "./results.ts";
+import type { Summary, VersionSummary } from "./results.ts";
 
 export const metricLabels: Record<MetricKey, string> = {
   input_tokens: "Input tokens",
@@ -18,10 +18,15 @@ export function metric(value: number | null | undefined, key: MetricKey): string
   if (value === null || value === undefined || !Number.isFinite(value)) return "Unavailable";
   if (key === "cost_usd") return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
   if (key === "duration_ms") {
-    const seconds = value / 1000;
-    if (seconds < 60) return `${seconds.toFixed(1)}s`;
-    if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-    return `${(seconds / 3600).toFixed(1)}h`;
+    const seconds = Math.round(value / 1000);
+    if (seconds < 60) return `${(value / 1000).toFixed(1)} sec`;
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return [
+      hours ? `${hours} hr` : null,
+      minutes ? `${minutes} min` : null,
+      seconds % 60 ? `${seconds % 60} sec` : null,
+    ].filter(Boolean).join(" ");
   }
   return value.toLocaleString("en-US", { maximumFractionDigits: 1 });
 }
@@ -42,6 +47,15 @@ export function versionLabel(version: Version): string {
   const short = version.label.replace(/(?:sha256[:-])?([a-f0-9]{16,})/gi, (_, hash: string) => hash.slice(0, 8));
   const day = version.latest_at_ms === null ? "" : new Date(version.latest_at_ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return [version.harness, short, day].filter(Boolean).join(" · ");
+}
+
+export function versionStats(summary: VersionSummary): string {
+  const tasks = `${summary.tasks} ${summary.tasks === 1 ? "task" : "tasks"}`;
+  if (!summary.finished) return `${tasks} · No finished attempts`;
+  const cost = summary.metrics.cost_usd;
+  const costLabel = cost.value === null || !Number.isFinite(cost.value) ? "cost unavailable" : `${metric(cost.value, "cost_usd")}/attempt`;
+  const recorded = cost.samples > 0 && cost.samples < summary.finished ? ` · ${cost.samples}/${summary.finished} costs recorded` : "";
+  return `${tasks} · ${percentage(summary.statuses.passed / summary.finished)} pass · ${costLabel}${recorded}`;
 }
 
 export function statusLabel(status: Status): string {

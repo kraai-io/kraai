@@ -20,6 +20,10 @@ export interface TaskGroup {
   comparable: boolean;
 }
 
+export interface VersionSummary extends Summary {
+  tasks: number;
+}
+
 export function isFinished(attempt: Attempt): boolean {
   return ["passed", "failed", "error"].includes(attempt.status);
 }
@@ -61,6 +65,15 @@ export function summarize(attempts: Attempt[]): Summary {
   };
 }
 
+export function summarizeVersions(attempts: Attempt[], versions: Version[]): Map<string, VersionSummary> {
+  const groups = new Map(versions.map(({ id }) => [id, [] as Attempt[]]));
+  for (const attempt of attempts) groups.get(attempt.version_id)?.push(attempt);
+  return new Map([...groups].map(([id, items]) => [id, {
+    ...summarize(items),
+    tasks: new Set(items.filter(isFinished).map(({ task }) => task)).size,
+  }]));
+}
+
 export function compareTasks(attempts: Attempt[], versions: Version[]) {
   const selected = new Set(versions.map(({ id }) => id));
   const groups = new Map<string, Map<string, Attempt[]>>();
@@ -83,10 +96,13 @@ export function compareTasks(attempts: Attempt[], versions: Version[]) {
 
 export function defaultSelection(versions: Version[]): string[] {
   const sorted = [...versions].sort((a, b) => (b.latest_at_ms ?? 0) - (a.latest_at_ms ?? 0));
-  const kraai = sorted.filter((version) => !version.harness.toLowerCase().includes("codex"));
-  const codex = sorted.find((version) => version.harness.toLowerCase().includes("codex"));
-  const previous = kraai.find((version) => version.label !== kraai[0]?.label);
-  return [kraai[0]?.id ?? "", previous?.id ?? "", codex?.id ?? ""];
+  const kraai = sorted.find((version) => !isCodex(version));
+  const codex = sorted.find(isCodex);
+  return [kraai?.id ?? "", codex?.id ?? ""];
+}
+
+export function isCodex(version: Version): boolean {
+  return version.harness.toLowerCase().includes("codex");
 }
 
 export function preserveSelection(selected: string[], versions: Version[]): string[] {

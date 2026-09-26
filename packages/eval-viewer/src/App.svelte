@@ -5,11 +5,13 @@
   import VersionPicker from "./VersionPicker.svelte";
   import Overview from "./Overview.svelte";
   import TaskTable from "./TaskTable.svelte";
+  import History from "./History.svelte";
 
   let catalog = $state<Catalog>({ versions: [], attempts: [], warnings: [] });
   let benchmark = $state("");
   let model = $state("");
-  let selected = $state<string[]>(["", "", ""]);
+  let selected = $state<string[]>(["", ""]);
+  let view = $state<"comparison" | "history">("comparison");
   let loaded = $state(false);
   let refreshing = $state(false);
   let error = $state("");
@@ -99,9 +101,17 @@
         <label>Benchmark<select aria-label="Benchmark" value={benchmark} onchange={(event) => chooseBenchmark(event.currentTarget.value)}>{#each benchmarks as value}<option value={value}>{value}</option>{/each}</select></label>
         <label>Model<select aria-label="Model" value={model} onchange={(event) => chooseModel(event.currentTarget.value)}>{#each models as value}<option value={value}>{JSON.parse(value) ?? "Unknown model"}</option>{/each}</select></label>
       </div>
-      <VersionPicker versions={available} {selected} onchange={(value) => selected = value} />
+      <VersionPicker versions={available} attempts={catalog.attempts} {selected} onchange={(value) => selected = value} />
     </section>
-    {#if versions.length === 0}
+    <nav class="views" aria-label="Results view">
+      <button aria-pressed={view === "comparison"} onclick={() => view = "comparison"}>Comparison</button>
+      <button aria-pressed={view === "history"} onclick={() => view = "history"}>History</button>
+    </nav>
+    {#if view === "history"}
+      {#key `${benchmark}:${model}`}
+        <History attempts={catalog.attempts} versions={available} selected={versions} />
+      {/key}
+    {:else if versions.length === 0}
       <p class="empty">Select a version to see its results.</p>
     {:else}
       <Overview {versions} summaries={comparison.summaries} shared={comparison.shared} total={comparison.tasks.length} />
@@ -118,6 +128,9 @@
   .refresh span { font-size: 12px; }
   .filters { display: flex; flex-direction: column; gap: 18px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 21px 0; }
   .scope { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px; }
+  .views { display: flex; gap: 6px; }
+  .views button { background: transparent; border-color: transparent; color: var(--muted); }
+  .views button[aria-pressed="true"] { background: var(--panel); border-color: var(--border); color: #e4e6ed; }
   label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
   select { color: #e4e6ed; font-size: 14px; width: 100%; }
   .empty p { margin-top: 8px; }

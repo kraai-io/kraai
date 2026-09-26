@@ -1,3 +1,5 @@
+mod trajectory;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
