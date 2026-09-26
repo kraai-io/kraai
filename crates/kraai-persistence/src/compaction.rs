@@ -117,7 +117,7 @@ mod tests {
             superseded_usage: vec![MessageId::new("latest")],
             previous_boundary: Some(MessageId::new("previous")),
             replacement: vec![ConversationItem::User {
-                text: "User requested a parser; the parser is implemented.".into(),
+                content: "User requested a parser; the parser is implemented.".into(),
             }],
             model_id: ModelId::new("model"),
             provider_id: ProviderId::new("provider"),
@@ -248,7 +248,7 @@ mod tests {
             id: checkpoint.covered_through.clone(),
             parent_id: None,
             content: ConversationItem::User {
-                text: String::from("hello"),
+                content: String::from("hello").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,

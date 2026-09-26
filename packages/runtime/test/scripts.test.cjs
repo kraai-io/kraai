@@ -38,7 +38,7 @@ for (const profile of ['plan', 'coding', 'coding-no-sandbox']) {
         const history = unwrap(await runtime.getChatHistory(session));
         const result = Object.values(history).find(message => message.content.type === 'script_result');
         assert.equal(event.ScriptResultReady.status, 'completed', JSON.stringify(result));
-        assert.match(result.content.output, /42/);
+        assert.match(result.content.output.filter((part) => part.type === "text").map((part) => part.text).join("\n"), /42/);
         break;
       }
     }

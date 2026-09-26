@@ -159,10 +159,28 @@ impl RuntimeCore {
     pub(crate) async fn handle_send_message(
         &self,
         session_id: String,
-        message: String,
+        message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> RuntimeResult<SubmitMessageOutcome> {
+        if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+            return Err(RuntimeError::invalid_argument("Too many image attachments"));
+        }
+        if message
+            .images()
+            .try_fold(0u64, |total, image| total.checked_add(image.byte_length))
+            .is_none_or(|total| total > kraai_types::image::MAX_REQUEST_IMAGE_BYTES)
+        {
+            return Err(RuntimeError::invalid_argument(
+                "Image attachments exceed the request byte limit",
+            ));
+        }
+        for image in message.images() {
+            self.image_store
+                .read(image)
+                .await
+                .map_err(RuntimeError::internal)?;
+        }
         let has_pending_messages = {
             let queued = self.queued_messages.lock().await;
             queued

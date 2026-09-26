@@ -21,7 +21,7 @@ pub(crate) fn trim_tool_outputs(request: &mut ProviderRequest, context_window: O
             break;
         };
         bytes = bytes
-            .saturating_sub(output.len())
+            .saturating_sub(output.display_text().len())
             .saturating_add(TRUNCATED_OUTPUT.len());
         *output = TRUNCATED_OUTPUT.into();
     }
@@ -41,9 +41,10 @@ fn encrypted_bytes(payload: &serde_json::Value) -> usize {
 
 fn visible_bytes(item: &ConversationItem) -> usize {
     match item {
-        ConversationItem::System { text } | ConversationItem::User { text } => text.len(),
+        ConversationItem::System { text } => text.len(),
+        ConversationItem::User { content } => content.display_text().len(),
         ConversationItem::Compaction { payload, .. } => encrypted_bytes(payload),
-        ConversationItem::ScriptResult { output, .. } => output.len(),
+        ConversationItem::ScriptResult { output, .. } => output.display_text().len(),
         ConversationItem::Assistant { items } => items
             .iter()
             .map(|item| match item {
@@ -81,7 +82,7 @@ mod tests {
                 call.clone(),
                 ConversationItem::ScriptResult {
                     call_id: ToolCallId::new("call"),
-                    output: "x".repeat(10000),
+                    output: "x".repeat(10000).into(),
                 },
                 ConversationItem::System {
                     text: "pinned file".into(),
@@ -94,7 +95,7 @@ mod tests {
         assert_eq!(request.messages.first(), Some(&encrypted));
         assert_eq!(request.messages.get(1), Some(&call));
         assert!(
-            matches!(request.messages.get(2), Some(ConversationItem::ScriptResult { call_id, output }) if call_id.as_str() == "call" && output == TRUNCATED_OUTPUT)
+            matches!(request.messages.get(2), Some(ConversationItem::ScriptResult { call_id, output }) if call_id.as_str() == "call" && output.as_text() == Some(TRUNCATED_OUTPUT))
         );
     }
 }

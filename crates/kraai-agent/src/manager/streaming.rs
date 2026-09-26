@@ -6,7 +6,7 @@ impl AgentManager {
         &mut self,
         session_id: &str,
         role: ChatRole,
-        content: String,
+        content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
     ) -> Result<MessageId> {
         Ok(self
@@ -22,7 +22,7 @@ impl AgentManager {
         message_id: MessageId,
         profile_id: String,
         call_id: ToolCallId,
-        content: String,
+        content: kraai_types::MessageContent,
     ) -> Result<bool> {
         self.require_session(session_id).await?;
         let outcome = self
@@ -49,21 +49,23 @@ impl AgentManager {
         &mut self,
         session_id: &str,
         role: ChatRole,
-        content: String,
+        content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
     ) -> Result<AppendedMessage> {
         let title_if_first_message = if role == ChatRole::User {
-            title_from_user_prompt(&content)
+            title_from_user_prompt(&content.display_text())
         } else {
             None
         };
         let content = match role {
-            ChatRole::System => ConversationItem::System { text: content },
-            ChatRole::User => ConversationItem::User { text: content },
+            ChatRole::System => ConversationItem::System {
+                text: content.display_text().into_owned(),
+            },
+            ChatRole::User => ConversationItem::User { content },
             ChatRole::Assistant => ConversationItem::Assistant {
                 items: vec![AssistantItem::Text {
                     phase: AssistantPhase::FinalAnswer,
-                    text: content,
+                    text: content.display_text().into_owned(),
                 }],
             },
             ChatRole::ToolCallResult => {
@@ -346,7 +348,7 @@ impl AgentManager {
                                 session_id: state.session_id.clone(),
                                 content: ConversationItem::ScriptResult {
                                     call_id,
-                                    output: cancelled_script_output.to_string(),
+                                    output: cancelled_script_output.to_string().into(),
                                 },
                                 status: MessageStatus::Complete,
                                 agent_profile_id: state.message.agent_profile_id.clone(),
@@ -434,7 +436,10 @@ impl AgentManager {
         Ok(result)
     }
 
-    pub async fn undo_last_user_message(&self, session_id: &str) -> Result<Option<String>> {
+    pub async fn undo_last_user_message(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<kraai_types::MessageContent>> {
         if self.pending_message_rollbacks.contains_key(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot undo while queued message rollback is incomplete"
@@ -454,7 +459,10 @@ impl AgentManager {
         while let Some(message) = history.get(&cursor) {
             if message.role() == ChatRole::User {
                 self.set_tip(session_id, message.parent_id.clone()).await?;
-                return Ok(message.content.text().map(ToString::to_string));
+                return Ok(match &message.content {
+                    ConversationItem::User { content } => Some(content.clone()),
+                    _ => None,
+                });
             }
 
             let Some(parent_id) = message.parent_id.clone() else {

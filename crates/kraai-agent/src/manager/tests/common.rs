@@ -18,6 +18,7 @@ impl Provider for MockProvider {
 
     async fn list_models(&self) -> Vec<Model> {
         vec![Model {
+            supports_images: true,
             id: ModelId::new("mock-model"),
             name: String::from("Mock Model"),
             max_context: None,

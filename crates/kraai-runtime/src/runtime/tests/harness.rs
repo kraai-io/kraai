@@ -233,6 +233,7 @@ impl kraai_provider_core::Provider for RetryNotifyingProvider {
 
 fn mock_model() -> kraai_provider_core::Model {
     kraai_provider_core::Model {
+        supports_images: true,
         id: ModelId::new("mock-model"),
         name: String::from("Mock Model"),
         max_context: None,
@@ -400,6 +401,9 @@ path = \"inherit\"\n",
             startup_rx,
         };
         let runtime = RuntimeCore {
+            image_store: Arc::new(kraai_persistence::FileImageStore::new(
+                &data_dir.join("data"),
+            )),
             queue_drains: Arc::default(),
             session_preparations: Arc::default(),
             event_tx: event_tx.clone(),

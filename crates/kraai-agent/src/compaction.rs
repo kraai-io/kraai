@@ -20,6 +20,7 @@ pub struct ContextCompaction {
     pub(crate) history: Vec<Message>,
     pub(crate) previous: Option<CompactionCheckpoint>,
     pub(crate) on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
+    pub(crate) image_resolver: Option<Arc<dyn kraai_provider_core::ImageResolver>>,
     pub(crate) usage_barrier: Option<Arc<tokio::sync::RwLock<()>>>,
 }
 
@@ -79,14 +80,24 @@ pub(crate) fn assemble(
         );
         Some(boundary)
     };
-    ProviderRequest {
+    let mut request = ProviderRequest {
         messages,
         script_tool: tool,
         cacheable_messages,
-    }
+    };
+    limit_request_images(&mut request);
+    request
 }
 
 impl ContextCompaction {
+    pub fn with_image_resolver(
+        mut self,
+        resolver: Arc<dyn kraai_provider_core::ImageResolver>,
+    ) -> Self {
+        self.image_resolver = Some(resolver);
+        self
+    }
+
     pub fn observe_usage(
         mut self,
         barrier: Arc<tokio::sync::RwLock<()>>,
@@ -149,12 +160,14 @@ fn retained_users(messages: &[ConversationItem], token_budget: usize) -> Vec<Con
     let mut remaining = token_budget.saturating_mul(4);
     let mut retained = Vec::new();
     for item in messages.iter().rev() {
-        let ConversationItem::User { text } = item else {
+        let ConversationItem::User { content } = item else {
             continue;
         };
         if remaining == 0 {
             break;
         }
+        let content = content.without_images();
+        let text = content.display_text();
         let mut end = text.len().min(remaining);
         while !text.is_char_boundary(end) {
             end -= 1;
@@ -163,10 +176,35 @@ fn retained_users(messages: &[ConversationItem], token_budget: usize) -> Vec<Con
             break;
         }
         retained.push(ConversationItem::User {
-            text: text.get(..end).unwrap_or_default().to_string(),
+            content: text.get(..end).unwrap_or_default().into(),
         });
         remaining = remaining.saturating_sub(end);
     }
     retained.reverse();
     retained
+}
+
+pub(crate) fn limit_request_images(request: &mut ProviderRequest) {
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    for message in request.messages.iter_mut().rev() {
+        let content = match message {
+            ConversationItem::User { content } => content,
+            ConversationItem::ScriptResult { output, .. } => output,
+            _ => continue,
+        };
+        for part in content.0.iter_mut().rev() {
+            if let kraai_types::ContentPart::Image { image } = part {
+                if count < kraai_types::image::MAX_REQUEST_IMAGES
+                    && bytes.saturating_add(image.byte_length)
+                        <= kraai_types::image::MAX_REQUEST_IMAGE_BYTES
+                {
+                    count += 1;
+                    bytes += image.byte_length;
+                } else {
+                    *part = kraai_types::ContentPart::omitted_image(image);
+                }
+            }
+        }
+    }
 }

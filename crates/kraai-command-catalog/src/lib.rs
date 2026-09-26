@@ -6,9 +6,15 @@ use std::collections::HashSet;
 
 use kraai_types::CommandMetadata;
 
-pub use builtins::{CLOSE_FILES, EDIT_FILE, OPEN_FILES, WEB_SEARCH};
+pub use builtins::{CLOSE_FILES, EDIT_FILE, OPEN_FILES, VIEW_IMAGE, WEB_SEARCH};
 
-static COMMANDS: [&CommandMetadata; 4] = [&OPEN_FILES, &CLOSE_FILES, &EDIT_FILE, &WEB_SEARCH];
+static COMMANDS: [&CommandMetadata; 5] = [
+    &OPEN_FILES,
+    &CLOSE_FILES,
+    &EDIT_FILE,
+    &WEB_SEARCH,
+    &VIEW_IMAGE,
+];
 
 pub fn command_metadata(command_id: &str) -> Option<&'static CommandMetadata> {
     COMMANDS

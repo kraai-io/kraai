@@ -85,7 +85,7 @@ async fn idempotent_history_search_rejects_parent_cycles() {
                         id,
                         parent_id: Some(parent_id),
                         content: ConversationItem::User {
-                            text: String::from("cycle"),
+                            content: String::from("cycle").into(),
                         },
                         status: MessageStatus::Complete,
                         agent_profile_id: None,
@@ -137,7 +137,7 @@ async fn idempotent_append_links_orphan_once_and_recognizes_history() {
                     parent_id: Some(root.message.id),
                     content: ConversationItem::ScriptResult {
                         call_id: ToolCallId::new("test-call"),
-                        output: String::from("result"),
+                        output: String::from("result").into(),
                     },
                     status: MessageStatus::Complete,
                     agent_profile_id: Some(String::from("coding")),
@@ -149,7 +149,7 @@ async fn idempotent_append_links_orphan_once_and_recognizes_history() {
                 session_id: String::from("session"),
                 content: ConversationItem::ScriptResult {
                     call_id: ToolCallId::new("test-call"),
-                    output: String::from("result"),
+                    output: String::from("result").into(),
                 },
                 status: MessageStatus::Complete,
                 agent_profile_id: Some(String::from("coding")),

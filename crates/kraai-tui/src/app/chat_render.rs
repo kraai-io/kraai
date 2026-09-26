@@ -32,7 +32,9 @@ impl AppState {
             rendered_messages.push(Cow::Owned(Message {
                 id: MessageId::new(optimistic.local_id.clone()),
                 parent_id: None,
-                content: ConversationItem::User { text: content },
+                content: ConversationItem::User {
+                    content: content.into(),
+                },
                 status: MessageStatus::Complete,
                 agent_profile_id: self.selected_profile_id.clone(),
                 generation: None,
@@ -92,6 +94,7 @@ impl AppState {
             let key = msg.id.as_str().to_string();
             let mut fingerprint = message_fingerprint(&msg);
             let lines = if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
+                let output = output.display_text();
                 let expanded = self
                     .execution_expanded
                     .get(call_id.as_str())
@@ -109,9 +112,9 @@ impl AppState {
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_execution_lines(
-                        &super::executions::result_summary(output),
+                        &super::executions::result_summary(&output),
                         source,
-                        output,
+                        &output,
                         expanded,
                         selected,
                         width,
@@ -269,14 +272,7 @@ fn message_fingerprint(msg: &Message) -> u64 {
         }
         MessageStatus::Cancelled => 2u8.hash(&mut hasher),
     }
-    match &msg.content {
-        ConversationItem::System { text } | ConversationItem::User { text } => {
-            text.hash(&mut hasher);
-        }
-        ConversationItem::ScriptResult { output, .. } => output.hash(&mut hasher),
-        ConversationItem::Assistant { .. } => msg.display_text().hash(&mut hasher),
-        ConversationItem::Compaction { .. } => {}
-    }
+    msg.display_text().hash(&mut hasher);
     hasher.finish()
 }
 

@@ -289,6 +289,7 @@ impl RuntimeBuilder {
         )));
 
         let runtime = RuntimeCore {
+            image_store: Arc::new(kraai_persistence::FileImageStore::new(&data_dir)),
             queue_drains: Arc::default(),
             session_preparations: Arc::default(),
             event_tx,

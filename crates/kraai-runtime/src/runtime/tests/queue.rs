@@ -44,7 +44,7 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
     assert_eq!(
         messages
             .iter()
-            .map(|message| message.message.as_str())
+            .map(|message| message.message.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
@@ -194,7 +194,7 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
     assert_eq!(
         restored
             .iter()
-            .map(|m| m.message.as_str())
+            .map(|m| m.message.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["first", "second"]
     );
@@ -282,7 +282,7 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
     assert_eq!(queued.len(), 1);
     assert_eq!(
         queued.first().expect("queued message").message,
-        "new message"
+        "new message".into()
     );
     assert!(
         runtime
@@ -359,7 +359,10 @@ async fn failed_interception_preserves_turn_and_pending_workspace() -> Result<()
         .await;
     let queued = runtime.take_queued_messages(&session_id).await;
     assert_eq!(queued.len(), 1);
-    assert_eq!(queued.first().expect("restored message").message, "queued");
+    assert_eq!(
+        queued.first().expect("restored message").message,
+        "queued".into()
+    );
     harness.shutdown().await;
     Ok(())
 }

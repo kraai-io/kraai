@@ -3,6 +3,7 @@ members = [
   "crates/kraai-agent",
   "crates/kraai-web",
   "crates/commands/kraai-command-web-search",
+  "crates/commands/kraai-command-view-image",
   "crates/commands/kraai-command-open-files",
   "crates/commands/kraai-command-close-files",
   "crates/commands/kraai-command-edit-file",
@@ -42,6 +43,7 @@ kraai-command-close-files = { path = "crates/commands/kraai-command-close-files"
 kraai-command-core = { path = "crates/kraai-command-core" }
 kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
 kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
+kraai-command-view-image = { path = "crates/commands/kraai-command-view-image" }
 kraai-command-web-search = { path = "crates/commands/kraai-command-web-search" }
 kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }
 kraai-persistence = { path = "crates/kraai-persistence" }
@@ -69,6 +71,10 @@ directories = "6.0.0"
 futures = "0.3.32"
 hmac = "0.13.0"
 httpdate = "1.0.3"
+image = { version = "0.25.10", default-features = false, features = [
+  "jpeg",
+  "png",
+] }
 libc = "0.2.186"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 notify = "8.2.0"

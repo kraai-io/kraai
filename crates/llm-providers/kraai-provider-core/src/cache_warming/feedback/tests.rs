@@ -5,7 +5,7 @@ use kraai_types::{ConversationItem, RequestCost, Usd};
 fn prefix(turn: usize) -> Result<Prefix> {
     let messages: Vec<_> = (0..=turn)
         .map(|index| ConversationItem::User {
-            text: format!("history {index}"),
+            content: (format!("history {index}")).into(),
         })
         .collect();
     Prefix::new(&messages, &None)
@@ -110,7 +110,7 @@ fn changed_pinned_files_and_rewritten_history_reset_growth() -> Result<()> {
     );
     let changed = Prefix::new(
         &[ConversationItem::User {
-            text: "compacted".into(),
+            content: "compacted".into(),
         }],
         &None,
     )?;

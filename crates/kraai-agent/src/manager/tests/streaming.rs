@@ -94,7 +94,7 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("start"),
+            String::from("start").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -177,12 +177,12 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
     let first = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
         .await?;
-    let messages = vec![String::from("queued one"), String::from("queued two")];
+    let messages = vec!["queued one".into(), "queued two".into()];
     let result = manager
         .prepare_intercepted_stream(
             &session_id,
@@ -211,7 +211,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
         .messages
         .iter()
         .filter_map(|item| match item {
-            ConversationItem::User { text } => Some(text.as_str()),
+            ConversationItem::User { content: text } => Some(text.as_text().unwrap_or("")),
             _ => None,
         })
         .collect();
@@ -232,7 +232,7 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
     let first_request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -272,7 +272,7 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
     let first_request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -300,7 +300,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
     let first = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -322,14 +322,14 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             MessageId::new(Ulid::generate()),
             String::from("plan"),
             call_id,
-            String::from("42"),
+            String::from("42").into(),
         )
         .await?;
 
     let intercepted = manager
         .prepare_intercepted_stream(
             &session_id,
-            vec![String::from("queued one"), String::from("queued two")],
+            vec!["queued one".into(), "queued two".into()],
             ModelId::new("new-model"),
             ProviderId::new("mock-alternate"),
         )
@@ -343,7 +343,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         .messages
         .iter()
         .filter_map(|item| match item {
-            ConversationItem::User { text } => Some(text.as_str()),
+            ConversationItem::User { content: text } => Some(text.as_text().unwrap_or("")),
             _ => None,
         })
         .collect();
@@ -352,14 +352,14 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         .provider_request
         .messages
         .iter()
-        .position(|item| matches!(item, ConversationItem::User { text } if text == "queued one"))
+        .position(|item| matches!(item, ConversationItem::User { content: text } if text.display_text() == "queued one"))
         .expect("first queued message");
     assert!(matches!(
         intercepted
             .provider_request
             .messages
             .get(queued_one_index.saturating_sub(1)),
-        Some(ConversationItem::ScriptResult { output, .. }) if output == "42"
+        Some(ConversationItem::ScriptResult { output, .. }) if output.display_text() == "42"
     ));
 
     cleanup_dir(data_dir).await;
@@ -374,7 +374,7 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
     let first = manager
         .prepare_start_stream(
             &session_id,
-            String::from("start with the first provider"),
+            String::from("start with the first provider").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -399,7 +399,7 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
     let second = manager
         .prepare_start_stream(
             &session_id,
-            String::from("continue with a different provider"),
+            String::from("continue with a different provider").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock-alternate"),
         )

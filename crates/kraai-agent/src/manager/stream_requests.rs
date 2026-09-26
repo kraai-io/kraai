@@ -7,7 +7,7 @@ impl AgentManager {
     pub async fn prepare_start_stream(
         &mut self,
         session_id: &str,
-        message: String,
+        message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {

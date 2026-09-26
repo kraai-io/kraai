@@ -253,9 +253,34 @@ impl RequestBridge {
                 provider_id,
             } => {
                 let result = self.execute(|runtime| {
-                    runtime.send_message(session_id, message, model_id, provider_id)
+                    runtime.send_content(session_id, message, model_id, provider_id)
                 });
                 RuntimeResponse::SendMessage(result)
+            }
+            RuntimeRequest::ImportImage { path, session_id } => {
+                let origin_session_id = session_id.clone();
+                let result = self.execute(|runtime| async move {
+                    let path = if path.is_relative()
+                        && let Some(session_id) = session_id
+                    {
+                        let workspace =
+                            runtime
+                                .get_workspace_state(session_id)
+                                .await?
+                                .ok_or_else(|| {
+                                    RuntimeError::unavailable("Session workspace is unavailable")
+                                })?;
+                        std::path::Path::new(&workspace.workspace_dir).join(path)
+                    } else {
+                        path
+                    };
+                    let bytes = super::images::read_image_file(&path).await?;
+                    runtime.import_image(bytes).await
+                });
+                RuntimeResponse::ImportImage {
+                    session_id: origin_session_id,
+                    result,
+                }
             }
             RuntimeRequest::SaveSettings { settings } => {
                 let result = self.execute(|runtime| runtime.save_settings(settings));

@@ -9,7 +9,8 @@ use kraai_runtime::{
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
 use kraai_types::{
-    AssistantItem, AssistantPhase, ChatRole, ConversationItem, MessageId, MessageStatus,
+    AssistantItem, AssistantPhase, ChatRole, ContentPart, ConversationItem, ImageAttachment,
+    MessageContent, MessageId, MessageStatus,
 };
 use ratatui::crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -25,6 +26,7 @@ mod composer;
 mod cost;
 mod duration;
 mod executions;
+mod images;
 mod lifecycle;
 mod menu_search;
 mod providers_flow;
@@ -63,10 +65,11 @@ use self::ui::{
 };
 use self::workspace_preferences::WorkspacePreferences;
 
-const SLASH_COMMANDS: [(&str, &str); 9] = [
+const SLASH_COMMANDS: [(&str, &str); 10] = [
     ("agent", "Open agent selector"),
     ("continue", "Reprompt the agent"),
     ("help", "Open command help"),
+    ("image", "Attach PNG/JPEG: /image <path>"),
     ("model", "Open model selector"),
     ("new", "Start new chat"),
     ("providers", "Open providers"),

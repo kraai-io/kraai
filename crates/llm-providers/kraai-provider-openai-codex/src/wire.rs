@@ -47,6 +47,8 @@ pub struct ListModelEntry {
     pub display_name: String,
     pub visibility: ModelVisibility,
     pub context_window: Option<usize>,
+    #[serde(default)]
+    pub input_modalities: Vec<String>,
     pub default_reasoning_level: Option<String>,
     pub supported_reasoning_levels: Vec<ReasoningLevel>,
 }

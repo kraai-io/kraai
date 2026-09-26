@@ -546,7 +546,7 @@ fn evaluation_metrics_count_script_results() {
             parent_id: None,
             content: kraai_types::ConversationItem::ScriptResult {
                 call_id: kraai_types::ToolCallId::new("call-1"),
-                output: String::from("<tool_call_result status=\"completed\" />"),
+                output: String::from("<tool_call_result status=\"completed\" />").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: Some(String::from("coding")),
@@ -635,5 +635,6 @@ mod snapshot_delivery;
 
 mod auth_response;
 
+mod images;
 #[path = "tests/startup.rs"]
 mod startup;

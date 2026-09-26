@@ -160,7 +160,9 @@ impl App {
                 {
                     return;
                 }
-                self.state.pending_submit = None;
+                if let Some(pending) = self.state.pending_submit.take() {
+                    self.recover_message_draft(pending.message);
+                }
                 self.set_error(format!("Failed creating session: {err}"));
                 self.fail_ci(format!("Failed creating session: {err}"));
             }
@@ -202,12 +204,18 @@ impl App {
                             false,
                         );
                     } else {
-                        self.request(RuntimeRequest::SendMessage {
+                        let message = pending_submit.message.clone();
+                        if self.request(RuntimeRequest::SendMessage {
                             session_id,
                             message: pending_submit.message,
                             model_id: pending_submit.model_id,
                             provider_id: pending_submit.provider_id,
-                        });
+                        }) == RuntimeRequestDelivery::Delivered
+                        {
+                            self.state.pending_messages.push_back(message);
+                        } else {
+                            self.recover_message_draft(message);
+                        }
                     }
                 }
             }
@@ -222,8 +230,9 @@ impl App {
                     .as_ref()
                     .and_then(|pending| pending.session_id.as_deref())
                     == Some(session_id.as_str())
+                    && let Some(pending) = self.state.pending_submit.take()
                 {
-                    self.state.pending_submit = None;
+                    self.recover_message_draft(pending.message);
                 }
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.profile_lock_stale_after_terminal_event = false;
@@ -231,8 +240,22 @@ impl App {
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
-            RuntimeResponse::SendMessage(Ok(_outcome)) => {}
+            RuntimeResponse::ImportImage { session_id, result } => {
+                self.state.image_import_pending = false;
+                if self.state.current_session_id == session_id {
+                    self.finish_image_import(result);
+                } else {
+                    self.state.status =
+                        String::from("Image attachment discarded after session changed");
+                }
+            }
+            RuntimeResponse::SendMessage(Ok(_outcome)) => {
+                self.state.pending_messages.pop_front();
+            }
             RuntimeResponse::SendMessage(Err(err)) => {
+                if let Some(message) = self.state.pending_messages.pop_front() {
+                    self.recover_message_draft(message);
+                }
                 if !self.state.optimistic_messages.is_empty() {
                     self.state.optimistic_messages.remove(0);
                     self.update_queued_status();
@@ -395,7 +418,7 @@ impl App {
 
                 match result {
                     Ok(Some(message)) => {
-                        self.set_input_text(message);
+                        self.restore_message_draft(message);
                         self.state.status = String::from("Restored last user message");
                         self.request_sync_for_session(&session_id);
                     }

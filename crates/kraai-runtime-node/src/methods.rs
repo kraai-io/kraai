@@ -91,6 +91,8 @@ runtime_methods! {
     save_settings(settings: SettingsDocument) -> ();
     create_session() -> String;
     create_session_with(request: CreateSessionRequest) -> String;
+    import_image(bytes: Vec<u8>) -> kraai_types::ImageAttachment;
+    send_content(session_id: String, message: kraai_types::MessageContent, model_id: String, provider_id: String) -> SubmitMessageOutcome;
     send_message(session_id: String, message: String, model_id: String, provider_id: String) -> SubmitMessageOutcome;
     get_chat_history(session_id: String) -> BTreeMap<MessageId, kraai_types::Message>;
     get_session_snapshot(session_id: String) -> SessionSnapshot;
@@ -102,7 +104,7 @@ runtime_methods! {
     get_workspace_state(session_id: String) -> Option<WorkspaceState>;
     set_workspace_dir(session_id: String, workspace_dir: String) -> ();
     get_tip(session_id: String) -> Option<String>;
-    undo_last_user_message(session_id: String) -> Option<String>;
+    undo_last_user_message(session_id: String) -> Option<kraai_types::MessageContent>;
     get_pending_script(session_id: String) -> Option<PendingScriptInfo>;
     approve_script(session_id: String, execution_id: String) -> ();
     deny_script(session_id: String, execution_id: String) -> ();

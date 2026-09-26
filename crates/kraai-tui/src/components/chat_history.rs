@@ -587,7 +587,7 @@ mod tests {
                 text: content.to_string(),
             },
             ChatRole::User => ConversationItem::User {
-                text: content.to_string(),
+                content: content.into(),
             },
             ChatRole::Assistant => ConversationItem::Assistant {
                 items: vec![AssistantItem::Text {
@@ -597,7 +597,7 @@ mod tests {
             },
             ChatRole::ToolCallResult => ConversationItem::ScriptResult {
                 call_id: ToolCallId::new("test-call"),
-                output: content.to_string(),
+                output: content.into(),
             },
         };
         Message {

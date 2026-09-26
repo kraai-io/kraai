@@ -1,12 +1,12 @@
 use kraai_runtime::TurnTimer;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageContent, MessageId};
 
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
@@ -32,6 +32,9 @@ pub(super) struct AppState {
     pub(super) execution_expanded: HashMap<String, bool>,
     pub(super) selected_execution: Option<String>,
     pub(super) input: String,
+    pub(super) draft_content: MessageContent,
+    pub(super) image_import_pending: bool,
+    pub(super) pending_messages: VecDeque<MessageContent>,
     pub(super) input_cursor: usize,
     pub(super) input_width: u16,
     pub(super) input_history: Vec<String>,
@@ -121,6 +124,9 @@ impl Default for AppState {
             execution_expanded: HashMap::new(),
             selected_execution: None,
             input: String::new(),
+            draft_content: MessageContent::default(),
+            image_import_pending: false,
+            pending_messages: VecDeque::new(),
             input_cursor: 0,
             input_width: 80,
             input_history: Vec::new(),

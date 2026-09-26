@@ -75,8 +75,11 @@ impl RuntimeCore {
                 );
             });
         if let Some(compaction) = context_compaction {
-            let compaction =
-                compaction.observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone());
+            let compaction = compaction
+                .observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone())
+                .with_image_resolver(Arc::new(super::images::StoredImageResolver(
+                    agent_manager.read().await.image_store(),
+                )));
             emit_event(
                 &event_tx,
                 Event::ContextStateChanged {
@@ -138,6 +141,9 @@ impl RuntimeCore {
                 &model_id,
                 warmup,
                 recorder,
+                Arc::new(super::images::StoredImageResolver(
+                    agent_manager.read().await.image_store(),
+                )),
             )
             .await
             {
@@ -155,7 +161,10 @@ impl RuntimeCore {
                 session_state_barrier: Arc::clone(&session_state_barrier),
             }),
             session_id.clone(),
-        );
+        )
+        .with_image_resolver(Arc::new(super::images::StoredImageResolver(
+            agent_manager.read().await.image_store(),
+        )));
         {
             let _state_guard = session_state_barrier.read().await;
             match agent_manager

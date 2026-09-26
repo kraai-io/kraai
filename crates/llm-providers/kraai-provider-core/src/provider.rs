@@ -81,6 +81,7 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
+    pub supports_images: bool,
 }
 
 #[cfg(test)]

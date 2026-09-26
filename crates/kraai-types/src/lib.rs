@@ -5,6 +5,7 @@ mod context_state;
 mod cost;
 mod effect;
 mod error;
+pub mod image;
 mod permissions;
 mod policy;
 mod profile;
@@ -20,6 +21,7 @@ pub use cost::{CostSummary, RequestCost, RequestUsage, TokenRates, Usd};
 
 pub use effect::{ContextStateDelta, OpenedFilesOperation, StateEffectAck, StateEffectRequest};
 pub use error::{DomainError, DomainErrorKind};
+pub use image::ImageAttachment;
 pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
 pub use policy::{
     CapabilityPermissionRules, EscalationPolicy, PermissionResolution, ResolvedPermissions,
@@ -65,126 +67,10 @@ pub enum ChatRole {
     ToolCallResult,
 }
 
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AssistantPhase {
-    Commentary,
-    FinalAnswer,
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AssistantItem {
-    /// Opaque provider data retained in history and snapshots, not display text.
-    Reasoning {
-        provider_id: ProviderId,
-        #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
-        payload: serde_json::Value,
-    },
-    Text {
-        phase: AssistantPhase,
-        text: String,
-    },
-    ScriptCall {
-        call_id: ToolCallId,
-        name: String,
-        input: String,
-    },
-}
-
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ConversationItem {
-    Compaction {
-        provider_id: ProviderId,
-        #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
-        payload: serde_json::Value,
-    },
-    System {
-        text: String,
-    },
-    User {
-        text: String,
-    },
-    Assistant {
-        items: Vec<AssistantItem>,
-    },
-    ScriptResult {
-        call_id: ToolCallId,
-        output: String,
-    },
-}
-
-impl ConversationItem {
-    pub fn role(&self) -> ChatRole {
-        match self {
-            Self::System { .. } => ChatRole::System,
-            Self::User { .. } => ChatRole::User,
-            Self::Assistant { .. } | Self::Compaction { .. } => ChatRole::Assistant,
-            Self::ScriptResult { .. } => ChatRole::ToolCallResult,
-        }
-    }
-
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            Self::System { text } | Self::User { text } => Some(text),
-            Self::Assistant { .. } | Self::ScriptResult { .. } | Self::Compaction { .. } => None,
-        }
-    }
-
-    pub fn assistant_items(&self) -> Option<&[AssistantItem]> {
-        match self {
-            Self::Assistant { items } => Some(items),
-            _ => None,
-        }
-    }
-
-    pub fn display_text(&self) -> Cow<'_, str> {
-        match self {
-            Self::System { text } | Self::User { text } => Cow::Borrowed(text),
-            Self::Assistant { items } => render_assistant_items(items),
-            Self::ScriptResult { output, .. } => Cow::Borrowed(output),
-            Self::Compaction { .. } => Cow::Borrowed(""),
-        }
-    }
-}
-
-fn render_assistant_items(items: &[AssistantItem]) -> Cow<'_, str> {
-    let mut rendered = Cow::Borrowed("");
-    for item in items {
-        if matches!(item, AssistantItem::Reasoning { .. })
-            || matches!(item, AssistantItem::Text { text, .. } if text.is_empty())
-        {
-            continue;
-        }
-        if !rendered.is_empty() {
-            rendered.to_mut().push_str("\n\n");
-        }
-        match item {
-            AssistantItem::Reasoning { .. } => {}
-            AssistantItem::Text { text, .. } => {
-                if rendered.is_empty() {
-                    rendered = Cow::Borrowed(text);
-                } else {
-                    rendered.to_mut().push_str(text);
-                }
-            }
-            AssistantItem::ScriptCall { input, .. } => {
-                let rendered = rendered.to_mut();
-                rendered.push_str("<tool_call>\n");
-                rendered.push_str(input);
-                rendered.push_str("\n</tool_call>");
-            }
-        }
-    }
-    rendered
-}
+pub use conversation::{
+    AssistantItem, AssistantPhase, ContentPart, ConversationItem, MessageContent,
+};
+mod conversation;
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
@@ -422,7 +308,9 @@ mod tests {
         let text = "é\n display";
         for content in [
             ConversationItem::System { text: text.into() },
-            ConversationItem::User { text: text.into() },
+            ConversationItem::User {
+                content: text.into(),
+            },
             ConversationItem::ScriptResult {
                 call_id: ToolCallId::new("call"),
                 output: text.into(),

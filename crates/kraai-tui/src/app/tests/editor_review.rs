@@ -32,7 +32,7 @@ fn edited_prompt_does_not_overwrite_an_undo_received_while_editing() {
         .app
         .handle_runtime_response(RuntimeResponse::UndoLastUserMessage {
             session_id: String::from("session"),
-            result: Ok(Some(String::from("restored message"))),
+            result: Ok(Some("restored message".into())),
         });
     assert!(
         harness

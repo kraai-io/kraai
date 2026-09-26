@@ -27,3 +27,5 @@ pub use builder::RuntimeBuilder;
     reason = "integration-style runtime tests use direct assertions and fixtures"
 )]
 mod tests;
+
+mod images;

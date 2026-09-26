@@ -320,11 +320,12 @@ impl App {
     pub(super) fn dispatch_send_message(
         &mut self,
         session_id: String,
-        message: String,
+        message: MessageContent,
         model_id: String,
         provider_id: String,
         is_queued: bool,
     ) {
+        let message_was_draft = self.compose_message(self.state.input.trim()) == message;
         if self.request(RuntimeRequest::SendMessage {
             session_id,
             message: message.clone(),
@@ -332,12 +333,20 @@ impl App {
             provider_id: provider_id.clone(),
         }) == RuntimeRequestDelivery::Disconnected
         {
-            self.set_input_text(message);
+            if !message_was_draft {
+                self.recover_message_draft(message);
+            }
             return;
         }
 
+        self.state.pending_messages.push_back(message.clone());
+        if message_was_draft {
+            self.clear_message_draft();
+        }
+        let display_text = message.display_text().into_owned();
+
         self.state.last_error = None;
-        let content_key = message.trim().to_string();
+        let content_key = display_text.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
             .state
@@ -349,7 +358,7 @@ impl App {
         self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
         self.state.optimistic_messages.push(OptimisticMessage {
             local_id: format!("local-user-{}", self.state.optimistic_seq),
-            content: message.clone(),
+            content: display_text,
             content_key,
             occurrence: visible_count + optimistic_same_count + 1,
             is_queued,
@@ -367,7 +376,9 @@ impl App {
         }
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
-        self.remember_submitted_input(&message);
+        if let Some(text) = message.as_text() {
+            self.remember_submitted_input(text);
+        }
         self.invalidate_chat_cache();
     }
 
@@ -389,7 +400,13 @@ impl App {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
         self.runtime_bridge_error.get_or_insert(message.clone());
-        self.state.pending_submit = None;
+        if let Some(pending) = self.state.pending_submit.take() {
+            self.recover_message_draft(pending.message);
+        }
+        while let Some(message) = self.state.pending_messages.pop_back() {
+            self.recover_message_draft(message);
+        }
+        self.state.image_import_pending = false;
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
@@ -433,7 +450,7 @@ impl App {
         let mut seen_users: HashMap<String, usize> = HashMap::new();
         for msg in visible_chain {
             if msg.role() == ChatRole::User {
-                let key = msg.content.text().unwrap_or_default().trim().to_string();
+                let key = msg.display_text().trim().to_string();
                 *seen_users.entry(key).or_insert(0) += 1;
             }
         }
@@ -457,7 +474,7 @@ impl App {
         )
         .into_iter()
         .filter(|message| message.role() == ChatRole::User)
-        .filter(|message| message.content.text().unwrap_or_default().trim() == content_key)
+        .filter(|message| message.display_text().trim() == content_key)
         .count()
     }
 

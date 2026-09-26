@@ -6,11 +6,21 @@ use crate::{DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Valida
 pub struct ConfiguredModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
+    pub supports_images: Option<bool>,
 }
 
 impl ConfiguredModelMetadata {
     pub fn fields() -> Vec<FieldDefinition> {
         vec![
+            FieldDefinition {
+                key: String::from("supports_images"),
+                label: String::from("Image Input"),
+                value_kind: FieldValueKind::Boolean,
+                required: false,
+                secret: false,
+                help_text: Some(String::from("Whether this model accepts image input")),
+                default_value: None,
+            },
             FieldDefinition {
                 key: String::from("name"),
                 label: String::from("Display Name"),
@@ -55,6 +65,14 @@ impl ConfiguredModelMetadata {
                 }),
             }
         }
+        if let Some(value) = config.get("supports_images")
+            && value.as_bool().is_none()
+        {
+            errors.push(ValidationError {
+                field: String::from("supports_images"),
+                message: String::from("Image Input must be a boolean"),
+            });
+        }
         errors
     }
 
@@ -70,7 +88,19 @@ impl ConfiguredModelMetadata {
             .map(usize::try_from)
             .transpose()
             .map_err(|error| eyre!("Invalid max_context: {error}"))?;
-        Ok(Self { name, max_context })
+        let supports_images = config
+            .get("supports_images")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| eyre!("Image Input must be a boolean"))
+            })
+            .transpose()?;
+        Ok(Self {
+            name,
+            max_context,
+            supports_images,
+        })
     }
 }
 

@@ -329,6 +329,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         results
             .first()
             .expect("cancelled script result")
+            .display_text()
             .contains("status=\"cancelled\"")
     );
     assert!(request.messages.iter().any(|item| {

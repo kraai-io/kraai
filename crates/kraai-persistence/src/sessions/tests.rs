@@ -324,7 +324,7 @@ async fn deleting_session_removes_only_unique_messages() {
                         superseded_usage: vec![boundary.clone()],
                         previous_boundary: None,
                         replacement: vec![kraai_types::ConversationItem::User {
-                            text: "Completed work".into(),
+                            content: "Completed work".into(),
                         }],
                         model_id: kraai_types::ModelId::new("model"),
                         provider_id: kraai_types::ProviderId::new("provider"),

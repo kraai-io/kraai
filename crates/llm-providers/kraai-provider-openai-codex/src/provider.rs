@@ -424,6 +424,21 @@ impl OpenAiCodexProvider {
         request_context: &ProviderRequestContext,
         compact: bool,
     ) -> Result<Response> {
+        let supports_images = self
+            .models
+            .read()
+            .await
+            .supports_images(model_id, &self.model_configs)?;
+        kraai_provider_core::validate_image_support(
+            &provider_request.messages,
+            model_id,
+            supports_images,
+        )?;
+        let images = kraai_provider_core::ResolvedImages::resolve(
+            &provider_request.messages,
+            request_context,
+        )
+        .await?;
         let has_tool = provider_request.script_tool.is_some();
         let tools = provider_request
             .script_tool
@@ -434,7 +449,7 @@ impl OpenAiCodexProvider {
                 description: tool.description,
             })
             .collect();
-        let normalized = normalize_conversation(provider_request.messages, &self.id);
+        let normalized = normalize_conversation(provider_request.messages, &self.id, &images)?;
         let resolved_model = self.models.read().await.resolve(model_id)?;
         let include = if resolved_model.reasoning.is_some() {
             vec!["reasoning.encrypted_content"]

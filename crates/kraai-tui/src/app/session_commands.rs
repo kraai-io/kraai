@@ -3,7 +3,7 @@ use super::*;
 impl App {
     pub(super) fn handle_submit(&mut self) {
         let raw_input = self.state.input.trim().to_string();
-        if raw_input.is_empty() {
+        if raw_input.is_empty() && !self.state.draft_content.has_images() {
             return;
         }
 
@@ -18,15 +18,15 @@ impl App {
             return;
         }
 
-        self.state.input.clear();
-        self.state.input_cursor = 0;
-        self.reset_input_history_navigation();
-
         self.submit_message(raw_input);
     }
 
     pub(super) fn submit_message(&mut self, raw_input: String) {
-        if raw_input.trim().is_empty() {
+        if self.state.image_import_pending {
+            self.state.status = String::from("Wait for the image attachment to finish loading");
+            return;
+        }
+        if raw_input.trim().is_empty() && !self.state.draft_content.has_images() {
             let message = String::from("Message cannot be empty");
             self.state.status = message.clone();
             self.fail_ci(message);
@@ -55,8 +55,15 @@ impl App {
             || self.state.script_phase == ScriptPhase::Executing
             || self.state.pending_script.is_some();
 
+        let message = self.compose_message(&raw_input);
+        if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+            self.state.status =
+                String::from("Too many images. Use /image clear to clear attachments");
+            return;
+        }
+
         if let Some(session_id) = self.state.current_session_id.clone() {
-            self.dispatch_send_message(session_id, raw_input, model_id, provider_id, is_queueing);
+            self.dispatch_send_message(session_id, message, model_id, provider_id, is_queueing);
             return;
         }
 
@@ -81,10 +88,11 @@ impl App {
         self.state.pending_submit = Some(PendingSubmit {
             creation_id,
             session_id: None,
-            message: raw_input,
+            message,
             model_id,
             provider_id,
         });
+        self.clear_message_draft();
         self.state.status = String::from("Creating session");
     }
 
@@ -96,6 +104,7 @@ impl App {
         };
 
         match command {
+            "image" => self.attach_image(command_line.strip_prefix("image").unwrap_or("").trim()),
             "quit" => {
                 self.state.exit = true;
             }

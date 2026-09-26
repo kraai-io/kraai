@@ -118,7 +118,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         assert_eq!(
             request.messages.get(2),
             Some(&ConversationItem::User {
-                text: "latest request".into()
+                content: "latest request".into()
             })
         );
     }
@@ -218,13 +218,15 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
             request
                 .messages
                 .iter()
-                .filter(|item| matches!(item, ConversationItem::User { text } if text == user))
+                .filter(|item| matches!(item, ConversationItem::User { content: text } if text.display_text() == user))
                 .count(),
             1
         );
         assert_eq!(
             request.messages.get(1),
-            Some(&ConversationItem::User { text: user.into() })
+            Some(&ConversationItem::User {
+                content: user.into()
+            })
         );
         let summary = request
             .messages
@@ -254,7 +256,12 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
     let (mut manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
-        .add_message(&session, ChatRole::User, "large input ".repeat(20000), None)
+        .add_message(
+            &session,
+            ChatRole::User,
+            "large input ".repeat(20000).into(),
+            None,
+        )
         .await?;
     let assistant = manager
         .add_message(&session, ChatRole::Assistant, "answer".into(), None)
@@ -319,7 +326,12 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     let (mut manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let boundary = manager
-        .add_message(&session, ChatRole::User, "large input ".repeat(20000), None)
+        .add_message(
+            &session,
+            ChatRole::User,
+            "large input ".repeat(20000).into(),
+            None,
+        )
         .await?;
     let assistant = manager
         .add_message(&session, ChatRole::Assistant, "answer".into(), None)
@@ -422,7 +434,7 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
     let mut saved = checkpoint(boundary, None, "unused");
     saved.replacement = vec![
         ConversationItem::User {
-            text: "original task".into(),
+            content: "original task".into(),
         },
         ConversationItem::Compaction {
             provider_id: ProviderId::new("mock"),
@@ -469,7 +481,7 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
                 .any(|item| item.display_text() == "original findings"),
             !native
         );
-        assert_eq!(request.messages.iter().filter(|item| matches!(item, ConversationItem::User { text } if text == "original task")).count(), 1);
+        assert_eq!(request.messages.iter().filter(|item| matches!(item, ConversationItem::User { content } if content.as_text() == Some("original task"))).count(), 1);
     }
     cleanup_dir(data_dir).await;
     Ok(())

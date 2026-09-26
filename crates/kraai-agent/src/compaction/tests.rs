@@ -41,22 +41,24 @@ impl Provider for Summarizer {
         &self,
         _: &ModelId,
         request: ProviderRequest,
-        _: &ProviderRequestContext,
+        context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         ensure!(self.native);
+        kraai_provider_core::ResolvedImages::resolve(&request.messages, context).await?;
         self.respond(request)
     }
     async fn generate_reply_stream(
         &self,
         _: &ModelId,
         request: ProviderRequest,
-        _: &ProviderRequestContext,
+        context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         ensure!(
             !self.native,
             "Native compaction must not use text summarization"
         );
         ensure!(request.script_tool.is_none());
+        kraai_provider_core::ResolvedImages::resolve(&request.messages, context).await?;
         self.respond(request)
     }
 }
@@ -66,7 +68,7 @@ impl Summarizer {
         &self,
         request: ProviderRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
-        let too_large = self.reject_large_input && request.messages.iter().any(|item| matches!(item, ConversationItem::ScriptResult { output, .. } if output.len() > 1000));
+        let too_large = self.reject_large_input && request.messages.iter().any(|item| matches!(item, ConversationItem::ScriptResult { output, .. } if output.display_text().len() > 1000));
         let attempt = {
             let mut requests = self.requests.lock().map_err(|e| eyre!("{e}"))?;
             requests.push(request);
@@ -107,7 +109,7 @@ fn fixture(
         message(
             "user",
             ConversationItem::User {
-                text: "Preserve the filesystem".into(),
+                content: "Preserve the filesystem".into(),
             },
         ),
         message(
@@ -130,7 +132,7 @@ fn fixture(
             "result",
             ConversationItem::ScriptResult {
                 call_id: ToolCallId::new("call"),
-                output: "firmware output ".repeat(20_000),
+                output: "firmware output ".repeat(20_000).into(),
             },
         ),
     ];
@@ -155,6 +157,7 @@ fn fixture(
         previous: None,
         on_usage: None,
         usage_barrier: None,
+        image_resolver: None,
     };
     events.push(ProviderStreamEvent::Usage(TokenUsage {
         input_tokens: 100,
@@ -219,7 +222,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         saved.replacement
             == vec![
                 ConversationItem::User {
-                    text: "Preserve the filesystem".into()
+                    content: "Preserve the filesystem".into()
                 },
                 ConversationItem::Compaction {
                     provider_id: ProviderId::new("test"),
@@ -267,7 +270,7 @@ async fn fallback_uses_one_conversation_request_and_accepts_large_summary() -> R
                 == Some(context.original.messages.as_slice())
         );
         ensure!(
-            matches!(sent.messages.last(), Some(ConversationItem::User { text }) if text.contains("CONTEXT CHECKPOINT"))
+            matches!(sent.messages.last(), Some(ConversationItem::User { content: text }) if text.display_text().contains("CONTEXT CHECKPOINT"))
         );
         drop(requests);
     }
@@ -331,16 +334,16 @@ async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_te
 fn user_retention_prioritizes_recent_requests_and_preserves_unicode_boundaries() {
     let messages = vec![
         ConversationItem::User {
-            text: "older".into(),
+            content: "older".into(),
         },
         ConversationItem::User {
-            text: "😀中hello".into(),
+            content: "😀中hello".into(),
         },
     ];
     assert_eq!(
         retained_users(&messages, 2),
         vec![ConversationItem::User {
-            text: "😀中h".into()
+            content: "😀中h".into()
         }]
     );
 }
@@ -378,7 +381,7 @@ async fn fallback_context_overflow_trims_complete_exchanges_and_keeps_original_u
         drop(requests);
     }
     ensure!(outcome.request.messages.iter().any(
-        |item| matches!(item, ConversationItem::User { text } if text == "Preserve the filesystem")
+        |item| matches!(item, ConversationItem::User { content: text } if text.display_text() == "Preserve the filesystem")
     ));
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
@@ -498,16 +501,20 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
 fn user_retention_stops_when_no_character_fits_the_remaining_budget() {
     let messages = vec![
         ConversationItem::User {
-            text: "older".into(),
+            content: "older".into(),
         },
         ConversationItem::User {
-            text: "😀".into()
+            content: "😀".into(),
         },
-        ConversationItem::User { text: "abc".into() },
+        ConversationItem::User {
+            content: "abc".into(),
+        },
     ];
     assert_eq!(
         retained_users(&messages, 1),
-        vec![ConversationItem::User { text: "abc".into() }]
+        vec![ConversationItem::User {
+            content: "abc".into()
+        }]
     );
 }
 
@@ -515,14 +522,126 @@ fn user_retention_stops_when_no_character_fits_the_remaining_budget() {
 fn empty_user_messages_do_not_discard_older_requests() {
     let messages = vec![
         ConversationItem::User {
-            text: "older".into(),
+            content: "older".into(),
         },
         ConversationItem::User {
-            text: String::new(),
+            content: String::new().into(),
         },
         ConversationItem::User {
-            text: "newer".into(),
+            content: "newer".into(),
         },
     ];
     assert_eq!(retained_users(&messages, 10), messages);
+}
+
+#[test]
+fn image_request_budget_keeps_recent_images_and_reopenable_references() {
+    let image = |index: usize| kraai_types::ContentPart::Image {
+        image: kraai_types::ImageAttachment {
+            id: format!("{index:064x}"),
+            mime_type: "image/png".into(),
+            width: 1,
+            height: 1,
+            byte_length: 100,
+        },
+    };
+    let mut request = ProviderRequest {
+        messages: (0..40)
+            .map(|index| ConversationItem::User {
+                content: kraai_types::MessageContent(vec![image(index)]),
+            })
+            .collect(),
+        script_tool: None,
+        cacheable_messages: None,
+    };
+    limit_request_images(&mut request);
+    let count = request
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            ConversationItem::User { content } => Some(content.images().count()),
+            _ => None,
+        })
+        .sum::<usize>();
+    assert_eq!(count, kraai_types::image::MAX_REQUEST_IMAGES);
+    assert!(request.messages.first().is_some_and(|message| {
+        message
+            .display_text()
+            .contains("kraai-view-image --attachment")
+    }));
+    assert!(
+        matches!(request.messages.last(), Some(ConversationItem::User { content }) if content.has_images())
+    );
+}
+
+struct TestImageResolver;
+
+#[async_trait::async_trait]
+impl kraai_provider_core::ImageResolver for TestImageResolver {
+    async fn resolve(&self, _: &kraai_types::ImageAttachment) -> Result<Vec<u8>> {
+        Ok(vec![1, 2, 3])
+    }
+}
+
+#[tokio::test]
+async fn compaction_reads_images_but_retains_only_reopenable_references() -> Result<()> {
+    let image = kraai_types::ImageAttachment {
+        id: "a".repeat(64),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 3,
+        byte_length: 3,
+    };
+    for native in [false, true] {
+        let events = if native {
+            vec![ProviderStreamEvent::Compaction {
+                payload: serde_json::json!({"type":"compaction","encrypted_content":"opaque"}),
+            }]
+        } else {
+            vec![]
+        };
+        let (mut context, providers, requests, root) = fixture(native, events, false);
+        let user = ConversationItem::User {
+            content: kraai_types::MessageContent(vec![
+                kraai_types::ContentPart::Text {
+                    text: "Inspect the screenshot".into(),
+                },
+                kraai_types::ContentPart::Image {
+                    image: image.clone(),
+                },
+            ]),
+        };
+        context.original.messages.insert(1, user.clone());
+        let outcome = context
+            .with_image_resolver(Arc::new(TestImageResolver))
+            .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
+            .await?;
+        {
+            let requests = requests.lock().map_err(|error| eyre!("{error}"))?;
+            ensure!(
+                requests
+                    .first()
+                    .is_some_and(|request| request.messages.contains(&user))
+            );
+        }
+        let saved = FileCompactionStore::new(&root)
+            .get(&MessageId::new("result"))
+            .await?
+            .ok_or_else(|| eyre!("missing checkpoint"))?;
+        for messages in [&outcome.request.messages, &saved.replacement] {
+            ensure!(messages.iter().all(|message| !matches!(message, ConversationItem::User { content } if content.has_images())));
+            ensure!(
+                messages
+                    .iter()
+                    .any(|message| message.display_text().contains(&image.id))
+            );
+            ensure!(
+                messages
+                    .iter()
+                    .any(|message| message.display_text().contains("Inspect the screenshot"))
+            );
+        }
+        tokio::fs::remove_dir_all(root).await?;
+    }
+    Ok(())
 }

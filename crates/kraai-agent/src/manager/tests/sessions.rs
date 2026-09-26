@@ -10,7 +10,12 @@ async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let message_id = manager
-        .add_message(&session_id, ChatRole::User, String::from("cycle"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("cycle").into(),
+            None,
+        )
         .await?;
     let mut message = manager.message_store.get(&message_id).await?.unwrap();
     message.parent_id = Some(message_id.clone());
@@ -40,7 +45,7 @@ async fn restored_session_supplies_script_workspace_independently_of_executable(
     manager
         .prepare_start_stream(
             &session_id,
-            String::from("probe"),
+            String::from("probe").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -188,7 +193,7 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
     let _request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("hello"),
+            String::from("hello").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -216,10 +221,20 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
     let session_b = manager.create_session().await?;
 
     let a_message = manager
-        .add_message(&session_a, ChatRole::User, String::from("hello a"), None)
+        .add_message(
+            &session_a,
+            ChatRole::User,
+            String::from("hello a").into(),
+            None,
+        )
         .await?;
     let b_message = manager
-        .add_message(&session_b, ChatRole::User, String::from("hello b"), None)
+        .add_message(
+            &session_b,
+            ChatRole::User,
+            String::from("hello b").into(),
+            None,
+        )
         .await?;
 
     assert_eq!(manager.get_tip(&session_a).await?, Some(a_message.clone()));
@@ -249,13 +264,18 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
 
     let session_id = manager.create_session().await?;
     manager
-        .add_message(&session_id, ChatRole::User, String::from("first"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("first").into(),
+            None,
+        )
         .await?;
     manager
         .add_message(
             &session_id,
             ChatRole::Assistant,
-            String::from("assistant reply"),
+            String::from("assistant reply").into(),
             None,
         )
         .await?;
@@ -263,7 +283,7 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
         .add_message(
             &session_id,
             ChatRole::User,
-            String::from("  second  "),
+            String::from("  second  ").into(),
             None,
         )
         .await?;
@@ -287,7 +307,7 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
         .add_message(
             &session_id,
             ChatRole::User,
-            String::from("first prompt"),
+            String::from("first prompt").into(),
             None,
         )
         .await?;
@@ -295,7 +315,7 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
         .add_message(
             &session_id,
             ChatRole::Assistant,
-            String::from("assistant response"),
+            String::from("assistant response").into(),
             None,
         )
         .await?;
@@ -303,7 +323,7 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
         .add_message(
             &session_id,
             ChatRole::User,
-            String::from("second prompt should not replace the title"),
+            String::from("second prompt should not replace the title").into(),
             None,
         )
         .await?;
@@ -324,7 +344,7 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
         .add_message(
             &session_id,
             ChatRole::User,
-            String::from("before stream"),
+            String::from("before stream").into(),
             None,
         )
         .await?;
@@ -395,7 +415,7 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
     let pending = manager
         .prepare_start_stream(
             &first_session,
-            String::from("build something"),
+            String::from("build something").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -432,7 +452,7 @@ async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> 
     let error = manager
         .prepare_start_stream(
             &session_id,
-            String::from("hello"),
+            String::from("hello").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -451,16 +471,26 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
 
     let session_id = manager.create_session().await?;
     let first_user = manager
-        .add_message(&session_id, ChatRole::User, String::from("first"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("first").into(),
+            None,
+        )
         .await?;
     let second_user = manager
-        .add_message(&session_id, ChatRole::User, String::from("second"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("second").into(),
+            None,
+        )
         .await?;
     let assistant = manager
         .add_message(
             &session_id,
             ChatRole::Assistant,
-            String::from("reply"),
+            String::from("reply").into(),
             None,
         )
         .await?;
@@ -469,7 +499,7 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
 
     let restored = manager.undo_last_user_message(&session_id).await?;
 
-    assert_eq!(restored.as_deref(), Some("second"));
+    assert_eq!(restored, Some("second".into()));
     assert_eq!(
         manager.get_tip(&session_id).await?,
         Some(first_user.clone())
@@ -511,13 +541,18 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         .set_session_profile(&session_id, String::from("plan"))
         .await?;
     manager
-        .add_message(&session_id, ChatRole::User, String::from("hello"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("hello").into(),
+            None,
+        )
         .await?;
 
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("trigger failure"),
+            String::from("trigger failure").into(),
             ModelId::new("mock-model"),
             ProviderId::new("missing-provider"),
         )
@@ -563,7 +598,7 @@ async fn loading_session_recovers_persisted_interrupted_stream() -> Result<()> {
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("preserve this prompt"),
+            String::from("preserve this prompt").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -609,7 +644,7 @@ async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("still streaming"),
+            String::from("still streaming").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )

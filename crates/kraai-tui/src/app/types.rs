@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use kraai_runtime::{
     AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{Message, MessageId, TokenUsage};
+use kraai_types::{ImageAttachment, Message, MessageContent, MessageId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
@@ -107,7 +107,7 @@ pub(super) struct OptimisticMessage {
 pub(super) struct PendingSubmit {
     pub(super) creation_id: u64,
     pub(super) session_id: Option<String>,
-    pub(super) message: String,
+    pub(super) message: MessageContent,
     pub(super) model_id: String,
     pub(super) provider_id: String,
 }
@@ -146,9 +146,13 @@ pub(super) enum RuntimeRequest {
     },
     SendMessage {
         session_id: String,
-        message: String,
+        message: MessageContent,
         model_id: String,
         provider_id: String,
+    },
+    ImportImage {
+        path: std::path::PathBuf,
+        session_id: Option<String>,
     },
     SaveSettings {
         settings: SettingsDocument,
@@ -213,6 +217,10 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<()>,
     },
     SendMessage(RuntimeResult<kraai_runtime::SubmitMessageOutcome>),
+    ImportImage {
+        session_id: Option<String>,
+        result: RuntimeResult<ImageAttachment>,
+    },
     SaveSettings(RuntimeResult<()>),
     ChatHistory {
         session_id: String,
@@ -228,7 +236,7 @@ pub(super) enum RuntimeResponse {
     },
     UndoLastUserMessage {
         session_id: String,
-        result: RuntimeResult<Option<String>>,
+        result: RuntimeResult<Option<MessageContent>>,
     },
     LoadSession {
         load_id: u64,

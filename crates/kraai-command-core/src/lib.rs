@@ -144,21 +144,33 @@ pub trait StateEffectClient: Send + Sync {
     ) -> Result<(), StateEffectError>;
 }
 
+pub trait ImageAttachmentClient: Send + Sync {
+    fn attach(&self, bytes: Vec<u8>) -> Result<kraai_types::ImageAttachment, String>;
+    fn attach_existing(&self, id: String) -> Result<kraai_types::ImageAttachment, String>;
+}
+
 #[derive(Clone)]
 pub struct CommandContext {
     web_search: Arc<dyn WebSearchClient>,
     state_effects: Arc<dyn StateEffectClient>,
+    images: Arc<dyn ImageAttachmentClient>,
 }
 
 impl CommandContext {
     pub fn new(
         state_effects: Arc<dyn StateEffectClient>,
         web_search: Arc<dyn WebSearchClient>,
+        images: Arc<dyn ImageAttachmentClient>,
     ) -> Self {
         Self {
             state_effects,
             web_search,
+            images,
         }
+    }
+
+    pub fn images(&self) -> &dyn ImageAttachmentClient {
+        self.images.as_ref()
     }
 
     pub fn web_search(&self) -> &dyn WebSearchClient {
