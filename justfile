@@ -101,3 +101,5 @@ check: generate-cargo-nix format lint test test-harbor check-node check-eval-vie
 
 eval *args:
     nix run .#kraai-eval -- {{ args }}
+
+eval-view: (eval "view" "--no-open" "--port" "3928")
