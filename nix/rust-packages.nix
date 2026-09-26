@@ -2,6 +2,7 @@
   perSystem = {
     lib,
     pkgs,
+    self',
     ...
   }: let
     rustToolchain = pkgs.rust-bin.stable.latest.default;
@@ -154,6 +155,7 @@
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
             --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
             --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
+            --set-default KRAAI_EVAL_VIEWER_ASSETS ${self'.packages.kraai-eval-viewer} \
             --prefix PATH : ${lib.makeBinPath [
             kraai
             pkgs.bubblewrap

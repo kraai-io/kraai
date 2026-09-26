@@ -83,7 +83,21 @@ check-node test_script="test":
     npm run typecheck
     npm run "{{ test_script }}"
 
-check: generate-cargo-nix format lint test test-harbor check-node
+[script('bash')]
+build-eval-viewer:
+    set -euo pipefail
+    cd packages/eval-viewer
+    npm ci --no-audit --no-fund
+    npm run build
+
+[script('bash')]
+check-eval-viewer: build-eval-viewer
+    set -euo pipefail
+    cd packages/eval-viewer
+    npm run typecheck
+    npm test
+
+check: generate-cargo-nix format lint test test-harbor check-node check-eval-viewer
 
 eval *args:
     nix run .#kraai-eval -- {{ args }}
