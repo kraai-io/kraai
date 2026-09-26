@@ -690,3 +690,45 @@ async fn skill_reads_return_text_without_context_effects() -> Result<(), Box<dyn
 
 #[path = "host_execution/web_search.rs"]
 mod web_search;
+
+#[tokio::test]
+async fn startup_errors_fail_inherited_execution_but_do_not_affect_clean_execution() {
+    for (filename, source) in [
+        ("env.nu", "do --ignore-shell-errors { 'ignored' }"),
+        ("config.nu", "$env.config.footer_mode = '25'"),
+    ] {
+        let workspace = TestWorkspace::new();
+        let config_home = workspace.0.join("config");
+        let nushell_config = config_home.join("nushell");
+        std::fs::create_dir_all(&nushell_config).expect("create config directory");
+        std::fs::write(nushell_config.join(filename), source).expect("write invalid startup file");
+        for startup in [NushellStartup::Inherit, NushellStartup::Clean] {
+            let mut execution = plan(b"print 'script-ran'".to_vec(), &workspace);
+            execution.nushell_startup = startup;
+            execution
+                .environment
+                .insert("XDG_CONFIG_HOME".into(), config_home.display().to_string());
+            let result = execute(execution, CancellationToken::new())
+                .await
+                .expect("run host");
+            if startup == NushellStartup::Inherit {
+                assert_eq!(
+                    result.output.termination,
+                    Termination::Exited { code: Some(70) }
+                );
+                assert!(!String::from_utf8_lossy(&result.output.stdout).contains("script-ran"));
+                assert!(String::from_utf8_lossy(&result.output.stderr).contains(filename));
+            } else {
+                assert_eq!(
+                    result.output.termination,
+                    Termination::Exited { code: Some(0) }
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&result.output.stdout),
+                    "script-ran\n"
+                );
+                assert!(result.output.stderr.is_empty());
+            }
+        }
+    }
+}

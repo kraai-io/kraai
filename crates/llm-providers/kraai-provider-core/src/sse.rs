@@ -45,7 +45,11 @@ where
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
-                let _ = tx.send(Err(eyre!(error))).await;
+                let _ = tx
+                    .send(Err(eyre!(error).wrap_err(
+                        crate::ProviderError::StreamInterrupted("HTTP response body failed".into()),
+                    )))
+                    .await;
                 return;
             }
         };

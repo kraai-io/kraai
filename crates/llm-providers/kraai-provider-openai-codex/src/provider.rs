@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
@@ -87,6 +88,7 @@ fn build_codex_http_client(
     base_url: &str,
 ) -> Result<Client> {
     Ok(streaming_http_client_builder()
+        .read_timeout(Duration::from_secs(300))
         .https_only(!proxy_token)
         .redirect(codex_redirect_policy(
             proxy_token,
@@ -340,6 +342,30 @@ impl Provider for OpenAiCodexProvider {
         Some(kraai_provider_core::CacheWarmingPolicy::default())
     }
 
+    fn supports_native_compaction(&self, _model_id: &ModelId) -> bool {
+        true
+    }
+
+    async fn compact_stream(
+        &self,
+        model_id: &ModelId,
+        request: ProviderRequest,
+        request_context: &ProviderRequestContext,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        let mut request = request;
+        crate::compaction::trim_tool_outputs(
+            &mut request,
+            self.get_model(model_id)
+                .await
+                .and_then(|model| model.max_context),
+        );
+        let context = request_context.clone().with_max_attempts(3);
+        let response = self
+            .send_responses_request(model_id, request, &context, true)
+            .await?;
+        Ok(adapt_responses_stream(stream_sse_data(response)))
+    }
+
     async fn generate_reply_stream(
         &self,
         model_id: &ModelId,
@@ -347,7 +373,7 @@ impl Provider for OpenAiCodexProvider {
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let response = self
-            .send_responses_request(model_id, request, request_context)
+            .send_responses_request(model_id, request, request_context, false)
             .await?;
         Ok(adapt_responses_stream(stream_sse_data(response)))
     }
@@ -396,6 +422,7 @@ impl OpenAiCodexProvider {
         model_id: &ModelId,
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
+        compact: bool,
     ) -> Result<Response> {
         let has_tool = provider_request.script_tool.is_some();
         let tools = provider_request
@@ -438,6 +465,13 @@ impl OpenAiCodexProvider {
                 .await
                 .filter(&mut request.input);
         }
+        if compact {
+            request
+                .input
+                .push(crate::messages::ResponsesRequestItem::Compaction(
+                    serde_json::json!({"type": "compaction_trigger"}),
+                ));
+        }
         let response = self.post_responses(&request, request_context).await;
         if let Some(error) = response
             .as_ref()
@@ -452,6 +486,9 @@ impl OpenAiCodexProvider {
                 .write()
                 .await
                 .reject(&request.input, &error.0);
+            if compact {
+                return response;
+            }
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });
@@ -604,6 +641,9 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
             == Some("invalid_encrypted_content")
     {
         return Err(InvalidEncryptedContent(body).into());
+    }
+    if let Some(error) = kraai_provider_core::ProviderError::from_api_error(&body) {
+        return Err(error.into());
     }
     Err(eyre!(
         "OpenAI Codex {operation} failed with status {status} at {url}: {body}"

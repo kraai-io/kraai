@@ -3,6 +3,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
+    #[error("Model context window exceeded: {0}")]
+    ContextWindowExceeded(String),
+    #[error("Provider stream interrupted: {0}")]
+    StreamInterrupted(String),
+
     #[error("Provider not found: {0}")]
     ProviderNotFound(ProviderId),
 
@@ -29,4 +34,16 @@ pub enum ProviderError {
 pub struct ProviderModelCacheRefreshError {
     pub provider_id: ProviderId,
     pub message: String,
+}
+
+impl ProviderError {
+    pub fn from_api_error(body: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(body).ok()?;
+        let code = value
+            .pointer("/error/code")
+            .or_else(|| value.get("code"))?
+            .as_str()?;
+        matches!(code, "context_length_exceeded" | "context_window_exceeded")
+            .then(|| Self::ContextWindowExceeded(body.to_string()))
+    }
 }

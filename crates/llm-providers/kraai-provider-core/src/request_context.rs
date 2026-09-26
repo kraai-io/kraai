@@ -26,6 +26,7 @@ pub trait ProviderRetryObserver: Send + Sync {
 pub struct ProviderRequestContext {
     retry_observer: Option<Arc<dyn ProviderRetryObserver>>,
     prompt_cache_key: Option<String>,
+    max_attempts: Option<u32>,
 }
 
 impl ProviderRequestContext {
@@ -33,6 +34,7 @@ impl ProviderRequestContext {
         Self {
             retry_observer,
             prompt_cache_key: None,
+            max_attempts: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl ProviderRequestContext {
         Self {
             retry_observer: Some(retry_observer),
             prompt_cache_key: None,
+            max_attempts: None,
         }
     }
 
@@ -47,6 +50,7 @@ impl ProviderRequestContext {
         Self {
             retry_observer: None,
             prompt_cache_key: Some(prompt_cache_key),
+            max_attempts: None,
         }
     }
 
@@ -57,7 +61,17 @@ impl ProviderRequestContext {
         Self {
             retry_observer: Some(retry_observer),
             prompt_cache_key: Some(prompt_cache_key),
+            max_attempts: None,
         }
+    }
+
+    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = Some(max_attempts.max(1));
+        self
+    }
+
+    pub fn max_attempts(&self) -> Option<u32> {
+        self.max_attempts
     }
 
     pub fn retry_observer(&self) -> Option<&dyn ProviderRetryObserver> {

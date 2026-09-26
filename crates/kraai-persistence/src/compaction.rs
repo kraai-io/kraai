@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, ensure, eyre};
-use kraai_types::{MessageId, ModelId, ProviderId, TokenUsage};
+use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
@@ -11,7 +11,7 @@ pub struct CompactionCheckpoint {
     #[serde(default)]
     pub superseded_usage: Vec<MessageId>,
     pub previous_boundary: Option<MessageId>,
-    pub summary: String,
+    pub replacement: Vec<ConversationItem>,
     pub model_id: ModelId,
     pub provider_id: ProviderId,
     pub prompt_version: u32,
@@ -19,6 +19,14 @@ pub struct CompactionCheckpoint {
 }
 
 impl CompactionCheckpoint {
+    pub fn compatible_with(&self, provider_id: &ProviderId, model_id: &ModelId) -> bool {
+        !self
+            .replacement
+            .iter()
+            .any(|item| matches!(item, ConversationItem::Compaction { .. }))
+            || (&self.provider_id == provider_id && &self.model_id == model_id)
+    }
+
     fn validate(&self) -> Result<()> {
         MessageId::try_new(self.covered_through.as_str()).map_err(|error| eyre!(error))?;
         for message in &self.superseded_usage {
@@ -35,7 +43,7 @@ impl CompactionCheckpoint {
             self.prompt_version == 1,
             "Unsupported compaction prompt version"
         );
-        ensure!(!self.summary.trim().is_empty(), "Empty compaction summary");
+        ensure!(!self.replacement.is_empty(), "Empty compaction replacement");
         Ok(())
     }
 }
@@ -108,7 +116,9 @@ mod tests {
             covered_through: MessageId::new("boundary"),
             superseded_usage: vec![MessageId::new("latest")],
             previous_boundary: Some(MessageId::new("previous")),
-            summary: String::from("User requested a parser; the parser is implemented."),
+            replacement: vec![ConversationItem::User {
+                text: "User requested a parser; the parser is implemented.".into(),
+            }],
             model_id: ModelId::new("model"),
             provider_id: ProviderId::new("provider"),
             prompt_version: 1,
@@ -154,7 +164,7 @@ mod tests {
             ensure!(store.save(&invalid).await.is_err());
         }
         let mut invalid = original.clone();
-        invalid.summary = String::from(" \n\t");
+        invalid.replacement.clear();
         ensure!(store.save(&invalid).await.is_err());
         invalid = original.clone();
         invalid.prompt_version = 2;
@@ -181,7 +191,7 @@ mod tests {
             ensure!(store.get(&other).await.is_err());
         }
         let mut invalid = checkpoint.clone();
-        invalid.summary.clear();
+        invalid.replacement.clear();
         fs::write(
             store.path(&checkpoint.covered_through)?,
             serde_json::to_vec(&invalid)?,

@@ -370,7 +370,12 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
         }),
     };
     provider
-        .send_responses_request(&model.id, request, &ProviderRequestContext::default())
+        .send_responses_request(
+            &model.id,
+            request,
+            &ProviderRequestContext::default(),
+            false,
+        )
         .await?
         .text()
         .await?;
@@ -573,5 +578,188 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Res
                 .is_none()
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> Result<()> {
+    let models = json!({"models": [{"slug":"astra", "display_name":"Astra", "visibility":"list", "context_window":272000, "default_reasoning_level":"low", "supported_reasoning_levels":[{"effort":"low"}]}]}).to_string();
+    let payload = json!({"type":"compaction","id":"cmp-1","encrypted_content":"opaque-state"});
+    let completed = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":200,\"output_tokens\":20}}}\n\n";
+    let body = format!(
+        "data: {}\n\n{completed}",
+        json!({"type":"response.output_item.done","item":payload})
+    );
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        ("200 OK", body),
+        ("200 OK", completed.into()),
+    ])
+    .await?;
+    let provider = provider(base_url)?;
+    provider.cache_models().await?;
+    let reasoning =
+        json!({"type":"reasoning","id":"rs-1","encrypted_content":"prior-reasoning","summary":[]});
+    let request = ProviderRequest {
+        messages: vec![
+            ConversationItem::System {
+                text: "system instructions".into(),
+            },
+            ConversationItem::User {
+                text: "task".into(),
+            },
+            ConversationItem::Assistant {
+                items: vec![kraai_types::AssistantItem::Reasoning {
+                    provider_id: provider.id.clone(),
+                    payload: reasoning.clone(),
+                }],
+            },
+        ],
+        script_tool: Some(ScriptToolDefinition {
+            name: "kraai_nushell".into(),
+            description: "Run script".into(),
+        }),
+        cacheable_messages: None,
+    };
+    let events = provider
+        .compact_stream(
+            &ModelId::new("astra-low"),
+            request.clone(),
+            &ProviderRequestContext::default(),
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert!(events.iter().any(|event| matches!(event, ProviderStreamEvent::Compaction { payload: value } if value == &payload)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::Usage(_)))
+    );
+    let mut replay = request;
+    replay.messages.pop();
+    replay.messages.push(ConversationItem::Compaction {
+        provider_id: provider.id.clone(),
+        payload: payload.clone(),
+    });
+    provider
+        .generate_reply_stream(
+            &ModelId::new("astra-low"),
+            replay,
+            &ProviderRequestContext::default(),
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    let requests = server.await??;
+    let bodies = requests
+        .iter()
+        .skip(1)
+        .map(|r| {
+            serde_json::from_str::<Value>(
+                r.split_once("\r\n\r\n")
+                    .map(|(_, body)| body)
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let compact = bodies
+        .first()
+        .ok_or_else(|| eyre!("missing compact request"))?;
+    assert_eq!(
+        compact["input"].as_array().and_then(|input| input.last()),
+        Some(&json!({"type":"compaction_trigger"}))
+    );
+    assert!(
+        compact["input"]
+            .as_array()
+            .is_some_and(|items| items.contains(&reasoning))
+    );
+    assert_eq!(
+        compact.pointer("/tools/0/name").and_then(Value::as_str),
+        Some("kraai_nushell")
+    );
+    assert_eq!(compact["instructions"], "system instructions");
+    let replay = bodies.get(1).ok_or_else(|| eyre!("missing replay"))?;
+    assert!(
+        replay["input"]
+            .as_array()
+            .is_some_and(|items| items.contains(&payload))
+    );
+    assert!(!replay["input"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_compaction_records_rejected_reasoning_without_retrying_the_failed_call()
+-> Result<()> {
+    let models = json!({"models": [{"slug":"astra", "display_name":"Astra", "visibility":"list", "context_window":272000, "default_reasoning_level":"low", "supported_reasoning_levels":[{"effort":"low"}]}]}).to_string();
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        (
+            "400 Bad Request",
+            json!({"error":{"code":"invalid_encrypted_content","message":"invalid reasoning","param":"input[0].encrypted_content"}})
+                .to_string(),
+        ),
+        ("200 OK", "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":2}}}\n\n".into()),
+    ])
+    .await?;
+    let provider = provider(base_url)?;
+    provider.cache_models().await?;
+    let request = ProviderRequest {
+        messages: vec![ConversationItem::Assistant {
+            items: vec![kraai_types::AssistantItem::Reasoning {
+                provider_id: provider.id.clone(),
+                payload: json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque","summary":[]}),
+            }],
+        }],
+        script_tool: None,
+        cacheable_messages: None,
+    };
+    assert!(
+        provider
+            .compact_stream(
+                &ModelId::new("astra-low"),
+                request.clone(),
+                &ProviderRequestContext::default()
+            )
+            .await
+            .is_err()
+    );
+    provider
+        .compact_stream(
+            &ModelId::new("astra-low"),
+            request,
+            &ProviderRequestContext::default(),
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    let requests = server.await??;
+    assert_eq!(requests.len(), 3);
+    let second = requests
+        .last()
+        .and_then(|request| request.split_once("\r\n\r\n"))
+        .ok_or_else(|| eyre!("missing request body"))?
+        .1;
+    let body: Value = serde_json::from_str(second)?;
+    ensure!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(|item| item["type"] != "reasoning"))
+    );
+    ensure!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["type"] == "compaction_trigger")
+            })
+    );
     Ok(())
 }

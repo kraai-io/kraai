@@ -19,7 +19,7 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
         .map_err(HostError::Commands)?;
     let mut engine_state = build_engine(&request, commands)?;
     let mut stack = Stack::new();
-    load_startup_files(&request, &mut engine_state, &mut stack);
+    load_startup_files(&request, &mut engine_state, &mut stack)?;
     Ok(nu_cli::eval_source(
         &mut engine_state,
         &mut stack,
@@ -30,17 +30,53 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
     ))
 }
 
-fn load_startup_files(request: &HostRequest, engine_state: &mut EngineState, stack: &mut Stack) {
-    if request.nushell_startup != NushellStartup::Inherit {
-        return;
+fn load_startup_files(
+    request: &HostRequest,
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+) -> Result<(), HostError> {
+    if request.nushell_startup != NushellStartup::Inherit || !engine_state.config_dirs.is_resolved()
+    {
+        return Ok(());
     }
-    if !engine_state.config_dirs.is_resolved() {
-        return;
+    for path in [
+        engine_state.config_dirs.env_file.to_path_buf(),
+        engine_state.config_dirs.config_file.to_path_buf(),
+    ] {
+        let contents = match std::fs::read(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(HostError::Initialization(format!(
+                    "unable to read startup file '{}': {error}",
+                    path.display()
+                )));
+            }
+        };
+        let previous_file = engine_state.file.replace(path.clone());
+        let exit_code = nu_cli::eval_source(
+            engine_state,
+            stack,
+            &contents,
+            &path.to_string_lossy(),
+            PipelineData::empty(),
+            false,
+        );
+        engine_state.file = previous_file;
+        if exit_code != 0 {
+            return Err(HostError::Initialization(format!(
+                "startup file '{}' failed with exit code {exit_code}",
+                path.display()
+            )));
+        }
+        engine_state.merge_env(stack).map_err(|error| {
+            HostError::Initialization(format!(
+                "startup file '{}' failed to update the environment: {error}",
+                path.display()
+            ))
+        })?;
     }
-    let env_file = engine_state.config_dirs.env_file.to_path_buf();
-    let config_file = engine_state.config_dirs.config_file.to_path_buf();
-    nu_cli::eval_config_contents(env_file, engine_state, stack, false);
-    nu_cli::eval_config_contents(config_file, engine_state, stack, false);
+    Ok(())
 }
 
 fn validate_request(request: &HostRequest) -> Result<(), HostError> {
@@ -66,11 +102,11 @@ fn build_engine(
     let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
         nu_cmd_lang::create_default_context(),
     ));
-    if let Ok((config_dirs, _warnings)) =
-        nu_config::resolve_paths(&nu_config::SystemEnv, &nu_config::CliOverrides::default())
-    {
-        engine_state.config_dirs = config_dirs;
-    }
+    configure_startup_paths(
+        &mut engine_state,
+        request.nushell_startup,
+        &nu_config::SystemEnv,
+    )?;
     nu_cli::gather_parent_env_vars(&mut engine_state, &request.workspace_root);
 
     let mut working_set = StateWorkingSet::new(&engine_state);
@@ -86,6 +122,23 @@ fn build_engine(
         .merge_delta(delta)
         .map_err(|error| HostError::Initialization(error.to_string()))?;
     Ok(engine_state)
+}
+
+fn configure_startup_paths(
+    engine_state: &mut EngineState,
+    startup: NushellStartup,
+    environment: &impl nu_config::EnvAccess,
+) -> Result<(), HostError> {
+    match nu_config::resolve_paths(environment, &nu_config::CliOverrides::default()) {
+        Ok((config_dirs, _warnings)) => engine_state.config_dirs = config_dirs,
+        Err(error) if startup == NushellStartup::Inherit => {
+            return Err(HostError::Initialization(format!(
+                "unable to resolve startup paths: {error}"
+            )));
+        }
+        Err(_) => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -113,3 +166,28 @@ impl std::fmt::Display for HostError {
 }
 
 impl std::error::Error for HostError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_startup_paths_fail_inherited_startup_but_allow_clean_startup() {
+        for environment in [
+            nu_config::TestEnv::new(Default::default()),
+            nu_config::TestEnv::new(Default::default()).with_config_dir(std::env::temp_dir()),
+        ] {
+            let mut engine = EngineState::new();
+            let error = configure_startup_paths(&mut engine, NushellStartup::Inherit, &environment);
+            assert!(matches!(
+                error,
+                Err(HostError::Initialization(message))
+                    if message.contains("unable to resolve startup paths")
+            ));
+            assert!(
+                configure_startup_paths(&mut engine, NushellStartup::Clean, &environment).is_ok()
+            );
+            assert!(!engine.config_dirs.is_resolved());
+        }
+    }
+}

@@ -5,8 +5,9 @@ use crate::wire::RequestMessage;
 pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMessage> {
     messages
         .into_iter()
-        .map(|message| {
+        .filter_map(|message| {
             let (role, content) = match message {
+                ConversationItem::Compaction { .. } => return None,
                 ConversationItem::System { text } => ("system", text),
                 ConversationItem::User { text } => ("user", text),
                 message @ ConversationItem::Assistant { .. } => {
@@ -14,7 +15,7 @@ pub fn normalize_chat_messages(messages: Vec<ConversationItem>) -> Vec<RequestMe
                 }
                 ConversationItem::ScriptResult { output, .. } => ("user", output),
             };
-            RequestMessage { role, content }
+            Some(RequestMessage { role, content })
         })
         .collect()
 }

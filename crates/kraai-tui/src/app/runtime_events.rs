@@ -196,6 +196,16 @@ impl App {
                 session_id,
                 notifications,
             } => {
+                if self.is_ci_mode() {
+                    for notification in &notifications {
+                        if let Err(error) = std::io::Write::write_fmt(
+                            &mut std::io::stderr(),
+                            format_args!("{notification}\n"),
+                        ) {
+                            tracing::warn!(%error, "Unable to write context notification");
+                        }
+                    }
+                }
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str())
                     && !notifications.is_empty()
                 {

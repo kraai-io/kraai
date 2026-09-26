@@ -39,9 +39,7 @@ pub(crate) fn adapt_responses_stream(
                     }
                     Some(Ok(SseEvent::Done)) | None => {
                         return Some((
-                            Err(eyre!(
-                                "OpenAI response stream ended before response.completed"
-                            )),
+                            Err(kraai_provider_core::ProviderError::StreamInterrupted("OpenAI response stream ended before response.completed".into()).into()),
                             (source, true, phases),
                         ));
                     }
@@ -80,6 +78,16 @@ pub(crate) fn adapt_responses_stream(
                         }
                     }
                     "response.output_item.done" => {
+                        if let Some(item) = &event.item && item.kind == "compaction" {
+                            let result = if item.extra.get("encrypted_content")
+                                .and_then(serde_json::Value::as_str).is_none_or(str::is_empty) {
+                                Err(eyre!("OpenAI compaction item omitted encrypted content"))
+                            } else {
+                                serde_json::to_value(item).map(|payload| ProviderStreamEvent::Compaction { payload }).map_err(Into::into)
+                            };
+                            let failed = result.is_err();
+                            return Some((result, (source, failed, phases)));
+                        }
                         if let Some(item) = &event.item
                             && item.kind == "reasoning"
                             && item.extra.get("encrypted_content").is_some_and(|value| !value.is_null())

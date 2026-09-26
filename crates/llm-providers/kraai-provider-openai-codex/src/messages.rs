@@ -5,6 +5,7 @@ use serde::Serialize;
 #[serde(untagged)]
 pub enum ResponsesRequestItem {
     Reasoning(serde_json::Value),
+    Compaction(serde_json::Value),
     Message(ResponsesRequestMessage),
     CustomToolCall(ResponsesCustomToolCall),
     CustomToolCallOutput(ResponsesCustomToolCallOutput),
@@ -70,6 +71,14 @@ pub fn normalize_conversation(
 
     for message in messages {
         match message {
+            ConversationItem::Compaction {
+                provider_id: source,
+                payload,
+            } => {
+                if source == *provider_id {
+                    input.push(ResponsesRequestItem::Compaction(payload));
+                }
+            }
             ConversationItem::System { text } => {
                 input.push(ResponsesRequestItem::Message(text_message(
                     "developer",
