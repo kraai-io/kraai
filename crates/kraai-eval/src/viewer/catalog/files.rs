@@ -1,0 +1,178 @@
+use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+
+use color_eyre::eyre::{Context, Result, ensure};
+use serde::de::DeserializeOwned;
+
+use super::Catalog;
+
+pub(super) const JSON_LIMIT: u64 = 8 * 1024 * 1024;
+pub(super) const LOG_LIMIT: u64 = 2 * 1024 * 1024;
+pub(super) const DIRECTORY_SCAN_LIMIT: usize = 50_000;
+
+fn checked_path(root: &Path, path: &Path) -> Result<()> {
+    ensure!(
+        !fs::symlink_metadata(root)?.is_symlink(),
+        "symlink cache directories are not served"
+    );
+    let relative = path
+        .strip_prefix(root)
+        .wrap_err("artifact is outside the result cache")?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        ensure!(
+            matches!(component, Component::Normal(_)),
+            "invalid artifact path"
+        );
+        current.push(component);
+        ensure!(
+            !fs::symlink_metadata(&current)?.is_symlink(),
+            "symlink artifacts are not served"
+        );
+    }
+    ensure!(path.metadata()?.is_file(), "artifact is not a regular file");
+    Ok(())
+}
+
+pub(super) fn read_bounded(root: &Path, path: &Path, limit: u64) -> Result<(Vec<u8>, bool)> {
+    checked_path(root, path)?;
+    let file = File::open(path)?;
+    ensure!(file.metadata()?.is_file(), "artifact is not a regular file");
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    let truncated = bytes.len() as u64 > limit;
+    bytes.truncate(limit as usize);
+    Ok((bytes, truncated))
+}
+
+pub(super) fn read_json<T: DeserializeOwned>(root: &Path, path: &Path) -> Result<T> {
+    let (bytes, truncated) = read_bounded(root, path, JSON_LIMIT)?;
+    ensure!(!truncated, "saved JSON exceeds the 8 MiB viewer limit");
+    serde_json::from_slice(&bytes).wrap_err("invalid saved JSON")
+}
+
+impl Catalog {
+    pub(super) fn json<T: DeserializeOwned>(&mut self, path: &Path) -> Option<T> {
+        match read_json(&self.root, path) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.warning(path, format!("{error:#}"));
+                None
+            }
+        }
+    }
+
+    pub(super) fn optional_json<T: DeserializeOwned>(&mut self, path: &Path) -> Option<T> {
+        path.exists().then(|| self.json(path)).flatten()
+    }
+
+    pub(super) fn directories(&mut self, root: &Path, depth: usize) -> Vec<PathBuf> {
+        if self.scan_limit_reached
+            || !root.exists()
+            || root.symlink_metadata().is_ok_and(|meta| meta.is_symlink())
+        {
+            return Vec::new();
+        }
+        let mut directories = Vec::new();
+        self.collect_directories(root, depth, &mut directories);
+        directories.sort();
+        directories
+    }
+
+    fn collect_directories(&mut self, root: &Path, depth: usize, directories: &mut Vec<PathBuf>) {
+        if depth == 0 {
+            directories.push(root.to_path_buf());
+            return;
+        }
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warning(root, error);
+                return;
+            }
+        };
+        for entry in entries {
+            if self.total_scanned_entries == DIRECTORY_SCAN_LIMIT {
+                self.scan_limit_reached = true;
+                self.warning(
+                    root,
+                    "directory scan limit reached; showing discovered results only",
+                );
+                return;
+            }
+            self.total_scanned_entries += 1;
+            match entry {
+                Ok(entry) => match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => {
+                        self.collect_directories(&entry.path(), depth - 1, directories);
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.warning(&entry.path(), error),
+                },
+                Err(error) => self.warning(root, error),
+            }
+            if self.scan_limit_reached {
+                return;
+            }
+        }
+    }
+}
+
+pub(super) fn logs(root: &Path, directory: &Path) -> BTreeMap<String, PathBuf> {
+    if !directory.starts_with(root)
+        || !directory
+            .canonicalize()
+            .is_ok_and(|resolved| resolved == directory)
+    {
+        return BTreeMap::new();
+    }
+    let names = [
+        "result.json",
+        "source.json",
+        "events.jsonl",
+        "proxy.events.jsonl",
+        "harness-metrics.json",
+        "request-accounting.json",
+        "runner.stdout.log",
+        "runner.stderr.log",
+        "submission.patch",
+        "trial.log",
+        "exception.txt",
+        "agent/runner.stdout.jsonl",
+        "agent/runner.stderr.log",
+        "agent/kraai-metrics.json",
+        "agent/codex.txt",
+        "agent/trajectory.json",
+        "agent/trajectory-metrics.json",
+        "verifier/test-stdout.txt",
+        "verifier/test-stderr.txt",
+        "verifier/reward.txt",
+        "kraai-controller/proxy.events.jsonl",
+        "kraai-controller/proxy-metrics.json",
+        "kraai-controller/request-accounting.json",
+        "kraai-controller/runner-metrics.json",
+    ];
+    let mut logs = BTreeMap::new();
+    for name in names
+        .into_iter()
+        .map(str::to_owned)
+        .chain((0..64).flat_map(|index| {
+            [
+                format!("grader-{index}.stdout.log"),
+                format!("grader-{index}.stderr.log"),
+            ]
+        }))
+    {
+        let path = directory.join(&name);
+        if path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.is_file())
+            && checked_path(directory, &path).is_ok()
+        {
+            logs.insert(name.replace('/', "--"), path);
+        }
+    }
+    logs
+}

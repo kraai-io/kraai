@@ -3,6 +3,7 @@ mod benchmark;
 mod display;
 mod proxy;
 mod tasks;
+mod viewer;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,8 @@ enum Command {
     Run(Box<RunArgs>),
     #[command(about = "Display a saved run result.json or suite summary.json")]
     Report { path: PathBuf },
+    #[command(about = "Open saved benchmark results in a local browser")]
+    View(viewer::ViewerArgs),
     #[command(
         about = "Calculate context sizes and estimated API costs from saved requests without calling a model"
     )]
@@ -197,6 +200,7 @@ pub(super) fn run() -> Result<ExitCode> {
             }
         }
         Command::Report { path } => return report(&path, cli.json),
+        Command::View(args) => return viewer::execute(args, cli.json),
         Command::Compare { left, right } => {
             let comparison = kraai_eval::compare(&left, &right)?;
             if cli.json {

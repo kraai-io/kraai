@@ -9,3 +9,4 @@ result
 __pycache__/
 node_modules/
 packages/runtime/dist/
+packages/eval-viewer/dist/

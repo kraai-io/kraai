@@ -22,6 +22,7 @@ mod runner;
 mod sandbox;
 mod suite;
 mod validation;
+pub mod viewer;
 mod workspace;
 
 pub use accounting::{
