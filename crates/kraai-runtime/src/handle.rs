@@ -167,6 +167,25 @@ impl RuntimeHandle {
         model_id: String,
         provider_id: String,
     ) -> RuntimeResult<SubmitMessageOutcome> {
+        self.send_content(session_id, message.into(), model_id, provider_id)
+            .await
+    }
+
+    pub async fn import_image(
+        &self,
+        bytes: Vec<u8>,
+    ) -> RuntimeResult<kraai_types::ImageAttachment> {
+        self.request(|response| Command::ImportImage { bytes, response })
+            .await
+    }
+
+    pub async fn send_content(
+        &self,
+        session_id: String,
+        message: kraai_types::MessageContent,
+        model_id: String,
+        provider_id: String,
+    ) -> RuntimeResult<SubmitMessageOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
         })?;
@@ -279,7 +298,7 @@ impl RuntimeHandle {
     pub async fn undo_last_user_message(
         &self,
         session_id: String,
-    ) -> RuntimeResult<Option<String>> {
+    ) -> RuntimeResult<Option<kraai_types::MessageContent>> {
         self.request(|response| Command::UndoLastUserMessage {
             session_id,
             response,

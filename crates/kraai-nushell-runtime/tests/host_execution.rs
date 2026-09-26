@@ -732,3 +732,5 @@ async fn startup_errors_fail_inherited_execution_but_do_not_affect_clean_executi
         }
     }
 }
+#[path = "host_execution/images.rs"]
+mod images;

@@ -6,8 +6,9 @@ pub(crate) fn command_registry(
     let open_files = kraai_command_open_files::OpenFilesCommand::registration(context.clone())?;
     let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
     let edit_file = kraai_command_edit_file::EditFileCommand::registration(context.clone())?;
-    let web_search = kraai_command_web_search::WebSearchCommand::registration(context)?;
-    CommandRegistry::new([open_files, close_files, edit_file, web_search])
+    let web_search = kraai_command_web_search::WebSearchCommand::registration(context.clone())?;
+    let view_image = kraai_command_view_image::ViewImageCommand::registration(context)?;
+    CommandRegistry::new([open_files, close_files, edit_file, web_search, view_image])
 }
 
 #[cfg(test)]
@@ -41,6 +42,15 @@ mod tests {
         }
     }
 
+    impl kraai_command_core::ImageAttachmentClient for UnusedEffects {
+        fn attach_existing(&self, _: String) -> Result<kraai_types::ImageAttachment, String> {
+            Err(String::from("test commands must not run"))
+        }
+        fn attach(&self, _: Vec<u8>) -> Result<kraai_types::ImageAttachment, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
+
     #[test]
     #[expect(
         clippy::panic_in_result_fn,
@@ -48,6 +58,7 @@ mod tests {
     )]
     fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
         let registry = command_registry(CommandContext::new(
+            Arc::new(UnusedEffects),
             Arc::new(UnusedEffects),
             Arc::new(UnusedEffects),
         ))?;

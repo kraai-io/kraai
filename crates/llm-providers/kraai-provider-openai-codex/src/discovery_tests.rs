@@ -194,7 +194,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
                             text: "Summarize the conversation. Do not execute tools.".into(),
                         },
                         ConversationItem::User {
-                            text:
+                            content:
                                 "Previous summary:\n\nAdditional conversation data:\nRouting fixed."
                                     .into(),
                         },
@@ -512,7 +512,7 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Res
                     ],
                 },
                 ConversationItem::User {
-                    text: "Continue".into(),
+                    content: "Continue".into(),
                 },
             ],
         };
@@ -606,7 +606,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
                 text: "system instructions".into(),
             },
             ConversationItem::User {
-                text: "task".into(),
+                content: "task".into(),
             },
             ConversationItem::Assistant {
                 items: vec![kraai_types::AssistantItem::Reasoning {

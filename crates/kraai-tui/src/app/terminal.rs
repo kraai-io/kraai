@@ -209,6 +209,7 @@ impl App {
                 }
                 self.reset_completion_cycle();
             }
+            KeyCode::Delete => self.delete_input_char(),
             KeyCode::Backspace => {
                 self.backspace_input_char();
                 if active_command_prefix(&self.state.input).is_none() {
@@ -286,8 +287,7 @@ impl App {
     }
 
     pub(super) fn clear_chat_transient_state(&mut self) {
-        self.state.input.clear();
-        self.state.input_cursor = 0;
+        self.clear_message_draft();
         self.state.command_popup_dismissed = false;
         self.reset_completion_cycle();
     }
@@ -329,7 +329,7 @@ impl App {
     }
 
     pub(super) fn execute_current_command_suggestion(&mut self) -> bool {
-        if self.state.command_popup_dismissed {
+        if self.state.command_popup_dismissed || self.state.draft_images.len() != 0 {
             return false;
         }
         let Some(prefix) = active_command_prefix(&self.state.input) else {
@@ -349,8 +349,7 @@ impl App {
         let Some((command, _)) = matches.get(selected_idx) else {
             return false;
         };
-        self.state.input.clear();
-        self.state.input_cursor = 0;
+        self.clear_message_draft();
         self.state.command_popup_dismissed = false;
         self.reset_completion_cycle();
         self.handle_command(command);

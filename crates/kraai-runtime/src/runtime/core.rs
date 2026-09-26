@@ -29,6 +29,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
     pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
     pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(crate) image_store: Arc<kraai_persistence::FileImageStore>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
@@ -66,7 +67,7 @@ pub(crate) struct ActiveScriptTask {
 
 #[derive(Clone, Debug)]
 pub(crate) struct QueuedMessage {
-    pub(crate) message: String,
+    pub(crate) message: kraai_types::MessageContent,
     pub(crate) model_id: ModelId,
     pub(crate) provider_id: ProviderId,
 }

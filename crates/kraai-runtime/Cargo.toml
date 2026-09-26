@@ -18,6 +18,7 @@ kraai-sandbox.workspace = true
 kraai-script-protocol.workspace = true
 kraai-types.workspace = true
 
+async-trait.workspace = true
 color-eyre.workspace = true
 futures.workspace = true
 notify.workspace = true
@@ -31,8 +32,6 @@ tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 ulid.workspace = true
 
-[dev-dependencies]
-async-trait.workspace = true
 
 [features]
 typescript = [
@@ -45,3 +44,6 @@ typescript = [
 [dependencies.ts-rs]
 optional = true
 workspace = true
+
+[dev-dependencies]
+image.workspace = true

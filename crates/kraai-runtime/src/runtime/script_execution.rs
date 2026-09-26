@@ -49,21 +49,30 @@ pub(crate) struct PendingScriptApproval {
 }
 
 impl CompletedScriptExecution {
-    pub(crate) fn render_result(&self) -> Result<String> {
+    pub(crate) fn render_result(&self) -> Result<kraai_types::MessageContent> {
         let status = self.record.status.ok_or_else(|| {
             eyre!(
                 "Execution {} finished without a terminal status",
                 self.record.id
             )
         })?;
-        Ok(render_tool_call_result(ToolCallResultView {
+        let text = render_tool_call_result(ToolCallResultView {
             status,
             exit_code: self.record.exit_code,
             elapsed_millis: self.record.elapsed_millis(),
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,
             diagnostic: self.record.error.as_deref(),
-        }))
+        });
+        let mut content = kraai_types::MessageContent::from(text);
+        content.0.extend(
+            self.record
+                .images
+                .values()
+                .cloned()
+                .map(|image| kraai_types::ContentPart::Image { image }),
+        );
+        Ok(content)
     }
 }
 
@@ -151,6 +160,13 @@ impl RuntimeCore {
         plan.active_commands = request.profile.commands;
         plan.nushell_startup = request.profile.nushell_startup;
         plan.output_events = Some(output_tx);
+        plan.image_attachment_handler = Arc::new(super::images::DurableImageAttachments {
+            session_id: request.session_id.clone(),
+            agent: self.agent_manager.clone(),
+            execution_id: execution_id.clone(),
+            images: self.image_store.clone(),
+            executions: self.execution_store.clone(),
+        });
         plan.state_effect_handler = Arc::new(DurableStateEffects {
             execution_id: execution_id.clone(),
             session_id: request.session_id,

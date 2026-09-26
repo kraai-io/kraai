@@ -64,7 +64,7 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
             call_id: ToolCallId::new("completed"),
             output: String::from(
                 "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"125\">\n<stdout>hidden-output</stdout>\n</tool_call_result>",
-            ),
+            ).into(),
         },
     );
     let mut state = AppState {
@@ -128,7 +128,7 @@ fn streaming_refresh_reuses_unchanged_messages_and_rebuilds_after_resize() {
         "user",
         None,
         ConversationItem::User {
-            text: String::from("question"),
+            content: String::from("question").into(),
         },
     );
     let assistant = message(
@@ -285,7 +285,7 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
         Some("second"),
         ConversationItem::ScriptResult {
             call_id: ToolCallId::new(String::from("same-call")),
-            output: String::from("<tool_call_result status=\"completed\" />"),
+            output: String::from("<tool_call_result status=\"completed\" />").into(),
         },
     );
     let mut state = AppState {

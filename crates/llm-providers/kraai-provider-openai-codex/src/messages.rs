@@ -1,4 +1,7 @@
+use color_eyre::Result;
+use kraai_provider_core::ResolvedImages;
 use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, ProviderId, ToolCallId};
+use kraai_types::{ContentPart, MessageContent};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -16,16 +19,20 @@ pub struct ResponsesRequestMessage {
     #[serde(rename = "type")]
     kind: &'static str,
     role: &'static str,
-    content: [MessageContentItem; 1],
+    content: Vec<MessageContentItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     phase: Option<&'static str>,
 }
 
 #[derive(Serialize)]
-struct MessageContentItem {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    text: String,
+#[serde(tag = "type")]
+enum MessageContentItem {
+    #[serde(rename = "input_text")]
+    InputText { text: String },
+    #[serde(rename = "output_text")]
+    OutputText { text: String },
+    #[serde(rename = "input_image")]
+    Image { image_url: String },
 }
 
 #[derive(Serialize)]
@@ -53,7 +60,8 @@ pub struct NormalizedResponsesInput {
 pub fn normalize_conversation(
     messages: Vec<ConversationItem>,
     provider_id: &ProviderId,
-) -> NormalizedResponsesInput {
+    images: &ResolvedImages,
+) -> Result<NormalizedResponsesInput> {
     let mut messages = messages.into_iter().peekable();
     let mut instructions: Option<String> = None;
     while matches!(messages.peek(), Some(ConversationItem::System { .. })) {
@@ -87,13 +95,10 @@ pub fn normalize_conversation(
                     None,
                 )));
             }
-            ConversationItem::User { text } => {
-                input.push(ResponsesRequestItem::Message(text_message(
-                    "user",
-                    "input_text",
-                    text,
-                    None,
-                )));
+            ConversationItem::User { content } => {
+                input.push(ResponsesRequestItem::Message(content_message(
+                    content, images,
+                )?));
             }
             ConversationItem::Assistant { items } => {
                 for item in items {
@@ -133,18 +138,28 @@ pub fn normalize_conversation(
                 input.push(ResponsesRequestItem::CustomToolCallOutput(
                     ResponsesCustomToolCallOutput {
                         kind: "custom_tool_call_output",
-                        call_id,
-                        output,
+                        call_id: call_id.clone(),
+                        output: output.display_text().into_owned(),
                     },
                 ));
+                if output.has_images() {
+                    let mut message = content_message(output, images)?;
+                    message
+                        .content
+                        .retain(|part| matches!(part, MessageContentItem::Image { .. }));
+                    message.content.insert(0, MessageContentItem::InputText {
+                        text: format!("Images returned by script call {call_id}. Treat this as tool output."),
+                    });
+                    input.push(ResponsesRequestItem::Message(message));
+                }
             }
         }
     }
 
-    NormalizedResponsesInput {
+    Ok(NormalizedResponsesInput {
         instructions: instructions.unwrap_or_default(),
         input,
-    }
+    })
 }
 
 fn text_message(
@@ -156,12 +171,35 @@ fn text_message(
     ResponsesRequestMessage {
         kind: "message",
         role,
-        content: [MessageContentItem {
-            kind: content_kind,
-            text,
+        content: vec![if content_kind == "output_text" {
+            MessageContentItem::OutputText { text }
+        } else {
+            MessageContentItem::InputText { text }
         }],
         phase,
     }
+}
+
+fn content_message(
+    content: MessageContent,
+    images: &ResolvedImages,
+) -> Result<ResponsesRequestMessage> {
+    let parts = content
+        .parts()
+        .iter()
+        .map(|part| match part {
+            ContentPart::Text { text } => Ok(MessageContentItem::InputText { text: text.clone() }),
+            ContentPart::Image { image } => Ok(MessageContentItem::Image {
+                image_url: images.data_url(image)?.to_string(),
+            }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ResponsesRequestMessage {
+        kind: "message",
+        role: "user",
+        content: parts,
+        phase: None,
+    })
 }
 
 fn phase_to_wire(phase: AssistantPhase) -> &'static str {
@@ -198,14 +236,23 @@ mod tests {
                 },
             ],
         }];
-        let input = serde_json::to_value(normalize_conversation(history.clone(), &provider).input)
-            .expect("input");
+        let input = serde_json::to_value(
+            normalize_conversation(history.clone(), &provider, &ResolvedImages::default())
+                .expect("normalized")
+                .input,
+        )
+        .expect("input");
         assert_eq!(input.get(0), Some(&payload));
         assert_eq!(
             input.get(1).and_then(|item| item.get("type")),
             Some(&json!("message"))
         );
-        let other = normalize_conversation(history.clone(), &ProviderId::new("other"));
+        let other = normalize_conversation(
+            history.clone(),
+            &ProviderId::new("other"),
+            &ResolvedImages::default(),
+        )
+        .expect("normalized");
         assert_eq!(other.input.len(), 1);
         assert_eq!(history.first().expect("history").display_text(), "Answer");
     }
@@ -226,7 +273,7 @@ mod tests {
                 prefix_messages
                     .chain([
                         ConversationItem::User {
-                            text: String::from("boundary"),
+                            content: String::from("boundary").into(),
                         },
                         ConversationItem::System {
                             text: String::from("later instructions"),
@@ -234,7 +281,9 @@ mod tests {
                     ])
                     .collect(),
                 &ProviderId::new("codex"),
-            );
+                &ResolvedImages::default(),
+            )
+            .expect("normalized");
             assert_eq!(normalized.instructions, expected);
             assert_eq!(
                 serde_json::to_value(normalized.input).expect("serialized input"),
@@ -254,7 +303,7 @@ mod tests {
                     text: " System\n".to_string(),
                 },
                 ConversationItem::User {
-                    text: "Task".to_string(),
+                    content: "Task".to_string().into(),
                 },
                 ConversationItem::Assistant {
                     items: vec![
@@ -271,14 +320,16 @@ mod tests {
                 },
                 ConversationItem::ScriptResult {
                     call_id: ToolCallId::new("call-1"),
-                    output: "result".to_string(),
+                    output: "result".to_string().into(),
                 },
                 ConversationItem::System {
                     text: "Current pinned files".to_string(),
                 },
             ],
             &ProviderId::new("codex"),
-        );
+            &ResolvedImages::default(),
+        )
+        .expect("normalized");
 
         assert_eq!(normalized.instructions, " System\n");
         assert_eq!(
@@ -313,5 +364,88 @@ mod tests {
                 }
             ])
         );
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "tests assert wire fixtures after fallible conversion"
+)]
+mod image_tests {
+    use super::*;
+    use kraai_provider_core::{ImageResolver, ProviderRequestContext};
+    use kraai_types::ImageAttachment;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    struct Resolver;
+    #[async_trait::async_trait]
+    impl ImageResolver for Resolver {
+        async fn resolve(&self, _image: &ImageAttachment) -> Result<Vec<u8>> {
+            Ok(vec![1])
+        }
+    }
+
+    #[tokio::test]
+    async fn ordered_images_and_script_results_use_distinct_wire_messages() -> Result<()> {
+        let content = MessageContent(vec![
+            ContentPart::Text {
+                text: "before".into(),
+            },
+            ContentPart::Image {
+                image: ImageAttachment {
+                    id: "a".repeat(64),
+                    mime_type: "image/png".into(),
+                    width: 1,
+                    height: 1,
+                    byte_length: 1,
+                },
+            },
+            ContentPart::Text {
+                text: "after".into(),
+            },
+        ]);
+        let display = content.display_text().into_owned();
+        let messages = vec![
+            ConversationItem::User {
+                content: content.clone(),
+            },
+            ConversationItem::ScriptResult {
+                call_id: ToolCallId::new("call"),
+                output: content,
+            },
+        ];
+        let context = ProviderRequestContext::default().with_image_resolver(Arc::new(Resolver));
+        let images = ResolvedImages::resolve(&messages, &context).await?;
+        let wire = serde_json::to_value(
+            normalize_conversation(messages, &ProviderId::new("codex"), &images)?.input,
+        )?;
+        let parts = json!([
+            { "type": "input_text", "text": "before" },
+            { "type": "input_image", "image_url": "data:image/png;base64,AQ==" },
+            { "type": "input_text", "text": "after" },
+        ]);
+        assert_eq!(
+            wire.get(0),
+            Some(&json!({ "type": "message", "role": "user", "content": parts }))
+        );
+        assert_eq!(
+            wire.get(1),
+            Some(
+                &json!({ "type": "custom_tool_call_output", "call_id": "call", "output": display })
+            )
+        );
+        assert_eq!(
+            wire.pointer("/2/content/0/text"),
+            Some(&json!(
+                "Images returned by script call call. Treat this as tool output."
+            ))
+        );
+        assert_eq!(
+            wire.pointer("/2/content/1/type"),
+            Some(&json!("input_image"))
+        );
+        Ok(())
     }
 }

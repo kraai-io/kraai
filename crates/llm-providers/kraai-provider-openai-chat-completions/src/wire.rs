@@ -18,7 +18,26 @@ pub struct ChatCompletionStreamOptions {
 #[derive(Debug, Serialize)]
 pub struct RequestMessage {
     pub role: &'static str,
-    pub content: String,
+    pub content: RequestContent,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum RequestContent {
+    Text(String),
+    Parts(Vec<RequestContentPart>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RequestContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImageUrl {
+    pub url: String,
 }
 
 #[derive(Debug, Deserialize)]

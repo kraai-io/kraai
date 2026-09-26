@@ -17,7 +17,7 @@ fn request() -> ProviderRequest {
                 text: "instructions".into(),
             },
             ConversationItem::User {
-                text: "history ".repeat(1500),
+                content: ("history ".repeat(1500)).into(),
             },
             ConversationItem::System {
                 text: "pinned files".into(),
@@ -97,7 +97,7 @@ fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() -> Result<()> {
     request.messages.insert(
         2,
         ConversationItem::User {
-            text: "new history ".repeat(1000),
+            content: ("new history ".repeat(1000)).into(),
         },
     );
     request.cacheable_messages = Some(3);
@@ -110,7 +110,7 @@ fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() -> Result<()> {
     request.messages.insert(
         3,
         ConversationItem::User {
-            text: "more history ".repeat(1000),
+            content: ("more history ".repeat(1000)).into(),
         },
     );
     request.cacheable_messages = Some(4);
@@ -153,7 +153,7 @@ fn changed_history_and_tools_invalidate_the_warmed_prefix() -> Result<()> {
             request.messages.insert(
                 1,
                 ConversationItem::User {
-                    text: "compacted or edited history ".repeat(400),
+                    content: ("compacted or edited history ".repeat(400)).into(),
                 },
             );
         }
@@ -248,9 +248,12 @@ fn append(request: &mut ProviderRequest, text: String) -> Result<()> {
     let boundary = request
         .cacheable_messages
         .ok_or_else(|| eyre!("missing boundary"))?;
-    request
-        .messages
-        .insert(boundary, ConversationItem::User { text });
+    request.messages.insert(
+        boundary,
+        ConversationItem::User {
+            content: text.into(),
+        },
+    );
     request.cacheable_messages = Some(boundary + 1);
     Ok(())
 }

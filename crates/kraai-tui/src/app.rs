@@ -9,7 +9,8 @@ use kraai_runtime::{
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
 use kraai_types::{
-    AssistantItem, AssistantPhase, ChatRole, ConversationItem, MessageId, MessageStatus,
+    AssistantItem, AssistantPhase, ChatRole, ConversationItem, ImageAttachment, MessageContent,
+    MessageId, MessageStatus,
 };
 use ratatui::crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -21,10 +22,13 @@ use crate::components::TextInput;
 mod auth;
 mod chat;
 mod chat_render;
+mod clipboard_worker;
 mod composer;
 mod cost;
+mod draft_images;
 mod duration;
 mod executions;
+mod images;
 mod lifecycle;
 mod menu_search;
 mod providers_flow;

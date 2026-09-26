@@ -104,3 +104,18 @@ command_metadata! {
         },
     ];
 }
+
+command_metadata! {
+    VIEW_IMAGE;
+    id: "kraai-view-image";
+    name: "kraai-view-image";
+    description: "View a local PNG or JPEG image, or reopen a previous image from this session with --attachment <id>. Captures the image once and attaches it to this script result so you can inspect it on the next turn.";
+    signature_help: "kraai-view-image [path] [--attachment <id>] -> record<id: string, mime_type: string, width: int, height: int>";
+    examples: [
+        {
+            description: "Inspect a screenshot",
+            timeout: "10sec",
+            script: "kraai-view-image screenshot.png",
+        },
+    ];
+}

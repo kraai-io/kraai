@@ -105,6 +105,15 @@ impl ScriptExecutionStore for PausedExecutionStore {
         self.inner.read_output(id).await
     }
 
+    async fn append_image(
+        &self,
+        id: &ScriptExecutionId,
+        sequence: u64,
+        image: kraai_types::ImageAttachment,
+    ) -> Result<()> {
+        self.inner.append_image(id, sequence, image).await
+    }
+
     async fn mark_awaiting_approval(
         &self,
         id: &ScriptExecutionId,

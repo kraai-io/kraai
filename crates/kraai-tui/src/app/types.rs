@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use kraai_runtime::{
     AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{Message, MessageId, TokenUsage};
+use kraai_types::{ImageAttachment, Message, MessageContent, MessageId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
@@ -16,6 +16,11 @@ pub struct StartupOptions {
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub message: Option<String>,
+}
+
+pub(super) enum SubmissionSource {
+    Composer { queued: bool },
+    Pending,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,10 +109,17 @@ pub(super) struct OptimisticMessage {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct PendingMessage {
+    pub(super) session_id: String,
+    pub(super) message: MessageContent,
+    pub(super) local_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct PendingSubmit {
     pub(super) creation_id: u64,
     pub(super) session_id: Option<String>,
-    pub(super) message: String,
+    pub(super) message: MessageContent,
     pub(super) model_id: String,
     pub(super) provider_id: String,
 }
@@ -146,9 +158,12 @@ pub(super) enum RuntimeRequest {
     },
     SendMessage {
         session_id: String,
-        message: String,
+        message: MessageContent,
         model_id: String,
         provider_id: String,
+    },
+    PasteImage {
+        request_id: u64,
     },
     SaveSettings {
         settings: SettingsDocument,
@@ -212,7 +227,14 @@ pub(super) enum RuntimeResponse {
         profile_id: String,
         result: RuntimeResult<()>,
     },
-    SendMessage(RuntimeResult<kraai_runtime::SubmitMessageOutcome>),
+    SendMessage {
+        session_id: String,
+        result: RuntimeResult<kraai_runtime::SubmitMessageOutcome>,
+    },
+    PasteImage {
+        request_id: u64,
+        result: RuntimeResult<ImageAttachment>,
+    },
     SaveSettings(RuntimeResult<()>),
     ChatHistory {
         session_id: String,
@@ -228,7 +250,7 @@ pub(super) enum RuntimeResponse {
     },
     UndoLastUserMessage {
         session_id: String,
-        result: RuntimeResult<Option<String>>,
+        result: RuntimeResult<Option<MessageContent>>,
     },
     LoadSession {
         load_id: u64,

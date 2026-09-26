@@ -14,6 +14,12 @@ use crate::runtime::script_execution::CompletedScriptExecution;
 
 async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>>
 {
+    completed_script_with_image(false).await
+}
+
+pub(super) async fn completed_script_with_image(
+    include_image: bool,
+) -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>> {
     let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
         "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
     )]])
@@ -45,6 +51,25 @@ async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, Comple
         .execution_store
         .mark_running(&pending.request.id)
         .await?;
+    if include_image {
+        use kraai_nushell_runtime::ImageAttachmentHandler;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 3).write_to(&mut bytes, image::ImageFormat::Png)?;
+        let path = harness.data_dir.join("workspace/screenshot.png");
+        tokio::fs::write(&path, bytes.get_ref()).await?;
+        let attachments = crate::runtime::images::DurableImageAttachments {
+            execution_id: pending.request.id.clone(),
+            session_id: session_id.clone(),
+            agent: harness.runtime.agent_manager.clone(),
+            images: harness.runtime.image_store.clone(),
+            executions: harness.runtime.execution_store.clone(),
+        };
+        attachments
+            .attach(1, tokio::fs::read(&path).await?)
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+        tokio::fs::remove_file(path).await?;
+    }
     let record = harness
         .runtime
         .execution_store
@@ -52,7 +77,7 @@ async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, Comple
             &pending.request.id,
             ScriptExecutionCompletion {
                 status: ScriptExecutionStatus::Completed,
-                exit_code: Some(0),
+                exit_code: Some(if include_image { 1 } else { 0 }),
                 sandbox_denied: false,
                 error: None,
                 stdout: Vec::new(),
@@ -84,7 +109,7 @@ async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, Comple
     Ok(Some((harness, session_id, completed)))
 }
 
-async fn reopen_agent(
+pub(super) async fn reopen_agent(
     harness: &RuntimeTestHarness,
 ) -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
     let (messages, sessions, _, context) = kraai_persistence::init_at(&harness.data_dir).await?;
@@ -170,7 +195,7 @@ async fn append_later_message(
         .append_message(AppendMessageRequest {
             session_id: session_id.to_owned(),
             content: ConversationItem::User {
-                text: String::from("later turn"),
+                content: String::from("later turn").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,
@@ -226,7 +251,9 @@ async fn recovery_still_validates_previously_delivered_script_results() -> Resul
             let ConversationItem::ScriptResult { output, .. } = &mut message.content else {
                 panic!("expected script result");
             };
-            output.push_str("changed");
+            output.0.push(kraai_types::ContentPart::Text {
+                text: "changed".into(),
+            });
             messages.save(&message).await?;
         }
         reopen_agent(&harness).await?;

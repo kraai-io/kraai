@@ -186,3 +186,52 @@ async fn output_is_written_before_terminal_record_is_exposed() {
     assert_eq!(output.stderr, b"warning");
     let _ = fs::remove_dir_all(data_dir).await;
 }
+
+#[tokio::test]
+async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
+    let data_dir = test_dir("image-results");
+    let store = FileScriptExecutionStore::new(&data_dir);
+    let id = ScriptExecutionId::new(Ulid::generate());
+    store.create(execution(&id)).await.unwrap();
+    let image = kraai_types::ImageAttachment {
+        id: "a".repeat(64),
+        mime_type: "image/png".into(),
+        width: 1,
+        height: 1,
+        byte_length: 100,
+    };
+    assert!(store.append_image(&id, 1, image.clone()).await.is_err());
+    store.mark_running(&id).await.unwrap();
+    assert!(store.append_image(&id, 0, image.clone()).await.is_err());
+    store.append_image(&id, 1, image.clone()).await.unwrap();
+    store.append_image(&id, 1, image.clone()).await.unwrap();
+    let mut other = image.clone();
+    other.id = "b".repeat(64);
+    assert!(store.append_image(&id, 1, other).await.is_err());
+    store
+        .append_output(&id, ScriptOutputStream::Stdout, b"later output".to_vec())
+        .await
+        .unwrap();
+    let finished = store
+        .finish(
+            &id,
+            ScriptExecutionCompletion {
+                status: ScriptExecutionStatus::Completed,
+                exit_code: Some(1),
+                sandbox_denied: false,
+                error: Some("failed after viewing image".into()),
+                stdout: b"later output".to_vec(),
+                stderr: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(finished.images.values().collect::<Vec<_>>(), vec![&image]);
+    let reopened = FileScriptExecutionStore::new(&data_dir);
+    assert_eq!(
+        reopened.get(&id).await.unwrap().unwrap().images,
+        finished.images
+    );
+    assert!(reopened.append_image(&id, 2, image).await.is_err());
+    fs::remove_dir_all(data_dir).await.unwrap();
+}

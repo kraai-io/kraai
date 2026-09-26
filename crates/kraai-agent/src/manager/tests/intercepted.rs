@@ -117,7 +117,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
     });
     manager.conversation_store =
         ConversationStore::new(manager.message_store.clone(), store.clone());
-    let messages = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+    let messages = vec!["one".into(), "two".into(), "three".into()];
     let error = manager
         .prepare_intercepted_stream(
             &session_id,
@@ -183,7 +183,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
         .messages
         .iter()
         .filter_map(|item| match item {
-            ConversationItem::User { text } => Some(text.as_str()),
+            ConversationItem::User { content: text } => Some(text.as_text().unwrap_or("")),
             _ => None,
         })
         .collect();

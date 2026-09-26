@@ -47,7 +47,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
     let first = manager
         .prepare_start_stream(
             &session,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -65,7 +65,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
         manager
             .prepare_intercepted_stream(
                 &session,
-                vec![String::from("queued")],
+                vec!["queued".into()],
                 ModelId::new("mock-model"),
                 ProviderId::new("missing"),
             )
@@ -98,7 +98,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
     let next = manager
         .prepare_start_stream(
             &session,
-            String::from("next turn"),
+            String::from("next turn").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -157,7 +157,7 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("follow up"),
+            String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -198,7 +198,7 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("continue"),
+            String::from("continue").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -249,7 +249,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("follow up"),
+            String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -296,7 +296,7 @@ async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("follow up"),
+            String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -338,7 +338,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("follow up"),
+            String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -371,7 +371,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
     let first_request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -435,7 +435,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
     let first_request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -480,7 +480,12 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
         .set_session_profile(&session_id, String::from("plan"))
         .await?;
     manager
-        .add_message(&session_id, ChatRole::User, String::from("prior"), None)
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            String::from("prior").into(),
+            None,
+        )
         .await?;
     persist_open_effect(&mut manager, &session_id, &file_path).await?;
 
@@ -527,7 +532,7 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("review this"),
+            String::from("review this").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -571,7 +576,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )
@@ -632,7 +637,7 @@ async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_er
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("first"),
+            String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )

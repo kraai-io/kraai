@@ -1,12 +1,12 @@
 use kraai_runtime::TurnTimer;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageContent, MessageId};
 
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
@@ -32,11 +32,15 @@ pub(super) struct AppState {
     pub(super) execution_expanded: HashMap<String, bool>,
     pub(super) selected_execution: Option<String>,
     pub(super) input: String,
+    pub(super) draft_images: super::draft_images::DraftImages,
+    pub(super) next_image_request_id: u64,
+    pub(super) pending_messages: VecDeque<super::types::PendingMessage>,
+    pub(super) failed_messages: HashMap<Option<String>, Vec<MessageContent>>,
     pub(super) input_cursor: usize,
     pub(super) input_width: u16,
     pub(super) input_history: Vec<String>,
     pub(super) input_history_index: Option<usize>,
-    pub(super) input_history_draft: Option<String>,
+    pub(super) input_history_draft: Option<(String, super::draft_images::DraftImages)>,
     pub(super) ctrl_c_exit_armed: bool,
     pub(super) chat_history: BTreeMap<MessageId, Message>,
     pub(super) optimistic_messages: Vec<OptimisticMessage>,
@@ -121,6 +125,10 @@ impl Default for AppState {
             execution_expanded: HashMap::new(),
             selected_execution: None,
             input: String::new(),
+            draft_images: super::draft_images::DraftImages::default(),
+            next_image_request_id: 1,
+            pending_messages: VecDeque::new(),
+            failed_messages: HashMap::new(),
             input_cursor: 0,
             input_width: 80,
             input_history: Vec::new(),

@@ -66,6 +66,7 @@ fn listing_sorts_ids_across_interleaved_base_names_and_reasoning_variants() -> R
     let configs = BTreeMap::from([(
         ModelId::new("a-j"),
         ConfiguredModelMetadata {
+            supports_images: None,
             name: Some(String::from("First by display name")),
             max_context: Some(42),
         },
@@ -149,6 +150,7 @@ fn model_configs_override_remote_metadata() -> Result<()> {
         (
             ModelId::new("new-model"),
             ConfiguredModelMetadata {
+                supports_images: None,
                 name: Some("Custom".into()),
                 max_context: Some(200000),
             },
@@ -156,6 +158,7 @@ fn model_configs_override_remote_metadata() -> Result<()> {
         (
             ModelId::new("new-model-high"),
             ConfiguredModelMetadata {
+                supports_images: None,
                 name: Some("Thorough".into()),
                 max_context: Some(150000),
             },
@@ -206,6 +209,7 @@ fn model_lookup_matches_listing_for_visibility_variants_and_overrides() -> Resul
         (
             ModelId::new("model"),
             ConfiguredModelMetadata {
+                supports_images: None,
                 name: Some(String::from("Configured base")),
                 max_context: Some(200_000),
             },
@@ -213,6 +217,7 @@ fn model_lookup_matches_listing_for_visibility_variants_and_overrides() -> Resul
         (
             ModelId::new("model-mini-special"),
             ConfiguredModelMetadata {
+                supports_images: None,
                 name: Some(String::from("Configured effort")),
                 max_context: Some(150_000),
             },
@@ -365,5 +370,52 @@ fn malformed_metadata_fails_and_empty_discovery_has_no_fallback() -> Result<()> 
     invalid.default_reasoning_level = Some("unsupported".into());
     assert!(DiscoveredModels::new(vec![invalid]).is_err());
     assert!(DiscoveredModels::new(vec![model("new-model")?, model("new-model-low")?]).is_err());
+    Ok(())
+}
+
+#[test]
+fn image_capabilities_follow_discovery_and_explicit_variant_overrides() -> Result<()> {
+    let mut entry = model("vision")?;
+    entry.input_modalities = vec!["text".into(), "image".into()];
+    let models = DiscoveredModels::new(vec![entry, model("unknown")?])?;
+    assert!(models.supports_images(&ModelId::new("vision"), &BTreeMap::new())?);
+    assert!(
+        models
+            .get(&ModelId::new("vision-high"), &BTreeMap::new())
+            .is_some_and(|model| model.supports_images)
+    );
+    assert!(
+        models
+            .get(&ModelId::new("unknown-high"), &BTreeMap::new())
+            .is_some_and(|model| !model.supports_images)
+    );
+    let configs = BTreeMap::from([
+        (
+            ModelId::new("vision"),
+            ConfiguredModelMetadata {
+                name: None,
+                max_context: None,
+                supports_images: Some(false),
+            },
+        ),
+        (
+            ModelId::new("vision-high"),
+            ConfiguredModelMetadata {
+                name: None,
+                max_context: None,
+                supports_images: Some(true),
+            },
+        ),
+    ]);
+    assert!(
+        models
+            .get(&ModelId::new("vision-low"), &configs)
+            .is_some_and(|model| !model.supports_images)
+    );
+    assert!(
+        models
+            .get(&ModelId::new("vision-high"), &configs)
+            .is_some_and(|model| model.supports_images)
+    );
     Ok(())
 }

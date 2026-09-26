@@ -106,8 +106,8 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
             .state
             .pending_submit
             .as_ref()
-            .map(|submit| &submit.message),
-        Some(&message),
+            .and_then(|submit| submit.message.as_text()),
+        Some(message.as_str()),
     );
     assert!(harness.app.startup_message_sent);
     harness.app.maybe_send_startup_message();

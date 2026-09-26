@@ -28,6 +28,7 @@ impl MockProvider {
         Self {
             id: ProviderId::new(id),
             models: vec![Model {
+                supports_images: false,
                 id: ModelId::new("mock-model"),
                 name: "Mock Model".to_string(),
                 max_context: Some(4096),

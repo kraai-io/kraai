@@ -44,10 +44,14 @@ pub(crate) enum Command {
     },
     SendMessage {
         session_id: String,
-        message: String,
+        message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
         response: oneshot::Sender<RuntimeResult<SubmitMessageOutcome>>,
+    },
+    ImportImage {
+        bytes: Vec<u8>,
+        response: oneshot::Sender<RuntimeResult<kraai_types::ImageAttachment>>,
     },
     StartQueuedMessages {
         session_id: String,
@@ -83,7 +87,7 @@ pub(crate) enum Command {
     },
     UndoLastUserMessage {
         session_id: String,
-        response: oneshot::Sender<RuntimeResult<Option<String>>>,
+        response: oneshot::Sender<RuntimeResult<Option<kraai_types::MessageContent>>>,
     },
     GetChatHistory {
         session_id: String,

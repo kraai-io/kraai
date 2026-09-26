@@ -198,6 +198,14 @@ impl RuntimeCore {
             Command::LoadConfig => {
                 self.load_providers_config_and_emit().await?;
             }
+            Command::ImportImage { bytes, response } => {
+                let result = self
+                    .image_store
+                    .import(bytes)
+                    .await
+                    .map_err(crate::RuntimeError::internal);
+                let _ = response.send(result);
+            }
             Command::SendMessage {
                 session_id,
                 message,

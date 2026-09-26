@@ -258,7 +258,7 @@ mod tests {
             id: MessageId::new("message"),
             parent_id: None,
             content: ConversationItem::User {
-                text: String::from("hello"),
+                content: String::from("hello").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,
@@ -272,7 +272,7 @@ mod tests {
                 superseded_usage: vec![message.id.clone()],
                 previous_boundary: None,
                 replacement: vec![kraai_types::ConversationItem::User {
-                    text: "Completed work".into(),
+                    content: "Completed work".into(),
                 }],
                 model_id: kraai_types::ModelId::new("model"),
                 provider_id: kraai_types::ProviderId::new("provider"),
@@ -323,7 +323,7 @@ mod tests {
             id: MessageId::new("message"),
             parent_id: None,
             content: ConversationItem::User {
-                text: String::from("initial"),
+                content: String::from("initial").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,
@@ -331,7 +331,7 @@ mod tests {
         };
         store.save(&message).await.unwrap();
         message.content = ConversationItem::User {
-            text: String::from("replacement"),
+            content: String::from("replacement").into(),
         };
         let path = store.message_path(&message.id).unwrap();
         let expected = serde_json::to_string_pretty(&message).unwrap();
@@ -373,7 +373,7 @@ mod tests {
             id: MessageId::new("message"),
             parent_id: Some(MessageId::new("parent")),
             content: ConversationItem::User {
-                text: String::from("hello"),
+                content: String::from("hello").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,
@@ -421,7 +421,7 @@ mod tests {
             id: MessageId::new("message"),
             parent_id: None,
             content: ConversationItem::User {
-                text: String::from("hello"),
+                content: String::from("hello").into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,

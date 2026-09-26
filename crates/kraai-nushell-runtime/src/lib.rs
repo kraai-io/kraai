@@ -5,12 +5,14 @@ mod effects;
 mod execution;
 mod host;
 mod host_calls;
+mod images;
 pub mod request;
 mod transport;
 mod wire;
 
 pub use effects::{RejectStateEffects, StateEffectHandler};
 pub use execution::{RuntimeError, ScriptExecutionPlan, ScriptExecutionResult, execute};
+pub use images::{ImageAttachmentHandler, RejectImageAttachments};
 
 #[doc(hidden)]
 pub const INTERNAL_HOST_ARGUMENT: &str = "--kraai-internal-nushell-host";
@@ -50,7 +52,11 @@ pub fn run_host_process() -> i32 {
         request.event_secret,
         transport,
     ));
-    let context = kraai_command_core::CommandContext::new(host_client.clone(), host_client);
+    let context = kraai_command_core::CommandContext::new(
+        host_client.clone(),
+        host_client.clone(),
+        host_client,
+    );
     let registry = match commands::command_registry(context) {
         Ok(registry) => registry,
         Err(error) => {

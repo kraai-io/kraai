@@ -37,6 +37,7 @@ pub struct NewScriptExecution {
 pub struct ScriptExecutionRecord {
     pub id: ScriptExecutionId,
     pub result_message_id: MessageId,
+    pub images: std::collections::BTreeMap<u64, kraai_types::ImageAttachment>,
     pub session_id: String,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
@@ -90,6 +91,13 @@ pub trait ScriptExecutionStore: Send + Sync {
     async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>>;
 
     async fn read_output(&self, id: &ScriptExecutionId) -> Result<PersistedScriptOutput>;
+
+    async fn append_image(
+        &self,
+        id: &ScriptExecutionId,
+        sequence: u64,
+        image: kraai_types::ImageAttachment,
+    ) -> Result<()>;
 
     async fn mark_awaiting_approval(&self, id: &ScriptExecutionId)
     -> Result<ScriptExecutionRecord>;
@@ -200,6 +208,7 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
                 let record = ScriptExecutionRecord {
                     id: execution.id,
                     result_message_id: MessageId::new(Ulid::generate()),
+                    images: Default::default(),
                     session_id: execution.session_id,
                     source_message_id: execution.source_message_id,
                     call_id: execution.call_id,
@@ -295,6 +304,48 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         let (stdout, stderr) = tokio::try_join!(fs::read(&stdout_path), fs::read(&stderr_path))
             .with_context(|| format!("Failed to read script output from: {execution_dir:?}"))?;
         Ok(PersistedScriptOutput { stdout, stderr })
+    }
+
+    async fn append_image(
+        &self,
+        id: &ScriptExecutionId,
+        sequence: u64,
+        image: kraai_types::ImageAttachment,
+    ) -> Result<()> {
+        image.validate().map_err(|error| eyre!(error))?;
+        if sequence == 0 {
+            return Err(eyre!("Image attachment sequence must be positive"));
+        }
+        let guard = self.execution_locks.lock(id).await;
+        let mut record = self.load_record(id).await?;
+        if let Some(existing) = record.images.get(&sequence) {
+            if existing == &image {
+                return Ok(());
+            }
+            return Err(eyre!(
+                "Image attachment sequence reused with different content"
+            ));
+        }
+        require_phase(&record, &[ScriptExecutionPhase::Running])?;
+        if record.images.len() >= kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+            return Err(eyre!("Too many image attachments in one script execution"));
+        }
+        let total = record
+            .images
+            .values()
+            .map(|image| image.byte_length)
+            .try_fold(image.byte_length, u64::checked_add);
+        if total.is_none_or(|total| total > kraai_types::image::MAX_REQUEST_IMAGE_BYTES) {
+            return Err(eyre!("Image attachments exceed the execution byte limit"));
+        }
+        record.images.insert(sequence, image);
+        let execution_dir = self.execution_dir(id)?;
+        complete_commit(
+            guard,
+            async move { Self::persist_record(&execution_dir, &record).await },
+            "Image attachment commit task failed",
+        )
+        .await
     }
 
     async fn mark_awaiting_approval(

@@ -273,12 +273,10 @@ impl AgentManager {
                     return;
                 }
 
-                let content = message
-                    .content
-                    .text()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
+                let content = match &message.content {
+                    ConversationItem::User { content } => content.text_only().trim().to_string(),
+                    _ => String::new(),
+                };
                 if !content.is_empty() {
                     history.push(content);
                 }

@@ -341,7 +341,7 @@ fn append_request(
             text: content.to_string(),
         },
         ChatRole::User => ConversationItem::User {
-            text: content.to_string(),
+            content: content.to_string().into(),
         },
         ChatRole::Assistant => ConversationItem::Assistant {
             items: if content.is_empty() {
@@ -355,7 +355,7 @@ fn append_request(
         },
         ChatRole::ToolCallResult => ConversationItem::ScriptResult {
             call_id: ToolCallId::new("test-call"),
-            output: content.to_string(),
+            output: content.to_string().into(),
         },
     };
     AppendMessageRequest {

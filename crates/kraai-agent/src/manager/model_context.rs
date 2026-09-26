@@ -71,7 +71,12 @@ impl AgentManager {
             .find(|(_, message)| matches!(message.content, ConversationItem::User { .. }));
         let pinned_user = latest_user
             .filter(|(index, _)| *index < start)
-            .map(|(_, message)| message.content.clone());
+            .map(|(_, message)| match &message.content {
+                ConversationItem::User { content } => ConversationItem::User {
+                    content: content.without_images(),
+                },
+                other => other.clone(),
+            });
         let history: Vec<_> = history.into_iter().skip(start).collect();
         let superseded_usage: HashSet<_> = previous
             .iter()
@@ -119,6 +124,7 @@ impl AgentManager {
                 previous,
                 on_usage: None,
                 usage_barrier: None,
+                image_resolver: None,
             });
         Ok((request, compaction))
     }

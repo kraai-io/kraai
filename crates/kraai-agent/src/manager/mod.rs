@@ -159,3 +159,9 @@ pub struct AgentManager {
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<HashMap<MessageId, StreamingMessageState>>,
 }
+
+impl AgentManager {
+    pub fn image_store(&self) -> kraai_persistence::FileImageStore {
+        kraai_persistence::FileImageStore::new(&self.storage_root.join("data"))
+    }
+}

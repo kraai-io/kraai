@@ -6,7 +6,7 @@ impl AgentManager {
     pub async fn prepare_intercepted_stream(
         &mut self,
         session_id: &str,
-        messages: Vec<String>,
+        messages: Vec<kraai_types::MessageContent>,
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<Option<PendingStreamRequest>> {

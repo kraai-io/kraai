@@ -127,6 +127,7 @@ impl DiscoveredModels {
                 }
             });
         Model {
+            supports_images: image_support(entry, &id, configs),
             id,
             name: variant_config
                 .and_then(|config| config.name.clone())
@@ -173,4 +174,38 @@ impl DiscoveredModels {
             }),
         })
     }
+
+    pub(crate) fn supports_images(
+        &self,
+        id: &ModelId,
+        configs: &BTreeMap<ModelId, ConfiguredModelMetadata>,
+    ) -> Result<bool> {
+        let resolved = self.resolve(id)?;
+        let entry = self
+            .entries
+            .get(&resolved.api_model)
+            .ok_or_else(|| eyre!("Resolved model is missing from discovery"))?;
+        Ok(image_support(entry, id, configs))
+    }
+}
+
+fn image_support(
+    entry: &ListModelEntry,
+    id: &ModelId,
+    configs: &BTreeMap<ModelId, ConfiguredModelMetadata>,
+) -> bool {
+    configs
+        .get(id)
+        .and_then(|config| config.supports_images)
+        .or_else(|| {
+            configs
+                .get(&ModelId::new(entry.slug.clone()))
+                .and_then(|config| config.supports_images)
+        })
+        .unwrap_or_else(|| {
+            entry
+                .input_modalities
+                .iter()
+                .any(|modality| modality == "image")
+        })
 }

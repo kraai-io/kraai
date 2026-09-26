@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-command-view-image"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+kraai-command-catalog.workspace = true
+kraai-command-core.workspace = true
+kraai-types.workspace = true
+nu-engine.workspace = true
+nu-protocol.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true, features = ["fs"] }

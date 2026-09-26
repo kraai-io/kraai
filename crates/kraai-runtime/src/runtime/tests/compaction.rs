@@ -39,7 +39,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
         let previous = agent
             .prepare_start_stream(
                 &session_id,
-                "old detail ".repeat(9000),
+                "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
             )
@@ -58,7 +58,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
         let request = agent
             .prepare_start_stream(
                 &session_id,
-                String::from("continue"),
+                String::from("continue").into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
             )
@@ -93,6 +93,7 @@ impl Provider for TestSummarizer {
 
     async fn list_models(&self) -> Vec<Model> {
         vec![Model {
+            supports_images: true,
             id: ModelId::new("mock-model"),
             name: String::from("Mock model"),
             max_context: Some(32768),
@@ -114,7 +115,7 @@ impl Provider for TestSummarizer {
         _request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let is_summary = request.messages.iter().any(|message| {
-            matches!(message, ConversationItem::User { text } if text.contains("CONTEXT CHECKPOINT COMPACTION"))
+            matches!(message, ConversationItem::User { content } if content.display_text().contains("CONTEXT CHECKPOINT COMPACTION"))
         });
         if is_summary {
             assert!(request.script_tool.is_none());
@@ -159,7 +160,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
         let request = agent
             .prepare_start_stream(
                 &session_id,
-                "old detail ".repeat(9000),
+                "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
             )
@@ -213,7 +214,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
     let snapshot = harness.handle.get_session_snapshot(session_id).await?;
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.values().any(|message| {
-        matches!(&message.content, ConversationItem::User { text } if text.len() == 99000)
+        matches!(&message.content, ConversationItem::User { content: text } if text.display_text().len() == 99000)
     }));
     harness.shutdown().await;
     Ok(())
@@ -241,7 +242,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         let previous = agent
             .prepare_start_stream(
                 &session_id,
-                "old detail ".repeat(9000),
+                "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
             )
@@ -260,7 +261,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         let request = agent
             .prepare_start_stream(
                 &session_id,
-                String::from("continue"),
+                String::from("continue").into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
             )

@@ -14,6 +14,7 @@ pub(super) async fn warm_cache(
     model_id: &ModelId,
     warmup: CacheWarmup,
     recorder: AuxiliaryUsageRecorder,
+    images: std::sync::Arc<dyn kraai_provider_core::ImageResolver>,
 ) -> Result<()> {
     let session_id = recorder.session_id.clone();
     let observer = recorder
@@ -24,7 +25,8 @@ pub(super) async fn warm_cache(
     let context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
         observer.clone(),
         session_id,
-    );
+    )
+    .with_image_resolver(images);
     let result = tokio::time::timeout(warmup.timeout, async {
         let mut stream = match providers
             .generate_reply_stream(

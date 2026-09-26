@@ -40,6 +40,7 @@ impl Provider for WarmingProvider {
     }
     async fn list_models(&self) -> Vec<Model> {
         vec![Model {
+            supports_images: true,
             id: ModelId::new("mock-model"),
             name: "Mock".into(),
             max_context: None,
@@ -147,7 +148,7 @@ async fn fixture(
         .await
         .prepare_start_stream(
             &session,
-            "history ".repeat(1500),
+            "history ".repeat(1500).into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )

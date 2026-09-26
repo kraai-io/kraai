@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::effects::{RejectStateEffects, StateEffectHandler};
-use crate::host_calls::serve;
+use crate::host_calls::{HostServices, serve};
+use crate::images::{ImageAttachmentHandler, RejectImageAttachments};
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
 use crate::transport;
 use crate::wire::write_request;
@@ -32,6 +33,7 @@ pub struct ScriptExecutionPlan {
     pub private_temp: PrivateTempConfig,
     pub web_search: Arc<dyn kraai_web::WebSearch>,
     pub state_effect_handler: Arc<dyn StateEffectHandler>,
+    pub image_attachment_handler: Arc<dyn ImageAttachmentHandler>,
 }
 
 impl ScriptExecutionPlan {
@@ -59,6 +61,7 @@ impl ScriptExecutionPlan {
             private_temp: PrivateTempConfig::default(),
             web_search: Arc::new(kraai_web::ExaSearch::default()),
             state_effect_handler: Arc::new(RejectStateEffects),
+            image_attachment_handler: Arc::new(RejectImageAttachments),
         }
     }
 }
@@ -147,8 +150,11 @@ pub async fn execute(
             channel_writer,
             channel_execution_id,
             secret,
-            plan.state_effect_handler,
-            plan.web_search,
+            HostServices {
+                effects: plan.state_effect_handler,
+                web: plan.web_search,
+                images: plan.image_attachment_handler,
+            },
             &host_request.active_commands,
         )
         .await

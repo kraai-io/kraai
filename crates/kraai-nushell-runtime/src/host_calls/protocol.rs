@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+const MAX_FRAME_BYTES: usize = kraai_types::image::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 64 * 1024;
+
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +92,7 @@ pub(super) fn read_authenticated_sync<T: DeserializeOwned + Serialize>(
     secret: &[u8; 32],
 ) -> Result<(u64, T), HostProtocolError> {
     let length = read_length_sync(reader)?;
+    validate_frame_length(length)?;
     let mut bytes = vec![0_u8; length];
     reader
         .read_exact(&mut bytes)
@@ -109,6 +112,7 @@ pub(super) async fn write_authenticated_async<T: Serialize + Send + Sync>(
 ) -> Result<(), HostProtocolError> {
     let frame = signed_frame(execution_id, sequence, payload, secret)?;
     let bytes = serde_json::to_vec(&frame).map_err(HostProtocolError::Serialize)?;
+    validate_frame_length(bytes.len())?;
     let length = u32::try_from(bytes.len()).map_err(|_error| HostProtocolError::FrameTooLarge)?;
     writer
         .write_all(&length.to_be_bytes())
@@ -137,6 +141,7 @@ pub(super) async fn read_frame_async<T: DeserializeOwned>(
         .map_err(HostProtocolError::Io)?;
     let length = usize::try_from(u32::from_be_bytes(length))
         .map_err(|_error| HostProtocolError::FrameTooLarge)?;
+    validate_frame_length(length)?;
     let mut bytes = vec![0_u8; length];
     reader
         .read_exact(&mut bytes)
@@ -155,10 +160,19 @@ fn is_clean_channel_close(error: &std::io::Error) -> bool {
 }
 
 fn write_length_sync(writer: &mut impl Write, length: usize) -> Result<(), HostProtocolError> {
+    validate_frame_length(length)?;
     let length = u32::try_from(length).map_err(|_error| HostProtocolError::FrameTooLarge)?;
     writer
         .write_all(&length.to_be_bytes())
         .map_err(HostProtocolError::Io)
+}
+
+fn validate_frame_length(length: usize) -> Result<(), HostProtocolError> {
+    if length > MAX_FRAME_BYTES {
+        Err(HostProtocolError::FrameTooLarge)
+    } else {
+        Ok(())
+    }
 }
 
 fn read_length_sync(reader: &mut impl Read) -> Result<usize, HostProtocolError> {
@@ -202,7 +216,7 @@ impl std::fmt::Display for HostProtocolError {
             ),
             Self::SequenceExhausted => write!(f, "host sequence exhausted"),
             Self::FrameTooLarge => {
-                write!(f, "host frame exceeds the protocol length range")
+                write!(f, "host frame exceeds the protocol size limit")
             }
         }
     }
@@ -336,6 +350,33 @@ mod tests {
         let mut asynchronous = Vec::new();
         write_authenticated_async(&mut asynchronous, &execution_id, 1, &payload, &secret).await?;
         assert_eq!(asynchronous, expected);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "frame tests propagate setup errors and assert boundaries"
+)]
+mod limits_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn oversized_lengths_are_rejected_before_reading_the_payload()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = u32::try_from(MAX_FRAME_BYTES + 1)?.to_be_bytes();
+        let secret = rand::random::<[u8; 32]>();
+        let mut synchronous = encoded.as_slice();
+        let result = read_authenticated_sync::<serde_json::Value>(
+            &mut synchronous,
+            &ScriptExecutionId::new("image-test"),
+            &secret,
+        );
+        assert!(matches!(result, Err(HostProtocolError::FrameTooLarge)));
+        let mut asynchronous = encoded.as_slice();
+        let result = read_frame_async::<serde_json::Value>(&mut asynchronous).await;
+        assert!(matches!(result, Err(HostProtocolError::FrameTooLarge)));
         Ok(())
     }
 }

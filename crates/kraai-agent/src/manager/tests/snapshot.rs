@@ -40,7 +40,7 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
             (
                 oldest,
                 ConversationItem::User {
-                    text: "newest".into(),
+                    content: "newest".into(),
                 },
             )
         };
@@ -87,7 +87,7 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
     let request = manager
         .prepare_start_stream(
             &session_id,
-            String::from("cycle"),
+            String::from("cycle").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
         )

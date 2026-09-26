@@ -133,7 +133,7 @@ impl App {
                     pending_submit.session_id = Some(session_id.clone());
                     pending_submit
                 });
-                self.reset_chat_session(Some(session_id.clone()), "Session ready");
+                self.reset_session_state(Some(session_id.clone()), "Session ready");
                 self.state.pending_submit = pending_submit;
                 self.state.selected_profile_id = draft_profile_id.clone();
                 self.request_sync_for_session(&session_id);
@@ -144,7 +144,7 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
-                        false,
+                        types::SubmissionSource::Pending,
                     );
                 }
             }
@@ -160,7 +160,9 @@ impl App {
                 {
                     return;
                 }
-                self.state.pending_submit = None;
+                if let Some(pending) = self.state.pending_submit.take() {
+                    self.recover_session_message(pending.session_id, pending.message);
+                }
                 self.set_error(format!("Failed creating session: {err}"));
                 self.fail_ci(format!("Failed creating session: {err}"));
             }
@@ -193,22 +195,13 @@ impl App {
                     == Some(session_id.as_str())
                     && let Some(pending_submit) = self.state.pending_submit.take()
                 {
-                    if is_foreground {
-                        self.dispatch_send_message(
-                            session_id,
-                            pending_submit.message,
-                            pending_submit.model_id,
-                            pending_submit.provider_id,
-                            false,
-                        );
-                    } else {
-                        self.request(RuntimeRequest::SendMessage {
-                            session_id,
-                            message: pending_submit.message,
-                            model_id: pending_submit.model_id,
-                            provider_id: pending_submit.provider_id,
-                        });
-                    }
+                    self.dispatch_send_message(
+                        session_id,
+                        pending_submit.message,
+                        pending_submit.model_id,
+                        pending_submit.provider_id,
+                        types::SubmissionSource::Pending,
+                    );
                 }
             }
             RuntimeResponse::SetSessionProfile {
@@ -222,8 +215,9 @@ impl App {
                     .as_ref()
                     .and_then(|pending| pending.session_id.as_deref())
                     == Some(session_id.as_str())
+                    && let Some(pending) = self.state.pending_submit.take()
                 {
-                    self.state.pending_submit = None;
+                    self.recover_session_message(pending.session_id, pending.message);
                 }
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.profile_lock_stale_after_terminal_event = false;
@@ -231,17 +225,36 @@ impl App {
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
-            RuntimeResponse::SendMessage(Ok(_outcome)) => {}
-            RuntimeResponse::SendMessage(Err(err)) => {
-                if !self.state.optimistic_messages.is_empty() {
-                    self.state.optimistic_messages.remove(0);
+            RuntimeResponse::PasteImage { request_id, result } => {
+                self.finish_image_import(request_id, result);
+            }
+            RuntimeResponse::SendMessage { session_id, result } => {
+                let Some(index) = self
+                    .state
+                    .pending_messages
+                    .iter()
+                    .position(|pending| pending.session_id == session_id)
+                else {
+                    return;
+                };
+                let Some(pending) = self.state.pending_messages.remove(index) else {
+                    return;
+                };
+                if let Err(err) = result {
+                    self.recover_session_message(Some(session_id.clone()), pending.message);
+                    if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                        return;
+                    }
+                    self.state
+                        .optimistic_messages
+                        .retain(|message| Some(&message.local_id) != pending.local_id.as_ref());
                     self.update_queued_status();
                     self.invalidate_chat_cache();
+                    self.state.is_streaming = false;
+                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.set_error(format!("Send failed: {err}"));
+                    self.fail_ci(format!("Send failed: {err}"));
                 }
-                self.state.is_streaming = false;
-                self.state.profile_lock_stale_after_terminal_event = false;
-                self.set_error(format!("Send failed: {err}"));
-                self.fail_ci(format!("Send failed: {err}"));
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
                 self.state.settings_errors.clear();
@@ -395,7 +408,7 @@ impl App {
 
                 match result {
                     Ok(Some(message)) => {
-                        self.set_input_text(message);
+                        self.restore_message_draft(message);
                         self.state.status = String::from("Restored last user message");
                         self.request_sync_for_session(&session_id);
                     }
@@ -488,6 +501,7 @@ impl App {
             } => {
                 self.state.status = String::from("Session deleted");
                 self.state.sessions.retain(|s| s.id != session_id);
+                self.state.failed_messages.remove(&Some(session_id.clone()));
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.reset_chat_session(None, "Session deleted");
                 }

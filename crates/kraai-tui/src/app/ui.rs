@@ -76,7 +76,15 @@ impl Widget for &AppState {
                 self.auto_scroll,
             );
         }
-        Paragraph::new(statusline_line(self))
+        let mut statusline = statusline_line(self);
+        let image_count = self.draft_images.len();
+        if image_count > 0 {
+            statusline.spans.push(ratatui::text::Span::raw(format!(
+                " | {image_count} {} attached",
+                if image_count == 1 { "image" } else { "images" }
+            )));
+        }
+        Paragraph::new(statusline)
             .style(Style::default().fg(Color::DarkGray))
             .render(status_area, buf);
 

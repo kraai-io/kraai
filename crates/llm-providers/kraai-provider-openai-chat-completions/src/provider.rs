@@ -6,8 +6,8 @@ use futures::stream::BoxStream;
 use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
     ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
-    ProviderRequestContext, ProviderStreamEvent, build_streaming_http_client, finite_request,
-    send_with_retry, stream_sse_data,
+    ProviderRequestContext, ProviderStreamEvent, ResolvedImages, build_streaming_http_client,
+    finite_request, send_with_retry, stream_sse_data, validate_image_support,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -120,6 +120,9 @@ where
                         .and_then(|entry| entry.name.clone())
                         .unwrap_or(raw_id),
                     max_context: configured.and_then(|entry| entry.max_context),
+                    supports_images: configured
+                        .and_then(|entry| entry.supports_images)
+                        .unwrap_or(false),
                 },
             );
         }
@@ -146,9 +149,16 @@ where
                 "text-envelope provider received a native script tool definition"
             ));
         }
+        let supports_images = self
+            .model_configs
+            .get(model_id)
+            .and_then(|metadata| metadata.supports_images)
+            .unwrap_or(false);
+        validate_image_support(&provider_request.messages, model_id, supports_images)?;
+        let images = ResolvedImages::resolve(&provider_request.messages, request_context).await?;
         let request = ChatCompletionRequest {
             model: model_id.to_string(),
-            messages: normalize_chat_messages(provider_request.messages),
+            messages: normalize_chat_messages(provider_request.messages, &images)?,
             stream: true,
             stream_options: Some(ChatCompletionStreamOptions {
                 include_usage: true,
@@ -427,7 +437,7 @@ mod tests {
                 ProviderRequest {
                     cacheable_messages: None,
                     messages: vec![kraai_types::ConversationItem::User {
-                        text: String::from("hello"),
+                        content: String::from("hello").into(),
                     }],
                     script_tool: None,
                 },
@@ -482,7 +492,7 @@ mod tests {
                 ProviderRequest {
                     cacheable_messages: None,
                     messages: vec![kraai_types::ConversationItem::User {
-                        text: String::from("hello"),
+                        content: String::from("hello").into(),
                     }],
                     script_tool: None,
                 },
@@ -534,6 +544,7 @@ mod tests {
                 cached_models: RwLock::new(BTreeMap::from([(
                     ModelId::new("stale"),
                     Model {
+                        supports_images: false,
                         id: ModelId::new("stale"),
                         name: String::from("Stale model"),
                         max_context: None,
@@ -542,6 +553,7 @@ mod tests {
                 model_configs: BTreeMap::from([(
                     ModelId::new("alpha"),
                     ConfiguredModelMetadata {
+                        supports_images: None,
                         name: Some(String::from("Configured alpha")),
                         max_context: Some(4096),
                     },

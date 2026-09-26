@@ -43,20 +43,13 @@ impl App {
     }
 
     pub(super) fn insert_input_char(&mut self, ch: char) {
-        self.reset_input_history_navigation();
-        let cursor = self.state.input_cursor.min(self.state.input.len());
-        if self.state.input.is_char_boundary(cursor) {
-            self.state.input.insert(cursor, ch);
-            self.state.input_cursor = cursor + ch.len_utf8();
-        }
+        self.insert_input_text(ch.encode_utf8(&mut [0; 4]));
     }
 
     pub(super) fn insert_input_text(&mut self, text: &str) {
-        self.reset_input_history_navigation();
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if self.state.input.is_char_boundary(cursor) {
-            self.state.input.insert_str(cursor, text);
-            self.state.input_cursor = cursor + text.len();
+            self.replace_input_range(cursor..cursor, text);
         }
     }
 
@@ -75,8 +68,7 @@ impl App {
             .last()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        self.state.input.drain(prev..cursor);
-        self.state.input_cursor = prev;
+        self.replace_input_range(prev..cursor, "");
     }
 
     pub(super) fn move_input_cursor_left(&mut self) {
@@ -89,7 +81,18 @@ impl App {
             .last()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        self.state.input_cursor = prev;
+        self.state.input_cursor = self.state.draft_images.snap(prev, false);
+    }
+
+    pub(super) fn delete_input_char(&mut self) {
+        let cursor = self.state.input_cursor;
+        let next = self
+            .state
+            .input
+            .get(cursor..)
+            .and_then(|text| text.chars().next())
+            .map_or(cursor, |ch| cursor + ch.len_utf8());
+        self.replace_input_range(cursor..next, "");
     }
 
     pub(super) fn move_input_cursor_right(&mut self) {
@@ -106,7 +109,7 @@ impl App {
             .map(|(idx, _)| idx)
             .find(|idx| *idx > cursor)
             .unwrap_or(self.state.input.len());
-        self.state.input_cursor = next;
+        self.state.input_cursor = self.state.draft_images.snap(next, true);
     }
 
     pub(super) fn reset_input_history_navigation(&mut self) {
@@ -121,11 +124,13 @@ impl App {
             self.state.input_width,
         );
         if nav.can_move_up {
-            self.state.input_cursor = nav.cursor_above;
+            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_above, false);
             return;
         }
 
-        self.recall_older_input_history();
+        if !self.state.draft_images.pending() {
+            self.recall_older_input_history();
+        }
     }
 
     pub(super) fn handle_input_down(&mut self) {
@@ -135,11 +140,13 @@ impl App {
             self.state.input_width,
         );
         if nav.can_move_down {
-            self.state.input_cursor = nav.cursor_below;
+            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_below, true);
             return;
         }
 
-        self.recall_newer_input_history();
+        if !self.state.draft_images.pending() {
+            self.recall_newer_input_history();
+        }
     }
 
     fn recall_older_input_history(&mut self) {
@@ -150,7 +157,8 @@ impl App {
         let next_index = match self.state.input_history_index {
             Some(index) => (index + 1).min(self.state.input_history.len().saturating_sub(1)),
             None => {
-                self.state.input_history_draft = Some(self.state.input.clone());
+                self.state.input_history_draft =
+                    Some((self.state.input.clone(), self.state.draft_images.clone()));
                 0
             }
         };
@@ -164,7 +172,8 @@ impl App {
 
         if index == 0 {
             let draft = self.state.input_history_draft.take().unwrap_or_default();
-            self.state.input = draft;
+            self.state.input = draft.0;
+            self.state.draft_images = draft.1;
             self.state.input_cursor = self.state.input.len();
             self.state.input_history_index = None;
             return;
@@ -177,6 +186,7 @@ impl App {
         let Some(message) = self.state.input_history.get(index).cloned() else {
             return;
         };
+        self.state.draft_images = draft_images::DraftImages::default();
         self.state.input = message;
         self.state.input_cursor = self.state.input.len();
         self.state.input_history_index = Some(index);
@@ -258,6 +268,18 @@ impl App {
     }
 
     pub(super) fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
+        if self.state.current_session_id != session_id {
+            self.clear_message_draft();
+        }
+        self.reset_session_state(session_id.clone(), status);
+        if let Some(messages) = self.state.failed_messages.remove(&session_id) {
+            for message in messages.into_iter().rev() {
+                self.recover_message_draft(message);
+            }
+        }
+    }
+
+    pub(super) fn reset_session_state(&mut self, session_id: Option<String>, status: &str) {
         let has_session = session_id.is_some();
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
@@ -299,6 +321,7 @@ impl App {
     }
 
     pub(super) fn start_new_chat(&mut self) {
+        self.clear_message_draft();
         self.state.pending_submit = None;
         self.state.pending_session_load_id = None;
         self.reset_chat_session(None, "Started new chat");
@@ -320,24 +343,46 @@ impl App {
     pub(super) fn dispatch_send_message(
         &mut self,
         session_id: String,
-        message: String,
+        message: MessageContent,
         model_id: String,
         provider_id: String,
-        is_queued: bool,
+        source: types::SubmissionSource,
     ) {
+        let is_foreground = self.state.current_session_id.as_deref() == Some(session_id.as_str());
+        let message_was_draft = matches!(source, types::SubmissionSource::Composer { .. });
+        let is_queued = matches!(source, types::SubmissionSource::Composer { queued: true });
         if self.request(RuntimeRequest::SendMessage {
-            session_id,
+            session_id: session_id.clone(),
             message: message.clone(),
             model_id: model_id.clone(),
             provider_id: provider_id.clone(),
         }) == RuntimeRequestDelivery::Disconnected
         {
-            self.set_input_text(message);
+            if !message_was_draft {
+                self.recover_session_message(Some(session_id), message);
+            }
             return;
         }
 
+        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
+        let local_id = format!("local-user-{}", self.state.optimistic_seq);
+        self.state
+            .pending_messages
+            .push_back(types::PendingMessage {
+                session_id,
+                message: message.clone(),
+                local_id: is_foreground.then(|| local_id.clone()),
+            });
+        if !is_foreground {
+            return;
+        }
+        if message_was_draft {
+            self.clear_message_draft();
+        }
+        let display_text = message.display_text().into_owned();
+
         self.state.last_error = None;
-        let content_key = message.trim().to_string();
+        let content_key = display_text.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
             .state
@@ -346,10 +391,9 @@ impl App {
             .filter(|optimistic| optimistic.content_key == content_key)
             .count();
 
-        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
         self.state.optimistic_messages.push(OptimisticMessage {
-            local_id: format!("local-user-{}", self.state.optimistic_seq),
-            content: message.clone(),
+            local_id,
+            content: display_text,
             content_key,
             occurrence: visible_count + optimistic_same_count + 1,
             is_queued,
@@ -367,7 +411,9 @@ impl App {
         }
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
-        self.remember_submitted_input(&message);
+        if let Some(text) = message.as_text() {
+            self.remember_submitted_input(text);
+        }
         self.invalidate_chat_cache();
     }
 
@@ -389,7 +435,23 @@ impl App {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
         self.runtime_bridge_error.get_or_insert(message.clone());
-        self.state.pending_submit = None;
+        let mut messages: std::collections::BTreeMap<Option<String>, Vec<MessageContent>> =
+            std::collections::BTreeMap::new();
+        while let Some(pending) = self.state.pending_messages.pop_front() {
+            messages
+                .entry(Some(pending.session_id))
+                .or_default()
+                .push(pending.message);
+        }
+        if let Some(pending) = self.state.pending_submit.take() {
+            messages
+                .entry(pending.session_id)
+                .or_default()
+                .push(pending.message);
+        }
+        for (session_id, messages) in messages {
+            self.recover_session_messages(session_id, messages);
+        }
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
@@ -433,7 +495,7 @@ impl App {
         let mut seen_users: HashMap<String, usize> = HashMap::new();
         for msg in visible_chain {
             if msg.role() == ChatRole::User {
-                let key = msg.content.text().unwrap_or_default().trim().to_string();
+                let key = msg.display_text().trim().to_string();
                 *seen_users.entry(key).or_insert(0) += 1;
             }
         }
@@ -457,7 +519,7 @@ impl App {
         )
         .into_iter()
         .filter(|message| message.role() == ChatRole::User)
-        .filter(|message| message.content.text().unwrap_or_default().trim() == content_key)
+        .filter(|message| message.display_text().trim() == content_key)
         .count()
     }
 

@@ -179,7 +179,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
             call_id: ToolCallId::new("tool"),
             output: String::from(
                 "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"125\">\n<stdout>secret-output</stdout>\n</tool_call_result>",
-            ),
+            ).into(),
         },
         status: MessageStatus::Complete,
         agent_profile_id: None,
@@ -208,7 +208,10 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         .get_mut(&MessageId::new("result"))
         && let ConversationItem::ScriptResult { output, .. } = &mut message.content
     {
-        *output = output.replace("exit_code=\"0\"", "exit_code=\"1\"");
+        *output = output
+            .display_text()
+            .replace("exit_code=\"0\"", "exit_code=\"1\"")
+            .into();
     }
     harness.app.invalidate_chat_cache();
     assert!(!screen(&harness.app.state, 100, 30).contains("secret-output"));
@@ -226,7 +229,8 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
                 call_id: ToolCallId::new(id),
                 output: String::from(
                     "<tool_call_result status=\"completed\" exit_code=\"0\"></tool_call_result>",
-                ),
+                )
+                .into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,
@@ -422,7 +426,8 @@ fn execution_view_navigates_from_latest_and_preserves_draft() {
                 call_id: ToolCallId::new(id),
                 output: String::from(
                     "<tool_call_result status=\"failed\">output-detail</tool_call_result>",
-                ),
+                )
+                .into(),
             },
             status: MessageStatus::Complete,
             agent_profile_id: None,

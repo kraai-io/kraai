@@ -10,3 +10,5 @@ mod queue;
 mod script_recovery;
 mod scripts;
 mod usage_cancellation;
+
+mod images;

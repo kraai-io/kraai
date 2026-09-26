@@ -27,6 +27,7 @@ pub struct ProviderRequestContext {
     retry_observer: Option<Arc<dyn ProviderRetryObserver>>,
     prompt_cache_key: Option<String>,
     max_attempts: Option<u32>,
+    image_resolver: Option<Arc<dyn crate::ImageResolver>>,
 }
 
 impl ProviderRequestContext {
@@ -35,6 +36,7 @@ impl ProviderRequestContext {
             retry_observer,
             prompt_cache_key: None,
             max_attempts: None,
+            image_resolver: None,
         }
     }
 
@@ -43,6 +45,7 @@ impl ProviderRequestContext {
             retry_observer: Some(retry_observer),
             prompt_cache_key: None,
             max_attempts: None,
+            image_resolver: None,
         }
     }
 
@@ -51,6 +54,7 @@ impl ProviderRequestContext {
             retry_observer: None,
             prompt_cache_key: Some(prompt_cache_key),
             max_attempts: None,
+            image_resolver: None,
         }
     }
 
@@ -62,6 +66,7 @@ impl ProviderRequestContext {
             retry_observer: Some(retry_observer),
             prompt_cache_key: Some(prompt_cache_key),
             max_attempts: None,
+            image_resolver: None,
         }
     }
 
@@ -72,6 +77,15 @@ impl ProviderRequestContext {
 
     pub fn max_attempts(&self) -> Option<u32> {
         self.max_attempts
+    }
+
+    pub fn with_image_resolver(mut self, resolver: Arc<dyn crate::ImageResolver>) -> Self {
+        self.image_resolver = Some(resolver);
+        self
+    }
+
+    pub fn image_resolver(&self) -> Option<&dyn crate::ImageResolver> {
+        self.image_resolver.as_deref()
     }
 
     pub fn retry_observer(&self) -> Option<&dyn ProviderRetryObserver> {

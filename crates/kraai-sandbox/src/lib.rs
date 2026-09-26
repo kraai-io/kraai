@@ -12,7 +12,7 @@ pub use config::{LaunchPlan, PrivateTempConfig};
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 pub use process::run;
-pub use process_spawn::spawn_command;
+pub use process_spawn::{spawn_command, spawn_tokio_command};
 
 #[cfg(target_os = "linux")]
 pub use platform::linux::restrict_network_after_startup;

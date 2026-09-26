@@ -7,12 +7,14 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
+base64.workspace = true
 hmac = { workspace = true }
 kraai-command-catalog.workspace = true
 kraai-command-close-files = { workspace = true }
 kraai-command-core = { workspace = true }
 kraai-command-edit-file = { workspace = true }
 kraai-command-open-files = { workspace = true }
+kraai-command-view-image.workspace = true
 kraai-command-web-search.workspace = true
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
