@@ -196,7 +196,6 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         description: String::from("Implementation agent without sandbox restrictions"),
         permissions: SandboxPermissionSet::new([SandboxCapability::NoSandbox])
             .expect("valid unsandboxed coding capabilities"),
-        nushell_startup: NushellStartup::Inherit,
         ..coding.clone()
     };
     vec![plan, coding, coding_no_sandbox]
@@ -531,7 +530,7 @@ mod tests {
                 .capabilities()
                 .is_unsandboxed()
         );
-        assert_eq!(coding_no_sandbox.nushell_startup, NushellStartup::Inherit);
+        assert_eq!(coding_no_sandbox.nushell_startup, coding.nushell_startup);
         let mut equivalent = coding_no_sandbox.clone();
         equivalent.id.clone_from(&coding.id);
         equivalent.display_name.clone_from(&coding.display_name);
