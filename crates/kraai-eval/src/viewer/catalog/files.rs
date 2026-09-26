@@ -10,6 +10,7 @@ use super::Catalog;
 
 pub(super) const JSON_LIMIT: u64 = 8 * 1024 * 1024;
 pub(super) const LOG_LIMIT: u64 = 2 * 1024 * 1024;
+pub(super) const DIRECTORY_SCAN_LIMIT: usize = 50_000;
 
 fn checked_path(root: &Path, path: &Path) -> Result<()> {
     ensure!(
@@ -68,40 +69,51 @@ impl Catalog {
     }
 
     pub(super) fn directories(&mut self, root: &Path, depth: usize) -> Vec<PathBuf> {
-        const LIMIT: usize = 50_000;
-        let mut directories = vec![root.to_path_buf()];
-        if !root.exists() || root.symlink_metadata().is_ok_and(|meta| meta.is_symlink()) {
+        if self.scan_limit_reached
+            || !root.exists()
+            || root.symlink_metadata().is_ok_and(|meta| meta.is_symlink())
+        {
             return Vec::new();
         }
-        for _ in 0..depth {
-            let mut next = Vec::new();
-            for directory in directories {
-                let entries = match fs::read_dir(&directory) {
-                    Ok(entries) => entries,
-                    Err(error) => {
-                        self.warning(&directory, error);
-                        continue;
-                    }
-                };
-                for entry in entries {
-                    self.total_scanned_entries += 1;
-                    if self.total_scanned_entries > LIMIT {
-                        self.warning(root, "directory scan limit reached");
-                        return Vec::new();
-                    }
-                    match entry {
-                        Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_dir()) => {
-                            next.push(entry.path());
-                        }
-                        Ok(_) => {}
-                        Err(error) => self.warning(&directory, error),
-                    }
-                }
-            }
-            next.sort();
-            directories = next;
-        }
+        let mut directories = Vec::new();
+        self.collect_directories(root, depth, &mut directories);
+        directories.sort();
         directories
+    }
+
+    fn collect_directories(&mut self, root: &Path, depth: usize, directories: &mut Vec<PathBuf>) {
+        if depth == 0 {
+            directories.push(root.to_path_buf());
+            return;
+        }
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warning(root, error);
+                return;
+            }
+        };
+        for entry in entries {
+            if self.total_scanned_entries == DIRECTORY_SCAN_LIMIT {
+                self.scan_limit_reached = true;
+                self.warning(
+                    root,
+                    "directory scan limit reached; showing discovered results only",
+                );
+                return;
+            }
+            self.total_scanned_entries += 1;
+            match entry {
+                Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_dir()) => {
+                    self.collect_directories(&entry.path(), depth - 1, directories);
+                }
+                Ok(_) => {}
+                Err(error) => self.warning(root, error),
+            }
+            if self.scan_limit_reached {
+                return;
+            }
+        }
     }
 }
 

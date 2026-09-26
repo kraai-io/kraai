@@ -17,6 +17,7 @@
     reload;
     log = null;
     error = "";
+    loading = false;
     if (!name) return;
     const controller = new AbortController();
     loading = true;

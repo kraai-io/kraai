@@ -1,3 +1,4 @@
+mod scanning;
 mod trajectory;
 
 use std::fs;

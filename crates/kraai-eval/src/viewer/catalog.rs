@@ -24,6 +24,8 @@ pub struct Catalog {
     task_revisions: BTreeMap<(String, String), String>,
     #[serde(skip)]
     total_scanned_entries: usize,
+    #[serde(skip)]
+    scan_limit_reached: bool,
 }
 
 #[derive(Debug, Serialize)]
