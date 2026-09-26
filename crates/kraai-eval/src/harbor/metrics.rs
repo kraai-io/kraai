@@ -107,7 +107,7 @@ impl HarborEfficiencyMetrics {
     }
 }
 
-pub(super) fn trial_metrics(
+pub(crate) fn trial_metrics(
     result: &Value,
     proxy: Option<ProxyMetrics>,
     allow_harbor_usage: bool,
