@@ -9087,6 +9087,12 @@ rec {
         ];
         devDependencies = [
           {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            target = { target, features }: (target."unix" or false);
+            features = [ "process" "signal" "fs" ];
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -9440,10 +9446,10 @@ rec {
         ];
         devDependencies = [
           {
-            name = "rustix";
-            packageId = "rustix 1.1.4";
+            name = "nix";
+            packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
-            features = [ "fs" "net" "pipe" ];
+            features = [ "process" "signal" "fs" ];
           }
           {
             name = "tempfile";

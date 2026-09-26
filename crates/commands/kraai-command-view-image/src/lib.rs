@@ -113,12 +113,9 @@ mod tests {
     fn rejects_fifo_without_waiting_for_a_writer() -> std::io::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("image.png");
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
+        nix::unistd::mkfifo(
             &path,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            0,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )?;
         assert!(read_image(directory.path(), &path).is_err());
         Ok(())

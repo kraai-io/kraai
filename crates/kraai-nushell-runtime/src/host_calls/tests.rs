@@ -59,7 +59,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
         let recorded = images.clone();
         let execution_id = ScriptExecutionId::new("image-test");
         let server_execution_id = execution_id.clone();
-        let secret = [42; 32];
+        let secret = rand::random::<[u8; 32]>();
         let (client, server) = tokio::io::duplex(8192);
         let (reader, writer) = tokio::io::split(server);
         let task = tokio::spawn(async move {
@@ -162,7 +162,7 @@ fn maximum_image_payload_survives_authenticated_framing() -> Result<(), Box<dyn 
         base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
     };
     let execution_id = ScriptExecutionId::new("image-max");
-    let secret = [17; 32];
+    let secret = rand::random::<[u8; 32]>();
     let mut wire = Vec::new();
     write_authenticated_sync(&mut wire, &execution_id, 1, &request, &secret)?;
     let (sequence, request) =

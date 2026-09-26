@@ -213,12 +213,9 @@ mod tests {
         let attachment = store.import(fixture(ImageFormat::Png)?).await?;
         let path = store.directory.join(&attachment.id);
         tokio::fs::remove_file(&path).await?;
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
+        nix::unistd::mkfifo(
             &path,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            0,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )?;
         let read = tokio::time::timeout(std::time::Duration::from_secs(1), store.read(&attachment))
             .await?;

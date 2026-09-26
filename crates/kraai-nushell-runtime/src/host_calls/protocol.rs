@@ -366,11 +366,12 @@ mod limits_tests {
     async fn oversized_lengths_are_rejected_before_reading_the_payload()
     -> Result<(), Box<dyn std::error::Error>> {
         let encoded = u32::try_from(MAX_FRAME_BYTES + 1)?.to_be_bytes();
+        let secret = rand::random::<[u8; 32]>();
         let mut synchronous = encoded.as_slice();
         let result = read_authenticated_sync::<serde_json::Value>(
             &mut synchronous,
             &ScriptExecutionId::new("image-test"),
-            &[0; 32],
+            &secret,
         );
         assert!(matches!(result, Err(HostProtocolError::FrameTooLarge)));
         let mut asynchronous = encoded.as_slice();
