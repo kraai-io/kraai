@@ -18,6 +18,11 @@ pub struct StartupOptions {
     pub message: Option<String>,
 }
 
+pub(super) enum SubmissionSource {
+    Composer { queued: bool },
+    Pending,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiMode {
     Chat,
@@ -150,9 +155,8 @@ pub(super) enum RuntimeRequest {
         model_id: String,
         provider_id: String,
     },
-    ImportImage {
-        path: std::path::PathBuf,
-        session_id: Option<String>,
+    PasteImage {
+        request_id: u64,
     },
     SaveSettings {
         settings: SettingsDocument,
@@ -217,8 +221,8 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<()>,
     },
     SendMessage(RuntimeResult<kraai_runtime::SubmitMessageOutcome>),
-    ImportImage {
-        session_id: Option<String>,
+    PasteImage {
+        request_id: u64,
         result: RuntimeResult<ImageAttachment>,
     },
     SaveSettings(RuntimeResult<()>),

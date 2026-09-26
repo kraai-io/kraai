@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use crate::app::{App, StartupOptions};
 
 mod app;
+#[path = "app/clipboard_image.rs"]
+mod clipboard_image;
 mod components;
 
 struct TerminalSessionGuard {
@@ -90,6 +92,9 @@ impl Cli {
 }
 
 fn main() -> Result<()> {
+    if let Some(exit_code) = clipboard_image::run_internal() {
+        std::process::exit(exit_code);
+    }
     if let Some(exit_code) = kraai_runtime::run_internal_process() {
         std::process::exit(exit_code);
     }

@@ -5,18 +5,31 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            KeyCode::Char('v') if key.modifiers == KeyModifiers::CONTROL => self.paste_image(),
             KeyCode::Char('e') if control => self.state.editor_requested = true,
             KeyCode::Left if control => {
-                self.state.input_cursor = word_left(&self.state.input, self.state.input_cursor)
+                self.state.input_cursor = self
+                    .state
+                    .draft_images
+                    .snap(word_left(&self.state.input, self.state.input_cursor), false)
             }
             KeyCode::Right if control => {
-                self.state.input_cursor = word_right(&self.state.input, self.state.input_cursor)
+                self.state.input_cursor = self
+                    .state
+                    .draft_images
+                    .snap(word_right(&self.state.input, self.state.input_cursor), true)
             }
             KeyCode::Char('b') if alt => {
-                self.state.input_cursor = word_left(&self.state.input, self.state.input_cursor)
+                self.state.input_cursor = self
+                    .state
+                    .draft_images
+                    .snap(word_left(&self.state.input, self.state.input_cursor), false)
             }
             KeyCode::Char('f') if alt => {
-                self.state.input_cursor = word_right(&self.state.input, self.state.input_cursor)
+                self.state.input_cursor = self
+                    .state
+                    .draft_images
+                    .snap(word_right(&self.state.input, self.state.input_cursor), true)
             }
             KeyCode::Backspace if control || alt => self.delete_input_word(false),
             KeyCode::Char('w') if control => self.delete_input_word(false),
@@ -36,10 +49,7 @@ impl App {
         } else {
             word_left(&self.state.input, cursor)
         };
-        self.state
-            .input
-            .drain(cursor.min(boundary)..cursor.max(boundary));
-        self.state.input_cursor = cursor.min(boundary);
+        self.replace_input_range(cursor.min(boundary)..cursor.max(boundary), "");
     }
 
     pub(super) fn open_composer_editor(
@@ -69,6 +79,10 @@ impl App {
             self.state.status = String::from("Set VISUAL or EDITOR to edit the prompt externally");
             return Ok(());
         };
+        if let Err(error) = self.state.draft_images.edited(&self.state.input) {
+            self.set_error(format!("Cannot open editor: {error}"));
+            return Ok(());
+        }
         let original_input = self.state.input.clone();
         let original_session = self.state.current_session_id.clone();
         let mut file = tempfile::Builder::new()
@@ -142,7 +156,20 @@ impl App {
                 "Session or prompt changed, or Kraai is exiting"
             ));
         }
+        self.state
+            .draft_images
+            .edited(original_input)
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+        let mut images = self
+            .state
+            .draft_images
+            .edited(&text)
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+        let mut text = text;
+        let end = text.len();
+        images.renumber(&mut text, end);
         self.set_input_text(text);
+        self.state.draft_images = images;
         Ok(())
     }
 }

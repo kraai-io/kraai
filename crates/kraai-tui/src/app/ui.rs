@@ -77,7 +77,7 @@ impl Widget for &AppState {
             );
         }
         let mut statusline = statusline_line(self);
-        let image_count = self.draft_content.images().count();
+        let image_count = self.draft_images.len();
         if image_count > 0 {
             statusline.spans.push(ratatui::text::Span::raw(format!(
                 " | {image_count} {} attached",

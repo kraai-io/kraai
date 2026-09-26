@@ -3,14 +3,15 @@ use super::*;
 impl App {
     pub(super) fn handle_submit(&mut self) {
         let raw_input = self.state.input.trim().to_string();
-        if raw_input.is_empty() && !self.state.draft_content.has_images() {
+        if raw_input.is_empty() && self.state.draft_images.len() == 0 {
             return;
         }
 
         let command_popup_dismissed = self.state.command_popup_dismissed;
         self.state.command_popup_dismissed = false;
 
-        if !command_popup_dismissed
+        if self.state.draft_images.len() == 0
+            && !command_popup_dismissed
             && let Some(command) = raw_input.strip_prefix('/')
             && (is_known_slash_command(command) || command.trim() == "settings")
         {
@@ -22,11 +23,11 @@ impl App {
     }
 
     pub(super) fn submit_message(&mut self, raw_input: String) {
-        if self.state.image_import_pending {
+        if self.state.draft_images.pending() {
             self.state.status = String::from("Wait for the image attachment to finish loading");
             return;
         }
-        if raw_input.trim().is_empty() && !self.state.draft_content.has_images() {
+        if raw_input.trim().is_empty() && self.state.draft_images.len() == 0 {
             let message = String::from("Message cannot be empty");
             self.state.status = message.clone();
             self.fail_ci(message);
@@ -58,20 +59,26 @@ impl App {
         let message = self.compose_message(&raw_input);
         if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
             self.state.status =
-                String::from("Too many images. Use /image clear to clear attachments");
+                String::from("Too many images. Delete an image chip before sending");
             return;
         }
 
         if let Some(session_id) = self.state.current_session_id.clone() {
-            self.dispatch_send_message(session_id, message, model_id, provider_id, is_queueing);
+            self.dispatch_send_message(
+                session_id,
+                message,
+                model_id,
+                provider_id,
+                types::SubmissionSource::Composer {
+                    queued: is_queueing,
+                },
+            );
             return;
         }
 
         if self.state.pending_submit.is_some() {
             self.state.status =
                 String::from("Session creation already in progress; message was not sent");
-            self.state.input = raw_input;
-            self.state.input_cursor = self.state.input.len();
             return;
         }
 
@@ -82,7 +89,6 @@ impl App {
             profile_id: self.state.selected_profile_id.clone(),
         }) == RuntimeRequestDelivery::Disconnected
         {
-            self.set_input_text(raw_input);
             return;
         }
         self.state.pending_submit = Some(PendingSubmit {
@@ -104,7 +110,6 @@ impl App {
         };
 
         match command {
-            "image" => self.attach_image(command_line.strip_prefix("image").unwrap_or("").trim()),
             "quit" => {
                 self.state.exit = true;
             }
@@ -233,6 +238,7 @@ impl App {
 
     pub(super) fn set_input_text(&mut self, text: String) {
         self.reset_input_history_navigation();
+        self.state.draft_images = draft_images::DraftImages::default();
         self.state.input = text;
         self.state.input_cursor = self.state.input.len();
     }

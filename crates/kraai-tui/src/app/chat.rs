@@ -43,20 +43,13 @@ impl App {
     }
 
     pub(super) fn insert_input_char(&mut self, ch: char) {
-        self.reset_input_history_navigation();
-        let cursor = self.state.input_cursor.min(self.state.input.len());
-        if self.state.input.is_char_boundary(cursor) {
-            self.state.input.insert(cursor, ch);
-            self.state.input_cursor = cursor + ch.len_utf8();
-        }
+        self.insert_input_text(ch.encode_utf8(&mut [0; 4]));
     }
 
     pub(super) fn insert_input_text(&mut self, text: &str) {
-        self.reset_input_history_navigation();
         let cursor = self.state.input_cursor.min(self.state.input.len());
         if self.state.input.is_char_boundary(cursor) {
-            self.state.input.insert_str(cursor, text);
-            self.state.input_cursor = cursor + text.len();
+            self.replace_input_range(cursor..cursor, text);
         }
     }
 
@@ -75,8 +68,7 @@ impl App {
             .last()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        self.state.input.drain(prev..cursor);
-        self.state.input_cursor = prev;
+        self.replace_input_range(prev..cursor, "");
     }
 
     pub(super) fn move_input_cursor_left(&mut self) {
@@ -89,7 +81,18 @@ impl App {
             .last()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        self.state.input_cursor = prev;
+        self.state.input_cursor = self.state.draft_images.snap(prev, false);
+    }
+
+    pub(super) fn delete_input_char(&mut self) {
+        let cursor = self.state.input_cursor;
+        let next = self
+            .state
+            .input
+            .get(cursor..)
+            .and_then(|text| text.chars().next())
+            .map_or(cursor, |ch| cursor + ch.len_utf8());
+        self.replace_input_range(cursor..next, "");
     }
 
     pub(super) fn move_input_cursor_right(&mut self) {
@@ -106,7 +109,7 @@ impl App {
             .map(|(idx, _)| idx)
             .find(|idx| *idx > cursor)
             .unwrap_or(self.state.input.len());
-        self.state.input_cursor = next;
+        self.state.input_cursor = self.state.draft_images.snap(next, true);
     }
 
     pub(super) fn reset_input_history_navigation(&mut self) {
@@ -121,11 +124,13 @@ impl App {
             self.state.input_width,
         );
         if nav.can_move_up {
-            self.state.input_cursor = nav.cursor_above;
+            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_above, false);
             return;
         }
 
-        self.recall_older_input_history();
+        if !self.state.draft_images.pending() {
+            self.recall_older_input_history();
+        }
     }
 
     pub(super) fn handle_input_down(&mut self) {
@@ -135,11 +140,13 @@ impl App {
             self.state.input_width,
         );
         if nav.can_move_down {
-            self.state.input_cursor = nav.cursor_below;
+            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_below, true);
             return;
         }
 
-        self.recall_newer_input_history();
+        if !self.state.draft_images.pending() {
+            self.recall_newer_input_history();
+        }
     }
 
     fn recall_older_input_history(&mut self) {
@@ -150,7 +157,8 @@ impl App {
         let next_index = match self.state.input_history_index {
             Some(index) => (index + 1).min(self.state.input_history.len().saturating_sub(1)),
             None => {
-                self.state.input_history_draft = Some(self.state.input.clone());
+                self.state.input_history_draft =
+                    Some((self.state.input.clone(), self.state.draft_images.clone()));
                 0
             }
         };
@@ -164,7 +172,8 @@ impl App {
 
         if index == 0 {
             let draft = self.state.input_history_draft.take().unwrap_or_default();
-            self.state.input = draft;
+            self.state.input = draft.0;
+            self.state.draft_images = draft.1;
             self.state.input_cursor = self.state.input.len();
             self.state.input_history_index = None;
             return;
@@ -177,6 +186,7 @@ impl App {
         let Some(message) = self.state.input_history.get(index).cloned() else {
             return;
         };
+        self.state.draft_images = draft_images::DraftImages::default();
         self.state.input = message;
         self.state.input_cursor = self.state.input.len();
         self.state.input_history_index = Some(index);
@@ -258,6 +268,13 @@ impl App {
     }
 
     pub(super) fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
+        if self.state.current_session_id != session_id {
+            self.clear_message_draft();
+        }
+        self.reset_session_state(session_id, status);
+    }
+
+    pub(super) fn reset_session_state(&mut self, session_id: Option<String>, status: &str) {
         let has_session = session_id.is_some();
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
@@ -299,6 +316,7 @@ impl App {
     }
 
     pub(super) fn start_new_chat(&mut self) {
+        self.clear_message_draft();
         self.state.pending_submit = None;
         self.state.pending_session_load_id = None;
         self.reset_chat_session(None, "Started new chat");
@@ -323,9 +341,10 @@ impl App {
         message: MessageContent,
         model_id: String,
         provider_id: String,
-        is_queued: bool,
+        source: types::SubmissionSource,
     ) {
-        let message_was_draft = self.compose_message(self.state.input.trim()) == message;
+        let message_was_draft = matches!(source, types::SubmissionSource::Composer { .. });
+        let is_queued = matches!(source, types::SubmissionSource::Composer { queued: true });
         if self.request(RuntimeRequest::SendMessage {
             session_id,
             message: message.clone(),
@@ -406,7 +425,6 @@ impl App {
         while let Some(message) = self.state.pending_messages.pop_back() {
             self.recover_message_draft(message);
         }
-        self.state.image_import_pending = false;
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;

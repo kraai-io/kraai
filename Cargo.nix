@@ -746,6 +746,30 @@ rec {
             features = [ "std" ];
           }
           {
+            name = "image";
+            packageId = "image";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ((target."unix" or false) && (!(("macos" == target."os" or null) || ("android" == target."os" or null) || ("emscripten" == target."os" or null))));
+            features = [ "png" ];
+          }
+          {
+            name = "image";
+            packageId = "image";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "tiff" ];
+          }
+          {
+            name = "image";
+            packageId = "image";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."windows" or false);
+            features = [ "png" "bmp" ];
+          }
+          {
             name = "log";
             packageId = "log";
             target = { target, features }: ((target."unix" or false) && (!(("macos" == target."os" or null) || ("android" == target."os" or null) || ("emscripten" == target."os" or null))));
@@ -766,6 +790,22 @@ rec {
             usesDefaultFeatures = false;
             target = { target, features }: ("macos" == target."os" or null);
             features = [ "std" "objc2-core-graphics" "NSPasteboard" "NSPasteboardItem" "NSImage" ];
+          }
+          {
+            name = "objc2-core-foundation";
+            packageId = "objc2-core-foundation";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "std" "CFCGTypes" ];
+          }
+          {
+            name = "objc2-core-graphics";
+            packageId = "objc2-core-graphics";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "std" "CGImage" "CGColorSpace" "CGDataProvider" ];
           }
           {
             name = "objc2-foundation";
@@ -811,7 +851,7 @@ rec {
           "windows-sys" = [ "windows-sys/Win32_Graphics_Gdi" ];
           "wl-clipboard-rs" = [ "dep:wl-clipboard-rs" ];
         };
-        resolvedDefaultFeatures = [ "wayland-data-control" "wl-clipboard-rs" ];
+        resolvedDefaultFeatures = [ "core-graphics" "image" "image-data" "wayland-data-control" "windows-sys" "wl-clipboard-rs" ];
       };
       "arraydeque" = rec {
         crateName = "arraydeque";
@@ -3388,6 +3428,19 @@ rec {
         ];
 
       };
+      "crunchy" = rec {
+        crateName = "crunchy";
+        version = "0.2.4";
+        edition = "2021";
+        sha256 = "1mbp5navim2qr3x48lyvadqblcxc1dm0lqr0swrkkwy2qblvw3s6";
+        authors = [
+          "Eira Fransham <jackefransham@gmail.com>"
+        ];
+        features = {
+          "default" = [ "limit_128" ];
+        };
+        resolvedDefaultFeatures = [ "default" "limit_128" ];
+      };
       "crypto-common 0.1.7" = rec {
         crateName = "crypto-common";
         version = "0.1.7";
@@ -4779,6 +4832,18 @@ rec {
           "std" = [ "alloc" ];
         };
         resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+      };
+      "fax" = rec {
+        crateName = "fax";
+        version = "0.2.7";
+        edition = "2018";
+        sha256 = "0nmc65jjdym0f7lr4qm2q7awz1p5arm8i19wv1cmsg92cfahgwfa";
+        authors = [
+          "Sebastian K <s3bk@protonmail.com>"
+        ];
+        features = {
+          "generate_bitmaps" = [ "dep:fax_derive" ];
+        };
       };
       "fd-lock" = rec {
         crateName = "fd-lock";
@@ -6266,6 +6331,49 @@ rec {
         features = {
         };
       };
+      "half" = rec {
+        crateName = "half";
+        version = "2.7.1";
+        edition = "2021";
+        sha256 = "0jyq42xfa6sghc397mx84av7fayd4xfxr4jahsqv90lmjr5xi8kf";
+        authors = [
+          "Kathryn Long <squeeself@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "crunchy";
+            packageId = "crunchy";
+            target = { target, features }: ("spirv" == target."arch" or null);
+          }
+          {
+            name = "zerocopy";
+            packageId = "zerocopy 0.8.54";
+            usesDefaultFeatures = false;
+            features = [ "derive" "simd" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "crunchy";
+            packageId = "crunchy";
+          }
+        ];
+        features = {
+          "arbitrary" = [ "dep:arbitrary" ];
+          "bytemuck" = [ "dep:bytemuck" ];
+          "default" = [ "std" ];
+          "num-traits" = [ "dep:num-traits" ];
+          "rand_distr" = [ "dep:rand" "dep:rand_distr" ];
+          "rkyv" = [ "dep:rkyv" ];
+          "serde" = [ "dep:serde" ];
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+      };
       "hashbrown 0.15.5" = rec {
         crateName = "hashbrown";
         version = "0.15.5";
@@ -7636,6 +7744,11 @@ rec {
             optional = true;
           }
           {
+            name = "tiff";
+            packageId = "tiff";
+            optional = true;
+          }
+          {
             name = "zune-core";
             packageId = "zune-core";
             optional = true;
@@ -7665,7 +7778,7 @@ rec {
           "tiff" = [ "dep:tiff" ];
           "webp" = [ "dep:image-webp" ];
         };
-        resolvedDefaultFeatures = [ "jpeg" "png" ];
+        resolvedDefaultFeatures = [ "bmp" "jpeg" "png" "tiff" ];
       };
       "indenter" = rec {
         crateName = "indenter";
@@ -9839,6 +9952,7 @@ rec {
             name = "arboard";
             packageId = "arboard";
             usesDefaultFeatures = false;
+            features = [ "image-data" "wayland-data-control" ];
           }
           {
             name = "base64";
@@ -9858,6 +9972,12 @@ rec {
             packageId = "crossbeam-channel";
           }
           {
+            name = "image";
+            packageId = "image";
+            usesDefaultFeatures = false;
+            features = [ "jpeg" "png" ];
+          }
+          {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
           }
@@ -9874,11 +9994,6 @@ rec {
             packageId = "kraai-types";
           }
           {
-            name = "libc";
-            packageId = "libc";
-            target = { target, features }: (target."unix" or false);
-          }
-          {
             name = "ratatui";
             packageId = "ratatui";
             features = [ "all-widgets" "macros" "scrolling-regions" "serde" ];
@@ -9886,6 +10001,12 @@ rec {
           {
             name = "regex";
             packageId = "regex";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.4";
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "net" "pipe" "process" ];
           }
           {
             name = "serde_json";
@@ -14734,7 +14855,7 @@ rec {
           "objc2-metal" = [ "dep:objc2-metal" ];
           "std" = [ "alloc" ];
         };
-        resolvedDefaultFeatures = [ "CGColor" "CGColorSpace" "CGContext" "CGDirectDisplay" "CGEventTypes" "CGFont" "CGImage" "CGPath" "bitflags" "objc2" ];
+        resolvedDefaultFeatures = [ "CGColor" "CGColorSpace" "CGContext" "CGDataProvider" "CGDirectDisplay" "CGEventTypes" "CGFont" "CGImage" "CGPath" "alloc" "bitflags" "objc2" "std" ];
       };
       "objc2-core-services" = rec {
         crateName = "objc2-core-services";
@@ -16338,6 +16459,18 @@ rec {
         sha256 = "1slrnbxd0nc96sny6x50ss1sm9ci0gig0fp1w8mw0pkgm5prapfm";
         authors = [
           "Radzivon Bartoshyk"
+        ];
+
+      };
+      "quick-error" = rec {
+        crateName = "quick-error";
+        version = "2.0.1";
+        edition = "2018";
+        sha256 = "18z6r2rcjvvf8cn92xjhm2qc3jpd1ljvcbf12zv0k9p565gmb4x9";
+        libName = "quick_error";
+        authors = [
+          "Paul Colomiets <paul@colomiets.name>"
+          "Colin Kiegel <kiegel@gmx.de>"
         ];
 
       };
@@ -21257,6 +21390,56 @@ rec {
         features = {
         };
       };
+      "tiff" = rec {
+        crateName = "tiff";
+        version = "0.11.3";
+        edition = "2021";
+        sha256 = "0lmw68ic77sixk17r4rl2vsv00rqhja3yj2h9p5bcd9x6krylgxn";
+        authors = [
+          "The image-rs Developers"
+        ];
+        dependencies = [
+          {
+            name = "fax";
+            packageId = "fax";
+            rename = "fax34";
+            optional = true;
+          }
+          {
+            name = "flate2";
+            packageId = "flate2";
+            optional = true;
+          }
+          {
+            name = "half";
+            packageId = "half";
+          }
+          {
+            name = "quick-error";
+            packageId = "quick-error";
+          }
+          {
+            name = "weezl";
+            packageId = "weezl";
+            optional = true;
+          }
+          {
+            name = "zune-jpeg";
+            packageId = "zune-jpeg";
+            optional = true;
+          }
+        ];
+        features = {
+          "default" = [ "deflate" "fax" "jpeg" "lzw" ];
+          "deflate" = [ "dep:flate2" ];
+          "fax" = [ "dep:fax34" ];
+          "jpeg" = [ "dep:zune-jpeg" ];
+          "lzw" = [ "dep:weezl" ];
+          "webp" = [ "dep:image-webp" ];
+          "zstd" = [ "dep:zstd" ];
+        };
+        resolvedDefaultFeatures = [ "default" "deflate" "fax" "jpeg" "lzw" ];
+      };
       "time" = rec {
         crateName = "time";
         version = "0.3.53";
@@ -25212,6 +25395,23 @@ rec {
         ];
 
       };
+      "weezl" = rec {
+        crateName = "weezl";
+        version = "0.1.12";
+        edition = "2018";
+        crateBin = [];
+        sha256 = "122a1dhha6cib5az4ihcqlh60ns2bi6rskdv875p94lbvj6wk2m2";
+        authors = [
+          "The image-rs Developers"
+        ];
+        features = {
+          "async" = [ "futures" "std" ];
+          "default" = [ "std" ];
+          "futures" = [ "dep:futures" ];
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+      };
       "wezterm-bidi" = rec {
         crateName = "wezterm-bidi";
         version = "0.2.3";
@@ -27825,7 +28025,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_DataExchange" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_DataExchange" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -29069,7 +29269,7 @@ rec {
           "std" = [ "alloc" ];
           "zerocopy-derive" = [ "dep:zerocopy-derive" ];
         };
-        resolvedDefaultFeatures = [ "simd" ];
+        resolvedDefaultFeatures = [ "derive" "simd" "zerocopy-derive" ];
       };
       "zerocopy-derive 0.7.35" = rec {
         crateName = "zerocopy-derive";

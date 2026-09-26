@@ -133,7 +133,7 @@ impl App {
                     pending_submit.session_id = Some(session_id.clone());
                     pending_submit
                 });
-                self.reset_chat_session(Some(session_id.clone()), "Session ready");
+                self.reset_session_state(Some(session_id.clone()), "Session ready");
                 self.state.pending_submit = pending_submit;
                 self.state.selected_profile_id = draft_profile_id.clone();
                 self.request_sync_for_session(&session_id);
@@ -144,7 +144,7 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
-                        false,
+                        types::SubmissionSource::Pending,
                     );
                 }
             }
@@ -201,7 +201,7 @@ impl App {
                             pending_submit.message,
                             pending_submit.model_id,
                             pending_submit.provider_id,
-                            false,
+                            types::SubmissionSource::Pending,
                         );
                     } else {
                         let message = pending_submit.message.clone();
@@ -240,14 +240,8 @@ impl App {
                     self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
-            RuntimeResponse::ImportImage { session_id, result } => {
-                self.state.image_import_pending = false;
-                if self.state.current_session_id == session_id {
-                    self.finish_image_import(result);
-                } else {
-                    self.state.status =
-                        String::from("Image attachment discarded after session changed");
-                }
+            RuntimeResponse::PasteImage { request_id, result } => {
+                self.finish_image_import(request_id, result);
             }
             RuntimeResponse::SendMessage(Ok(_outcome)) => {
                 self.state.pending_messages.pop_front();

@@ -120,8 +120,10 @@ pub(super) fn spawn_runtime_bridge(
     runtime: RuntimeHandle,
 ) -> (Sender<RuntimeRequest>, Receiver<RuntimeResponse>) {
     let (runtime_tx, req_rx) = unbounded();
+    let (ordered_tx, ordered_rx) = unbounded();
     let (res_tx, runtime_rx) = unbounded();
-
+    let clipboard =
+        super::clipboard_worker::ClipboardWorker::spawn(runtime.clone(), res_tx.clone());
     std::thread::spawn(move || {
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -130,12 +132,29 @@ pub(super) fn spawn_runtime_bridge(
                 RuntimeError::unavailable(format!("failed to create tokio runtime: {error}"))
             });
         let bridge = RequestBridge { runtime, executor };
-        while let Ok(request) = req_rx.recv() {
+        while let Ok(request) = ordered_rx.recv() {
             let _ = res_tx.send(bridge.dispatch(request));
         }
     });
-
+    std::thread::spawn(move || route_requests(req_rx, ordered_tx, |id| clipboard.submit(id)));
     (runtime_tx, runtime_rx)
+}
+
+pub(super) fn route_requests(
+    requests: Receiver<RuntimeRequest>,
+    ordered: Sender<RuntimeRequest>,
+    mut paste_image: impl FnMut(u64),
+) {
+    while let Ok(request) = requests.recv() {
+        match request {
+            RuntimeRequest::PasteImage { request_id } => paste_image(request_id),
+            request => {
+                if ordered.send(request).is_err() {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 struct RequestBridge {
@@ -257,30 +276,11 @@ impl RequestBridge {
                 });
                 RuntimeResponse::SendMessage(result)
             }
-            RuntimeRequest::ImportImage { path, session_id } => {
-                let origin_session_id = session_id.clone();
-                let result = self.execute(|runtime| async move {
-                    let path = if path.is_relative()
-                        && let Some(session_id) = session_id
-                    {
-                        let workspace =
-                            runtime
-                                .get_workspace_state(session_id)
-                                .await?
-                                .ok_or_else(|| {
-                                    RuntimeError::unavailable("Session workspace is unavailable")
-                                })?;
-                        std::path::Path::new(&workspace.workspace_dir).join(path)
-                    } else {
-                        path
-                    };
-                    let bytes = super::images::read_image_file(&path).await?;
-                    runtime.import_image(bytes).await
-                });
-                RuntimeResponse::ImportImage {
-                    session_id: origin_session_id,
-                    result,
-                }
+            RuntimeRequest::PasteImage { request_id } => {
+                let result = Err(RuntimeError::unavailable(
+                    "Clipboard request was not routed to its worker",
+                ));
+                RuntimeResponse::PasteImage { request_id, result }
             }
             RuntimeRequest::SaveSettings { settings } => {
                 let result = self.execute(|runtime| runtime.save_settings(settings));

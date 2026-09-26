@@ -25,6 +25,19 @@ pub fn spawn_command(command: &mut Command) -> io::Result<Child> {
     }
 }
 
+pub fn spawn_tokio_command(
+    command: &mut tokio::process::Command,
+) -> io::Result<tokio::process::Child> {
+    #[cfg(windows)]
+    {
+        with_lock(|| command.spawn())
+    }
+    #[cfg(not(windows))]
+    {
+        command.spawn()
+    }
+}
+
 #[cfg(all(test, windows))]
 #[expect(
     unsafe_code,
