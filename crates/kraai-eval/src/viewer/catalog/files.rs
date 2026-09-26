@@ -104,10 +104,13 @@ impl Catalog {
             }
             self.total_scanned_entries += 1;
             match entry {
-                Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_dir()) => {
-                    self.collect_directories(&entry.path(), depth - 1, directories);
-                }
-                Ok(_) => {}
+                Ok(entry) => match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => {
+                        self.collect_directories(&entry.path(), depth - 1, directories);
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.warning(&entry.path(), error),
+                },
                 Err(error) => self.warning(root, error),
             }
             if self.scan_limit_reached {
