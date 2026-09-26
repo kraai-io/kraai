@@ -102,11 +102,11 @@ fn build_engine(
     let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
         nu_cmd_lang::create_default_context(),
     ));
-    if let Ok((config_dirs, _warnings)) =
-        nu_config::resolve_paths(&nu_config::SystemEnv, &nu_config::CliOverrides::default())
-    {
-        engine_state.config_dirs = config_dirs;
-    }
+    configure_startup_paths(
+        &mut engine_state,
+        request.nushell_startup,
+        &nu_config::SystemEnv,
+    )?;
     nu_cli::gather_parent_env_vars(&mut engine_state, &request.workspace_root);
 
     let mut working_set = StateWorkingSet::new(&engine_state);
@@ -122,6 +122,23 @@ fn build_engine(
         .merge_delta(delta)
         .map_err(|error| HostError::Initialization(error.to_string()))?;
     Ok(engine_state)
+}
+
+fn configure_startup_paths(
+    engine_state: &mut EngineState,
+    startup: NushellStartup,
+    environment: &impl nu_config::EnvAccess,
+) -> Result<(), HostError> {
+    match nu_config::resolve_paths(environment, &nu_config::CliOverrides::default()) {
+        Ok((config_dirs, _warnings)) => engine_state.config_dirs = config_dirs,
+        Err(error) if startup == NushellStartup::Inherit => {
+            return Err(HostError::Initialization(format!(
+                "unable to resolve startup paths: {error}"
+            )));
+        }
+        Err(_) => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -149,3 +166,28 @@ impl std::fmt::Display for HostError {
 }
 
 impl std::error::Error for HostError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_startup_paths_fail_inherited_startup_but_allow_clean_startup() {
+        for environment in [
+            nu_config::TestEnv::new(Default::default()),
+            nu_config::TestEnv::new(Default::default()).with_config_dir(std::env::temp_dir()),
+        ] {
+            let mut engine = EngineState::new();
+            let error = configure_startup_paths(&mut engine, NushellStartup::Inherit, &environment);
+            assert!(matches!(
+                error,
+                Err(HostError::Initialization(message))
+                    if message.contains("unable to resolve startup paths")
+            ));
+            assert!(
+                configure_startup_paths(&mut engine, NushellStartup::Clean, &environment).is_ok()
+            );
+            assert!(!engine.config_dirs.is_resolved());
+        }
+    }
+}

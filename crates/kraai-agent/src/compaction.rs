@@ -159,6 +159,9 @@ fn retained_users(messages: &[ConversationItem], token_budget: usize) -> Vec<Con
         while !text.is_char_boundary(end) {
             end -= 1;
         }
+        if end == 0 && !text.is_empty() {
+            break;
+        }
         retained.push(ConversationItem::User {
             text: text.get(..end).unwrap_or_default().to_string(),
         });

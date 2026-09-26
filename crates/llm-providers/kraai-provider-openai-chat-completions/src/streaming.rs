@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream, stream::BoxStream};
-use kraai_provider_core::{ProviderStreamEvent, SseEvent};
+use kraai_provider_core::{ProviderError, ProviderStreamEvent, SseEvent};
 use kraai_types::AssistantPhase;
 
 use crate::usage::normalize_usage;
@@ -50,9 +50,10 @@ pub(super) fn adapt_chat_completion_stream(
                     }
                     None => {
                         return Some((
-                            Err(eyre!(
-                                "Chat completions stream ended before the [DONE] marker"
-                            )),
+                            Err(ProviderError::StreamInterrupted(
+                                "Chat completions stream ended before the [DONE] marker".into(),
+                            )
+                            .into()),
                             (source, pending, true),
                         ));
                     }
@@ -190,7 +191,12 @@ mod tests {
             events.first(),
             Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
         ));
-        assert!(events.get(1).is_some_and(Result::is_err));
+        assert!(matches!(
+            events.get(1).unwrap().as_ref().unwrap_err().downcast_ref::<ProviderError>(),
+            Some(ProviderError::StreamInterrupted(detail))
+                if detail == "Chat completions stream ended before the [DONE] marker"
+        ));
+        assert_eq!(events.len(), 2);
     }
 
     #[tokio::test]

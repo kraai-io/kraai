@@ -473,11 +473,10 @@ impl OpenAiCodexProvider {
                 ));
         }
         let response = self.post_responses(&request, request_context).await;
-        if !compact
-            && let Some(error) = response
-                .as_ref()
-                .err()
-                .and_then(|error| error.downcast_ref::<InvalidEncryptedContent>())
+        if let Some(error) = response
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<InvalidEncryptedContent>())
             && request
                 .input
                 .iter()
@@ -487,6 +486,9 @@ impl OpenAiCodexProvider {
                 .write()
                 .await
                 .reject(&request.input, &error.0);
+            if compact {
+                return response;
+            }
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });

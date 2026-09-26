@@ -695,15 +695,17 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
 }
 
 #[tokio::test]
-async fn native_compaction_does_not_retry_without_rejected_reasoning() -> Result<()> {
+async fn native_compaction_records_rejected_reasoning_without_retrying_the_failed_call()
+-> Result<()> {
     let models = json!({"models": [{"slug":"astra", "display_name":"Astra", "visibility":"list", "context_window":272000, "default_reasoning_level":"low", "supported_reasoning_levels":[{"effort":"low"}]}]}).to_string();
     let (base_url, server) = server(vec![
         ("200 OK", models),
         (
             "400 Bad Request",
-            json!({"error":{"code":"invalid_encrypted_content","message":"invalid reasoning"}})
+            json!({"error":{"code":"invalid_encrypted_content","message":"invalid reasoning","param":"input[0].encrypted_content"}})
                 .to_string(),
         ),
+        ("200 OK", "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":2}}}\n\n".into()),
     ])
     .await?;
     let provider = provider(base_url)?;
@@ -722,12 +724,42 @@ async fn native_compaction_does_not_retry_without_rejected_reasoning() -> Result
         provider
             .compact_stream(
                 &ModelId::new("astra-low"),
-                request,
+                request.clone(),
                 &ProviderRequestContext::default()
             )
             .await
             .is_err()
     );
-    assert_eq!(server.await??.len(), 2);
+    provider
+        .compact_stream(
+            &ModelId::new("astra-low"),
+            request,
+            &ProviderRequestContext::default(),
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    let requests = server.await??;
+    assert_eq!(requests.len(), 3);
+    let second = requests
+        .last()
+        .and_then(|request| request.split_once("\r\n\r\n"))
+        .ok_or_else(|| eyre!("missing request body"))?
+        .1;
+    let body: Value = serde_json::from_str(second)?;
+    ensure!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(|item| item["type"] != "reasoning"))
+    );
+    ensure!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["type"] == "compaction_trigger")
+            })
+    );
     Ok(())
 }

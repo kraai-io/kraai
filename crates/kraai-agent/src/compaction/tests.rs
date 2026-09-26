@@ -493,3 +493,36 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
+
+#[test]
+fn user_retention_stops_when_no_character_fits_the_remaining_budget() {
+    let messages = vec![
+        ConversationItem::User {
+            text: "older".into(),
+        },
+        ConversationItem::User {
+            text: "😀".into()
+        },
+        ConversationItem::User { text: "abc".into() },
+    ];
+    assert_eq!(
+        retained_users(&messages, 1),
+        vec![ConversationItem::User { text: "abc".into() }]
+    );
+}
+
+#[test]
+fn empty_user_messages_do_not_discard_older_requests() {
+    let messages = vec![
+        ConversationItem::User {
+            text: "older".into(),
+        },
+        ConversationItem::User {
+            text: String::new(),
+        },
+        ConversationItem::User {
+            text: "newer".into(),
+        },
+    ];
+    assert_eq!(retained_users(&messages, 10), messages);
+}
