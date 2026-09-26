@@ -167,11 +167,30 @@ impl DraftImages {
         input.push_str(text.get(offset..).unwrap_or_default());
     }
 
-    pub(super) fn edited(&self, input: &str) -> Result<Self, &'static str> {
+    pub(super) fn editor(&self, input: &str) -> (String, Vec<String>) {
+        let mut nonce = 0u64;
+        while input.contains(&format!("; kraai:{nonce}]")) {
+            nonce += 1;
+        }
+        let labels: Vec<_> = self
+            .chips
+            .iter()
+            .map(|chip| format!("[Image #{}; kraai:{nonce}]", chip.number))
+            .collect();
+        let mut text = input.to_string();
+        for (chip, label) in self.chips.iter().zip(&labels).rev() {
+            text.replace_range(chip.range.clone(), label);
+        }
+        (text, labels)
+    }
+
+    pub(super) fn edited(&self, input: &str, labels: &[String]) -> Result<Self, &'static str> {
+        if labels.len() != self.chips.len() {
+            return Err("Image attachments changed while editing the prompt");
+        }
         let mut images = self.clone();
-        for chip in &mut images.chips {
-            let label = format!("[Image #{}]", chip.number);
-            let mut matches = input.match_indices(&label);
+        for (chip, label) in images.chips.iter_mut().zip(labels) {
+            let mut matches = input.match_indices(label);
             chip.range = matches
                 .next()
                 .map_or(0..0, |(start, _)| start..start + label.len());

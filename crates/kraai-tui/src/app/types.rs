@@ -109,6 +109,13 @@ pub(super) struct OptimisticMessage {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct PendingMessage {
+    pub(super) session_id: String,
+    pub(super) message: MessageContent,
+    pub(super) local_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct PendingSubmit {
     pub(super) creation_id: u64,
     pub(super) session_id: Option<String>,
@@ -220,7 +227,10 @@ pub(super) enum RuntimeResponse {
         profile_id: String,
         result: RuntimeResult<()>,
     },
-    SendMessage(RuntimeResult<kraai_runtime::SubmitMessageOutcome>),
+    SendMessage {
+        session_id: String,
+        result: RuntimeResult<kraai_runtime::SubmitMessageOutcome>,
+    },
     PasteImage {
         request_id: u64,
         result: RuntimeResult<ImageAttachment>,

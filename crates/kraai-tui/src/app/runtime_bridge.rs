@@ -272,9 +272,9 @@ impl RequestBridge {
                 provider_id,
             } => {
                 let result = self.execute(|runtime| {
-                    runtime.send_content(session_id, message, model_id, provider_id)
+                    runtime.send_content(session_id.clone(), message, model_id, provider_id)
                 });
-                RuntimeResponse::SendMessage(result)
+                RuntimeResponse::SendMessage { session_id, result }
             }
             RuntimeRequest::PasteImage { request_id } => {
                 let result = Err(RuntimeError::unavailable(

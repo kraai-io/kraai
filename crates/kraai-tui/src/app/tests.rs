@@ -638,3 +638,4 @@ mod auth_response;
 mod images;
 #[path = "tests/startup.rs"]
 mod startup;
+mod submission_recovery;

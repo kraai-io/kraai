@@ -271,7 +271,12 @@ impl App {
         if self.state.current_session_id != session_id {
             self.clear_message_draft();
         }
-        self.reset_session_state(session_id, status);
+        self.reset_session_state(session_id.clone(), status);
+        if let Some(messages) = self.state.failed_messages.remove(&session_id) {
+            for message in messages.into_iter().rev() {
+                self.recover_message_draft(message);
+            }
+        }
     }
 
     pub(super) fn reset_session_state(&mut self, session_id: Option<String>, status: &str) {
@@ -343,22 +348,34 @@ impl App {
         provider_id: String,
         source: types::SubmissionSource,
     ) {
+        let is_foreground = self.state.current_session_id.as_deref() == Some(session_id.as_str());
         let message_was_draft = matches!(source, types::SubmissionSource::Composer { .. });
         let is_queued = matches!(source, types::SubmissionSource::Composer { queued: true });
         if self.request(RuntimeRequest::SendMessage {
-            session_id,
+            session_id: session_id.clone(),
             message: message.clone(),
             model_id: model_id.clone(),
             provider_id: provider_id.clone(),
         }) == RuntimeRequestDelivery::Disconnected
         {
             if !message_was_draft {
-                self.recover_message_draft(message);
+                self.recover_session_message(Some(session_id), message);
             }
             return;
         }
 
-        self.state.pending_messages.push_back(message.clone());
+        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
+        let local_id = format!("local-user-{}", self.state.optimistic_seq);
+        self.state
+            .pending_messages
+            .push_back(types::PendingMessage {
+                session_id,
+                message: message.clone(),
+                local_id: is_foreground.then(|| local_id.clone()),
+            });
+        if !is_foreground {
+            return;
+        }
         if message_was_draft {
             self.clear_message_draft();
         }
@@ -374,9 +391,8 @@ impl App {
             .filter(|optimistic| optimistic.content_key == content_key)
             .count();
 
-        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
         self.state.optimistic_messages.push(OptimisticMessage {
-            local_id: format!("local-user-{}", self.state.optimistic_seq),
+            local_id,
             content: display_text,
             content_key,
             occurrence: visible_count + optimistic_same_count + 1,
@@ -419,11 +435,22 @@ impl App {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
         self.runtime_bridge_error.get_or_insert(message.clone());
-        if let Some(pending) = self.state.pending_submit.take() {
-            self.recover_message_draft(pending.message);
+        let mut messages: std::collections::BTreeMap<Option<String>, Vec<MessageContent>> =
+            std::collections::BTreeMap::new();
+        while let Some(pending) = self.state.pending_messages.pop_front() {
+            messages
+                .entry(Some(pending.session_id))
+                .or_default()
+                .push(pending.message);
         }
-        while let Some(message) = self.state.pending_messages.pop_back() {
-            self.recover_message_draft(message);
+        if let Some(pending) = self.state.pending_submit.take() {
+            messages
+                .entry(pending.session_id)
+                .or_default()
+                .push(pending.message);
+        }
+        for (session_id, messages) in messages {
+            self.recover_session_messages(session_id, messages);
         }
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();

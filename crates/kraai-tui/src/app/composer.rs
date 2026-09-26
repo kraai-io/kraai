@@ -79,17 +79,14 @@ impl App {
             self.state.status = String::from("Set VISUAL or EDITOR to edit the prompt externally");
             return Ok(());
         };
-        if let Err(error) = self.state.draft_images.edited(&self.state.input) {
-            self.set_error(format!("Cannot open editor: {error}"));
-            return Ok(());
-        }
         let original_input = self.state.input.clone();
         let original_session = self.state.current_session_id.clone();
         let mut file = tempfile::Builder::new()
             .prefix("kraai-prompt-")
             .suffix(".txt")
             .tempfile()?;
-        file.write_all(self.state.input.as_bytes())?;
+        let (editor_input, image_labels) = self.state.draft_images.editor(&original_input);
+        file.write_all(editor_input.as_bytes())?;
         file.flush()?;
         #[cfg(unix)]
         let _signal_guard = EditorSignalGuard::new()?;
@@ -125,7 +122,12 @@ impl App {
         }
         let edited = edit_result.and_then(|()| {
             let text = std::fs::read_to_string(file.path())?;
-            self.apply_edited_prompt(text, original_session.as_deref(), &original_input)
+            self.apply_edited_prompt(
+                text,
+                original_session.as_deref(),
+                &original_input,
+                &image_labels,
+            )
         });
         match edited {
             Ok(()) => {
@@ -147,6 +149,7 @@ impl App {
         text: String,
         original_session: Option<&str>,
         original_input: &str,
+        image_labels: &[String],
     ) -> Result<()> {
         if self.state.exit
             || self.state.current_session_id.as_deref() != original_session
@@ -156,14 +159,10 @@ impl App {
                 "Session or prompt changed, or Kraai is exiting"
             ));
         }
-        self.state
-            .draft_images
-            .edited(original_input)
-            .map_err(|error| color_eyre::eyre::eyre!(error))?;
         let mut images = self
             .state
             .draft_images
-            .edited(&text)
+            .edited(&text, image_labels)
             .map_err(|error| color_eyre::eyre::eyre!(error))?;
         let mut text = text;
         let end = text.len();

@@ -45,6 +45,32 @@ impl App {
         self.state.draft_images = images;
     }
 
+    pub(super) fn recover_session_message(
+        &mut self,
+        session_id: Option<String>,
+        message: MessageContent,
+    ) {
+        self.recover_session_messages(session_id, vec![message]);
+    }
+
+    pub(super) fn recover_session_messages(
+        &mut self,
+        session_id: Option<String>,
+        messages: Vec<MessageContent>,
+    ) {
+        if self.state.current_session_id == session_id {
+            for message in messages.into_iter().rev() {
+                self.recover_message_draft(message);
+            }
+        } else {
+            self.state
+                .failed_messages
+                .entry(session_id)
+                .or_default()
+                .extend(messages);
+        }
+    }
+
     pub(super) fn recover_message_draft(&mut self, message: MessageContent) {
         let (mut text, mut images) = draft_images::DraftImages::from_content(message);
         if !text.is_empty() && !self.state.input.is_empty() {

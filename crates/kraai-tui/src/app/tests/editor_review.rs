@@ -37,7 +37,7 @@ fn edited_prompt_does_not_overwrite_an_undo_received_while_editing() {
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft")
+            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
             .is_err()
     );
     assert_eq!(harness.app.state.input, "restored message");
@@ -51,7 +51,7 @@ fn edited_prompt_does_not_move_into_another_session() {
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft")
+            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
             .is_err()
     );
     assert_eq!(harness.app.state.input, "draft");
@@ -65,7 +65,7 @@ fn edited_prompt_updates_unchanged_session_and_draft() {
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft")
+            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
             .is_ok()
     );
     assert_eq!(harness.app.state.input, "edited draft");
@@ -79,7 +79,7 @@ fn edited_prompt_is_preserved_when_runtime_exit_arrives_during_editing() {
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), None, "draft")
+            .apply_edited_prompt(String::from("edited draft"), None, "draft", &[])
             .is_err()
     );
     assert_eq!(harness.app.state.input, "draft");
