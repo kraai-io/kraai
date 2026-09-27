@@ -237,9 +237,9 @@ impl<'a> ChatHistory<'a> {
     fn render_script_card(source: &str, width: usize) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
         let header_style = Style::default()
-            .fg(Color::Rgb(255, 200, 80))
+            .fg(Color::White)
             .add_modifier(Modifier::BOLD);
-        let body_style = Style::default().fg(Color::Rgb(130, 230, 255));
+        let body_style = Style::default().fg(Color::White);
 
         Self::push_wrapped_lines(&mut lines, "Nushell", width, header_style, "", "");
         Self::push_wrapped_lines(&mut lines, source, width, body_style, "  ", "  ");
@@ -364,17 +364,17 @@ impl<'a> ChatHistory<'a> {
         selected: bool,
         width: u16,
     ) -> Vec<RenderedLine> {
-        let style = Style::default().fg(if selected { Color::Cyan } else { Color::Gray });
-        let marker = if expanded { "▼" } else { "▶" };
-        let mut lines = Self::wrap_with_prefix(
-            &format!("{marker}  {summary}  [F6 executions]"),
-            width as usize,
-            "",
-            "",
-        )
-        .into_iter()
-        .map(|line| Self::single_span_line(line, style))
-        .collect::<Vec<_>>();
+        let style = Style::default().fg(if selected {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        });
+        let marker = if expanded { "⌄" } else { " " };
+        let mut lines =
+            Self::wrap_with_prefix(&format!("{marker} {summary}  [F6]"), width as usize, "", "")
+                .into_iter()
+                .map(|line| Self::single_span_line(line, style))
+                .collect::<Vec<_>>();
         if expanded {
             for (label, text) in [
                 ("Source", source.unwrap_or("Source unavailable")),
@@ -722,7 +722,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("    let value = 1;"))
+                .any(|line| line.contains("│ let value = 1;"))
         );
         assert!(rendered.iter().any(|line| line.contains("[31mred")));
         assert!(
@@ -830,7 +830,7 @@ mod tests {
         let assistant = message(
             "1",
             ChatRole::Assistant,
-            "# Title\n- **one**\n1. [two](https://example.com)\n> quote\n`inline`",
+            "# Title\n- **one**\n1. [two](https://example.com)\n> quote\n\n`inline`",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -856,8 +856,8 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| *line == " • [code: rust]"));
-        assert!(rendered.iter().any(|line| *line == "     fn main() {}"));
+        assert!(rendered.iter().any(|line| *line == " • rust"));
+        assert!(rendered.iter().any(|line| *line == "   │ fn main() {}"));
     }
 
     #[test]
@@ -873,7 +873,7 @@ mod tests {
         let has_colored_inline_code = lines[0]
             .spans
             .iter()
-            .any(|span| span.text == "beta" && span.style.fg == Some(Color::Rgb(255, 180, 90)));
+            .any(|span| span.text == "beta" && span.style.fg == Some(markdown::ACCENT));
         assert!(has_colored_inline_code);
     }
 

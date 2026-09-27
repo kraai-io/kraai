@@ -57,10 +57,6 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
     ) -> Result<()> {
         use ratatui::crossterm::{
-            event::{
-                DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-                EnableMouseCapture,
-            },
             execute,
             terminal::{
                 EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -92,22 +88,14 @@ impl App {
         let _signal_guard = EditorSignalGuard::new()?;
         disable_raw_mode()?;
         let edit_result = (|| -> Result<()> {
-            execute!(
-                io::stdout(),
-                DisableMouseCapture,
-                DisableBracketedPaste,
-                LeaveAlternateScreen
-            )?;
+            crate::terminal_features::disable()?;
+            execute!(io::stdout(), LeaveAlternateScreen)?;
             run_editor(&editor, file.path(), || {
                 self.process_events();
             })
         })();
-        let restore_result = execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            EnableBracketedPaste
-        );
+        let restore_result = execute!(io::stdout(), EnterAlternateScreen)
+            .and_then(|()| crate::terminal_features::enable());
         let raw_result = enable_raw_mode();
         if let Err(error) = restore_result
             .and(raw_result)

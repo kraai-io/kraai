@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{Clear, Paragraph, Widget, Wrap},
 };
 
 use super::super::{
@@ -128,7 +128,7 @@ pub(super) fn render_providers_menu(state: &AppState, area: Rect, buf: &mut Buff
     );
 
     Clear.render(popup_area, buf);
-    let outer = Block::default().title("/providers").borders(Borders::ALL);
+    let outer = super::menu_block().title("/providers");
     let inner = outer.inner(popup_area);
     outer.render(popup_area, buf);
 
@@ -152,7 +152,7 @@ pub(super) fn render_providers_menu(state: &AppState, area: Rect, buf: &mut Buff
     let footer_text = providers_footer_text(state);
     Paragraph::new(Line::raw(footer_text))
         .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().borders(Borders::ALL))
+        .block(super::menu_block())
         .render(footer_area, buf);
 }
 
@@ -275,7 +275,7 @@ fn render_provider_list_view(state: &AppState, area: Rect, buf: &mut Buffer) {
     }
 
     Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL))
+        .block(super::menu_block())
         .wrap(Wrap { trim: false })
         .render(area, buf);
 }
@@ -326,11 +326,7 @@ fn render_connect_provider_view(state: &AppState, area: Rect, buf: &mut Buffer) 
 
     Clear.render(modal_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title("Connect a provider")
-                .borders(Borders::ALL),
-        )
+        .block(super::menu_block().title("Connect a provider"))
         .scroll((scroll_offset as u16, 0))
         .wrap(Wrap { trim: false })
         .render(modal_area, buf);
@@ -398,7 +394,7 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             }
 
             Paragraph::new(Text::from(details_lines))
-                .block(Block::default().title("OpenAI auth").borders(Borders::ALL))
+                .block(super::menu_block().title("OpenAI auth"))
                 .wrap(Wrap { trim: false })
                 .render(details_area, buf);
         } else {
@@ -409,7 +405,7 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
                 Line::raw(format!("Configured fields: {}", provider.values.len())),
             ];
             Paragraph::new(Text::from(details_lines))
-                .block(Block::default().title("Details").borders(Borders::ALL))
+                .block(super::menu_block().title("Details"))
                 .wrap(Wrap { trim: false })
                 .render(details_area, buf);
         }
@@ -423,13 +419,31 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             match state.openai_codex_auth.state {
                 ProviderAuthState::BrowserPending => {
                     lines.push(Line::raw("Browser should open automatically."));
-                    lines.push(Line::raw("y copy sign-in URL  o open again  x cancel"));
+                    lines.push(Line::raw(
+                        if state
+                            .feedback
+                            .copied(super::super::feedback::CopyTarget::Auth)
+                        {
+                            "Copied             o open again  x cancel"
+                        } else {
+                            "y copy sign-in URL  o open again  x cancel"
+                        },
+                    ));
                 }
                 ProviderAuthState::DeviceCodePending => {
                     lines.push(Line::raw(
                         "Browser should open the verification page automatically.",
                     ));
-                    lines.push(Line::raw("y copy device code  o open again  x cancel"));
+                    lines.push(Line::raw(
+                        if state
+                            .feedback
+                            .copied(super::super::feedback::CopyTarget::Auth)
+                        {
+                            "Copied             o open again  x cancel"
+                        } else {
+                            "y copy device code  o open again  x cancel"
+                        },
+                    ));
                 }
                 ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {}
             }
@@ -441,12 +455,12 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             ]
         };
         Paragraph::new(Text::from(shortcut_lines))
-            .block(Block::default().title("Actions").borders(Borders::ALL))
+            .block(super::menu_block().title("Actions"))
             .wrap(Wrap { trim: false })
             .render(actions_area, buf);
     } else {
         Paragraph::new(Line::raw("No provider selected"))
-            .block(Block::default().borders(Borders::ALL))
+            .block(super::menu_block())
             .render(area, buf);
     }
 }
@@ -461,7 +475,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
         ProvidersAdvancedFocus::ModelFields => "Section: model fields",
     };
     Paragraph::new(Line::raw(summary))
-        .block(Block::default().borders(Borders::ALL))
+        .block(super::menu_block())
         .render(summary_area, buf);
 
     match state.providers_advanced_focus {
@@ -501,7 +515,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                 lines.push(Line::raw("No provider selected"));
             }
             Paragraph::new(Text::from(lines))
-                .block(Block::default().borders(Borders::ALL))
+                .block(super::menu_block())
                 .wrap(Wrap { trim: false })
                 .render(editor_area, buf);
         }
@@ -530,7 +544,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                 }
             }
             Paragraph::new(Text::from(lines))
-                .block(Block::default().borders(Borders::ALL))
+                .block(super::menu_block())
                 .render(editor_area, buf);
         }
         ProvidersAdvancedFocus::ModelFields => {
@@ -567,7 +581,7 @@ fn render_provider_advanced_view(state: &AppState, area: Rect, buf: &mut Buffer)
                 lines.push(Line::raw("No model selected"));
             }
             Paragraph::new(Text::from(lines))
-                .block(Block::default().borders(Borders::ALL))
+                .block(super::menu_block())
                 .wrap(Wrap { trim: false })
                 .render(editor_area, buf);
         }

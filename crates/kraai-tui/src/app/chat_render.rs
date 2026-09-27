@@ -84,16 +84,52 @@ impl AppState {
         let mut total_lines: u16 = 0;
         let mut execution_offsets = HashMap::new();
 
-        for msg in &rendered_messages {
-            if self.mode == UiMode::Executions
-                && !matches!(msg.content, ConversationItem::ScriptResult { .. })
-            {
+        let projected: Vec<_> = rendered_messages
+            .iter()
+            .filter(|msg| {
+                self.mode != UiMode::Executions
+                    || matches!(msg.content, ConversationItem::ScriptResult { .. })
+            })
+            .map(|msg| without_completed_calls(msg, &completed))
+            .filter(|msg| {
+                !matches!(&msg.content, ConversationItem::Assistant { .. })
+                    || !msg.display_text().trim().is_empty()
+            })
+            .collect();
+        for group in projected.chunk_by(|left, right| {
+            self.mode != UiMode::Executions
+                && matches!(left.content, ConversationItem::ScriptResult { .. })
+                && matches!(right.content, ConversationItem::ScriptResult { .. })
+        }) {
+            let Some(msg) = group.first() else {
                 continue;
-            }
-            let msg = without_completed_calls(msg, &completed);
+            };
             let key = msg.id.as_str().to_string();
-            let mut fingerprint = message_fingerprint(&msg);
-            let lines = if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
+            let mut fingerprint;
+            let grouped = self.mode != UiMode::Executions
+                && matches!(msg.content, ConversationItem::ScriptResult { .. });
+            let lines = if grouped {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                "execution-group".hash(&mut hasher);
+                for message in group {
+                    message_fingerprint(message).hash(&mut hasher);
+                }
+                fingerprint = hasher.finish();
+                match prior_entries.remove(&key) {
+                    Some(entry) if entry.fingerprint == fingerprint => entry.lines,
+                    _ => Arc::new(ChatHistory::build_execution_lines(
+                        &super::executions::group_summary(
+                            group.iter().map(|message| message.display_text()),
+                        ),
+                        None,
+                        "",
+                        false,
+                        false,
+                        width,
+                    )),
+                }
+            } else if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
+                fingerprint = message_fingerprint(msg);
                 let output = output.display_text();
                 let expanded = self
                     .execution_expanded
@@ -120,13 +156,11 @@ impl AppState {
                         width,
                     )),
                 }
-            } else if matches!(&msg.content, ConversationItem::Assistant { items } if items.is_empty())
-            {
-                continue;
             } else {
+                fingerprint = message_fingerprint(msg);
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_message_lines(&msg, width)),
+                    _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
                 }
             };
 

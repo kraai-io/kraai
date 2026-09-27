@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Clear, Paragraph, Widget},
 };
 
 use super::super::AppState;
@@ -51,11 +51,7 @@ pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title(format!("/model  Filter: {}", state.menu_search))
-                .borders(Borders::ALL),
-        )
+        .block(super::menu_block().title(format!("/model  Filter: {}", state.menu_search)))
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
@@ -125,7 +121,7 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(Block::default().title("/agent").borders(Borders::ALL))
+        .block(super::menu_block().title("/agent"))
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
@@ -207,11 +203,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title(format!("/sessions  Filter: {}", state.menu_search))
-                .borders(Borders::ALL),
-        )
+        .block(super::menu_block().title(format!("/sessions  Filter: {}", state.menu_search)))
         .scroll((scroll_offset as u16, 0))
         .render(popup_area, buf);
 }
@@ -226,6 +218,7 @@ pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         Line::raw("PgUp/PgDn    Scroll     Home/End     First/last"),
         Line::raw("Ctrl+V       Paste image"),
         Line::raw("F6           Executions"),
+        Line::raw("F8           Error details"),
         Line::raw("Esc          Close / cancel"),
     ];
     let popup_area = centered_rect(
@@ -241,10 +234,6 @@ pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
         .scroll((scroll, 0))
-        .block(
-            Block::default()
-                .title("Help · ↑/↓ scroll · Esc close")
-                .borders(Borders::ALL),
-        )
+        .block(super::menu_block().title("Help · ↑/↓ scroll · Esc close"))
         .render(popup_area, buf);
 }

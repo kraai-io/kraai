@@ -25,6 +25,7 @@ kraai-runtime = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
 ratatui = { workspace = true }
+markdown.workspace = true
 regex = { workspace = true }
 serde_json = { workspace = true }
 signal-hook = { workspace = true }

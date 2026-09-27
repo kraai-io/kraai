@@ -107,11 +107,16 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
         .insert(String::from("completed"), true);
     state.chat_epoch += 1;
     state.refresh_chat_render_cache(100);
+    assert_eq!(rendered_lines(&state), collapsed);
+    state.mode = UiMode::Executions;
+    state.chat_epoch += 1;
+    state.refresh_chat_render_cache(100);
     let expanded = rendered_lines(&state);
     assert!(expanded.iter().any(|line| line.contains("hidden-source")));
     assert!(expanded.iter().any(|line| line.contains("hidden-output")));
-    assert!(expanded.iter().any(|line| line.contains("pending-source")));
+    assert!(!expanded.iter().any(|line| line.contains("pending-source")));
 
+    state.mode = UiMode::Chat;
     state.execution_expanded.clear();
     state.chat_epoch += 1;
     state.refresh_chat_render_cache(100);
@@ -294,6 +299,7 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
             .map(|message| (message.id.clone(), message))
             .collect(),
         current_tip_id: Some(String::from("result")),
+        mode: UiMode::Executions,
         execution_expanded: HashMap::from([(String::from("same-call"), true)]),
         ..AppState::default()
     };
@@ -328,4 +334,73 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
     state.chat_epoch += 1;
     state.refresh_chat_render_cache(100);
     assert_eq!(rendered_lines(&state), updated);
+}
+
+#[test]
+fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
+    let result = |id: &str, parent: Option<&str>, exit: u8| {
+        message(id, parent, ConversationItem::ScriptResult {
+        call_id: ToolCallId::new(id),
+        output: format!("<tool_call_result status=\"completed\" exit_code=\"{exit}\" elapsed_ms=\"300\">output-{id}</tool_call_result>").into(),
+    })
+    };
+    let mut state = AppState {
+        chat_history: [
+            result("a", None, 0),
+            message(
+                "call",
+                Some("a"),
+                ConversationItem::Assistant {
+                    items: vec![call_item("b", "source-b")],
+                },
+            ),
+            result("b", Some("call"), 1),
+            message(
+                "text",
+                Some("b"),
+                ConversationItem::Assistant {
+                    items: vec![text_item("Next step")],
+                },
+            ),
+            result("c", Some("text"), 0),
+        ]
+        .into_iter()
+        .map(|message| (message.id.clone(), message))
+        .collect(),
+        current_tip_id: Some(String::from("c")),
+        ..AppState::default()
+    };
+    state.refresh_chat_render_cache(100);
+    let lines = rendered_lines(&state);
+    assert_eq!(lines.iter().filter(|line| line.contains("[F6]")).count(), 2);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("2 scripts · 1 failed · 0.6s"))
+    );
+    assert!(lines.iter().any(|line| line.contains("1 script · 0.3s")));
+    assert!(lines.iter().any(|line| line.contains("Next step")));
+    state
+        .chat_history
+        .insert(MessageId::new("b"), result("b", Some("call"), 0));
+    state.chat_epoch += 1;
+    state.refresh_chat_render_cache(100);
+    assert!(
+        rendered_lines(&state)
+            .iter()
+            .any(|line| line.contains("2 scripts · 0.6s"))
+    );
+    assert!(
+        !rendered_lines(&state)
+            .iter()
+            .any(|line| line.contains("failed"))
+    );
+    state.mode = UiMode::Executions;
+    state.chat_epoch += 1;
+    state.execution_expanded.insert(String::from("b"), true);
+    state.refresh_chat_render_cache(100);
+    let lines = rendered_lines(&state);
+    assert_eq!(lines.iter().filter(|line| line.contains("[F6]")).count(), 3);
+    assert!(lines.iter().any(|line| line.contains("source-b")));
+    assert!(lines.iter().any(|line| line.contains("output-b")));
 }

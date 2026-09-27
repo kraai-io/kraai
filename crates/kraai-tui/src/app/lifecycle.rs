@@ -95,6 +95,7 @@ impl App {
     }
 
     pub fn run(&mut self, mut terminal: ratatui::DefaultTerminal) -> Result<()> {
+        self.state.palette.request();
         let mut needs_redraw = true;
         while !self.state.exit {
             needs_redraw |= self.process_events();
@@ -103,6 +104,10 @@ impl App {
             }
             let event_timeout = if needs_redraw || self.startup_sync != StartupSync::Complete {
                 std::time::Duration::from_millis(0)
+            } else if self.state.feedback.completion_until.is_some()
+                && self.state.palette.muted.is_some()
+            {
+                Duration::from_millis(33)
             } else if self.state.runtime_is_active() {
                 STATUSLINE_ANIMATION_INTERVAL
             } else {
@@ -124,7 +129,8 @@ impl App {
                 continue;
             }
 
-            if self.state.mode == UiMode::Executions
+            if (self.state.error_open && self.state.last_error.is_some())
+                || self.state.mode == UiMode::Executions
                 || (self.state.mode == UiMode::Chat
                     && self.state.script_phase == ScriptPhase::AwaitingApproval)
             {
@@ -150,7 +156,8 @@ impl App {
                     let (cursor_x, cursor_y) =
                         TextInput::new(&self.state.input, self.state.input_cursor)
                             .get_cursor_position(input_area);
-                    if self.state.script_phase != ScriptPhase::AwaitingApproval
+                    if !(self.state.error_open && self.state.last_error.is_some())
+                        && self.state.script_phase != ScriptPhase::AwaitingApproval
                         && input_area.width > 0
                         && input_area.height > 0
                     {
@@ -330,22 +337,25 @@ impl App {
     }
 
     pub(super) fn advance_statusline_animation(&mut self, now: Instant) -> bool {
+        let expired = self.state.feedback.expire(now);
+        let expired =
+            expired | (self.state.palette.muted.is_some() && self.state.feedback.advance_fade(now));
         if !self.state.runtime_is_active() {
             self.last_statusline_animation_tick = None;
             if self.state.statusline_animation_frame != 0 {
                 self.state.statusline_animation_frame = 0;
                 return true;
             }
-            return false;
+            return expired;
         }
 
         let Some(last_tick) = self.last_statusline_animation_tick else {
             self.last_statusline_animation_tick = Some(now);
-            return false;
+            return expired;
         };
 
         if now.duration_since(last_tick) < STATUSLINE_ANIMATION_INTERVAL {
-            return false;
+            return expired;
         }
 
         self.last_statusline_animation_tick = Some(now);

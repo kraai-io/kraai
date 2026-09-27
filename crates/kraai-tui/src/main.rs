@@ -3,11 +3,6 @@
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use color_eyre::eyre::Result;
 use kraai_runtime::RuntimeBuilder;
-use ratatui::crossterm::{
-    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
-    execute,
-};
-use std::io::stdout;
 use std::path::PathBuf;
 
 use crate::app::{App, StartupOptions};
@@ -16,6 +11,7 @@ mod app;
 #[path = "app/clipboard_image.rs"]
 mod clipboard_image;
 mod components;
+mod terminal_features;
 
 struct TerminalSessionGuard {
     active: bool,
@@ -30,7 +26,7 @@ impl TerminalSessionGuard {
         if !self.active {
             return Ok(());
         }
-        let feature_result = execute!(stdout(), DisableMouseCapture, DisableBracketedPaste);
+        let feature_result = terminal_features::disable();
         ratatui::restore();
         self.active = false;
         feature_result
@@ -128,7 +124,7 @@ fn main() -> Result<()> {
 
     let terminal = ratatui::init();
     let mut terminal_guard = TerminalSessionGuard::new();
-    execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+    terminal_features::enable()?;
 
     let result = app.run(terminal);
 
