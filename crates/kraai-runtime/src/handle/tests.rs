@@ -40,6 +40,35 @@ async fn closed_channels_report_the_failed_transport_stage() {
 }
 
 #[tokio::test]
+async fn closed_channels_preserve_startup_failure() {
+    for enqueue in [false, true] {
+        let (mut client, mut commands) = handle();
+        let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
+        client.startup_rx = startup_rx;
+        let mut request = Box::pin(client.get_agent_profile_catalog(None));
+        if enqueue {
+            assert!(futures::poll!(&mut request).is_pending());
+            let Some(Command::GetAgentProfileCatalog { response, .. }) = commands.recv().await
+            else {
+                panic!("expected profile catalog request");
+            };
+            drop(response);
+        }
+        drop(commands);
+        assert!(futures::poll!(&mut request).is_pending());
+        startup_tx.send_replace(RuntimeStartupState::Failed(String::from(
+            "Failed to initialize persistence layer: fixture failure",
+        )));
+        assert_eq!(
+            request.await,
+            Err(RuntimeError::internal(
+                "Failed to initialize persistence layer: fixture failure"
+            ))
+        );
+    }
+}
+
+#[tokio::test]
 async fn cancellation_preserves_the_enqueue_boundary() {
     let (client, mut commands) = handle();
     client.command_tx.try_send(Command::LoadConfig).unwrap();
