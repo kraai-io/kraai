@@ -49,7 +49,7 @@ clean:
     cargo clean
 
 build:
-    cargo build --locked -p kraai-tui -p kraai-nushell-runtime --bins
+    cargo build --locked -p kraai-tui --bin kraai
 
 [positional-arguments]
 run *args: build

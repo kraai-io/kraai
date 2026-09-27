@@ -28,6 +28,12 @@ fn resolve_nushell_host_from(
     current_executable: PathBuf,
     use_current_executable: bool,
 ) -> Result<NushellHost> {
+    if use_current_executable {
+        return Ok(NushellHost {
+            executable: current_executable,
+            arguments: vec![kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT.into()],
+        });
+    }
     let directory = current_executable.parent().ok_or_else(|| {
         eyre!(
             "Kraai executable has no parent directory: {}",
@@ -38,19 +44,6 @@ fn resolve_nushell_host_from(
         "kraai-nushell-host{}",
         std::env::consts::EXE_SUFFIX
     ));
-    if host.try_exists()? {
-        let executable = canonical_executable(&host)?;
-        return Ok(NushellHost {
-            executable,
-            arguments: Vec::new(),
-        });
-    }
-    if use_current_executable {
-        return Ok(NushellHost {
-            executable: current_executable,
-            arguments: vec![kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT.into()],
-        });
-    }
     canonical_executable(&host)
         .map(|executable| NushellHost {
             executable,
@@ -77,7 +70,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nushell_host_prefers_packaged_sibling_and_can_fall_back_to_frontend() -> Result<()> {
+    fn nushell_host_uses_frontend_when_enabled_and_external_host_otherwise() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-host-resolution-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&directory)?;
@@ -85,21 +78,19 @@ mod tests {
         std::fs::write(&frontend, [])?;
         let frontend = frontend.canonicalize()?;
 
-        let fallback = resolve_nushell_host_from(frontend.clone(), true)?;
-        if fallback.executable != frontend {
-            return Err(eyre!("frontend fallback selected the wrong executable"));
+        let embedded = resolve_nushell_host_from(frontend.clone(), true)?;
+        if embedded.executable != frontend {
+            return Err(eyre!("frontend host selected the wrong executable"));
         }
-        if fallback.arguments
+        if embedded.arguments
             != [std::ffi::OsString::from(
                 kraai_nushell_runtime::INTERNAL_HOST_ARGUMENT,
             )]
         {
-            return Err(eyre!(
-                "frontend fallback omitted the internal host argument"
-            ));
+            return Err(eyre!("frontend host omitted the internal host argument"));
         }
         if resolve_nushell_host_from(frontend.clone(), false).is_ok() {
-            return Err(eyre!("frontend fallback was enabled without opt-in"));
+            return Err(eyre!("frontend host was enabled without opt-in"));
         }
 
         let packaged = directory.join(format!(
@@ -108,9 +99,13 @@ mod tests {
         ));
         std::fs::write(&packaged, [])?;
         let packaged = packaged.canonicalize()?;
-        let resolved = resolve_nushell_host_from(frontend, true)?;
+        let resolved = resolve_nushell_host_from(frontend.clone(), true)?;
+        if resolved.executable != embedded.executable || resolved.arguments != embedded.arguments {
+            return Err(eyre!("packaged host overrode the frontend host"));
+        }
+        let resolved = resolve_nushell_host_from(frontend, false)?;
         if resolved.executable != packaged || !resolved.arguments.is_empty() {
-            return Err(eyre!("packaged host was not preferred over the fallback"));
+            return Err(eyre!("packaged host was not selected"));
         }
 
         let explicit = directory.join("custom-host");
