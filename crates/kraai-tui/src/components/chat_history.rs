@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock};
 use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
+mod wrapping;
 
 static TOOL_CALL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
@@ -409,8 +410,25 @@ impl<'a> ChatHistory<'a> {
 
                 let mut lines = vec![Self::single_span_line(String::new(), user_style)];
 
-                for line in Self::wrap_with_prefix(&content, width.saturating_sub(1), " ", " ") {
-                    lines.push(Self::single_span_line(line, user_style));
+                for source in content.lines() {
+                    wrapping::push_prose(
+                        &mut lines,
+                        &[RenderedSpan {
+                            text: source.to_owned(),
+                            style: user_style,
+                        }],
+                        width.saturating_sub(2),
+                        user_style,
+                    );
+                }
+                for line in lines.iter_mut().skip(1) {
+                    line.spans.insert(
+                        0,
+                        RenderedSpan {
+                            text: String::from(" "),
+                            style: user_style,
+                        },
+                    );
                 }
 
                 lines.push(Self::single_span_line(String::new(), user_style));

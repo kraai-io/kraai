@@ -1,4 +1,9 @@
-use markdown::{ParseOptions, mdast::Node};
+use std::collections::HashMap;
+
+use markdown::{
+    ParseOptions,
+    mdast::{Link, Node},
+};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::{ChatHistory, RenderedLine, RenderedSpan};
@@ -8,13 +13,47 @@ mod table;
 pub(super) const ACCENT: Color = Color::Rgb(174, 184, 210);
 
 pub(super) fn render_message(content: &str, width: usize, normal: Style) -> Vec<RenderedLine> {
-    let Ok(root) = markdown::to_mdast(content, &ParseOptions::gfm()) else {
+    let Ok(mut root) = markdown::to_mdast(content, &ParseOptions::gfm()) else {
         return ChatHistory::wrap_with_prefix(content, width, "", "")
             .into_iter()
             .map(|text| ChatHistory::single_span_line(text, normal))
             .collect();
     };
+    let mut definitions = HashMap::new();
+    collect_definitions(&root, &mut definitions);
+    resolve_references(&mut root, &definitions);
     blocks(&root, width, normal)
+}
+
+fn collect_definitions(node: &Node, definitions: &mut HashMap<String, (String, Option<String>)>) {
+    if let Node::Definition(definition) = node {
+        definitions
+            .entry(definition.identifier.clone())
+            .or_insert_with(|| (definition.url.clone(), definition.title.clone()));
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_definitions(child, definitions);
+        }
+    }
+}
+
+fn resolve_references(node: &mut Node, definitions: &HashMap<String, (String, Option<String>)>) {
+    if let Node::LinkReference(reference) = node
+        && let Some((url, title)) = definitions.get(&reference.identifier)
+    {
+        *node = Node::Link(Link {
+            children: std::mem::take(&mut reference.children),
+            position: reference.position.take(),
+            url: url.clone(),
+            title: title.clone(),
+        });
+    }
+    if let Some(children) = node.children_mut() {
+        for child in children {
+            resolve_references(child, definitions);
+        }
+    }
 }
 
 fn blocks(node: &Node, width: usize, normal: Style) -> Vec<RenderedLine> {
@@ -31,7 +70,7 @@ fn blocks(node: &Node, width: usize, normal: Style) -> Vec<RenderedLine> {
             for span in spans {
                 for (index, text) in span.text.split('\n').enumerate() {
                     if index > 0 {
-                        ChatHistory::push_wrapped_spans(&mut lines, &part, width, style, "", "");
+                        super::wrapping::push_prose(&mut lines, &part, width, style);
                         part.clear();
                     }
                     part.push(RenderedSpan {
@@ -40,7 +79,7 @@ fn blocks(node: &Node, width: usize, normal: Style) -> Vec<RenderedLine> {
                     });
                 }
             }
-            ChatHistory::push_wrapped_spans(&mut lines, &part, width, style, "", "");
+            super::wrapping::push_prose(&mut lines, &part, width, style);
         }
         Node::Code(code) => {
             let label = code.lang.as_deref().unwrap_or("code");
@@ -197,6 +236,50 @@ fn inline(node: &Node, style: Style) -> Vec<RenderedSpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_links_render_like_inline_links() {
+        let render = |source: &str| {
+            render_message(source, 80, Style::default())
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| (span.text, span.style))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        for reference in ["[docs][ref]", "[ref][]", "[ref]", "[docs][ ReF ]"] {
+            let label = if reference.contains("docs") {
+                "docs"
+            } else {
+                "ref"
+            };
+            let source =
+                format!("{reference}\n\n[ref]: https://example.com\n[REF]: https://ignored.com");
+            assert_eq!(
+                render(&source),
+                render(&format!("[{label}](https://example.com)"))
+            );
+        }
+        for reference in ["[docs][A  B]", "[docs][a\tb]"] {
+            let source = format!("{reference}\n\n[a b]: https://example.com");
+            assert_eq!(render(&source), render("[docs](https://example.com)"));
+        }
+    }
+
+    #[test]
+    fn unresolved_reference_links_remain_visible() {
+        let source = "[docs][missing] [other][] [shortcut]";
+        let lines = render_message(source, 80, Style::default());
+        let text: String = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.text.as_str())
+            .collect();
+        assert_eq!(text, source);
+    }
 
     #[test]
     fn nested_emphasis_and_inline_code_keep_their_styles() {

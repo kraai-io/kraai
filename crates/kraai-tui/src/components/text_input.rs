@@ -55,10 +55,11 @@ impl<'a> TextInput<'a> {
         let current_line = segments
             .iter()
             .enumerate()
-            .find(|(_, segment)| safe_cursor >= segment.start && safe_cursor <= segment.end)
+            .find(|(_, segment)| segment.contains_cursor(safe_cursor))
             .map(|(index, segment)| {
-                let column =
-                    display_width(&normalized_input[segment.start..safe_cursor.min(segment.end)]);
+                let column = display_width(
+                    &normalized_input[segment.start..safe_cursor.min(segment.rendered_end)],
+                );
                 (index, column)
             })
             .unwrap_or((0, 0));
@@ -110,9 +111,13 @@ impl<'a> TextInput<'a> {
             } else {
                 let mut segment_start = line_start;
                 let mut segment_width = 0usize;
+                let mut word_boundary = None;
                 for (offset, grapheme) in source_line.grapheme_indices(true) {
                     let grapheme_width = display_width(grapheme);
                     let grapheme_start = line_start + offset;
+                    if grapheme.chars().all(char::is_whitespace) {
+                        word_boundary = Some(grapheme_start + grapheme.len());
+                    }
                     if grapheme_width > available {
                         if segment_start < grapheme_start {
                             wrapped.push(wrapped_segment(
@@ -126,19 +131,45 @@ impl<'a> TextInput<'a> {
                         wrapped.push(wrapped_segment(grapheme_start, segment_end, grapheme_start));
                         segment_start = segment_end;
                         segment_width = 0;
+                        word_boundary = None;
                         continue;
                     }
 
                     if segment_width > 0 && segment_width + grapheme_width > available {
-                        let segment_end = grapheme_start;
-                        wrapped.push(wrapped_segment(segment_start, segment_end, segment_end));
+                        let segment_end = word_boundary
+                            .filter(|boundary| *boundary > segment_start)
+                            .unwrap_or(grapheme_start);
+                        let rendered_end =
+                            segment_start + content[segment_start..segment_end].trim_end().len();
+                        wrapped.push(wrapped_segment(segment_start, segment_end, rendered_end));
                         segment_start = segment_end;
-                        segment_width = 0;
+                        segment_width = display_width(
+                            &content[segment_start..grapheme_start.max(segment_start)],
+                        );
+                        word_boundary = None;
+                        if segment_start > grapheme_start {
+                            continue;
+                        }
+                        if segment_width + grapheme_width > available {
+                            wrapped.push(wrapped_segment(
+                                segment_start,
+                                grapheme_start,
+                                grapheme_start,
+                            ));
+                            segment_start = grapheme_start;
+                            segment_width = 0;
+                        }
                     }
                     segment_width += grapheme_width;
                 }
 
-                if segment_start < line_end {
+                if segment_start < line_end
+                    || wrapped.last().is_some_and(|segment| {
+                        segment.end == line_end
+                            && segment.rendered_end > segment.start
+                            && segment.rendered_end < segment.end
+                    })
+                {
                     wrapped.push(wrapped_segment(segment_start, line_end, line_end));
                 }
             }
@@ -178,14 +209,14 @@ impl<'a> TextInput<'a> {
         let segments = Self::wrap_segments(&self.input, width);
         let row = segments
             .iter()
-            .position(|segment| self.cursor >= segment.start && self.cursor <= segment.end)
+            .position(|segment| segment.contains_cursor(self.cursor))
             .unwrap_or(0);
         let column = segments
             .get(row)
             .map(|segment| {
                 display_width(
                     self.input
-                        .get(segment.start..self.cursor)
+                        .get(segment.start..self.cursor.min(segment.rendered_end))
                         .unwrap_or_default(),
                 )
             })
@@ -249,6 +280,12 @@ struct WrappedSegment {
 }
 
 impl WrappedSegment {
+    fn contains_cursor(&self, cursor: usize) -> bool {
+        cursor >= self.start
+            && (cursor < self.end
+                || cursor == self.end
+                    && (self.rendered_end == self.end || self.rendered_end == self.start))
+    }
     fn text<'b>(&self, content: &'b str) -> &'b str {
         &content[self.start..self.rendered_end]
     }
@@ -273,7 +310,7 @@ fn line_cursor(
     };
 
     let mut width = 0usize;
-    for (idx, grapheme) in input[segment.start..segment.end].grapheme_indices(true) {
+    for (idx, grapheme) in input[segment.start..segment.rendered_end].grapheme_indices(true) {
         let grapheme_width = display_width(grapheme);
         if width + grapheme_width > column {
             return segment.start + idx;
@@ -283,7 +320,7 @@ fn line_cursor(
             return segment.start + idx + grapheme.len();
         }
     }
-    segment.end
+    segment.rendered_end
 }
 
 fn previous_char_boundary(s: &str, idx: usize) -> usize {
@@ -323,6 +360,51 @@ fn source_cursor(input: &str, normalized_cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_wrapping_keeps_cursor_and_navigation_on_the_visible_word() {
+        let input = "one distinct word";
+        assert_eq!(TextInput::wrap_text(input, 10), ["one", "distinct", "word"]);
+        let area = Rect::new(0, 0, 12, 5);
+        assert_eq!(TextInput::new(input, 4).get_cursor_position(area), (1, 2));
+        assert_eq!(TextInput::new(input, 3).get_cursor_position(area), (4, 1));
+        let navigation = TextInput::cursor_navigation(input, 5, 12);
+        assert_eq!(navigation.cursor_above, 1);
+        assert_eq!(navigation.cursor_below, 14);
+        assert_eq!(TextInput::wrap_text("hello world", 5), ["hello", "world"]);
+        assert_eq!(TextInput::wrap_text("hello ", 5), ["hello", ""]);
+        assert_eq!(
+            TextInput::new("hello ", 6).get_cursor_position(Rect::new(0, 0, 7, 4)),
+            (1, 2)
+        );
+    }
+
+    #[test]
+    fn vertical_navigation_clamps_to_visible_ends_of_shorter_wrapped_rows() {
+        let input = "one distinct word another";
+        let area = Rect::new(0, 0, 12, 8);
+        let navigation = TextInput::cursor_navigation(input, 12, area.width);
+        assert_eq!(navigation.cursor_above, 3);
+        assert_eq!(navigation.cursor_below, 17);
+        assert_eq!(
+            TextInput::new(input, navigation.cursor_above).get_cursor_position(area),
+            (4, 1)
+        );
+        assert_eq!(
+            TextInput::new(input, navigation.cursor_below).get_cursor_position(area),
+            (5, 3)
+        );
+    }
+
+    #[test]
+    fn long_words_with_wide_graphemes_stay_within_the_input_width() {
+        for width in [2, 80] {
+            let input = format!(" {}你", "a".repeat(width - 1));
+            let rows = TextInput::wrap_text(&input, width);
+            assert!(rows.iter().all(|row| display_width(row) <= width));
+            assert_eq!(rows.concat(), input.trim_start());
+        }
+    }
 
     #[test]
     fn wraps_wide_graphemes_without_rendering_truncation() {

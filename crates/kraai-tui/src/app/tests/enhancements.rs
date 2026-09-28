@@ -132,6 +132,10 @@ fn composer_scroll_keeps_cursor_and_tail_visible() {
 }
 
 #[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "rendering failures propagate while layout assertions fail the test"
+)]
 fn clearing_multiline_input_restores_three_row_background() -> color_eyre::Result<()> {
     use ratatui::{Terminal, backend::TestBackend, style::Color};
 
@@ -661,6 +665,30 @@ final",
 }
 
 #[test]
+fn error_dialog_ctrl_c_closes_without_cancelling_or_dismissing() {
+    let mut harness = test_harness();
+    harness.app.set_error(String::from("error"));
+    harness.app.state.error_open = true;
+    harness.app.state.input = String::from("draft");
+    for (key, modifiers) in [('d', KeyModifiers::CONTROL), ('c', KeyModifiers::ALT)] {
+        harness
+            .app
+            .handle_key_event(KeyEvent::new(KeyCode::Char(key), modifiers));
+        assert!(harness.app.state.error_open);
+        assert_eq!(harness.app.state.last_error.as_deref(), Some("error"));
+    }
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(!harness.app.state.error_open);
+    assert_eq!(harness.app.state.last_error.as_deref(), Some("error"));
+    assert_eq!(harness.app.state.input, "draft");
+    assert!(!harness.app.state.exit);
+    assert!(!harness.app.state.ctrl_c_exit_armed);
+    assert!(harness.drain_requests().is_empty());
+}
+
+#[test]
 fn error_details_reach_end_of_large_error_and_resize() {
     let mut harness = test_harness();
     let error = format!(
@@ -770,6 +798,10 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
 }
 
 #[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "fixture parsing errors propagate while feedback assertions fail the test"
+)]
 fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(String::from("session"));
@@ -799,7 +831,7 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     assert!(
         completed
             .lines()
-            .any(|line| line.starts_with("Finished in 2s"))
+            .any(|line| line.starts_with(" Finished in 2s"))
     );
     assert!(!completed.contains("✓"));
     harness.app.state.feedback.completion_until = None;

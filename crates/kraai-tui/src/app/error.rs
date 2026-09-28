@@ -1,4 +1,4 @@
-use super::{App, KeyCode, KeyEvent};
+use super::{App, KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
     pub(super) fn handle_error_key(&mut self, key: KeyEvent) -> bool {
@@ -15,6 +15,9 @@ impl App {
         }
         let scroll = self.state.error_scroll.get();
         match key.code {
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                self.state.error_open = false;
+            }
             KeyCode::Esc | KeyCode::F(8) => self.state.error_open = false,
             KeyCode::Up => self.state.error_scroll.set(scroll.saturating_sub(1)),
             KeyCode::Down => self.state.error_scroll.set(scroll.saturating_add(1)),
@@ -22,7 +25,7 @@ impl App {
             KeyCode::PageDown => self.state.error_scroll.set(scroll.saturating_add(10)),
             KeyCode::Home => self.state.error_scroll.set(0),
             KeyCode::End => self.state.error_scroll.set(usize::MAX),
-            KeyCode::Char('c') => {
+            KeyCode::Char('c') if key.modifiers.is_empty() => {
                 if let Some(error) = self.state.last_error.clone() {
                     self.state.status = match self
                         .copy_text_to_clipboard(&error, super::feedback::CopyTarget::Error)
@@ -32,7 +35,7 @@ impl App {
                     };
                 }
             }
-            KeyCode::Char('d') => {
+            KeyCode::Char('d') if key.modifiers.is_empty() => {
                 if self.state.last_error.as_ref() == Some(&self.state.status) {
                     self.state.status.clear();
                 }

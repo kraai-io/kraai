@@ -33,7 +33,7 @@ pub(super) fn render(table: &Table, width: usize, normal: Style) -> Vec<Rendered
         let mut lines = Vec::new();
         for row in rows {
             for cell in row {
-                ChatHistory::push_wrapped_spans(&mut lines, &cell, width, normal, "", "");
+                super::super::wrapping::push_prose(&mut lines, &cell, width, normal);
             }
             lines.push(ChatHistory::single_span_line(String::new(), normal));
         }
@@ -58,7 +58,7 @@ pub(super) fn render(table: &Table, width: usize, normal: Style) -> Vec<Rendered
                         span.style = span.style.add_modifier(Modifier::BOLD).fg(super::ACCENT);
                     }
                 }
-                ChatHistory::push_wrapped_spans(&mut cell_lines, &cell, *size, normal, "", "");
+                super::super::wrapping::push_prose(&mut cell_lines, &cell, *size, normal);
                 cell_lines
             })
             .collect();

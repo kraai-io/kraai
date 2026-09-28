@@ -23,9 +23,9 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
         .saturating_sub(1 + u16::from(state.last_error.is_some()))
         .min(1);
     let area = Rect::new(
-        area.x,
+        area.x + u16::from(area.width > 2),
         area.y + padding,
-        area.width.saturating_sub(u16::from(area.width > 2)),
+        area.width.saturating_sub(2 * u16::from(area.width > 2)),
         area.height - padding,
     );
     let activity = statusline_activity_label(state);
@@ -288,7 +288,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn footer_activity_has_no_left_inset() {
+    fn footer_activity_has_one_space_left_inset() {
         for is_streaming in [false, true] {
             let state = AppState {
                 is_streaming,
@@ -298,9 +298,10 @@ mod tests {
             let mut buffer = Buffer::empty(area);
             render_status(&state, area, &mut buffer);
             assert_eq!(
-                buffer[(area.x, area.y + 1)].symbol(),
+                buffer[(area.x + 1, area.y + 1)].symbol(),
                 if is_streaming { "·" } else { "R" }
             );
+            assert_eq!(buffer[(area.x, area.y + 1)].symbol(), " ");
             assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), " ");
         }
     }
