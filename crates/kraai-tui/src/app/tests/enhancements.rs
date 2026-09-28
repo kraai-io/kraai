@@ -42,7 +42,7 @@ fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
     assert!(harness.app.state.approval_expanded);
     assert_eq!(
         crate::app::ui::bottom_panel_height(&harness.app.state, Rect::new(0, 0, 90, 30)),
-        29
+        28
     );
     assert!(harness.drain_requests().is_empty());
 }
@@ -119,7 +119,7 @@ fn composer_scroll_keeps_cursor_and_tail_visible() {
     };
     let area = Rect::new(0, 0, 40, 24);
     let [chat, _, composer] = crate::app::ui::chat_layout(&state, area);
-    assert!(chat.height >= 15);
+    assert!(chat.height >= 14);
     assert!(screen(&state, 40, 24).contains("line-049"));
     let cursor = crate::components::TextInput::new(&state.input, state.input_cursor)
         .get_cursor_position(composer);
@@ -129,6 +129,45 @@ fn composer_scroll_keeps_cursor_and_tail_visible() {
             let _ = screen(&state, width, height);
         }
     }
+}
+
+#[test]
+fn clearing_multiline_input_restores_three_row_background() -> color_eyre::Result<()> {
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
+
+    let mut harness = test_harness();
+    for width in [8, 40, 80] {
+        for height in [8, 24, 50] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+            harness
+                .app
+                .set_input_text("many\nlines\nof\ninput\nhere".to_string());
+            terminal.draw(|frame| frame.render_widget(&harness.app.state, frame.area()))?;
+            harness.app.clear_message_draft();
+            terminal.draw(|frame| frame.render_widget(&harness.app.state, frame.area()))?;
+
+            let area = Rect::new(0, 0, width, height);
+            let [_, _, input] = crate::app::ui::chat_layout(&harness.app.state, area);
+            assert_eq!(input.height, 3);
+            assert_eq!(input.bottom(), height);
+            assert_eq!(
+                crate::components::TextInput::new(&harness.app.state.input, 0)
+                    .get_cursor_position(input),
+                (1, height - 2)
+            );
+            let buffer = terminal.backend().buffer();
+            for y in 0..height {
+                for x in 0..width {
+                    assert_eq!(
+                        buffer[(x, y)].bg == Color::DarkGray,
+                        y >= height - 3,
+                        "unexpected input background at ({x}, {y}) in {width}x{height}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -757,7 +796,11 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     });
     assert!(harness.app.state.feedback.completion_until.is_some());
     let completed = screen(&harness.app.state, 100, 20);
-    assert!(completed.contains(" Finished in 2s"));
+    assert!(
+        completed
+            .lines()
+            .any(|line| line.starts_with("Finished in 2s"))
+    );
     assert!(!completed.contains("✓"));
     harness.app.state.feedback.completion_until = None;
     let settled = screen(&harness.app.state, 100, 20);

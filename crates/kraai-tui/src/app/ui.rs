@@ -56,7 +56,7 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
 }
 
 fn footer_height(state: &AppState, area: Rect) -> u16 {
-    (1 + u16::from(state.last_error.is_some())).min(area.height.saturating_sub(1))
+    (2 + u16::from(state.last_error.is_some())).min(area.height.saturating_sub(1))
 }
 
 pub(super) fn chat_layout(state: &AppState, area: Rect) -> [Rect; 3] {

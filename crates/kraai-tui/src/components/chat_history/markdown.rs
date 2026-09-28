@@ -117,7 +117,7 @@ fn blocks(node: &Node, width: usize, normal: Style) -> Vec<RenderedLine> {
     lines
 }
 
-fn append_block(lines: &mut Vec<RenderedLine>, next: Vec<RenderedLine>, normal: Style) {
+pub(super) fn append_block(lines: &mut Vec<RenderedLine>, next: Vec<RenderedLine>, normal: Style) {
     if next.is_empty() {
         return;
     }

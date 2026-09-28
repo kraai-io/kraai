@@ -90,7 +90,7 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
     assert!(
         collapsed
             .iter()
-            .any(|line| line == " ❯ next question [queued]")
+            .any(|line| line == " next question [queued]")
     );
     assert!(!collapsed.iter().any(|line| line.contains("hidden-source")));
     assert!(!collapsed.iter().any(|line| line.contains("hidden-output")));

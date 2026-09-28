@@ -4,7 +4,7 @@ use super::super::duration::format_duration;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Paragraph, Widget},
@@ -18,7 +18,16 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
     if area.height == 0 {
         return;
     }
-    let area = area.inner(Margin::new(u16::from(area.width > 2), 0));
+    let padding = area
+        .height
+        .saturating_sub(1 + u16::from(state.last_error.is_some()))
+        .min(1);
+    let area = Rect::new(
+        area.x,
+        area.y + padding,
+        area.width.saturating_sub(u16::from(area.width > 2)),
+        area.height - padding,
+    );
     let activity = statusline_activity_label(state);
     let context = statusline_context_label(state);
     let incomplete = state.cost_recovery_list_pending
@@ -277,6 +286,51 @@ fn format_context_label(used_context_tokens: Option<usize>, max_context: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_activity_has_no_left_inset() {
+        for is_streaming in [false, true] {
+            let state = AppState {
+                is_streaming,
+                ..AppState::default()
+            };
+            let area = Rect::new(3, 4, 80, 2);
+            let mut buffer = Buffer::empty(area);
+            render_status(&state, area, &mut buffer);
+            assert_eq!(
+                buffer[(area.x, area.y + 1)].symbol(),
+                if is_streaming { "·" } else { "R" }
+            );
+            assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), " ");
+        }
+    }
+
+    #[test]
+    fn footer_layout_leaves_a_blank_row_above_status() {
+        for last_error in [None, Some(String::from("error"))] {
+            let state = AppState {
+                last_error,
+                ..AppState::default()
+            };
+            let area = Rect::new(0, 0, 80, 24);
+            let [history, footer, input] = super::super::chat_layout(&state, area);
+            assert_eq!(history.bottom(), footer.y);
+            assert_eq!(footer.bottom(), input.y);
+            assert_eq!(footer.height, 2 + u16::from(state.last_error.is_some()));
+            let mut buffer = Buffer::empty(footer);
+            render_status(&state, footer, &mut buffer);
+            let rows: Vec<String> = buffer
+                .content()
+                .chunks(usize::from(footer.width))
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            assert!(rows.first().is_some_and(|row| row.trim().is_empty()));
+            assert!(rows.last().is_some_and(|row| !row.trim().is_empty()));
+            if state.last_error.is_some() {
+                assert!(rows.get(1).is_some_and(|row| row.contains("F8 error")));
+            }
+        }
+    }
 
     #[test]
     fn footer_starts_with_activity_and_keeps_errors_accessible() {

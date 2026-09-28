@@ -242,7 +242,7 @@ impl<'a> ChatHistory<'a> {
         let body_style = Style::default().fg(Color::White);
 
         Self::push_wrapped_lines(&mut lines, "Nushell", width, header_style, "", "");
-        Self::push_wrapped_lines(&mut lines, source, width, body_style, "  ", "  ");
+        Self::push_wrapped_lines(&mut lines, source.trim_end(), width, body_style, "  ", "  ");
         lines
     }
 
@@ -261,13 +261,13 @@ impl<'a> ChatHistory<'a> {
 
             let before = &content[cursor..full_match.start()];
             if !before.trim().is_empty() {
-                let mut before_lines = markdown::render_message(before, width, normal_style);
-                lines.append(&mut before_lines);
+                let before_lines = markdown::render_message(before, width, normal_style);
+                markdown::append_block(&mut lines, before_lines, normal_style);
             }
 
             if let Some(source) = caps.get(1).map(|m| m.as_str()) {
-                let mut card_lines = Self::render_script_card(source, width);
-                lines.append(&mut card_lines);
+                let card_lines = Self::render_script_card(source, width);
+                markdown::append_block(&mut lines, card_lines, normal_style);
             }
 
             cursor = full_match.end();
@@ -279,8 +279,8 @@ impl<'a> ChatHistory<'a> {
         } else {
             let tail = &content[cursor..];
             if !tail.trim().is_empty() {
-                let mut parsed = markdown::render_message(tail, width, normal_style);
-                lines.append(&mut parsed);
+                let parsed = markdown::render_message(tail, width, normal_style);
+                markdown::append_block(&mut lines, parsed, normal_style);
             }
         }
 
@@ -405,18 +405,16 @@ impl<'a> ChatHistory<'a> {
         let content_width = width.saturating_sub(MESSAGE_GUTTER_WIDTH);
         match msg.role() {
             ChatRole::User => {
-                let user_style = Style::default()
-                    .fg(Color::Rgb(255, 255, 255))
-                    .bg(Color::DarkGray);
+                let user_style = Style::default().fg(Color::Reset).bg(Color::DarkGray);
 
                 let mut lines = vec![Self::single_span_line(String::new(), user_style)];
 
-                for line in Self::wrap_with_prefix(&content, content_width, "", "") {
+                for line in Self::wrap_with_prefix(&content, width.saturating_sub(1), " ", " ") {
                     lines.push(Self::single_span_line(line, user_style));
                 }
 
                 lines.push(Self::single_span_line(String::new(), user_style));
-                Self::add_message_gutter(lines, '❯')
+                lines
             }
             ChatRole::Assistant => Self::add_message_gutter(
                 Self::render_assistant_message(&content, content_width),
@@ -788,9 +786,18 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| *line == " • before"));
-        assert!(rendered.iter().any(|line| *line == "   Nushell"));
-        assert!(rendered.iter().any(|line| *line == "   after"));
+        assert_eq!(
+            rendered,
+            [
+                " • before",
+                "   ",
+                "   Nushell",
+                "     # timeout=1sec",
+                "     ls",
+                "   ",
+                "   after",
+            ]
+        );
     }
 
     #[test]
@@ -813,16 +820,29 @@ mod tests {
     }
 
     #[test]
-    fn renders_user_messages_with_gutter_indicator() {
+    fn renders_user_messages_with_one_cell_horizontal_padding() {
         let user = message("1", ChatRole::User, "hello");
         let refs = [&user];
         let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(40);
+        let lines = history.build_rendered_lines(7);
 
         assert_eq!(lines.len(), 3);
-        assert_eq!(ChatHistory::line_text(&lines[0]), "   ");
-        assert_eq!(ChatHistory::line_text(&lines[1]), " ❯ hello");
-        assert_eq!(ChatHistory::line_text(&lines[2]), "   ");
+        assert_eq!(ChatHistory::line_text(&lines[0]), "");
+        assert_eq!(ChatHistory::line_text(&lines[1]), " hello");
+        assert_eq!(ChatHistory::line_text(&lines[2]), "");
+        let area = Rect::new(0, 0, 7, 3);
+        let mut buffer = Buffer::empty(area);
+        history.render(area, &mut buffer);
+        let row: String = (0..7).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert_eq!(row, " hello ");
+        let wrapped = ChatHistory::build_message_lines(&user, 6);
+        assert_eq!(
+            wrapped
+                .iter()
+                .map(ChatHistory::line_text)
+                .collect::<Vec<_>>(),
+            ["", " hell", " o", ""]
+        );
     }
 
     #[test]
@@ -901,6 +921,27 @@ mod tests {
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert_eq!(rendered.first().map(String::as_str), Some(" • Nushell"));
+    }
+
+    #[test]
+    fn script_cards_trim_outer_blank_lines_without_losing_internal_spacing() {
+        let assistant = message(
+            "1",
+            ChatRole::Assistant,
+            "before\n\n<tool_call>\n# timeout=1sec\n\nls\n\n   \n</tool_call>",
+        );
+        let lines = ChatHistory::build_message_lines(&assistant, 80);
+        assert_eq!(
+            lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
+            [
+                " • before",
+                "   ",
+                "   Nushell",
+                "     # timeout=1sec",
+                "     ",
+                "     ls",
+            ]
+        );
     }
 
     #[test]
