@@ -101,8 +101,8 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Allows this frontend executable to serve as the sandboxed Nushell host when a packaged
-    /// sibling host binary is unavailable. The executable must call
+    /// Uses this frontend executable as the sandboxed Nushell host unless an explicit host path
+    /// is configured. The executable must call
     /// [`crate::run_internal_process`] before parsing its own arguments.
     pub fn use_current_executable_as_nushell_host(mut self) -> Self {
         self.use_current_executable_as_nushell_host = true;

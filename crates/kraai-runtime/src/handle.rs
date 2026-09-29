@@ -46,16 +46,25 @@ impl RuntimeHandle {
         RuntimeError::unavailable("runtime response channel is closed")
     }
 
+    async fn transport_error(&self, fallback: RuntimeError) -> RuntimeError {
+        match self.wait_for_startup().await {
+            Ok(RuntimeStartupState::Failed(error)) => RuntimeError::internal(error),
+            _ => fallback,
+        }
+    }
+
     async fn request<T: Send>(
         &self,
         build: impl FnOnce(oneshot::Sender<RuntimeResult<T>>) -> Command + Send,
     ) -> RuntimeResult<T> {
         let (response, result) = oneshot::channel();
-        self.command_tx
-            .send(build(response))
-            .await
-            .map_err(|_| Self::command_channel_closed())?;
-        result.await.map_err(|_| Self::response_channel_closed())?
+        if self.command_tx.send(build(response)).await.is_err() {
+            return Err(self.transport_error(Self::command_channel_closed()).await);
+        }
+        match result.await {
+            Ok(result) => result,
+            Err(_) => Err(self.transport_error(Self::response_channel_closed()).await),
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {

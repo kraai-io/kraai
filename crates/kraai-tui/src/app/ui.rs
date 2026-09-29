@@ -6,7 +6,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Style},
-    widgets::{Paragraph, Widget},
+    widgets::{Block, Borders, Widget},
 };
 
 use crate::components::{ChatHistory, TextInput};
@@ -14,6 +14,7 @@ use crate::components::{ChatHistory, TextInput};
 use super::{AppState, ScriptPhase, UiMode};
 
 mod command_popup;
+mod error;
 mod menus;
 mod providers;
 mod script_approval;
@@ -23,15 +24,22 @@ use menus::{render_agent_menu, render_help_menu, render_model_menu, render_sessi
 use providers::render_providers_menu;
 use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;
-use status::statusline_line;
+use status::render_status;
 
-pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+fn menu_block() -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+}
+
+pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] =
+    ["·  ", "·· ", "···", " ··", "  ·", " ··", "···", "·· "];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     if state.mode == UiMode::Executions {
         return 0;
     }
-    let available = area.height.saturating_sub(1);
+    let available = area.height.saturating_sub(footer_height(state, area));
     if state.mode == UiMode::Chat && state.script_phase == ScriptPhase::AwaitingApproval {
         if state.approval_expanded {
             available
@@ -47,10 +55,14 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     }
 }
 
+fn footer_height(state: &AppState, area: Rect) -> u16 {
+    (2 + u16::from(state.last_error.is_some())).min(area.height.saturating_sub(1))
+}
+
 pub(super) fn chat_layout(state: &AppState, area: Rect) -> [Rect; 3] {
     Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(footer_height(state, area)),
         Constraint::Length(bottom_panel_height(state, area)),
     ])
     .flex(Flex::End)
@@ -76,17 +88,7 @@ impl Widget for &AppState {
                 self.auto_scroll,
             );
         }
-        let mut statusline = statusline_line(self);
-        let image_count = self.draft_images.len();
-        if image_count > 0 {
-            statusline.spans.push(ratatui::text::Span::raw(format!(
-                " | {image_count} {} attached",
-                if image_count == 1 { "image" } else { "images" }
-            )));
-        }
-        Paragraph::new(statusline)
-            .style(Style::default().fg(Color::DarkGray))
-            .render(status_area, buf);
+        render_status(self, status_area, buf);
 
         if self.mode == UiMode::Chat && self.script_phase == ScriptPhase::AwaitingApproval {
             render_script_approval_panel(self, input_area, buf);
@@ -105,6 +107,7 @@ impl Widget for &AppState {
             UiMode::Help => render_help_menu(self, area, buf),
             UiMode::Chat | UiMode::Executions => {}
         }
+        error::render_error(self, area, buf);
     }
 }
 

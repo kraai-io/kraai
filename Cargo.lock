@@ -3264,6 +3264,7 @@ dependencies = [
  "kraai-runtime",
  "kraai-sandbox",
  "kraai-types",
+ "markdown",
  "ratatui",
  "regex",
  "rustix 1.1.5",

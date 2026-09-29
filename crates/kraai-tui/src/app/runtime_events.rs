@@ -33,6 +33,14 @@ impl App {
             }
             Event::TurnTimingChanged { session_id, timer } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                    let now = Instant::now();
+                    if timer.elapsed(now).is_some() {
+                        self.state.feedback.completion_until = None;
+                    } else if self.state.turn_timer.elapsed(now).is_some()
+                        && timer.last_duration().is_some()
+                    {
+                        self.state.feedback.completion_until = Some(now + Duration::from_secs(1));
+                    }
                     self.state.turn_timer = timer;
                 }
             }
@@ -171,6 +179,7 @@ impl App {
                     self.stream_event_content
                         .remove(&MessageId::new(message_id));
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
+                    self.state.feedback.completion_until = None;
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
                 }

@@ -6,12 +6,17 @@ const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 
 impl App {
     pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
+        let mut changed = false;
+        if let Some(events) = self.state.palette.expire(Instant::now()) {
+            for event in events {
+                changed |= self.handle_input_event(event);
+            }
+        }
         if !event::poll(timeout)? {
-            return Ok(false);
+            return Ok(changed);
         }
 
         let batch_started = Instant::now();
-        let mut changed = false;
         loop {
             if self.handle_terminal_event(event::read()?) {
                 changed = true;
@@ -30,6 +35,20 @@ impl App {
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        match self.state.palette.filter(event) {
+            super::palette::PaletteEvent::Pass(event) => self.handle_input_event(event),
+            super::palette::PaletteEvent::Consumed => true,
+            super::palette::PaletteEvent::Replay(events) => {
+                let mut changed = false;
+                for event in events {
+                    changed |= self.handle_input_event(event);
+                }
+                changed
+            }
+        }
+    }
+
+    fn handle_input_event(&mut self, event: CrosstermEvent) -> bool {
         if self.state.editor_requested || self.state.exit {
             return false;
         }
@@ -52,6 +71,15 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if self.state.error_open && self.state.last_error.is_some() {
+            let offset = self.state.error_scroll.get();
+            match mouse_event.kind {
+                MouseEventKind::ScrollUp => self.state.error_scroll.set(offset.saturating_sub(3)),
+                MouseEventKind::ScrollDown => self.state.error_scroll.set(offset.saturating_add(3)),
+                _ => {}
+            }
+            return;
+        }
         if self.state.mode == UiMode::Help {
             match mouse_event.kind {
                 MouseEventKind::ScrollUp => self
@@ -98,6 +126,9 @@ impl App {
     }
 
     pub(super) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_error_key(key_event) {
+            return;
+        }
         if self.state.mode == UiMode::Executions {
             self.handle_execution_key_event(key_event);
             return;
@@ -254,6 +285,9 @@ impl App {
     }
 
     pub(super) fn handle_paste(&mut self, text: String) {
+        if self.state.error_open && self.state.last_error.is_some() {
+            return;
+        }
         if matches!(self.state.mode, UiMode::ModelMenu | UiMode::SessionsMenu) {
             self.state
                 .menu_search
@@ -268,6 +302,7 @@ impl App {
             return;
         }
 
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_input_text(&text);
         if active_command_prefix(&self.state.input).is_none() {
             self.state.command_popup_dismissed = false;

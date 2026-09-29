@@ -66,7 +66,6 @@
 
     cargoNix = mkCargoNix true;
     cargoCheckNix = mkCargoNix false;
-    nushellHost = cargoNix.workspaceMembers."kraai-nushell-runtime".build;
     vmTestBinaries = name:
       ((cargoCheckNix.internal.builtRustCratesWithFeatures {
           packageId = name;
@@ -130,7 +129,6 @@
       postInstall =
         (old.postInstall or "")
         + ''
-          install -Dm755 ${nushellHost}/bin/kraai-nushell-host "$out/bin/kraai-nushell-host"
           wrapProgram "$out/bin/kraai" \
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
             --prefix PATH : ${lib.makeBinPath (

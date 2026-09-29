@@ -2,11 +2,19 @@ use super::*;
 
 impl App {
     pub(super) fn set_error(&mut self, error: String) {
+        self.state.feedback.completion_until = None;
+        self.state.feedback.clear_copy();
+        self.state.error_scroll.set(0);
         self.state.last_error = Some(error.clone());
         self.state.status = error;
     }
 
-    pub(super) fn copy_text_to_clipboard(&mut self, text: &str) -> Result<(), String> {
+    pub(super) fn copy_text_to_clipboard(
+        &mut self,
+        text: &str,
+        target: super::feedback::CopyTarget,
+    ) -> Result<(), String> {
+        self.state.feedback.clear_copy();
         let mut errors = Vec::new();
         let mut copied = false;
 
@@ -24,6 +32,7 @@ impl App {
         }
 
         if copied {
+            self.state.feedback.show_copied(target, Instant::now());
             Ok(())
         } else {
             Err(errors.join("; "))
@@ -285,6 +294,8 @@ impl App {
         self.state.current_session_id = session_id;
         self.state.current_tip_id = None;
         self.state.last_error = None;
+        self.state.error_open = false;
+        self.state.error_scroll.set(0);
         self.state.chat_history.clear();
         self.state.execution_expanded.clear();
         self.state.selected_execution = None;
@@ -310,6 +321,7 @@ impl App {
         self.state.retry_waiting = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
+        self.state.feedback = super::feedback::VisualFeedback::default();
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.last_stream_history_request = None;
@@ -382,6 +394,8 @@ impl App {
         let display_text = message.display_text().into_owned();
 
         self.state.last_error = None;
+        self.state.error_open = false;
+        self.state.error_scroll.set(0);
         let content_key = display_text.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
@@ -468,6 +482,7 @@ impl App {
         self.event_lag_script_resync_pending = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
+        self.state.feedback = super::feedback::VisualFeedback::default();
         self.invalidate_chat_cache();
         self.state.status = message.clone();
         self.state.exit = true;

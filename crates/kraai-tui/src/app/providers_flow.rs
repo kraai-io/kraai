@@ -399,9 +399,10 @@ impl App {
             return;
         };
 
-        self.state.status = match self.copy_text_to_clipboard(&value) {
-            Ok(()) => String::from("Copied to clipboard"),
-            Err(err) => format!("Copy failed: {err}"),
-        };
+        self.state.status =
+            match self.copy_text_to_clipboard(&value, super::feedback::CopyTarget::Auth) {
+                Ok(()) => String::new(),
+                Err(err) => format!("Copy failed: {err}"),
+            };
     }
 }

@@ -1,221 +1,315 @@
-#![expect(
-    clippy::expect_used,
-    reason = "module-level regex constants are statically validated during development"
-)]
+use std::collections::HashMap;
 
+use markdown::{
+    ParseOptions,
+    mdast::{Link, Node},
+};
 use ratatui::style::{Color, Modifier, Style};
-use regex::Regex;
-use std::borrow::Cow;
-use std::sync::LazyLock;
 
 use super::{ChatHistory, RenderedLine, RenderedSpan};
 
-static IMAGE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex"));
-static LINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex"));
-static STRONG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*|__([^_]+)__").expect("valid regex"));
-static EMPHASIS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*([^*]+)\*|_([^_]+)_").expect("valid regex"));
-static STRIKE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"~~([^~]+)~~").expect("valid regex"));
-static ESCAPE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\([\\`*_{}\[\]()#+.!~-])").expect("valid regex"));
-static INLINE_CODE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid regex"));
-static HEADING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(#{1,6})\s+(.*)$").expect("valid regex"));
-static QUOTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*>\s?(.*)$").expect("valid regex"));
-static UNORDERED_LIST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*[-*+]\s+(.*)$").expect("valid regex"));
-static ORDERED_LIST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(\d+)\.\s+(.*)$").expect("valid regex"));
-static FENCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*```([A-Za-z0-9_-]+)?\s*$").expect("valid regex"));
+mod table;
 
-pub(super) fn render_message(
-    content: &str,
-    width: usize,
-    normal_style: Style,
-) -> Vec<RenderedLine> {
+pub(super) const ACCENT: Color = Color::Rgb(174, 184, 210);
+
+pub(super) fn render_message(content: &str, width: usize, normal: Style) -> Vec<RenderedLine> {
+    let Ok(mut root) = markdown::to_mdast(content, &ParseOptions::gfm()) else {
+        return ChatHistory::wrap_with_prefix(content, width, "", "")
+            .into_iter()
+            .map(|text| ChatHistory::single_span_line(text, normal))
+            .collect();
+    };
+    let mut definitions = HashMap::new();
+    collect_definitions(&root, &mut definitions);
+    resolve_references(&mut root, &definitions);
+    blocks(&root, width, normal)
+}
+
+fn collect_definitions(node: &Node, definitions: &mut HashMap<String, (String, Option<String>)>) {
+    if let Node::Definition(definition) = node {
+        definitions
+            .entry(definition.identifier.clone())
+            .or_insert_with(|| (definition.url.clone(), definition.title.clone()));
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_definitions(child, definitions);
+        }
+    }
+}
+
+fn resolve_references(node: &mut Node, definitions: &HashMap<String, (String, Option<String>)>) {
+    if let Node::LinkReference(reference) = node
+        && let Some((url, title)) = definitions.get(&reference.identifier)
+    {
+        *node = Node::Link(Link {
+            children: std::mem::take(&mut reference.children),
+            position: reference.position.take(),
+            url: url.clone(),
+            title: title.clone(),
+        });
+    }
+    if let Some(children) = node.children_mut() {
+        for child in children {
+            resolve_references(child, definitions);
+        }
+    }
+}
+
+fn blocks(node: &Node, width: usize, normal: Style) -> Vec<RenderedLine> {
     let mut lines = Vec::new();
-    let heading_style = Style::default()
-        .fg(Color::Rgb(255, 220, 120))
-        .add_modifier(Modifier::BOLD);
-    let quote_style = Style::default()
-        .fg(Color::Rgb(170, 170, 170))
-        .add_modifier(Modifier::ITALIC);
-    let code_style = Style::default().fg(Color::Rgb(130, 230, 255));
-    let inline_code_style = Style::default().fg(Color::Rgb(255, 180, 90));
-    let list_style = normal_style;
-
-    let mut in_fenced_code = false;
-    let mut code_lang = String::new();
-
-    for source_line in content.lines() {
-        if let Some(caps) = FENCE_RE.captures(source_line) {
-            if in_fenced_code {
-                in_fenced_code = false;
-                code_lang.clear();
+    match node {
+        Node::Heading(_) | Node::Paragraph(_) => {
+            let style = if matches!(node, Node::Heading(_)) {
+                normal.fg(ACCENT).add_modifier(Modifier::BOLD)
             } else {
-                in_fenced_code = true;
-                code_lang = caps
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                if !code_lang.is_empty() {
-                    ChatHistory::push_wrapped_lines(
-                        &mut lines,
-                        &format!("[code: {code_lang}]"),
-                        width,
-                        code_style,
-                        "",
-                        "",
-                    );
+                normal
+            };
+            let spans = inline(node, style);
+            let mut part = Vec::new();
+            for span in spans {
+                for (index, text) in span.text.split('\n').enumerate() {
+                    if index > 0 {
+                        super::wrapping::push_prose(&mut lines, &part, width, style);
+                        part.clear();
+                    }
+                    part.push(RenderedSpan {
+                        text: text.to_string(),
+                        style: span.style,
+                    });
                 }
             }
-            continue;
+            super::wrapping::push_prose(&mut lines, &part, width, style);
         }
-
-        if in_fenced_code {
-            ChatHistory::push_wrapped_lines(&mut lines, source_line, width, code_style, "  ", "  ");
-            continue;
-        }
-
-        if let Some(caps) = HEADING_RE.captures(source_line) {
-            if let Some(text) = caps.get(2).map(|m| m.as_str()) {
-                let spans = inline_markdown_spans(text, heading_style, inline_code_style);
-                ChatHistory::push_wrapped_spans(&mut lines, &spans, width, heading_style, "", "");
-            }
-            continue;
-        }
-
-        if let Some(caps) = QUOTE_RE.captures(source_line)
-            && let Some(text) = caps.get(1).map(|m| m.as_str())
-        {
-            let spans = inline_markdown_spans(text, quote_style, inline_code_style);
-            ChatHistory::push_wrapped_spans(&mut lines, &spans, width, quote_style, "│ ", "│ ");
-            continue;
-        }
-
-        if let Some(caps) = UNORDERED_LIST_RE.captures(source_line)
-            && let Some(text) = caps.get(1).map(|m| m.as_str())
-        {
-            let spans = inline_markdown_spans(text, list_style, inline_code_style);
-            ChatHistory::push_wrapped_spans(&mut lines, &spans, width, list_style, "• ", "  ");
-            continue;
-        }
-
-        if let Some(caps) = ORDERED_LIST_RE.captures(source_line) {
-            let idx = caps.get(1).map(|m| m.as_str()).unwrap_or("1");
-            if let Some(text) = caps.get(2).map(|m| m.as_str()) {
-                let spans = inline_markdown_spans(text, list_style, inline_code_style);
-                let prefix = format!("{idx}. ");
+        Node::Code(code) => {
+            let label = code.lang.as_deref().unwrap_or("code");
+            ChatHistory::push_wrapped_lines(&mut lines, label, width, normal.fg(ACCENT), "", "");
+            for source in code.value.split('\n') {
+                let mut row = Vec::new();
                 ChatHistory::push_wrapped_spans(
-                    &mut lines, &spans, width, list_style, &prefix, "   ",
+                    &mut row,
+                    &[RenderedSpan {
+                        text: source.to_string(),
+                        style: normal,
+                    }],
+                    width.saturating_sub(2),
+                    normal,
+                    "",
+                    "",
                 );
-                continue;
+                lines.extend(prefixed(row, "│ ", "│ ", normal.fg(Color::DarkGray), width));
             }
         }
-
-        let spans = inline_markdown_spans(source_line, normal_style, inline_code_style);
-        ChatHistory::push_wrapped_spans(&mut lines, &spans, width, normal_style, "", "");
+        Node::Table(table) => lines = table::render(table, width, normal),
+        Node::List(list) => {
+            for (index, item) in list.children.iter().enumerate() {
+                let mut marker = if list.ordered {
+                    format!("{}. ", list.start.unwrap_or(1).saturating_add(index as u32))
+                } else {
+                    String::from("• ")
+                };
+                if let Node::ListItem(item) = item
+                    && let Some(checked) = item.checked
+                {
+                    marker.push_str(if checked { "[x] " } else { "[ ] " });
+                }
+                let indent = " ".repeat(crate::components::display_width(&marker));
+                let child = blocks(item, width.saturating_sub(indent.len()), normal);
+                lines.extend(prefixed(child, &marker, &indent, normal, width));
+            }
+        }
+        Node::Blockquote(_) => {
+            let mut child = Vec::new();
+            for node in node.children().into_iter().flatten() {
+                append_block(
+                    &mut child,
+                    blocks(node, width.saturating_sub(2), normal),
+                    normal,
+                );
+            }
+            lines = prefixed(child, "│ ", "│ ", normal.fg(Color::DarkGray), width);
+        }
+        Node::ThematicBreak(_) => {
+            lines.push(ChatHistory::single_span_line(
+                "─".repeat(width.min(32)),
+                normal.fg(Color::DarkGray),
+            ));
+        }
+        Node::Definition(_) => {}
+        _ => {
+            if let Some(children) = node.children() {
+                for child in children {
+                    append_block(&mut lines, blocks(child, width, normal), normal);
+                }
+            } else {
+                ChatHistory::push_wrapped_lines(
+                    &mut lines,
+                    &node.to_string(),
+                    width,
+                    normal,
+                    "",
+                    "",
+                );
+            }
+        }
     }
-
-    if lines.is_empty() {
-        lines.push(ChatHistory::single_span_line(String::new(), normal_style));
-    }
-
     lines
 }
 
-fn strip_non_code_inline_markdown(text: &str) -> String {
-    let mut text = Cow::Borrowed(text);
-    for (regex, replacement) in [
-        (&IMAGE_RE, "$1"),
-        (&LINK_RE, "$1 ($2)"),
-        (&STRONG_RE, "$1$2"),
-        (&EMPHASIS_RE, "$1$2"),
-        (&STRIKE_RE, "$1"),
-        (&ESCAPE_RE, "$1"),
-    ] {
-        if let Cow::Owned(replaced) = regex.replace_all(&text, replacement) {
-            text = Cow::Owned(replaced);
-        }
+pub(super) fn append_block(lines: &mut Vec<RenderedLine>, next: Vec<RenderedLine>, normal: Style) {
+    if next.is_empty() {
+        return;
     }
-    text.into_owned()
+    if !lines.is_empty() {
+        lines.push(ChatHistory::single_span_line(String::new(), normal));
+    }
+    lines.extend(next);
 }
 
-fn inline_markdown_spans(
-    text: &str,
-    base_style: Style,
-    inline_code_style: Style,
-) -> Vec<RenderedSpan> {
+fn prefixed(
+    lines: Vec<RenderedLine>,
+    first: &str,
+    rest: &str,
+    style: Style,
+    width: usize,
+) -> Vec<RenderedLine> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut line)| {
+            let prefix = if index == 0 { first } else { rest };
+            line.spans.insert(
+                0,
+                RenderedSpan {
+                    text: crate::components::fitting_prefix(prefix, width)
+                        .0
+                        .to_string(),
+                    style,
+                },
+            );
+            line
+        })
+        .collect()
+}
+
+fn inline(node: &Node, style: Style) -> Vec<RenderedSpan> {
+    let style = match node {
+        Node::Strong(_) => style.add_modifier(Modifier::BOLD),
+        Node::Emphasis(_) => style.add_modifier(Modifier::ITALIC),
+        Node::Delete(_) => style.add_modifier(Modifier::CROSSED_OUT),
+        Node::InlineCode(_) => style.fg(ACCENT),
+        Node::Link(_) => style.add_modifier(Modifier::UNDERLINED),
+        _ => style,
+    };
     let mut spans = Vec::new();
-    let mut cursor = 0usize;
-
-    for caps in INLINE_CODE_RE.captures_iter(text) {
-        let Some(full) = caps.get(0) else {
-            continue;
+    if let Some(children) = node.children() {
+        for child in children {
+            spans.extend(inline(child, style));
+        }
+    } else {
+        let text = match node {
+            Node::Break(_) => String::from("\n"),
+            Node::Image(image) => image.alt.clone(),
+            Node::ImageReference(image) => image.alt.clone(),
+            _ => node.to_string(),
         };
-        let before = &text[cursor..full.start()];
-        let before_plain = strip_non_code_inline_markdown(before);
-        if !before_plain.is_empty() {
-            spans.push(RenderedSpan {
-                text: before_plain,
-                style: base_style,
-            });
-        }
-
-        if let Some(code) = caps.get(1).map(|m| m.as_str())
-            && !code.is_empty()
-        {
-            spans.push(RenderedSpan {
-                text: code.to_string(),
-                style: inline_code_style,
-            });
-        }
-
-        cursor = full.end();
-    }
-
-    let tail = &text[cursor..];
-    let tail_plain = strip_non_code_inline_markdown(tail);
-    if !tail_plain.is_empty() {
         spans.push(RenderedSpan {
-            text: tail_plain,
-            style: base_style,
+            text: crate::components::normalize_terminal_text(&text).into_owned(),
+            style,
         });
     }
-
-    if spans.is_empty() {
-        spans.push(RenderedSpan {
-            text: String::new(),
-            style: base_style,
-        });
+    if let Node::Link(link) = node {
+        let label: String = spans.iter().map(|span| span.text.as_str()).collect();
+        if label != link.url {
+            spans.push(RenderedSpan {
+                text: format!(
+                    " ({})",
+                    crate::components::normalize_terminal_text(&link.url)
+                ),
+                style,
+            });
+        }
     }
-
     spans
 }
 
 #[cfg(test)]
 mod tests {
-    use super::strip_non_code_inline_markdown;
+    use super::*;
 
     #[test]
-    fn inline_replacements_preserve_order_and_plain_text() {
-        for (input, expected) in [
-            ("plain 你好 text", "plain 你好 text"),
-            ("**unterminated [label", "**unterminated [label"),
-            (
-                "![**image**](asset) [~~link~~](url) __bold__ _italic_ \\[literal\\]",
-                "image link (url) bold italic [literal]",
-            ),
-            ("[label](url) after", "label (url) after"),
-        ] {
-            assert_eq!(strip_non_code_inline_markdown(input), expected);
+    fn reference_links_render_like_inline_links() {
+        let render = |source: &str| {
+            render_message(source, 80, Style::default())
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| (span.text, span.style))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        for reference in ["[docs][ref]", "[ref][]", "[ref]", "[docs][ ReF ]"] {
+            let label = if reference.contains("docs") {
+                "docs"
+            } else {
+                "ref"
+            };
+            let source =
+                format!("{reference}\n\n[ref]: https://example.com\n[REF]: https://ignored.com");
+            assert_eq!(
+                render(&source),
+                render(&format!("[{label}](https://example.com)"))
+            );
         }
+        for reference in ["[docs][A  B]", "[docs][a\tb]"] {
+            let source = format!("{reference}\n\n[a b]: https://example.com");
+            assert_eq!(render(&source), render("[docs](https://example.com)"));
+        }
+    }
+
+    #[test]
+    fn unresolved_reference_links_remain_visible() {
+        let source = "[docs][missing] [other][] [shortcut]";
+        let lines = render_message(source, 80, Style::default());
+        let text: String = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.text.as_str())
+            .collect();
+        assert_eq!(text, source);
+    }
+
+    #[test]
+    fn nested_emphasis_and_inline_code_keep_their_styles() {
+        let lines = render_message(
+            "**bold and *italic*** with `a_b`",
+            80,
+            Style::default().fg(Color::White),
+        );
+        let spans: Vec<_> = lines.iter().flat_map(|line| &line.spans).collect();
+        assert!(spans.iter().any(|span| {
+            span.text.contains("italic")
+                && span
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD | Modifier::ITALIC)
+        }));
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.text == "a_b" && span.style.fg == Some(ACCENT))
+        );
+    }
+
+    #[test]
+    fn code_preserves_blank_lines_and_unfinished_fences() {
+        let lines = render_message("```rust\nfirst\n\nlast", 80, Style::default());
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+        assert_eq!(text, ["rust", "│ first", "│ ", "│ last"]);
     }
 }

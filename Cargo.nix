@@ -10218,6 +10218,10 @@ rec {
             packageId = "kraai-types";
           }
           {
+            name = "markdown";
+            packageId = "markdown";
+          }
+          {
             name = "ratatui";
             packageId = "ratatui";
             features = [ "all-widgets" "macros" "scrolling-regions" "serde" ];

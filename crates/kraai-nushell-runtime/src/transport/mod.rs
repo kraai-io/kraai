@@ -62,7 +62,7 @@ async fn read_greeting(transport: &mut (impl tokio::io::AsyncRead + Unpin)) -> i
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "incompatible Nushell host protocol: expected {HOST_PROTOCOL_VERSION}, received {version}. Rebuild Kraai and kraai-nushell-host together with `just build`"
+                "incompatible Nushell host protocol: expected {HOST_PROTOCOL_VERSION}, received {version}. Rebuild the runtime and its configured Nushell host together"
             ),
         ));
     }

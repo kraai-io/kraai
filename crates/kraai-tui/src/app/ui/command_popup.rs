@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Clear, Paragraph, Widget},
 };
 
 use super::super::AppState;
@@ -68,10 +68,6 @@ pub(super) fn render_command_popup(
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .title("Command (Tab/Down next, Shift-Tab/Up prev, Enter run)")
-                .borders(Borders::ALL),
-        )
+        .block(super::menu_block().title("Command (Tab/Down next, Shift-Tab/Up prev, Enter run)"))
         .render(popup_area, buf);
 }
