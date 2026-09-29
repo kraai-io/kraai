@@ -6,12 +6,17 @@ const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 
 impl App {
     pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
+        let mut changed = false;
+        if let Some(events) = self.state.palette.expire(Instant::now()) {
+            for event in events {
+                changed |= self.handle_input_event(event);
+            }
+        }
         if !event::poll(timeout)? {
-            return Ok(false);
+            return Ok(changed);
         }
 
         let batch_started = Instant::now();
-        let mut changed = false;
         loop {
             if self.handle_terminal_event(event::read()?) {
                 changed = true;

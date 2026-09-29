@@ -26,13 +26,11 @@ impl App {
             KeyCode::Home => self.state.error_scroll.set(0),
             KeyCode::End => self.state.error_scroll.set(usize::MAX),
             KeyCode::Char('c') if key.modifiers.is_empty() => {
-                if let Some(error) = self.state.last_error.clone() {
-                    self.state.status = match self
-                        .copy_text_to_clipboard(&error, super::feedback::CopyTarget::Error)
-                    {
-                        Ok(()) => error.clone(),
-                        Err(error) => format!("Copy failed: {error}"),
-                    };
+                if let Some(error) = self.state.last_error.clone()
+                    && let Err(error) =
+                        self.copy_text_to_clipboard(&error, super::feedback::CopyTarget::Error)
+                {
+                    self.state.status = format!("Copy failed: {error}");
                 }
             }
             KeyCode::Char('d') if key.modifiers.is_empty() => {

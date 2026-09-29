@@ -1,10 +1,12 @@
 use super::{CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub(super) struct TerminalPalette {
     pub(super) muted: Option<Color>,
     pending: bool,
+    deadline: Option<Instant>,
     response: String,
     held: Vec<CrosstermEvent>,
 }
@@ -24,10 +26,17 @@ impl TerminalPalette {
                 .write_all(b"\x1b]4;8;?\x07")
                 .and_then(|()| std::io::stdout().flush())
                 .is_ok();
+            self.deadline = self
+                .pending
+                .then(|| Instant::now() + Duration::from_secs(1));
         }
     }
 
     pub(super) fn filter(&mut self, event: CrosstermEvent) -> PaletteEvent {
+        if let Some(mut held) = self.expire(Instant::now()) {
+            held.push(event);
+            return PaletteEvent::Replay(held);
+        }
         if !self.pending {
             return PaletteEvent::Pass(event);
         }
@@ -61,6 +70,7 @@ impl TerminalPalette {
             if let Some(color) = parse_color(&self.response) {
                 self.muted = Some(color);
                 self.pending = false;
+                self.deadline = None;
                 self.held.clear();
                 self.response.clear();
                 return PaletteEvent::Consumed;
@@ -89,8 +99,20 @@ impl TerminalPalette {
     }
 
     fn replay(&mut self) -> PaletteEvent {
+        self.pending = false;
+        self.deadline = None;
         self.response.clear();
         PaletteEvent::Replay(std::mem::take(&mut self.held))
+    }
+
+    pub(super) fn expire(&mut self, now: Instant) -> Option<Vec<CrosstermEvent>> {
+        if !self.deadline.is_some_and(|deadline| now >= deadline) {
+            return None;
+        }
+        self.pending = false;
+        self.deadline = None;
+        self.response.clear();
+        Some(std::mem::take(&mut self.held))
     }
 }
 
@@ -115,6 +137,64 @@ fn parse_color(response: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_releases_partial_input_and_stops_intercepting_keys() {
+        let now = Instant::now();
+        let start = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
+        for partial in [false, true] {
+            let mut palette = TerminalPalette {
+                pending: true,
+                deadline: Some(now + Duration::from_secs(1)),
+                ..Default::default()
+            };
+            if partial {
+                assert!(matches!(
+                    palette.filter(start.clone()),
+                    PaletteEvent::Consumed
+                ));
+            }
+            assert!(palette.expire(now).is_none());
+            assert_eq!(
+                palette.expire(now + Duration::from_secs(1)),
+                Some(if partial { vec![start.clone()] } else { vec![] })
+            );
+            assert!(matches!(
+                palette.filter(start.clone()),
+                PaletteEvent::Pass(_)
+            ));
+            assert!(palette.expire(now + Duration::from_secs(2)).is_none());
+        }
+    }
+
+    #[test]
+    fn malformed_reply_disables_capture_and_late_input_is_replayed_in_order() {
+        let start = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
+        let mut palette = TerminalPalette {
+            pending: true,
+            ..Default::default()
+        };
+        palette.filter(start.clone());
+        assert!(matches!(
+            palette.filter(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char('g'),
+                KeyModifiers::CONTROL
+            ))),
+            PaletteEvent::Replay(_)
+        ));
+        assert!(matches!(
+            palette.filter(start.clone()),
+            PaletteEvent::Pass(_)
+        ));
+        palette.pending = true;
+        palette.filter(start.clone());
+        palette.deadline = Some(Instant::now());
+        let next = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        match palette.filter(next.clone()) {
+            PaletteEvent::Replay(events) => assert_eq!(events, vec![start, next]),
+            _ => unreachable!(),
+        }
+    }
 
     #[test]
     fn palette_reply_accepts_both_terminators_and_preserves_other_input() {
