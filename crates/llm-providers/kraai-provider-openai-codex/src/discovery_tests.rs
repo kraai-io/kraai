@@ -395,7 +395,7 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     for request in requests.iter().filter(|request| request.starts_with("GET")) {
         assert!(
             request
-                .starts_with("GET /backend-api/codex/models?client_version=0.154.0 HTTP/1.1\r\n")
+                .starts_with("GET /backend-api/codex/models?client_version=0.156.1 HTTP/1.1\r\n")
         );
         assert!(
             request
