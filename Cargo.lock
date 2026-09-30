@@ -3087,6 +3087,8 @@ dependencies = [
  "nu-cmd-lang",
  "nu-command",
  "nu-config",
+ "nu-engine",
+ "nu-parser",
  "nu-protocol",
  "rand 0.10.2",
  "rustix 1.1.5",

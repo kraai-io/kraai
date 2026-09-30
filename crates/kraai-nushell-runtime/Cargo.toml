@@ -23,6 +23,8 @@ nu-cli = { workspace = true }
 nu-cmd-lang = { workspace = true }
 nu-command = { workspace = true }
 nu-config = { workspace = true }
+nu-engine = { workspace = true }
+nu-parser = { workspace = true }
 nu-protocol = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
