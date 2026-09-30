@@ -25,7 +25,7 @@ use crate::streaming::adapt_responses_stream;
 use crate::wire::{ListModelsResponse, ResponsesCustomTool, ResponsesRequest};
 
 const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
-const CODEX_CLIENT_VERSION: &str = "0.156.1";
+const CODEX_CLIENT_VERSION: &str = "0.159.2";
 const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must use HTTPS; HTTP requires proxy-token authentication and a loopback endpoint, or allow_http_proxy for a private network endpoint";
 
 #[cfg(test)]
