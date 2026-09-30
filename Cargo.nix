@@ -9538,6 +9538,14 @@ rec {
             packageId = "nu-config";
           }
           {
+            name = "nu-engine";
+            packageId = "nu-engine";
+          }
+          {
+            name = "nu-parser";
+            packageId = "nu-parser";
+          }
+          {
             name = "nu-protocol";
             packageId = "nu-protocol";
           }

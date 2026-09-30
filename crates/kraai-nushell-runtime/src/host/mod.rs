@@ -1,3 +1,7 @@
+mod startup;
+
+use startup::load_startup_files;
+
 use kraai_command_core::{CommandRegistry, CommandRegistryError};
 use kraai_types::NushellStartup;
 use nu_protocol::PipelineData;
@@ -20,6 +24,7 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
     let mut engine_state = build_engine(&request, commands)?;
     let mut stack = Stack::new();
     load_startup_files(&request, &mut engine_state, &mut stack)?;
+    engine_state.report_log = Default::default();
     Ok(nu_cli::eval_source(
         &mut engine_state,
         &mut stack,
@@ -28,55 +33,6 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
         PipelineData::empty(),
         false,
     ))
-}
-
-fn load_startup_files(
-    request: &HostRequest,
-    engine_state: &mut EngineState,
-    stack: &mut Stack,
-) -> Result<(), HostError> {
-    if request.nushell_startup != NushellStartup::Inherit || !engine_state.config_dirs.is_resolved()
-    {
-        return Ok(());
-    }
-    for path in [
-        engine_state.config_dirs.env_file.to_path_buf(),
-        engine_state.config_dirs.config_file.to_path_buf(),
-    ] {
-        let contents = match std::fs::read(&path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(HostError::Initialization(format!(
-                    "unable to read startup file '{}': {error}",
-                    path.display()
-                )));
-            }
-        };
-        let previous_file = engine_state.file.replace(path.clone());
-        let exit_code = nu_cli::eval_source(
-            engine_state,
-            stack,
-            &contents,
-            &path.to_string_lossy(),
-            PipelineData::empty(),
-            false,
-        );
-        engine_state.file = previous_file;
-        if exit_code != 0 {
-            return Err(HostError::Initialization(format!(
-                "startup file '{}' failed with exit code {exit_code}",
-                path.display()
-            )));
-        }
-        engine_state.merge_env(stack).map_err(|error| {
-            HostError::Initialization(format!(
-                "startup file '{}' failed to update the environment: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    Ok(())
 }
 
 fn validate_request(request: &HostRequest) -> Result<(), HostError> {
@@ -99,6 +55,7 @@ fn build_engine(
     request: &HostRequest,
     commands: Vec<Box<dyn nu_protocol::engine::Command>>,
 ) -> Result<EngineState, HostError> {
+    nu_command::tls::CRYPTO_PROVIDER.default();
     let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
         nu_cmd_lang::create_default_context(),
     ));

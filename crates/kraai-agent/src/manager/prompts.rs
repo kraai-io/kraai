@@ -10,7 +10,18 @@ let packages = cargo metadata --no-deps --format-version 1 | from json
 $packages.packages | select name version
 ```
 
-Use Nushell raw strings such as `r#'source code'#` for embedded code containing quotes or backslashes. Preserve the code literally inside the raw string; do not double quotes or escape backslashes.
+Use Nushell raw strings such as `r###'source code'###` for embedded code containing quotes or backslashes. Use the same number of hashes on both delimiters, increasing it if the content starts with that many hashes or contains the closing delimiter. Avoid the single-hash form: content beginning with `#`, such as Rust attributes or C preprocessor directives, can terminate it prematurely. Preserve the code literally inside the raw string; do not double quotes or escape backslashes.
+
+Parenthesize pipelines used as conditions, such as `if ($row.item | str contains $pair.0) { ... }`.
+
+```nu
+# timeout=10sec
+let source = r###'#[test]
+fn example() { assert_eq!("a\\b", "a\\b"); }'###
+if ($source | str contains '#[test]') {
+    print $source
+}
+```
 
 Minimize unnecessary model round trips by grouping independent inspections and predictable sequences into one script. Continue until the next step requires interpreting new evidence or making a decision. Label each result and stop dependent work when a prerequisite fails. Do not batch uncertain mutations merely to reduce turns.
 
