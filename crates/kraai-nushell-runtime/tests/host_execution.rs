@@ -652,3 +652,6 @@ mod images;
 
 #[path = "host_execution/startup.rs"]
 mod startup;
+
+#[path = "host_execution/http.rs"]
+mod http;

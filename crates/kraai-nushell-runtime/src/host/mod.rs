@@ -55,6 +55,7 @@ fn build_engine(
     request: &HostRequest,
     commands: Vec<Box<dyn nu_protocol::engine::Command>>,
 ) -> Result<EngineState, HostError> {
+    nu_command::tls::CRYPTO_PROVIDER.default();
     let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
         nu_cmd_lang::create_default_context(),
     ));
