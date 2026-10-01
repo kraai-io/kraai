@@ -24,6 +24,8 @@ nu-cmd-lang = { workspace = true }
 nu-command = { workspace = true }
 nu-config = { workspace = true }
 nu-engine = { workspace = true }
+nu-experimental = { workspace = true }
+nu-json = { workspace = true }
 nu-parser = { workspace = true }
 nu-protocol = { workspace = true }
 rand = { workspace = true }

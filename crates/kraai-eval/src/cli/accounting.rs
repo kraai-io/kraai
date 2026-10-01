@@ -139,7 +139,7 @@ pub(super) fn format_accounting(accounting: &AccountingSummary) -> String {
         |cost| format!("~{cost}"),
     );
     format!(
-        "Estimated API cost: {cost}\nInput context: {} mean, {} peak, {} last recorded; {} measured / {} model requests",
+        "Estimated standard-tier API cost: {cost}\nInput context: {} mean, {} peak, {} last recorded; {} measured / {} model requests",
         context
             .mean_input_tokens
             .map_or_else(|| String::from("unknown"), |value| format!("{value:.1}")),

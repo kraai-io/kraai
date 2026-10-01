@@ -1,10 +1,11 @@
+mod output;
+mod script;
 mod startup;
 
 use startup::load_startup_files;
 
 use kraai_command_core::{CommandRegistry, CommandRegistryError};
 use kraai_types::NushellStartup;
-use nu_protocol::PipelineData;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
@@ -25,13 +26,10 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
     let mut stack = Stack::new();
     load_startup_files(&request, &mut engine_state, &mut stack)?;
     engine_state.report_log = Default::default();
-    Ok(nu_cli::eval_source(
+    Ok(script::evaluate(
         &mut engine_state,
         &mut stack,
         &request.source,
-        "kraai-script.nu",
-        PipelineData::empty(),
-        false,
     ))
 }
 
@@ -67,6 +65,7 @@ fn build_engine(
     nu_cli::gather_parent_env_vars(&mut engine_state, &request.workspace_root);
 
     let mut working_set = StateWorkingSet::new(&engine_state);
+    output::register(&mut working_set)?;
     for command in commands {
         let name = command.name().as_bytes();
         if working_set.find_decl(name).is_some() {
@@ -79,6 +78,16 @@ fn build_engine(
         .merge_delta(delta)
         .map_err(|error| HostError::Initialization(error.to_string()))?;
     Ok(engine_state)
+}
+
+fn apply_variable_deletions(engine_state: &mut EngineState, stack: &mut Stack) {
+    for var_id in stack.deletions.drain(..) {
+        if let Some(active_id) = engine_state.scope.active_overlays.last()
+            && let Some((_, overlay)) = engine_state.scope.overlays.get_mut(active_id.get())
+        {
+            overlay.vars.retain(|_, id| *id != var_id);
+        }
+    }
 }
 
 fn configure_startup_paths(

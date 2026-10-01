@@ -64,6 +64,7 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
         models: RwLock::new(DiscoveredModels::default()),
         rejected_reasoning: RwLock::new(RejectedReasoning::default()),
         model_configs: BTreeMap::new(),
+        fast_models: std::collections::BTreeSet::new(),
         base_url,
         proxy_token: Some("test-token".into()),
         allow_http_proxy: false,
@@ -760,6 +761,83 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
                     .iter()
                     .any(|item| item["type"] == "compaction_trigger")
             })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn fast_mode_preserves_model_and_reasoning_for_generation_and_compaction() -> Result<()> {
+    let models = json!({"models": [{
+        "slug": "gpt-6-astra", "display_name": "Astra", "visibility": "list",
+        "default_reasoning_level": "low",
+        "supported_reasoning_levels": [{"effort": "low", "description": "Low"}]
+    }]})
+    .to_string();
+    let mut responses = vec![("200 OK", models)];
+    responses.extend((0..6).map(|_| ("200 OK", "data: [DONE]\n\n".into())));
+    let (base_url, server) = server(responses).await?;
+    let mut provider = provider(base_url)?;
+    provider.cache_models().await?;
+    let model_id = ModelId::new("gpt-6-astra-low");
+    for enabled in [None, Some(true), Some(false)] {
+        if let Some(enabled) = enabled {
+            provider
+                .register_model(ModelConfig {
+                    id: model_id.clone(),
+                    provider_id: provider.id.clone(),
+                    config: DynamicConfig::from([(
+                        "fast_mode".into(),
+                        DynamicValue::Bool(enabled),
+                    )]),
+                })
+                .await?;
+        }
+        for compact in [false, true] {
+            let request = ProviderRequest {
+                messages: vec![ConversationItem::User {
+                    content: "Hello".into(),
+                }],
+                cacheable_messages: None,
+                script_tool: None,
+            };
+            provider
+                .send_responses_request(
+                    &model_id,
+                    request,
+                    &ProviderRequestContext::default(),
+                    compact,
+                )
+                .await?;
+        }
+    }
+    for (request, enabled) in server
+        .await??
+        .iter()
+        .skip(1)
+        .zip([false, false, true, true, false, false])
+    {
+        let (_, body) = request
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| eyre!("missing body"))?;
+        let body: Value = serde_json::from_str(body)?;
+        assert_eq!(body.get("model"), Some(&json!("gpt-6-astra")));
+        assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("low")));
+        assert_eq!(
+            body.get("service_tier"),
+            enabled.then_some(&json!("priority"))
+        );
+    }
+    let invalid = DynamicConfig::from([("fast_mode".into(), DynamicValue::String("true".into()))]);
+    assert_eq!(OpenAiCodexFactory::validate_model_config(&invalid).len(), 1);
+    assert!(
+        provider
+            .register_model(ModelConfig {
+                id: model_id,
+                provider_id: provider.id.clone(),
+                config: invalid
+            })
+            .await
+            .is_err()
     );
     Ok(())
 }

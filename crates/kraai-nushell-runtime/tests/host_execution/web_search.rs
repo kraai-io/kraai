@@ -29,7 +29,7 @@ async fn web_search_works_without_sandbox_network_access() {
     listener.set_nonblocking(true).expect("nonblocking fixture");
     let address = listener.local_addr().expect("fixture address");
     let mut execution = plan(
-        format!("try {{ http get --max-time 1sec http://{address} | ignore }} catch {{}}; kraai-web-search 'test query' --limit 3 --max-chars 100 | to json --raw").into_bytes(),
+        format!("try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ null }}; kraai-web-search 'test query' --limit 3 --max-chars 100").into_bytes(),
         &workspace,
     );
     execution.capabilities =

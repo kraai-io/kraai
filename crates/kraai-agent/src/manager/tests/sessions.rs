@@ -95,7 +95,7 @@ async fn session_defaults_follow_profiles_available_in_the_target_workspace() ->
         workspace_a.join(".kraai/agents.toml"),
         r#"[[profiles]]
 id = "workspace-only"
-extends = "plan"
+extends = "coding"
 display_name = "Workspace only"
 description = "Local profile"
 system_prompt = "Local instructions"
@@ -188,7 +188,7 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding-no-sandbox"))
         .await?;
     let _request = manager
         .prepare_start_stream(
@@ -538,7 +538,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding-no-sandbox"))
         .await?;
     manager
         .add_message(

@@ -37,7 +37,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
     let profile_path = workspace.join(".kraai/agents.toml");
     let profile = |prompt: &str| {
         format!(
-            "[[profiles]]\nid = \"turn-snapshot\"\nextends = \"plan\"\nsystem_prompt = \"{prompt}\"\n"
+            "[[profiles]]\nid = \"turn-snapshot\"\nextends = \"coding\"\nsystem_prompt = \"{prompt}\"\n"
         )
     };
     tokio::fs::write(&profile_path, profile("ORIGINAL TURN PROMPT")).await?;
@@ -149,7 +149,7 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
     persist_open_effect(&mut manager, &session_id, &file_path).await?;
     tokio::fs::write(&file_path, "new contents\nsecond line\n").await?;
@@ -190,7 +190,7 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
     persist_open_effect(&mut manager, &session_id, &file_path).await?;
     tokio::fs::remove_file(&file_path).await?;
@@ -243,7 +243,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let request = manager
@@ -268,18 +268,50 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         request.provider_request.messages.get(1),
         Some(ConversationItem::User { .. })
     ));
-    assert!(prefix.contains("one `<tool_call>` block containing the complete script input"));
-    assert!(prefix.contains("end the response immediately after it"));
-    assert!(prefix.contains(
-        "convert their output to text with `lines` before applying row-oriented filters"
-    ));
-    assert!(prefix.contains(
-        "Do not leave a byte stream as the final pipeline value because Nushell renders it as an unhelpful hex dump"
-    ));
-    assert!(prefix.contains(
-        "prefer it over Nushell built-ins, external programs, or ad hoc file manipulation"
-    ));
+    assert!(prefix.contains("<tool_call>"));
+    assert!(prefix.contains("</tool_call>"));
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_examples_are_present_for_both_transports() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let session = manager.require_session(&session_id).await?;
+    let profile = manager.resolve_selected_profile(&session)?;
+    let mut previous_examples = None;
+
+    for transport in [
+        kraai_provider_core::ScriptToolTransport::TextEnvelope,
+        kraai_provider_core::ScriptToolTransport::NativeCustom,
+    ] {
+        let prompt = manager
+            .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir, transport)
+            .await?;
+        let prefix = prompt.prefix;
+
+        let examples = prefix
+            .split("```nu\n")
+            .skip(1)
+            .map(|block| {
+                block
+                    .split_once("\n```")
+                    .map(|(script, _)| script.to_owned())
+                    .ok_or_else(|| eyre!("unclosed Nushell example"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        assert!(!examples.is_empty());
+        for example in &examples {
+            assert!(example.trim_start().starts_with("# timeout="));
+        }
+        if let Some(previous) = previous_examples {
+            assert_eq!(examples, previous);
+        }
+        previous_examples = Some(examples);
+    }
+
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -305,12 +337,12 @@ async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()
     let system_prompt = request_prefix(&request);
 
     assert!(system_prompt.contains(include_str!("../../profiles/build_code.md").trim()));
-    assert!(system_prompt.contains(
-        "make the smallest targeted edits that express the change instead of replacing the whole file"
-    ));
-    assert!(system_prompt.contains(
-        "Each range is inclusive, must exist in the current file, and its old_text must exactly match"
-    ));
+    let edit_command = kraai_command_catalog::EDIT_FILE;
+    assert!(system_prompt.contains(edit_command.description));
+    assert!(system_prompt.contains(edit_command.signature_help));
+    for example in edit_command.examples {
+        assert!(system_prompt.contains(example.script_input));
+    }
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -332,7 +364,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let request = manager
@@ -365,7 +397,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let first_request = manager
@@ -429,7 +461,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
         .set_workspace_dir(&session_id, workspace_a.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let first_request = manager
@@ -477,7 +509,7 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
         .set_workspace_dir(&session_id, workspace_dir.clone())
         .await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
     manager
         .add_message(

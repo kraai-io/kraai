@@ -87,17 +87,32 @@ fn missing_usage_or_unrecorded_requests_never_look_like_complete_cheap_runs() ->
 }
 
 #[test]
-fn non_default_service_tiers_stay_unpriced_and_stale_sidecars_are_rejected() -> Result<()> {
+fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<()> {
     let (root, options) = fixture()?;
     let path = root.join("proxy.events.jsonl");
-    let mut request = event(100, 0, 10, 0);
-    request
-        .as_object_mut()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
-        .insert(String::from("service_tier"), serde_json::json!("priority"));
-    fs::write(&path, format!("{request}\n"))?;
+    let standard = event(100, 400, 20, 10);
+    fs::write(&path, format!("{standard}\n"))?;
+    let baseline = analyze_requests(&path, 1, &options)?;
+    for tier in ["default", "auto", "priority", "fast", "ultrafast", "flex"] {
+        let mut request = standard.clone();
+        request
+            .as_object_mut()
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
+            .insert("service_tier".into(), serde_json::json!(tier));
+        fs::write(&path, format!("{request}\n"))?;
+        let result = analyze_requests(&path, 1, &options)?;
+        ensure!(result.complete_context().is_some());
+        ensure!(result.complete_cost() == Some(Usd(640_000)));
+        ensure!(result.pricing_basis() == baseline.pricing_basis());
+        ensure!(
+            result
+                .requests
+                .first()
+                .and_then(|request| request.service_tier.as_deref())
+                == Some(tier)
+        );
+    }
     let result = analyze_requests(&path, 1, &options)?;
-    ensure!(result.complete_context().is_some() && result.complete_cost().is_none());
     let sidecar = root.join("request-accounting.json");
     fs::write(&sidecar, serde_json::to_vec(&result)?)?;
     ensure!(load_accounting(&sidecar)?.is_some());

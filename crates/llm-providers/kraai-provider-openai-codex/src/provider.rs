@@ -181,7 +181,21 @@ impl OpenAiCodexFactory {
                     default_value: None,
                 },
             ],
-            model_fields: ConfiguredModelMetadata::fields(),
+            model_fields: {
+                let mut fields = ConfiguredModelMetadata::fields();
+                fields.push(FieldDefinition {
+                    key: "fast_mode".into(),
+                    label: "Fast Mode".into(),
+                    value_kind: FieldValueKind::Boolean,
+                    required: false,
+                    secret: false,
+                    help_text: Some(
+                        "Use priority processing with higher subscription usage".into(),
+                    ),
+                    default_value: Some(DynamicValue::Bool(false)),
+                });
+                fields
+            },
             supports_model_discovery: true,
             default_provider_id_prefix: "openai-codex".to_string(),
         }
@@ -237,7 +251,17 @@ impl OpenAiCodexFactory {
     }
 
     pub fn validate_model_config(config: &DynamicConfig) -> Vec<ValidationError> {
-        ConfiguredModelMetadata::validate(config)
+        let mut errors = ConfiguredModelMetadata::validate(config);
+        if config
+            .get("fast_mode")
+            .is_some_and(|value| value.as_bool().is_none())
+        {
+            errors.push(ValidationError {
+                field: "fast_mode".into(),
+                message: "Fast Mode must be a boolean".into(),
+            });
+        }
+        errors
     }
 
     pub fn create(&self, id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
@@ -279,6 +303,7 @@ impl OpenAiCodexFactory {
             models: RwLock::new(DiscoveredModels::default()),
             rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
+            fast_models: std::collections::BTreeSet::new(),
             base_url,
             proxy_token,
             allow_http_proxy,
@@ -293,6 +318,7 @@ pub struct OpenAiCodexProvider {
     models: RwLock<DiscoveredModels>,
     rejected_reasoning: RwLock<RejectedReasoning>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
+    fast_models: std::collections::BTreeSet<ModelId>,
     base_url: String,
     proxy_token: Option<String>,
     allow_http_proxy: bool,
@@ -326,7 +352,22 @@ impl Provider for OpenAiCodexProvider {
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
+        let fast_mode = model
+            .config
+            .get("fast_mode")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| eyre!("Fast Mode must be a boolean"))
+            })
+            .transpose()?
+            .unwrap_or(false);
         let metadata = ConfiguredModelMetadata::from_config(&model.config)?;
+        if fast_mode {
+            self.fast_models.insert(model.id.clone());
+        } else {
+            self.fast_models.remove(&model.id);
+        }
         self.model_configs.insert(model.id, metadata);
         Ok(())
     }
@@ -458,6 +499,7 @@ impl OpenAiCodexProvider {
         };
         let mut request = ResponsesRequest {
             model: resolved_model.api_model,
+            service_tier: self.fast_models.contains(model_id).then_some("priority"),
             instructions: normalized.instructions,
             input: normalized.input,
             reasoning: resolved_model.reasoning,
@@ -723,6 +765,7 @@ mod tests {
             models: RwLock::new(DiscoveredModels::default()),
             rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
+            fast_models: std::collections::BTreeSet::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,
             allow_http_proxy: false,

@@ -15,6 +15,10 @@ use crate::error::SandboxError;
 use crate::output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 use crate::platform::prepare_command;
 
+#[path = "output_capture.rs"]
+mod output_capture;
+use output_capture::OutputCapture;
+
 pub async fn run(
     mut plan: LaunchPlan,
     cancellation: CancellationToken,
@@ -191,25 +195,32 @@ async fn read_output(
     events: Option<UnboundedSender<OutputEvent>>,
     cancellation: CancellationToken,
 ) -> std::io::Result<Vec<u8>> {
-    let mut captured = Vec::new();
+    let mut captured = OutputCapture::new();
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
         let read = tokio::select! {
             biased;
-            () = cancellation.cancelled() => return Ok(captured),
+            () = cancellation.cancelled() => break,
             read = reader.read(&mut buffer) => read?,
         };
         if read == 0 {
-            return Ok(captured);
+            break;
         }
         let bytes = buffer.get(..read).unwrap_or(&buffer);
-        captured.extend_from_slice(bytes);
-        if let Some(events) = &events {
-            let _ = events.send(OutputEvent {
-                stream,
-                bytes: bytes.to_vec(),
-            });
-        }
+        emit_output(&events, stream, captured.push(bytes));
+    }
+    emit_output(&events, stream, captured.finish());
+    Ok(captured.into_bytes())
+}
+
+fn emit_output(events: &Option<UnboundedSender<OutputEvent>>, stream: OutputStream, bytes: &[u8]) {
+    if !bytes.is_empty()
+        && let Some(events) = events
+    {
+        let _ = events.send(OutputEvent {
+            stream,
+            bytes: bytes.to_vec(),
+        });
     }
 }
 

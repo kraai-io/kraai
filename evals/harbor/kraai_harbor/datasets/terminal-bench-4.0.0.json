@@ -402,6 +402,7 @@
       }
     ],
     "disabled_tasks": {
+      "hof-topology-interpenetration": "Temporarily disabled: web search exposes benchmark solutions and expected answers",
       "fp8-rmsnorm-gemm": "Requires an H100 GPU; disabled for local evaluation",
       "jax-speedrun-gpu": "Requires an H100 GPU; disabled for local evaluation",
       "math-eval-grader": "Requires an H100 GPU; disabled for local evaluation",

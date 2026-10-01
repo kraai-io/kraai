@@ -229,7 +229,7 @@ fn session_snapshot_at(
             created_at: 0,
             updated_at: 0,
             title: None,
-            selected_profile_id: Some(String::from("plan")),
+            selected_profile_id: Some(String::from("coding")),
             profile_locked: pending_script.is_some(),
             waiting_for_approval: pending_script.is_some(),
             is_streaming: false,
@@ -241,7 +241,7 @@ fn session_snapshot_at(
         profiles: AgentProfilesState {
             profiles: Vec::new(),
             warnings: Vec::new(),
-            selected_profile_id: Some(String::from("plan")),
+            selected_profile_id: Some(String::from("coding")),
             profile_locked: false,
         },
         activity,

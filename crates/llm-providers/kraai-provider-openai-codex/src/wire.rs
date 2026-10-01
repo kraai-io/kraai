@@ -5,6 +5,8 @@ use crate::messages::ResponsesRequestItem;
 #[derive(Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<&'static str>,
     pub instructions: String,
     pub input: Vec<ResponsesRequestItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +162,7 @@ mod tests {
     #[test]
     fn responses_request_serializes_prompt_cache_key_when_present() {
         let request = ResponsesRequest {
+            service_tier: None,
             model: "gpt-5.2-codex".to_string(),
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
@@ -181,6 +184,7 @@ mod tests {
     #[test]
     fn responses_request_omits_prompt_cache_key_when_missing() {
         let request = ResponsesRequest {
+            service_tier: None,
             model: "gpt-5.2-codex".to_string(),
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),
@@ -204,6 +208,7 @@ mod tests {
     #[test]
     fn responses_request_registers_exactly_one_raw_custom_tool() {
         let request = ResponsesRequest {
+            service_tier: None,
             model: "gpt-5.6-sol".to_string(),
             instructions: "instructions".to_string(),
             input: Vec::<ResponsesRequestItem>::new(),

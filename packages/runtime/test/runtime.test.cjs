@@ -23,7 +23,7 @@ function fixture(t) {
 
 test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: 30000 }, async (t) => {
   const { directory, create } = fixture(t);
-  writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "plan"\n');
+  writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "coding"\n');
   const runtime = create();
   assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
   const settings = unwrap(await runtime.getSettings());

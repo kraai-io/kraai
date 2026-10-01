@@ -110,7 +110,7 @@ fn begin_file_section(
     approximate_tokens: Option<usize>,
 ) {
     if sections.is_empty() {
-        sections.push_str("Opened Files\nThese files are freshly read from disk and included in every model request until closed. Treat them as the authoritative current on-disk contents. Prefer this section over repeated shell reads of these paths. Close files with kraai-close-files after extracting needed information, finishing an edit, or moving to other work, unless you still need their contents. You can reopen them later. Context estimates below use roughly one token per four UTF-8 bytes of line-numbered text; actual token counts and cache hits depend on the model.\n\nFormat: <line>|<content>.\n\n");
+        sections.push_str("Opened Files\nThese are the current on-disk contents, refreshed for this request. Keep files open while you need their contents. Closing a file with kraai-close-files removes its contents from this section on the next request; the contents are not saved in conversation history.\n\nFormat: <line>|<content>.\n\n");
     } else {
         sections.push_str("\n\n");
     }

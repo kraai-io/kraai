@@ -135,38 +135,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
     } else {
         (SandboxCapability::HostRead, NushellStartup::Inherit)
     };
-    let common = || {
-        (
-            CapabilityPermissionRules::default(),
-            EscalationPolicy::Prompt,
-            EnvironmentPolicy::Inherit,
-            nushell_startup,
-            PathPolicy::Packaged,
-        )
-    };
-    let (plan_rules, plan_escalation, plan_environment, plan_startup, plan_path) = common();
-    let (coding_rules, coding_escalation, coding_environment, coding_startup, coding_path) =
-        common();
-    let plan = AgentProfile {
-        id: String::from("plan"),
-        display_name: String::from("Plan"),
-        description: String::from("Read-only planning and investigation agent"),
-        system_prompt: include_str!("plan_code.md").trim().to_string(),
-        commands: vec![
-            String::from("kraai-open-files"),
-            String::from("kraai-close-files"),
-            String::from("kraai-web-search"),
-            String::from("kraai-view-image"),
-        ],
-        permissions: SandboxPermissionSet::new([read_capability, SandboxCapability::Network])
-            .expect("valid plan capabilities"),
-        permission_rules: plan_rules,
-        escalation_policy: plan_escalation,
-        environment: plan_environment,
-        nushell_startup: plan_startup,
-        path: plan_path,
-        source: AgentProfileSource::BuiltIn,
-    };
+
     let coding = AgentProfile {
         id: String::from("coding"),
         display_name: String::from("Coding"),
@@ -185,11 +154,11 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             SandboxCapability::Network,
         ])
         .expect("valid coding capabilities"),
-        permission_rules: coding_rules,
-        escalation_policy: coding_escalation,
-        environment: coding_environment,
-        nushell_startup: coding_startup,
-        path: coding_path,
+        permission_rules: CapabilityPermissionRules::default(),
+        escalation_policy: EscalationPolicy::Prompt,
+        environment: EnvironmentPolicy::Inherit,
+        nushell_startup,
+        path: PathPolicy::Packaged,
         source: AgentProfileSource::BuiltIn,
     };
     let coding_no_sandbox = AgentProfile {
@@ -200,7 +169,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             .expect("valid unsandboxed coding capabilities"),
         ..coding.clone()
     };
-    vec![plan, coding, coding_no_sandbox]
+    vec![coding, coding_no_sandbox]
 }
 
 fn workspace_profiles_path(workspace_dir: &Path) -> PathBuf {
@@ -467,28 +436,19 @@ mod tests {
     fn built_ins_match_the_locked_command_and_capability_sets() {
         let workspace = temp_dir("built-ins");
         let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
-        let plan = resolved
-            .profiles
-            .iter()
-            .find(|profile| profile.id == "plan")
-            .unwrap();
+        assert_eq!(
+            resolved
+                .profiles
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["coding", "coding-no-sandbox"]
+        );
         let coding = resolved
             .profiles
             .iter()
             .find(|profile| profile.id == "coding")
             .unwrap();
-        assert_eq!(plan.commands.len(), 4);
-        assert!(
-            plan.permissions
-                .capabilities()
-                .contains(SandboxCapability::WorkspaceRead)
-        );
-        assert!(
-            !plan
-                .permissions
-                .capabilities()
-                .contains(SandboxCapability::WorkspaceWrite)
-        );
         assert_eq!(coding.commands.len(), 5);
         assert!(
             coding
@@ -496,31 +456,29 @@ mod tests {
                 .capabilities()
                 .contains(SandboxCapability::WorkspaceWrite)
         );
-        for profile in [plan, coding] {
-            assert_eq!(profile.environment, EnvironmentPolicy::Inherit);
-            assert_eq!(
-                profile.nushell_startup,
-                if cfg!(windows) {
-                    NushellStartup::Clean
-                } else {
-                    NushellStartup::Inherit
-                }
-            );
-            assert_eq!(
-                profile
-                    .permissions
-                    .capabilities()
-                    .contains(SandboxCapability::HostRead),
-                !cfg!(windows)
-            );
-            assert!(
-                !profile
-                    .permissions
-                    .capabilities()
-                    .contains(SandboxCapability::HostWrite)
-            );
-            assert!(!profile.permissions.capabilities().is_unsandboxed());
-        }
+        assert_eq!(coding.environment, EnvironmentPolicy::Inherit);
+        assert_eq!(
+            coding.nushell_startup,
+            if cfg!(windows) {
+                NushellStartup::Clean
+            } else {
+                NushellStartup::Inherit
+            }
+        );
+        assert_eq!(
+            coding
+                .permissions
+                .capabilities()
+                .contains(SandboxCapability::HostRead),
+            !cfg!(windows)
+        );
+        assert!(
+            !coding
+                .permissions
+                .capabilities()
+                .contains(SandboxCapability::HostWrite)
+        );
+        assert!(!coding.permissions.capabilities().is_unsandboxed());
         let coding_no_sandbox = resolved
             .profiles
             .iter()
@@ -551,8 +509,8 @@ mod tests {
         fs::write(
             config_dir.join("agents.toml"),
             r#"[[profiles]]
-id = "plan"
-display_name = "Custom Plan"
+id = "coding"
+display_name = "Custom Coding"
 description = "custom"
 system_prompt = "custom prompt"
 commands = ["kraai-open-files"]
@@ -567,16 +525,17 @@ path = "packaged"
         .unwrap();
         let resolved = resolve_profiles(&workspace, &workspace.join("global"), &commands());
         assert!(resolved.warnings.is_empty());
-        let plan = resolved
+        let coding = resolved
             .profiles
             .iter()
-            .find(|profile| profile.id == "plan")
+            .find(|profile| profile.id == "coding")
             .unwrap();
-        assert_eq!(plan.display_name, "Custom Plan");
-        assert_eq!(plan.escalation_policy, EscalationPolicy::Deny);
-        assert_eq!(plan.environment, EnvironmentPolicy::Minimal);
+        assert_eq!(coding.display_name, "Custom Coding");
+        assert_eq!(coding.escalation_policy, EscalationPolicy::Deny);
+        assert_eq!(coding.environment, EnvironmentPolicy::Minimal);
         assert!(
-            plan.permissions
+            coding
+                .permissions
                 .capabilities()
                 .contains(SandboxCapability::HostRead)
         );

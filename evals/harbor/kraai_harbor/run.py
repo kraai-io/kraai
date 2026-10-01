@@ -81,7 +81,7 @@ def build_command(
     command = [
         sys.executable,
         "-m",
-        "harbor.cli.main",
+        "kraai_harbor.cli",
         "run",
         *(["--config", str(task_config)] if task_config else ["--dataset", args.dataset]),
         "--jobs-dir",
@@ -200,7 +200,7 @@ def main() -> None:
                 command = [
                     sys.executable,
                     "-m",
-                    "harbor.cli.main",
+                    "kraai_harbor.cli",
                     "jobs",
                     "resume",
                     "--job-path",

@@ -655,3 +655,6 @@ mod startup;
 
 #[path = "host_execution/http.rs"]
 mod http;
+
+#[path = "host_execution/output.rs"]
+mod output;
