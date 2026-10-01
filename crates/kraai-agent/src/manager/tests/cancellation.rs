@@ -210,7 +210,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
             .add_script_result_to_history(
                 &session_id,
                 MessageId::new(Ulid::generate()),
-                "plan".into(),
+                "coding".into(),
                 ToolCallId::new(if matching { "call" } else { "different-call" }),
                 "cancelled".into(),
             )

@@ -3088,6 +3088,8 @@ dependencies = [
  "nu-command",
  "nu-config",
  "nu-engine",
+ "nu-experimental",
+ "nu-json",
  "nu-parser",
  "nu-protocol",
  "rand 0.10.2",

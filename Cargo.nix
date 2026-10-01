@@ -9542,6 +9542,14 @@ rec {
             packageId = "nu-engine";
           }
           {
+            name = "nu-experimental";
+            packageId = "nu-experimental";
+          }
+          {
+            name = "nu-json";
+            packageId = "nu-json";
+          }
+          {
             name = "nu-parser";
             packageId = "nu-parser";
           }
@@ -13716,7 +13724,7 @@ rec {
           "nu-protocol" = [ "dep:nu-protocol" ];
           "preserve_order" = [ "linked-hash-map" "linked-hash-map/serde_impl" "serde_json/preserve_order" ];
         };
-        resolvedDefaultFeatures = [ "linked-hash-map" "nu-protocol" "preserve_order" ];
+        resolvedDefaultFeatures = [ "default" "linked-hash-map" "nu-protocol" "preserve_order" ];
       };
       "nu-parser" = rec {
         crateName = "nu-parser";

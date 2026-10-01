@@ -84,7 +84,7 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
             0 => harness.app.state.config_loaded = true,
             1 => harness.app.state.selected_provider_id = Some(String::from("provider")),
             2 => harness.app.state.selected_model_id = Some(String::from("model")),
-            _ => harness.app.state.selected_profile_id = Some(String::from("plan")),
+            _ => harness.app.state.selected_profile_id = Some(String::from("coding")),
         }
     }
 
@@ -98,7 +98,7 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
     assert!(matches!(
         harness.drain_requests().as_slice(),
         [RuntimeRequest::CreateSession { profile_id, .. }]
-            if profile_id.as_deref() == Some("plan")
+            if profile_id.as_deref() == Some("coding")
     ));
     assert_eq!(
         harness

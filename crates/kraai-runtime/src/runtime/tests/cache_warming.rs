@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use color_eyre::eyre::{Result, eyre};
+use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use kraai_provider_core::{
     CacheWarmingPolicy, Model, ModelConfig, Provider, ProviderManager, ProviderRequest,
@@ -21,7 +22,7 @@ enum WarmResult {
     Failure,
     PartialFailure,
     NoUsage,
-    Stall,
+    DelayedSuccess,
     WaitForCancellation,
 }
 
@@ -31,6 +32,7 @@ struct WarmingProvider {
     calls: CapturedRequests,
     result: WarmResult,
     entered: CancellationToken,
+    release: CancellationToken,
 }
 
 #[async_trait]
@@ -62,11 +64,6 @@ impl Provider for WarmingProvider {
             } else {
                 2
             },
-            timeout: if matches!(self.result, WarmResult::Stall) {
-                Duration::from_millis(100)
-            } else {
-                Duration::from_secs(60)
-            },
             ..Default::default()
         })
     }
@@ -86,10 +83,13 @@ impl Provider for WarmingProvider {
             match self.result {
                 WarmResult::Failure => return Err(eyre!("warming rejected")),
                 WarmResult::NoUsage => return Ok(Box::pin(stream::empty())),
-                WarmResult::Stall | WarmResult::WaitForCancellation => {
+                WarmResult::WaitForCancellation => {
                     return Ok(Box::pin(stream::pending()));
                 }
-                WarmResult::Success | WarmResult::PartialFailure | WarmResult::InvalidPolicy => {}
+                WarmResult::Success
+                | WarmResult::DelayedSuccess
+                | WarmResult::PartialFailure
+                | WarmResult::InvalidPolicy => {}
             }
             context.retry_observer().unwrap().before_attempt(1).await?;
         }
@@ -113,7 +113,17 @@ impl Provider for WarmingProvider {
         if first && matches!(self.result, WarmResult::PartialFailure) {
             events.push(Err(eyre!("stream failed after usage")));
         }
-        Ok(Box::pin(stream::iter(events)))
+        let release = self.release.clone();
+        let delayed = first && matches!(self.result, WarmResult::DelayedSuccess);
+        Ok(Box::pin(
+            stream::once(async move {
+                if delayed {
+                    release.cancelled().await;
+                }
+                stream::iter(events)
+            })
+            .flatten(),
+        ))
     }
 }
 
@@ -125,9 +135,11 @@ async fn fixture(
     kraai_agent::PendingStreamRequest,
     CapturedRequests,
     CancellationToken,
+    CancellationToken,
 )> {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let entered = CancellationToken::new();
+    let release = CancellationToken::new();
     let mut providers = ProviderManager::new();
     providers.register_provider(
         ProviderId::new("mock"),
@@ -135,6 +147,7 @@ async fn fixture(
             calls: calls.clone(),
             result,
             entered: entered.clone(),
+            release: release.clone(),
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers)
@@ -160,12 +173,12 @@ async fn fixture(
         .push(ConversationItem::System {
             text: "fresh pinned files".into(),
         });
-    Ok((harness, session, request, calls, entered))
+    Ok((harness, session, request, calls, entered, release))
 }
 
 #[tokio::test]
 async fn warming_discards_outputs_and_accounts_separately_before_the_real_request() -> Result<()> {
-    let (harness, session, request, calls, _) = fixture(WarmResult::Success).await?;
+    let (harness, session, request, calls, _, _) = fixture(WarmResult::Success).await?;
     let message_id = request.message_id.clone();
     let providers = harness
         .runtime
@@ -227,14 +240,13 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
 }
 
 #[tokio::test]
-async fn warming_errors_missing_usage_and_timeouts_still_send_the_real_request() -> Result<()> {
+async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Result<()> {
     for mode in [
         WarmResult::Failure,
         WarmResult::PartialFailure,
         WarmResult::NoUsage,
-        WarmResult::Stall,
     ] {
-        let (harness, session, request, calls, _) = fixture(mode).await?;
+        let (harness, session, request, calls, _, _) = fixture(mode).await?;
         let providers = harness
             .runtime
             .agent_manager
@@ -271,7 +283,7 @@ async fn warming_errors_missing_usage_and_timeouts_still_send_the_real_request()
 
 #[tokio::test]
 async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting() -> Result<()> {
-    let (harness, session, request, calls, entered) =
+    let (harness, session, request, calls, entered, _) =
         fixture(WarmResult::WaitForCancellation).await?;
     let providers = harness
         .runtime
@@ -306,7 +318,7 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
 
 #[tokio::test]
 async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> {
-    let (harness, session, request, calls, _) = fixture(WarmResult::InvalidPolicy).await?;
+    let (harness, session, request, calls, _, _) = fixture(WarmResult::InvalidPolicy).await?;
     let providers = harness
         .runtime
         .agent_manager
@@ -324,6 +336,70 @@ async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> 
     .await;
     assert!(matches!(result, StreamDriveResult::Completed(_)));
     assert_eq!(calls.lock().unwrap().len(), 1);
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn warming_waits_for_stream_completion_and_usage_before_the_real_request() -> Result<()> {
+    let (harness, session, request, calls, entered, release) =
+        fixture(WarmResult::DelayedSuccess).await?;
+    let providers = harness
+        .runtime
+        .agent_manager
+        .read()
+        .await
+        .cloned_provider_manager();
+    let message_id = request.message_id.clone();
+    let mut task = tokio::spawn(RuntimeCore::drive_stream(
+        session.clone(),
+        request,
+        providers,
+        harness.runtime.agent_manager.clone(),
+        harness.runtime.event_tx.clone(),
+        harness.runtime.session_state_barrier.clone(),
+    ));
+    entered.cancelled().await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(16), &mut task)
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    let store = harness
+        .runtime
+        .agent_manager
+        .read()
+        .await
+        .request_usage_store();
+    let requests = store.load(&session).await?;
+    assert_eq!(requests.len(), 1);
+    assert!(requests.values().all(|r| r.usage.is_none()));
+    release.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(5), task).await??;
+    assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    let requests = store.load(&session).await?;
+    assert_eq!(requests.len(), 2);
+    let warm = requests
+        .values()
+        .find(|r| r.message_id.as_str().starts_with("cache-warming-"))
+        .unwrap();
+    assert_eq!(warm.usage.as_ref().unwrap().input_tokens, 2000);
+    assert_eq!(
+        requests[&message_id].usage.as_ref().unwrap().input_tokens,
+        3000
+    );
+    let history = harness
+        .runtime
+        .agent_manager
+        .read()
+        .await
+        .get_chat_history(&session)
+        .await?;
+    assert!(
+        matches!(history[&message_id].content.assistant_items(), Some([kraai_types::AssistantItem::Text {text, ..}]) if text == "real answer")
+    );
     harness.shutdown().await;
     Ok(())
 }

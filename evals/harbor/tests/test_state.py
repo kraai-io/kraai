@@ -183,9 +183,9 @@ class StateTests(Fixture):
         available = {task["name"] for task in registry["tasks"]}
         eligible = eligible_tasks(TERMINAL_BENCH, available, [])
         self.assertEqual(len(available), 66)
-        self.assertEqual(len(eligible), 62)
+        self.assertEqual(len(eligible), 61)
         self.assertFalse(
-            set(select_tasks(TERMINAL_BENCH, list(eligible), 62))
+            set(select_tasks(TERMINAL_BENCH, list(eligible), 61))
             & set(registry["disabled_tasks"])
         )
         with self.assertRaisesRegex(ValueError, "temporarily disabled"):
@@ -205,8 +205,8 @@ class StateTests(Fixture):
         eligible = list(eligible_tasks(TERMINAL_BENCH, set(tasks), []))
         first = select_tasks(TERMINAL_BENCH, eligible, 5)
         self.assertEqual(first, [
-            "freecad-platform-drawing", "cad-model", "hof-topology-interpenetration",
-            "embedding-drift-monitor", "shadow-relay",
+            "freecad-platform-drawing", "cad-model", "embedding-drift-monitor",
+            "shadow-relay", "mvcc-lsm-compaction",
         ])
         self.assertEqual(first, select_tasks(TERMINAL_BENCH, eligible[::-1], 10)[:5])
         ranked = order_tasks(TERMINAL_BENCH, tasks + ["unknown-task"])

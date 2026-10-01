@@ -226,7 +226,7 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let first_request = manager
@@ -266,7 +266,7 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
 
     let session_id = manager.create_session().await?;
     manager
-        .set_session_profile(&session_id, String::from("plan"))
+        .set_session_profile(&session_id, String::from("coding"))
         .await?;
 
     let first_request = manager
@@ -320,7 +320,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         .add_script_result_to_history(
             &session_id,
             MessageId::new(Ulid::generate()),
-            String::from("plan"),
+            String::from("coding"),
             call_id,
             String::from("42").into(),
         )

@@ -85,13 +85,7 @@ fn evaluate_startup(
             &block,
             PipelineData::empty(),
         )?;
-        for var_id in stack.deletions.drain(..) {
-            if let Some(active_id) = engine_state.scope.active_overlays.last()
-                && let Some((_, overlay)) = engine_state.scope.overlays.get_mut(active_id.get())
-            {
-                overlay.vars.retain(|_, id| *id != var_id);
-            }
-        }
+        super::apply_variable_deletions(engine_state, stack);
         let no_newline = matches!(&pipeline.body, PipelineData::ByteStream(..));
         pipeline
             .body

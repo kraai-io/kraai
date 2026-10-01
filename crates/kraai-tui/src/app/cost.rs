@@ -6,7 +6,11 @@ use super::{App, UsageModelKey};
 
 impl App {
     pub(super) fn costs_incomplete(&self) -> bool {
-        self.state.cost_recovery_list_pending || !self.state.cost_recovery_sessions.is_empty()
+        let total = summarize(self.state.launch_requests.values());
+        self.state.cost_recovery_list_pending
+            || !self.state.cost_recovery_sessions.is_empty()
+            || total.unknown != 0
+            || total.overflow
     }
 
     pub(super) fn update_costs(
@@ -86,10 +90,12 @@ impl App {
             ));
         }
         let total = summarize(self.state.launch_requests.values());
-        if self.costs_incomplete() {
+        if self.state.cost_recovery_list_pending || !self.state.cost_recovery_sessions.is_empty() {
             lines.push(format!(
                 "  total: {total} (incomplete: runtime events missed)"
             ));
+        } else if self.costs_incomplete() {
+            lines.push(format!("  total: {total} (incomplete cost accounting)"));
         } else {
             lines.push(format!("  total: {total}"));
         }

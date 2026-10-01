@@ -147,7 +147,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session_id);
     manager
-        .set_session_profile(&session_id, "plan".into())
+        .set_session_profile(&session_id, "coding-no-sandbox".into())
         .await?;
 
     let snapshot = reader.load().await?;

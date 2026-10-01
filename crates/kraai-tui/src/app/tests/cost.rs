@@ -33,6 +33,62 @@ fn evaluation_metrics_preserve_cache_write_only_usage() {
 }
 
 #[test]
+fn evaluation_costs_require_usage_prices_and_all_attempts() {
+    let mut harness = test_harness();
+    harness.app.state.launched_at = 100;
+    let mut request = pending_request("cache-warming-timeout");
+    request.subscription = true;
+    let update = |harness: &mut TestHarness, request: &kraai_types::RequestUsage| {
+        harness.app.update_costs(
+            "session",
+            std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())]),
+        );
+    };
+    update(&mut harness, &request);
+    assert_eq!(
+        harness.app.evaluation_metrics()["request_costs_complete"],
+        false
+    );
+    assert!(
+        harness
+            .app
+            .exit_cost_summary()
+            .iter()
+            .any(|line| line.contains("incomplete cost accounting"))
+    );
+
+    request.usage = Some(kraai_types::TokenUsage::default());
+    update(&mut harness, &request);
+    assert_eq!(
+        harness.app.evaluation_metrics()["request_costs_complete"],
+        false
+    );
+
+    request.usage = Some(kraai_types::TokenUsage {
+        cost: Some(kraai_types::RequestCost {
+            amount: kraai_types::Usd(0),
+            source: "test".into(),
+            rates: None,
+            priced_at: 1,
+            upstream: None,
+        }),
+        ..Default::default()
+    });
+    update(&mut harness, &request);
+    assert_eq!(
+        harness.app.evaluation_metrics()["request_costs_complete"],
+        true
+    );
+
+    request.unpriced_attempts = 1;
+    update(&mut harness, &request);
+    assert_eq!(
+        harness.app.evaluation_metrics()["request_costs_complete"],
+        false
+    );
+}
+
+#[test]
 fn lag_recovery_restores_costs_from_background_sessions() {
     let mut harness = test_harness();
     harness.app.state.launched_at = 100;

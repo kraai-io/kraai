@@ -112,13 +112,6 @@ impl RequestPricing {
             .model
             .as_deref()
             .ok_or_else(|| String::from("missing actual model"))?;
-        if request
-            .service_tier
-            .as_deref()
-            .is_some_and(|tier| !matches!(tier, "auto" | "default"))
-        {
-            return Err(String::from("service tier pricing is unavailable"));
-        }
         let model = ModelId::new(model);
         let quote = self
             .pricing

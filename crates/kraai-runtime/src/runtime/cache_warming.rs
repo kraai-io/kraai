@@ -27,52 +27,41 @@ pub(super) async fn warm_cache(
         session_id,
     )
     .with_image_resolver(images);
-    let result = tokio::time::timeout(warmup.timeout, async {
-        let mut stream = match providers
-            .generate_reply_stream(
-                provider_id.clone(),
-                model_id,
-                warmup.request.clone(),
-                context,
-            )
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming failed to start");
-                return Ok(false);
-            }
-        };
-        let mut received_usage = false;
-        while let Some(event) = stream.next().await {
-            match event {
-                Ok(ProviderStreamEvent::Usage(usage)) => {
-                    observer.save_usage(usage).await?;
-                    received_usage = true;
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming stream failed");
-                    return Ok(false);
-                }
-            }
-            tokio::task::yield_now().await;
-        }
-        if !received_usage {
-            tracing::warn!("Cache warming ended without usage");
-        }
-        Ok::<_, color_eyre::Report>(received_usage)
-    })
-    .await;
-    match result {
-        Ok(result) => {
-            if result? && let Some(usage) = observer.snapshot().await.usage {
-                warmup.complete(&usage)?;
-            }
-        }
+    let mut stream = match providers
+        .generate_reply_stream(
+            provider_id.clone(),
+            model_id,
+            warmup.request.clone(),
+            context,
+        )
+        .await
+    {
+        Ok(stream) => stream,
         Err(error) => {
-            tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming timed out; continuing with the conversation")
+            tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming failed to start");
+            return Ok(());
         }
+    };
+    let mut received_usage = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ProviderStreamEvent::Usage(usage)) => {
+                observer.save_usage(usage).await?;
+                received_usage = true;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(request_id = %request_id, elapsed_ms = started.elapsed().as_millis(), error = %format!("{error:#}"), "Cache warming stream failed");
+                return Ok(());
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    if !received_usage {
+        tracing::warn!("Cache warming ended without usage");
+    }
+    if received_usage && let Some(usage) = observer.snapshot().await.usage {
+        warmup.complete(&usage)?;
     }
     Ok(())
 }

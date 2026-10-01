@@ -20,7 +20,6 @@ pub struct CacheWarmingPolicy {
     pub min_requests_between_warmups: usize,
     pub max_requests_between_warmups: usize,
     pub refresh_after: Duration,
-    pub timeout: Duration,
 }
 
 impl Default for CacheWarmingPolicy {
@@ -31,7 +30,6 @@ impl Default for CacheWarmingPolicy {
             min_requests_between_warmups: 2,
             max_requests_between_warmups: 5,
             refresh_after: Duration::from_secs(300),
-            timeout: Duration::from_secs(15),
         }
     }
 }
@@ -69,7 +67,6 @@ struct CompletedWarmup {
 
 pub struct CacheWarmup {
     pub request: ProviderRequest,
-    pub timeout: Duration,
     prefix: Option<Prefix>,
     state: Arc<Mutex<State>>,
 }
@@ -196,7 +193,6 @@ impl ProviderManager {
                 script_tool: request.script_tool.clone(),
                 cacheable_messages: None,
             },
-            timeout: policy.timeout,
             prefix: Some(prefix),
             state,
         }))

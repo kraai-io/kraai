@@ -567,7 +567,7 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
     let mut execution = plan(
         format!(
             "kraai-open-files notes.txt | ignore; \
-             try {{ http get --max-time 1sec http://{address} | ignore }} catch {{}}; \
+             try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ ignore }}; \
              'effect-acknowledged'"
         )
         .into_bytes(),
@@ -655,3 +655,6 @@ mod startup;
 
 #[path = "host_execution/http.rs"]
 mod http;
+
+#[path = "host_execution/output.rs"]
+mod output;

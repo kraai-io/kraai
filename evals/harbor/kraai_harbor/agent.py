@@ -131,6 +131,20 @@ class KraaiAgent(ProfileAgent):
     def name() -> str:
         return "kraai"
 
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
+        executions = shlex.quote(str(self.environment_logs_dir / "script-executions"))
+        await self.exec_as_agent(
+            environment,
+            command=(
+                f'mkdir -p "$HOME/.kraai/data" {executions} && '
+                f'if [ "$(readlink "$HOME/.kraai/data/executions")" != {executions} ]; then '
+                f'ln -sT {executions} "$HOME/.kraai/data/executions"; fi'
+            ),
+        )
+        await super().run(instruction, environment, context)
+
     async def install(self, environment: BaseEnvironment) -> None:
         await super().install(environment)
         if self.skills_dir:

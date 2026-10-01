@@ -1,7 +1,7 @@
 use super::*;
 
 const SCRIPT_TOOL_NAME: &str = "kraai_nushell";
-const SCRIPT_TOOL_DESCRIPTION: &str = "Execute one complete Nushell script in Kraai's local, policy-controlled scripting environment. Input must be plaintext Nushell beginning with a metadata comment containing timeout.";
+const SCRIPT_TOOL_DESCRIPTION: &str = "Execute a Nushell script. Input must be plaintext Nushell beginning with a metadata comment containing timeout, such as # timeout=30sec.";
 
 impl AgentManager {
     pub async fn prepare_start_stream(
