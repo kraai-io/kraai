@@ -66,6 +66,7 @@ async fn redirects_and_ignored_results_stay_silent() {
     assert_script(
         r#"
 "ignored" | ignore
+try { error make {msg: 'expected failure'} } catch { ignore }
 "saved" out> result.txt
 let nothing = ("assigned" | str uppercase)
 open --raw result.txt
