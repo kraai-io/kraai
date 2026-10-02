@@ -154,15 +154,9 @@ fn index_lines(contents: &str) -> Vec<LineSpan> {
     let mut start = 0;
     for (index, byte) in bytes.iter().enumerate() {
         if *byte == b'\n' {
-            let content_end = if index > start && bytes.get(index.saturating_sub(1)) == Some(&b'\r')
-            {
-                index.saturating_sub(1)
-            } else {
-                index
-            };
             lines.push(LineSpan {
                 content_start: start,
-                content_end,
+                content_end: index.saturating_add(1),
             });
             start = index.saturating_add(1);
         }
@@ -199,25 +193,33 @@ mod tests {
             (
                 "alpha\nbeta\ngamma\ndelta\n",
                 vec![
-                    edit(4, 4, "delta", "last\nline"),
-                    edit(1, 1, "alpha", "a"),
-                    edit(2, 2, "beta", ""),
+                    edit(4, 4, "delta\n", "last\nline\n"),
+                    edit(1, 1, "alpha\n", "a\n"),
+                    edit(2, 2, "beta\n", ""),
                 ],
-                "a\n\ngamma\nlast\nline\n",
+                "a\ngamma\nlast\nline\n",
             ),
             (
                 "α\r\nβ\r\nkeep\r\n終",
-                vec![edit(4, 4, "終", "🦀"), edit(1, 2, "α\r\nβ", "é\nnew")],
-                "é\nnew\r\nkeep\r\n🦀",
+                vec![edit(4, 4, "終", "🦀"), edit(1, 2, "α\r\nβ\r\n", "é\nnew\n")],
+                "é\nnew\nkeep\r\n🦀",
             ),
             (
                 "\n\nend",
-                vec![edit(2, 2, "", "inserted")],
+                vec![edit(2, 2, "\n", "inserted\n")],
                 "\ninserted\nend",
             ),
             ("", vec![edit(1, 1, "", "first\n")], "first\n"),
             ("unchanged\r\n", vec![], "unchanged\r\n"),
             ("remove", vec![edit(1, 1, "remove", "")], ""),
+            ("remove\r\n", vec![edit(1, 1, "remove\r\n", "")], ""),
+            (
+                "one\ntwo\n",
+                vec![edit(1, 1, "one\n", "joined")],
+                "joinedtwo\n",
+            ),
+            ("one\n", vec![edit(1, 1, "one\n", "one")], "one"),
+            ("one", vec![edit(1, 1, "one", "one\r\n")], "one\r\n"),
         ];
 
         for (contents, edits, expected) in cases {
@@ -234,8 +236,8 @@ mod tests {
             Path::new("file"),
             "one\ntwo\nthree\n",
             &[
-                edit(2, 3, "two\nthree", "last"),
-                edit(1, 2, "one\ntwo", "first"),
+                edit(2, 3, "two\nthree\n", "last\n"),
+                edit(1, 2, "one\ntwo\n", "first\n"),
             ],
         )
         .unwrap_err();
@@ -258,8 +260,8 @@ mod tests {
             ExactTextEdit {
                 start_line: 1,
                 end_line: 1,
-                old_text: String::from("alpha"),
-                new_text: String::from("one"),
+                old_text: String::from("alpha\n"),
+                new_text: String::from("one\n"),
             },
             ExactTextEdit {
                 start_line: 2,
@@ -270,5 +272,18 @@ mod tests {
         ];
         let error = apply_exact_edits(Path::new("file"), "alpha\nbeta\n", &edits).unwrap_err();
         assert!(matches!(error, WorkspaceFsError::OldTextMismatch { .. }));
+    }
+
+    #[test]
+    fn matching_requires_exact_line_terminators() {
+        for (contents, old_text) in [("one\n", "one"), ("one\r\n", "one\n"), ("one", "one\n")] {
+            let error = apply_exact_edits(
+                Path::new("file"),
+                contents,
+                &[edit(1, 1, old_text, "new\n")],
+            )
+            .unwrap_err();
+            assert!(matches!(error, WorkspaceFsError::OldTextMismatch { .. }));
+        }
     }
 }

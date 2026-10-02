@@ -265,8 +265,8 @@ mod tests {
             &[ExactTextEdit {
                 start_line: 2,
                 end_line: 2,
-                old_text: String::from("beta"),
-                new_text: String::from("gamma"),
+                old_text: String::from("beta\n"),
+                new_text: String::from("gamma\n"),
             }],
         )
         .unwrap();
@@ -301,8 +301,8 @@ mod tests {
             &[ExactTextEdit {
                 start_line: 1,
                 end_line: 1,
-                old_text: String::from("original"),
-                new_text: String::from("replacement"),
+                old_text: String::from("original\n"),
+                new_text: String::from("replacement\n"),
             }],
         )
         .unwrap();

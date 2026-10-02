@@ -10,6 +10,8 @@ pub struct CommandMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandExample {
     pub description: &'static str,
+    pub setup: &'static str,
     pub script: &'static str,
     pub script_input: &'static str,
+    pub outcome: &'static str,
 }

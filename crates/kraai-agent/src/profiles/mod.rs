@@ -140,7 +140,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         id: String::from("coding"),
         display_name: String::from("Coding"),
         description: String::from("Implementation agent with workspace write access"),
-        system_prompt: include_str!("build_code.md").trim().to_string(),
+        system_prompt: String::new(),
         commands: vec![
             String::from("kraai-open-files"),
             String::from("kraai-close-files"),

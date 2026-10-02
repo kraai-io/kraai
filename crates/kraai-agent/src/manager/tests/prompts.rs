@@ -317,7 +317,7 @@ async fn script_examples_are_present_for_both_transports() -> Result<()> {
 }
 
 #[tokio::test]
-async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()> {
+async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
@@ -336,14 +336,84 @@ async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()
 
     let system_prompt = request_prefix(&request);
 
-    assert!(system_prompt.contains(include_str!("../../profiles/build_code.md").trim()));
+    let session = manager.require_session(&session_id).await?;
+    assert!(
+        manager
+            .resolve_selected_profile(&session)?
+            .system_prompt
+            .is_empty()
+    );
     let edit_command = kraai_command_catalog::EDIT_FILE;
     assert!(system_prompt.contains(edit_command.description));
     assert!(system_prompt.contains(edit_command.signature_help));
     for example in edit_command.examples {
         assert!(system_prompt.contains(example.script_input));
+        assert!(system_prompt.contains(example.setup));
+        assert!(system_prompt.contains(example.outcome));
     }
 
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn execution_context_reports_selected_profile_grants_and_policy() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let session = manager.require_session(&session_id).await?;
+    let mut profile = manager.resolve_selected_profile(&session)?;
+    profile.permissions =
+        kraai_types::SandboxPermissionSet::new([kraai_types::SandboxCapability::WorkspaceRead])?;
+    profile.permission_rules = kraai_types::CapabilityPermissionRules::new([(
+        kraai_types::SandboxCapability::Network,
+        kraai_types::EscalationPolicy::Deny,
+    )]);
+    profile.escalation_policy = kraai_types::EscalationPolicy::Prompt;
+    for unsandboxed in [false, true] {
+        if unsandboxed {
+            profile.permissions = kraai_types::SandboxPermissionSet::new([
+                kraai_types::SandboxCapability::NoSandbox,
+            ])?;
+        }
+        let prompt = manager
+            .build_turn_system_prompt(
+                &session_id,
+                &profile,
+                &session.workspace_dir,
+                kraai_provider_core::ScriptToolTransport::NativeCustom,
+            )
+            .await?;
+        let context = prompt
+            .prefix
+            .split_once("# Execution Context\n")
+            .and_then(|(_, tail)| tail.lines().next())
+            .ok_or_else(|| eyre!("missing execution context"))?;
+        let context: serde_json::Value = serde_json::from_str(context)?;
+        assert_eq!(
+            context.get("workspace"),
+            Some(&serde_json::json!(session.workspace_dir))
+        );
+        assert_eq!(
+            context.get("platform"),
+            Some(&serde_json::json!(std::env::consts::OS))
+        );
+        assert_eq!(
+            context.get("granted_capabilities"),
+            Some(&serde_json::json!([if unsandboxed {
+                "no-sandbox"
+            } else {
+                "workspace-read"
+            }]))
+        );
+        assert_eq!(
+            context.get("default_escalation_policy"),
+            Some(&serde_json::json!("prompt"))
+        );
+        assert_eq!(
+            context.get("capability_policy_overrides"),
+            Some(&serde_json::json!({"network": "deny"}))
+        );
+    }
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -619,7 +689,13 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         prompt.find("Global working agreements").unwrap()
             < prompt.find("Project agreements").unwrap()
     );
-    assert!(prompt.contains("Workspace instructions take precedence over user-level instructions"));
+    assert!(
+        prompt.contains("The workspace AGENTS.md takes precedence over the global user AGENTS.md")
+    );
+    assert!(
+        prompt
+            .contains("Explicit user requests in the conversation take precedence over both files")
+    );
     manager.complete_message(&request.message_id).await?;
 
     for contents in [
