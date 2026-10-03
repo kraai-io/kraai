@@ -43,7 +43,7 @@ command_metadata! {
     OPEN_FILES;
     id: "kraai-open-files";
     name: "kraai-open-files";
-    description: "Read text files into context as line-numbered snapshots. Contents stay available and refresh automatically when changed; no reread needed. Close when no longer needed. Use filtered reads for large data files.";
+    description: "Read text files into context as line-numbered snapshots. Contents stay available and refresh automatically when changed; no reread needed.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [];
 }
@@ -61,7 +61,7 @@ command_metadata! {
     EDIT_FILE;
     id: "kraai-edit-file";
     name: "kraai-edit-file";
-    description: "Atomically replace complete line ranges; batch edits in one array. Ranges are 1-based, inclusive, nonoverlapping, and refer to the original file. old_text must match exactly, including line endings but excluding line-number prefixes. new_text is verbatim: supply every newline (\\n or \\r\\n in double-quoted strings); empty text deletes the range. --create requires a new path.";
+    description: "Atomically replace complete line ranges using an array of edits. Ranges are 1-based, inclusive, nonoverlapping, and refer to the original file. old_text must match exactly, including line endings but excluding line-number prefixes. new_text is verbatim: supply every newline (\\n or \\r\\n in double-quoted strings); empty text deletes the range. --create requires a new path.";
     signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
     examples: [
         {
