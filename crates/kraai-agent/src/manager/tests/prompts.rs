@@ -693,13 +693,8 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         prompt.find("Global working agreements").unwrap()
             < prompt.find("Project agreements").unwrap()
     );
-    assert!(
-        prompt.contains("The workspace AGENTS.md takes precedence over the global user AGENTS.md")
-    );
-    assert!(
-        prompt
-            .contains("Explicit user requests in the conversation take precedence over both files")
-    );
+    assert!(prompt.contains("workspace AGENTS.md overrides global AGENTS.md"));
+    assert!(prompt.contains("Explicit user requests override AGENTS.md"));
     manager.complete_message(&request.message_id).await?;
 
     for contents in [
