@@ -16,16 +16,17 @@ fn request_prefix(request: &PendingStreamRequest) -> &str {
         .expect("request should start with its instruction prefix")
 }
 
-fn request_suffix(request: &PendingStreamRequest) -> &str {
+fn request_file_context(request: &PendingStreamRequest) -> String {
     request
         .provider_request
         .messages
-        .last()
-        .and_then(|message| match message {
-            ConversationItem::System { text } => Some(text.as_str()),
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::FileContext { text } => Some(text.as_str()),
             _ => None,
         })
-        .expect("request should end with its dynamic context")
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[tokio::test]
@@ -163,8 +164,8 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
         )
         .await?;
 
-    let system_prompt = request_suffix(&request);
-    assert!(system_prompt.contains("Opened Files"));
+    let system_prompt = request_file_context(&request);
+    assert!(system_prompt.contains("Opened file:"));
     assert!(system_prompt.contains(file_path_str.as_str()));
     assert!(system_prompt.contains("1|new contents"));
     assert!(system_prompt.contains("2|second line"));
@@ -214,18 +215,21 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
             .count(),
         1,
     );
-    let system_prompt = request_suffix(&request);
-    assert!(system_prompt.contains("Pinned File Updates"));
+    let system_prompt = request_file_context(&request);
+    assert!(system_prompt.contains("automatically unpinned"));
     assert!(system_prompt.contains("removed.txt"));
     assert!(!system_prompt.contains("[temporarily unavailable:"));
 
     let next_refresh = crate::context_state::refresh_context_state(
         manager.context_state_store.as_ref(),
         &session_id,
+        &request.message_id,
+        &[],
+        None,
     )
     .await?;
     assert!(next_refresh.notifications.is_empty());
-    assert!(next_refresh.prompt.is_empty());
+    assert!(next_refresh.snapshots.is_empty());
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -603,7 +607,7 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
         .await?
         .expect("continuation request should exist");
 
-    let system_prompt = request_suffix(&request);
+    let system_prompt = request_file_context(&request);
     assert!(system_prompt.contains("1|current"));
     assert!(matches!(
         request.provider_request.messages.first(),

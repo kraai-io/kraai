@@ -94,6 +94,15 @@ impl Summarizer {
     }
 }
 
+fn snapshots(text: &str) -> Vec<FileContextSnapshot> {
+    vec![FileContextSnapshot {
+        path: "file.rs".into(),
+        opened_event: "open".into(),
+        anchor: kraai_types::MessageId::new("result"),
+        text: text.into(),
+    }]
+}
+
 fn fixture(
     native: bool,
     mut events: Vec<ProviderStreamEvent>,
@@ -138,7 +147,7 @@ fn fixture(
     ];
     let original = assemble(
         "instructions",
-        "pinned files",
+        &snapshots("pinned files"),
         None,
         &history,
         Some(kraai_provider_core::ScriptToolDefinition {
@@ -152,7 +161,8 @@ fn fixture(
         session_id: "session".into(),
         original,
         prefix: "instructions".into(),
-        suffix: "pinned files".into(),
+        snapshots: snapshots("pinned files"),
+        file_notifications: vec![],
         history,
         previous: None,
         on_usage: None,
@@ -209,7 +219,16 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
         ensure!(requests.len() == 1);
         let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
-        ensure!(sent.messages == context.original.messages);
+        ensure!(
+            sent.messages
+                == context
+                    .original
+                    .messages
+                    .iter()
+                    .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>()
+        );
         ensure!(sent.script_tool == context.original.script_tool);
         drop(requests);
     }
@@ -235,13 +254,31 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
     ensure!(!saved.compatible_with(&ProviderId::new("test"), &ModelId::new("other")));
     let replay = assemble(
         "new instructions",
-        "updated files",
+        &snapshots("updated files"),
         Some(&saved),
         &[],
         context.original.script_tool.clone(),
     );
-    ensure!(replay.messages.get(2..4) == Some(saved.replacement.as_slice()));
-    ensure!(outcome.request.cacheable_messages == Some(1));
+    ensure!(replay.messages.get(1..3) == Some(saved.replacement.as_slice()));
+    ensure!(outcome.request.cacheable_messages.is_none());
+    ensure!(
+        matches!(outcome.request.messages.last(), Some(ConversationItem::FileContext { text }) if text == "pinned files")
+    );
+    ensure!(
+        outcome
+            .request
+            .messages
+            .iter()
+            .filter(|item| matches!(item, ConversationItem::FileContext { .. }))
+            .count()
+            == 1
+    );
+    ensure!(
+        !saved
+            .replacement
+            .iter()
+            .any(|item| matches!(item, ConversationItem::FileContext { .. }))
+    );
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
@@ -265,10 +302,14 @@ async fn fallback_uses_one_conversation_request_and_accepts_large_summary() -> R
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
         ensure!(requests.len() == 1);
         let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
-        ensure!(
-            sent.messages.get(..context.original.messages.len())
-                == Some(context.original.messages.as_slice())
-        );
+        let expected: Vec<_> = context
+            .original
+            .messages
+            .iter()
+            .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
+            .cloned()
+            .collect();
+        ensure!(sent.messages.get(..expected.len()) == Some(expected.as_slice()));
         ensure!(
             matches!(sent.messages.last(), Some(ConversationItem::User { content: text }) if text.display_text().contains("CONTEXT CHECKPOINT"))
         );
@@ -472,11 +513,14 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
     {
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
         ensure!(requests.len() == 2);
-        ensure!(
-            requests
-                .iter()
-                .all(|request| request.messages == context.original.messages)
-        );
+        let expected: Vec<_> = context
+            .original
+            .messages
+            .iter()
+            .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
+            .cloned()
+            .collect();
+        ensure!(requests.iter().all(|request| request.messages == expected));
     }
     let saved = context
         .store
@@ -643,5 +687,43 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
         }
         tokio::fs::remove_dir_all(root).await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_removal_notifications_survive_compaction_without_becoming_retained_users()
+-> Result<()> {
+    let (mut context, providers, _, root) = fixture(
+        true,
+        vec![ProviderStreamEvent::Compaction {
+            payload: serde_json::json!({"type":"compaction", "encrypted_content":"opaque"}),
+        }],
+        false,
+    );
+    context.file_notifications =
+        vec!["removed.txt was automatically unpinned because it no longer exists.".into()];
+    crate::context_state::append_notifications(&mut context.original, &context.file_notifications);
+    let outcome = context
+        .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
+        .await?;
+    ensure!(
+        outcome
+            .request
+            .messages
+            .last()
+            .is_some_and(|item| item.display_text().contains("removed.txt"))
+    );
+    let checkpoint = context
+        .store
+        .get(&MessageId::new("result"))
+        .await?
+        .ok_or_else(|| eyre!("missing checkpoint"))?;
+    ensure!(
+        !checkpoint
+            .replacement
+            .iter()
+            .any(|item| item.display_text().contains("removed.txt"))
+    );
+    tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }

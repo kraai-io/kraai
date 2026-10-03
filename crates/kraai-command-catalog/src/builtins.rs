@@ -43,16 +43,17 @@ command_metadata! {
     OPEN_FILES;
     id: "kraai-open-files";
     name: "kraai-open-files";
-    description: "Pin text files you expect to edit or consult across turns. Prefer pinning these files from the start so reads and later edits do not leave stale copies in conversation history. Their current contents are refreshed from disk for every model request until closed; use those contents instead of rereading them through shell commands. Keep files open through related edits, tests, and verification, then close them with kraai-close-files when you no longer expect to need their contents. Use shell reads for one-off inspection of files you do not expect to edit, returning relevant excerpts or summaries. Process large data files in scripts rather than including their full contents in context. If a file read through the shell later needs editing, pin it before editing and use its refreshed contents thereafter.";
+    description: "Read text files into context. Their contents stay available and refresh automatically before each response, replacing any earlier snapshot. Use the supplied contents without rereading the files. Close files with kraai-close-files when their contents are no longer needed. For large data files, use scripts to return relevant excerpts or summaries instead.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [
         {
-            description: "Pin a source file for future turns",
+            description: "Read a source file into context",
             timeout: "10sec",
             script: "kraai-open-files src/main.rs",
+            outcome: "Returns success and the resolved paths. A line-numbered snapshot is supplied alongside the script result and stays current until closed.",
         },
         {
-            description: "Pin several files without returning their contents",
+            description: "Read several files into context",
             timeout: "10sec",
             script: "kraai-open-files Cargo.toml src/lib.rs",
         },
@@ -63,7 +64,7 @@ command_metadata! {
     CLOSE_FILES;
     id: "kraai-close-files";
     name: "kraai-close-files";
-    description: "Remove files from future context when their contents are no longer needed. Their pinned contents disappear from the next request and are not saved in conversation history; you can no longer see them unless you read or reopen the files. Preserve facts needed later in your working notes before closing. Files remain on disk and can be reopened with kraai-open-files.";
+    description: "Remove file snapshots from subsequent model requests. Their contents are no longer visible unless you reopen or read the files. Files remain on disk.";
     signature_help: "kraai-close-files <path>... -> record<success: bool, paths: list<string>>";
     examples: [
         {

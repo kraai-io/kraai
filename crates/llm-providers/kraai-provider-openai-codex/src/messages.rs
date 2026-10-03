@@ -95,6 +95,14 @@ pub fn normalize_conversation(
                     None,
                 )));
             }
+            ConversationItem::FileContext { text } => {
+                input.push(ResponsesRequestItem::Message(text_message(
+                    "user",
+                    "input_text",
+                    text,
+                    None,
+                )));
+            }
             ConversationItem::User { content } => {
                 input.push(ResponsesRequestItem::Message(content_message(
                     content, images,
@@ -322,8 +330,8 @@ mod tests {
                     call_id: ToolCallId::new("call-1"),
                     output: "result".to_string().into(),
                 },
-                ConversationItem::System {
-                    text: "Current pinned files".to_string(),
+                ConversationItem::FileContext {
+                    text: "Current file snapshot".to_string(),
                 },
             ],
             &ProviderId::new("codex"),
@@ -359,8 +367,8 @@ mod tests {
                 },
                 {
                     "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": "Current pinned files"}]
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Current file snapshot"}]
                 }
             ])
         );

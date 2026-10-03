@@ -3,10 +3,9 @@ use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{CompactionCheckpoint, FileCompactionStore};
 
-fn prompt(prefix: &str, suffix: &str) -> prompts::TurnSystemPrompt {
+fn prompt(prefix: &str) -> prompts::TurnSystemPrompt {
     prompts::TurnSystemPrompt {
         prefix: prefix.to_string(),
-        suffix: suffix.to_string(),
         context_notifications: Vec::new(),
     }
 }
@@ -79,33 +78,24 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
         data_dir.clone(),
     );
-    for (prefix, suffix) in [
-        ("current instructions", "file version one"),
-        ("new instructions", "file version two"),
-    ] {
-        let (request, pending) = reopened
+    for prefix in ["current instructions", "new instructions"] {
+        let (request, pending, _) = reopened
             .build_model_context(
                 &session,
                 context(&reopened, &session).await?,
-                &prompt(prefix, suffix),
+                &prompt(prefix),
                 None,
                 None,
                 (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             )
             .await?;
         assert!(pending.is_none());
-        assert_eq!(request.cacheable_messages, Some(request.messages.len() - 1));
-        assert_eq!(request.messages.len(), 4);
+        assert_eq!(request.cacheable_messages, None);
+        assert_eq!(request.messages.len(), 3);
         assert_eq!(
             request.messages.first(),
             Some(&ConversationItem::System {
                 text: prefix.into()
-            })
-        );
-        assert_eq!(
-            request.messages.last(),
-            Some(&ConversationItem::System {
-                text: suffix.into()
             })
         );
         let summary = request
@@ -169,11 +159,11 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
     manager
         .add_message(&session, ChatRole::User, "replacement request".into(), None)
         .await?;
-    let (request, _) = manager
+    let (request, _, _) = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
-            &prompt("system", ""),
+            &prompt("system"),
             None,
             None,
             (&ProviderId::new("mock"), &ModelId::new("mock-model")),
@@ -204,11 +194,11 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
         .save(&checkpoint(first.clone(), None, "first summary"))
         .await?;
     for iteration in 0..2 {
-        let (request, _) = manager
+        let (request, _, _) = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
-                &prompt("system", "fresh files"),
+                &prompt("system"),
                 None,
                 None,
                 (&ProviderId::new("mock"), &ModelId::new("mock-model")),
@@ -269,7 +259,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
     manager
         .add_message(&session, ChatRole::User, "next".into(), None)
         .await?;
-    let system = prompt("instructions", &"pinned contents ".repeat(10000));
+    let system = prompt("instructions");
     let tool = ScriptToolDefinition {
         name: "tool".into(),
         description: "tool instructions".into(),
@@ -292,7 +282,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
         manager.message_store.save(&message).await?;
         let displayed = manager.get_session_context_usage(&session).await?.unwrap();
         assert_eq!(displayed.usage.used_context_tokens(), input + 1200);
-        let (_, pending) = manager
+        let (_, pending, _) = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
@@ -305,7 +295,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
         assert_eq!(pending.is_some(), expected);
     }
     for limit in [None, Some(0), Some(usize::MAX)] {
-        let (_, pending) = manager
+        let (_, pending, _) = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
@@ -336,8 +326,8 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     let assistant = manager
         .add_message(&session, ChatRole::Assistant, "answer".into(), None)
         .await?;
-    let system = prompt("instructions", "pinned contents");
-    let (_, pending) = manager
+    let system = prompt("instructions");
+    let (_, pending, _) = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -384,7 +374,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     manager
         .add_message(&session, ChatRole::User, "continue".into(), None)
         .await?;
-    let (_, pending) = manager
+    let (_, pending, _) = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -401,7 +391,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     let mut next_message = manager.message_store.get(&next).await?.unwrap();
     next_message.generation = message.generation;
     manager.message_store.save(&next_message).await?;
-    let (_, pending) = manager
+    let (_, pending, _) = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -457,11 +447,11 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
         let provider = ProviderId::new(provider);
         let model = ModelId::new(model);
         let history = manager.get_model_history(&tip, (&provider, &model)).await?;
-        let (request, _) = manager
+        let (request, _, _) = manager
             .build_model_context(
                 &session,
                 history,
-                &prompt("instructions", "files"),
+                &prompt("instructions"),
                 None,
                 None,
                 (&provider, &model),

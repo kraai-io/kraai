@@ -27,7 +27,9 @@ pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};
 pub use sessions::{FileSessionStore, SessionMeta, SessionStore};
 pub use usage::{FileRequestUsageStore, RequestUsageStore};
 
-pub use context::{ContextStateStore, FileContextStateStore};
+pub use context::{
+    ContextStateDocument, ContextStateStore, FileContextSnapshot, FileContextStateStore,
+};
 pub use executions::{
     FileScriptExecutionStore, NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion,
     ScriptExecutionRecord, ScriptExecutionStore,

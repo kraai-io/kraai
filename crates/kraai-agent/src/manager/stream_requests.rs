@@ -75,7 +75,7 @@ impl AgentManager {
             .resolve_model_max_context(&provider_id, &model_id)
             .await;
         let prepared = async {
-            let prompt = self
+            let mut prompt = self
                 .build_turn_system_prompt(
                     session_id,
                     &profile,
@@ -83,7 +83,7 @@ impl AgentManager {
                     script_tool_transport,
                 )
                 .await?;
-            let (request, compaction) = self
+            let (request, compaction, notifications) = self
                 .build_model_context(
                     session_id,
                     context,
@@ -93,6 +93,7 @@ impl AgentManager {
                     (&provider_id, &model_id),
                 )
                 .await?;
+            prompt.context_notifications.extend(notifications);
             Ok::<_, color_eyre::Report>((prompt, request, compaction))
         }
         .await;
@@ -205,14 +206,14 @@ impl AgentManager {
         let script_tool_transport = self
             .providers
             .script_tool_transport(&provider_id, &model_id)?;
-        let system_prompt = self
+        let mut system_prompt = self
             .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
             .await?;
 
         let max_context = self
             .resolve_model_max_context(&provider_id, &model_id)
             .await;
-        let (provider_request, context_compaction) = self
+        let (provider_request, context_compaction, notifications) = self
             .build_model_context(
                 session_id,
                 context,
@@ -223,6 +224,7 @@ impl AgentManager {
             )
             .await?;
 
+        system_prompt.context_notifications.extend(notifications);
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),

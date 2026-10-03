@@ -51,7 +51,7 @@ impl AgentManager {
         script_tool: Option<ScriptToolDefinition>,
         max_context: Option<usize>,
         identity: (&ProviderId, &ModelId),
-    ) -> Result<(ProviderRequest, Option<ContextCompaction>)> {
+    ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
         let store = FileCompactionStore::new(&self.storage_root);
         let mut previous = None;
         let mut start = 0;
@@ -77,7 +77,21 @@ impl AgentManager {
                 },
                 other => other.clone(),
             });
+        let latest = history
+            .last()
+            .map(|message| message.id.clone())
+            .ok_or_else(|| eyre!("Cannot prepare file context without a conversation message"))?;
         let history: Vec<_> = history.into_iter().skip(start).collect();
+        let files = crate::context_state::refresh_context_state(
+            self.context_state_store.as_ref(),
+            session_id,
+            &latest,
+            &history,
+            previous
+                .as_ref()
+                .map(|checkpoint| &checkpoint.covered_through),
+        )
+        .await?;
         let superseded_usage: HashSet<_> = previous
             .iter()
             .flat_map(|checkpoint| &checkpoint.superseded_usage)
@@ -90,7 +104,7 @@ impl AgentManager {
             .map(|context| context.usage.used_context_tokens());
         let mut request = assemble(
             &prompt.prefix,
-            &prompt.suffix,
+            &files.snapshots,
             previous.as_ref(),
             &history,
             script_tool,
@@ -103,10 +117,8 @@ impl AgentManager {
             })
         {
             request.messages.insert(1, user.clone());
-            if let Some(boundary) = &mut request.cacheable_messages {
-                *boundary += 1;
-            }
         }
+        crate::context_state::append_notifications(&mut request, &files.notifications);
         let compaction = max_context
             .filter(|limit| {
                 *limit > 0
@@ -119,13 +131,14 @@ impl AgentManager {
                 session_id: session_id.to_string(),
                 original: request.clone(),
                 prefix: prompt.prefix.clone(),
-                suffix: prompt.suffix.clone(),
+                snapshots: files.snapshots,
+                file_notifications: files.notifications.clone(),
                 history,
                 previous,
                 on_usage: None,
                 usage_barrier: None,
                 image_resolver: None,
             });
-        Ok((request, compaction))
+        Ok((request, compaction, files.notifications))
     }
 }
