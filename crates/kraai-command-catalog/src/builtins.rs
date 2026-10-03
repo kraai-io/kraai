@@ -67,7 +67,7 @@ command_metadata! {
         {
             description: "Batch replacements and deletions",
             timeout: "10sec",
-            script: "kraai-edit-file settings.conf [\n    {start_line: 1, end_line: 1, old_text: \"enabled = false\\n\", new_text: (r###'enabled = true'### + \"\\n\")}\n    {start_line: 3, end_line: 3, old_text: \"obsolete = true\\n\", new_text: ''}\n]",
+            script: "kraai-edit-file settings.conf [\n    {start_line: 1, end_line: 1, old_text: \"enabled = false\\n\", new_text: \"enabled = true\\n\"}\n    {start_line: 3, end_line: 3, old_text: \"obsolete = true\\n\", new_text: ''}\n]",
             setup: "settings.conf: \"enabled = false\\nretries = 1\\nobsolete = true\\n\"",
             outcome: "settings.conf: \"enabled = true\\nretries = 1\\n\"",
         },

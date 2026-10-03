@@ -6,7 +6,7 @@ Run Nushell scripts starting with `# timeout=30sec` (any positive Nushell durati
 
 Each script starts a fresh shell in the workspace; shell state does not persist. Timeout kills the script and its children; completed writes remain.
 
-Use Nushell syntax, including `and`/`or`, `^` to disambiguate external commands, and parentheses around pipelines in conditions or expressions in record fields. Use raw strings like `r###'literal code'###` for embedded source; preserve their contents literally and increase the hash count if a delimiter conflicts. External output is a byte stream: use `lines` before row filters.
+Use raw strings like `r###'literal code'###` for embedded source; preserve their contents literally and increase the hash count if a delimiter conflicts. External output is a byte stream: use `lines` before row filters.
 
 Top-level statements emit results; assignments stay silent. Loops need `print`; functions and closures return their final pipeline. Text stays plain; structured values become JSON, with streamed items emitted separately. Each stdout/stderr stream is capped at 1 MiB; execution continues after truncation.
 
