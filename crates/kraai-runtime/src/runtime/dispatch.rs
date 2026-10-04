@@ -83,7 +83,9 @@ impl RuntimeCore {
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
         let _state_guard = if matches!(
             &command,
-            Command::GetSessionSnapshot { .. } | Command::CancelStream { .. }
+            Command::GetSessionSnapshot { .. }
+                | Command::CancelStream { .. }
+                | Command::CancelTurn { .. }
         ) {
             None
         } else {
@@ -205,6 +207,9 @@ impl RuntimeCore {
                     .await
                     .map_err(crate::RuntimeError::internal);
                 let _ = response.send(result);
+            }
+            Command::ReadImage { image, response } => {
+                respond(response, self.image_store.read(&image).await);
             }
             Command::SendMessage {
                 session_id,
@@ -428,6 +433,13 @@ impl RuntimeCore {
                 response,
             } => {
                 let cancelled = self.cancel_stream(session_id).await;
+                respond(response, cancelled);
+            }
+            Command::CancelTurn {
+                session_id,
+                response,
+            } => {
+                let cancelled = self.cancel_turn(session_id).await;
                 respond(response, cancelled);
             }
             Command::ContinueSession {

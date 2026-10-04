@@ -56,6 +56,12 @@ impl RuntimeCore {
                 agent.clear_active_turn(&completed_session);
                 drop(agent);
                 self.event_tx.finish_timer(&completed_session);
+                emit_event(
+                    &self.event_tx,
+                    Event::TurnCompleted {
+                        session_id: completed_session.clone(),
+                    },
+                );
                 self.schedule_queue_drain(&completed_session);
                 emit_event(
                     &self.event_tx,
@@ -177,6 +183,15 @@ impl RuntimeCore {
             profile: turn.profile,
         };
         self.prepare_script_execution(&request).await?;
+        emit_event(
+            &self.event_tx,
+            Event::ScriptPrepared {
+                session_id: session_id.clone(),
+                execution_id: request.id.to_string(),
+                call_id: request.call_id.to_string(),
+                source: script.input,
+            },
+        );
 
         match decision {
             ScriptDecision::Deny => {
@@ -239,7 +254,7 @@ impl RuntimeCore {
                 id: id.clone(),
                 session_id: session_id.to_string(),
                 source_message_id,
-                call_id,
+                call_id: call_id.clone(),
                 profile: turn.profile,
                 source: invalid.source,
                 requested_capabilities: invalid.requested_capabilities,
@@ -247,6 +262,15 @@ impl RuntimeCore {
                 timeout: invalid.timeout,
             })
             .await?;
+        emit_event(
+            &self.event_tx,
+            Event::ScriptPrepared {
+                session_id: session_id.to_string(),
+                execution_id: id.to_string(),
+                call_id: call_id.to_string(),
+                source: invalid.input,
+            },
+        );
         let completed = self
             .finish_prepared_execution(
                 &id,
@@ -300,7 +324,7 @@ impl RuntimeCore {
                 completed.record.result_message_id.clone(),
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
-                result,
+                result.clone(),
             )
             .await
             .with_context(|| {
@@ -311,6 +335,8 @@ impl RuntimeCore {
             Event::ScriptResultReady {
                 session_id: session_id.to_string(),
                 execution_id,
+                call_id: completed.record.call_id.to_string(),
+                output: result,
                 status: status.as_str().to_string(),
             },
         );
@@ -323,8 +349,11 @@ impl RuntimeCore {
             drop(agent);
             self.event_tx.finish_timer(session_id);
             self.schedule_queue_drain(session_id);
-        } else {
-            self.spawn_continuation(session_id.to_string());
+        } else if self.agent_manager.read().await.is_turn_active(session_id) {
+            self.spawn_continuation(
+                session_id.to_string(),
+                completed.record.result_message_id.clone(),
+            );
         }
         emit_event(
             &self.event_tx,
@@ -449,24 +478,6 @@ impl RuntimeCore {
         Ok(())
     }
 
-    pub(crate) async fn cancel_active_script(&self, session_id: &str) -> bool {
-        let completion = {
-            let _state_guard = self.session_state_barrier.read().await;
-            let tasks = self.active_script_tasks.lock().await;
-            let Some(task) = tasks.get(session_id) else {
-                return false;
-            };
-            task.cancellation.cancel();
-            let completion = task.completion.clone();
-            drop(tasks);
-            completion
-        };
-        // Finalization owns removal and publishes terminal events under its own guard.
-        // Await it without retaining a reader that could deadlock a queued snapshot writer.
-        completion.cancelled().await;
-        true
-    }
-
     pub(crate) async fn deny_pending_script(
         &self,
         session_id: String,
@@ -490,6 +501,32 @@ impl RuntimeCore {
             self.fail_script_turn(&session_id, error).await;
         }
         result
+    }
+
+    pub(super) async fn cancel_pending_script(&self, session_id: &str) -> Result<bool> {
+        let pending = self
+            .pending_script_approvals
+            .lock()
+            .await
+            .remove(session_id);
+        let Some(pending) = pending else {
+            return Ok(false);
+        };
+        let result = async {
+            let completed = self
+                .finish_prepared_execution(
+                    &pending.request.id,
+                    ScriptExecutionStatus::Cancelled,
+                    Some(String::from("Script cancelled before approval")),
+                )
+                .await?;
+            self.finalize_script_turn(session_id, completed).await
+        }
+        .await;
+        if let Err(error) = &result {
+            self.fail_script_turn(session_id, error).await;
+        }
+        result.map(|()| true)
     }
 
     async fn take_pending_script(

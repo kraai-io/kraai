@@ -291,9 +291,9 @@ impl RuntimeCore {
             return;
         };
 
-        drop(preparation);
         self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
             .await;
+        drop(preparation);
     }
 
     pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {

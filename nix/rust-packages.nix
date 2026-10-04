@@ -129,25 +129,29 @@
         '';
       };
 
-    kraai = cargoNix.workspaceMembers."kraai-tui".build.overrideAttrs (old: {
-      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
-      postInstall =
-        (old.postInstall or "")
-        + ''
-          wrapProgram "$out/bin/kraai" \
-            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
-            --prefix PATH : ${lib.makeBinPath (
-            [pkgs.ripgrep]
-            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
-          )} \
-            --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
-        '';
-      meta =
-        (old.meta or {})
-        // {
-          mainProgram = "kraai";
-        };
-    });
+    frontendPackage = member: binary:
+      cargoNix.workspaceMembers.${member}.build.overrideAttrs (old: {
+        nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
+        postInstall =
+          (old.postInstall or "")
+          + ''
+            wrapProgram "$out/bin/${binary}" \
+              --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+              --prefix PATH : ${lib.makeBinPath (
+              [pkgs.ripgrep]
+              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
+            )} \
+              --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
+          '';
+        meta =
+          (old.meta or {})
+          // {
+            mainProgram = binary;
+          };
+      });
+
+    kraai = frontendPackage "kraai-tui" "kraai";
+    kraai-acp = frontendPackage "kraai-acp" "kraai-acp";
 
     kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
       nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
@@ -236,7 +240,7 @@
   in {
     packages =
       {
-        inherit kraai;
+        inherit kraai kraai-acp;
         default = kraai;
       }
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {inherit kraai-eval;};

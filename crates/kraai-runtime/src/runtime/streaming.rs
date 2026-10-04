@@ -97,7 +97,6 @@ impl RuntimeCore {
 
             match continuation {
                 Ok(Some((providers, request))) => {
-                    drop(preparation);
                     self.start_stream_job(
                         StreamJobKind::Continuation,
                         session_id,
@@ -105,6 +104,7 @@ impl RuntimeCore {
                         request,
                     )
                     .await;
+                    drop(preparation);
                     return Ok(ContinueSessionOutcome::Started);
                 }
                 Ok(None) => {
@@ -139,7 +139,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(crate) fn spawn_continuation(&self, session_id: String) {
+    pub(crate) fn spawn_continuation(&self, session_id: String, expected_tip: MessageId) {
         if self.is_stopping() {
             return;
         }
@@ -147,10 +147,26 @@ impl RuntimeCore {
         tokio::spawn(async move {
             let _state_guard = runtime.session_state_barrier.read().await;
             let preparation = runtime.session_preparations.begin(&session_id).await;
-            if let Err(error) = runtime
-                .continue_prepared_session(session_id.clone(), preparation, None)
-                .await
-            {
+            let result: RuntimeResult<()> = async {
+                let agent = runtime.agent_manager.read().await;
+                if !agent.is_turn_active(&session_id)
+                    || agent
+                        .get_tip(&session_id)
+                        .await
+                        .map_err(RuntimeError::from_report)?
+                        .as_ref()
+                        != Some(&expected_tip)
+                {
+                    return Ok(());
+                }
+                drop(agent);
+                runtime
+                    .continue_prepared_session(session_id.clone(), preparation, None)
+                    .await?;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
                 emit_event(
                     &runtime.event_tx,
                     Event::ContinuationFailed {
@@ -528,12 +544,49 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+        self.cancel_session_work(session_id, false).await
+    }
+
+    pub(crate) async fn cancel_turn(&self, session_id: String) -> Result<bool> {
+        self.cancel_session_work(session_id, true).await
+    }
+
+    async fn cancel_session_work(&self, session_id: String, discard_queued: bool) -> Result<bool> {
         let state_guard = self.session_state_barrier.read().await;
         let preparation = self.session_preparations.begin(&session_id).await;
+        let discarded = discard_queued && !self.take_queued_messages(&session_id).await.is_empty();
+        if self.cancel_pending_script(&session_id).await? {
+            return Ok(true);
+        }
         let Some(active_stream) = self.take_active_stream(&session_id).await else {
+            let completion = {
+                let tasks = self.active_script_tasks.lock().await;
+                tasks.get(&session_id).map(|task| {
+                    task.cancellation.cancel();
+                    task.completion.clone()
+                })
+            };
+            let mut agent = self.agent_manager.write().await;
+            let active = agent.is_turn_active(&session_id);
+            if active {
+                agent.clear_active_turn(&session_id);
+            }
+            drop(agent);
             drop(preparation);
             drop(state_guard);
-            return Ok(self.cancel_active_script(&session_id).await);
+            let cancelled = active || completion.is_some() || discarded;
+            if let Some(completion) = completion {
+                completion.cancelled().await;
+            }
+            if cancelled {
+                let _state_guard = self.session_state_barrier.read().await;
+                self.event_tx.finish_timer(&session_id);
+                self.send_event(Event::HistoryUpdated {
+                    session_id: session_id.clone(),
+                });
+                self.schedule_queue_drain(&session_id);
+            }
+            return Ok(cancelled);
         };
 
         let cancelled_stream = {
@@ -570,7 +623,7 @@ impl RuntimeCore {
             cancelled
         };
         let Some(cancelled_stream) = cancelled_stream else {
-            return Ok(false);
+            return Ok(discarded);
         };
 
         self.send_event(Event::StreamCancelled {

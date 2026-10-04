@@ -188,6 +188,11 @@ impl RuntimeHandle {
             .await
     }
 
+    pub async fn read_image(&self, image: kraai_types::ImageAttachment) -> RuntimeResult<Vec<u8>> {
+        self.request(|response| Command::ReadImage { image, response })
+            .await
+    }
+
     pub async fn send_content(
         &self,
         session_id: String,
@@ -357,6 +362,14 @@ impl RuntimeHandle {
     /// Cancel the active stream for a session.
     pub async fn cancel_stream(&self, session_id: String) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelStream {
+            session_id,
+            response,
+        })
+        .await
+    }
+
+    pub async fn cancel_turn(&self, session_id: String) -> RuntimeResult<bool> {
+        self.request(|response| Command::CancelTurn {
             session_id,
             response,
         })

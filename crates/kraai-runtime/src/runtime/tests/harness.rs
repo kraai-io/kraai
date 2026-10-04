@@ -406,6 +406,7 @@ path = \"inherit\"\n",
             config: Arc::new(RuntimeConfig {
                 provider_config_path: data_dir.join("providers.toml"),
                 use_current_executable_as_nushell_host: false,
+                resume_recovered_turns: true,
                 nushell_host_path: None,
                 script_runtime_roots: None,
             }),

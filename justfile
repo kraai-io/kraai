@@ -51,6 +51,9 @@ clean:
 build:
     cargo build --locked -p kraai-tui --bin kraai
 
+build-acp:
+    cargo build --locked -p kraai-acp --bin kraai-acp
+
 [positional-arguments]
 run *args: build
     cargo run --locked -p kraai-tui -- "$@"

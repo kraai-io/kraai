@@ -39,6 +39,8 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
             Event::ScriptResultReady {
                 session_id: String::from("session"),
                 execution_id: String::from("previous"),
+                call_id: String::from("call"),
+                output: Default::default(),
                 status: String::from("completed"),
             },
             Event::StreamStart {
@@ -102,6 +104,8 @@ fn delayed_decision_reply_does_not_restart_a_finished_script() {
         harness.app.handle_runtime_event(Event::ScriptResultReady {
             session_id: String::from("session"),
             execution_id: String::from("previous"),
+            call_id: String::from("call"),
+            output: Default::default(),
             status: String::from("completed"),
         });
         let status = harness.app.state.status.clone();

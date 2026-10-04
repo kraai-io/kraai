@@ -131,6 +131,10 @@ impl RuntimeCore {
             .mark_running(&execution_id)
             .await
             .with_context(|| format!("Failed to mark execution {execution_id} running"))?;
+        self.send_event(crate::Event::ScriptStarted {
+            session_id: request.session_id.clone(),
+            call_id: request.call_id.to_string(),
+        });
         let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
         let output_store = self.execution_store.clone();
         let output_execution_id = execution_id.clone();

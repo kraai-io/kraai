@@ -2,6 +2,7 @@
 members = [
   "crates/kraai-mcp",
   "crates/commands/kraai-command-mcp",
+  "crates/kraai-acp",
   "crates/kraai-agent",
   "crates/kraai-web",
   "crates/commands/kraai-command-web-search",
@@ -39,6 +40,7 @@ opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
+agent-client-protocol = "2.2.0"
 kraai-agent = { path = "crates/kraai-agent" }
 kraai-command-catalog = { path = "crates/kraai-command-catalog" }
 kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }

@@ -68,6 +68,10 @@ pub(crate) enum Command {
         bytes: Vec<u8>,
         response: oneshot::Sender<RuntimeResult<kraai_types::ImageAttachment>>,
     },
+    ReadImage {
+        image: kraai_types::ImageAttachment,
+        response: oneshot::Sender<RuntimeResult<Vec<u8>>>,
+    },
     StartQueuedMessages {
         session_id: String,
     },
@@ -131,6 +135,10 @@ pub(crate) enum Command {
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     CancelStream {
+        session_id: String,
+        response: oneshot::Sender<RuntimeResult<bool>>,
+    },
+    CancelTurn {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<bool>>,
     },

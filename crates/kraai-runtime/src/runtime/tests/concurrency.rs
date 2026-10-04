@@ -452,7 +452,9 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
         .session_preparations
         .begin(&session_id)
         .await;
-    harness.runtime.spawn_continuation(session_id.clone());
+    harness
+        .runtime
+        .spawn_continuation(session_id.clone(), request.message_id);
     tokio::time::timeout(Duration::from_secs(1), async {
         while harness.runtime.session_state_barrier.try_write().is_ok() {
             tokio::task::yield_now().await;

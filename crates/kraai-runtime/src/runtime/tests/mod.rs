@@ -1,5 +1,7 @@
+mod assistant_text;
 mod basic;
 mod cache_warming;
+mod cancellation;
 mod compaction;
 mod concurrency;
 mod continuation;
