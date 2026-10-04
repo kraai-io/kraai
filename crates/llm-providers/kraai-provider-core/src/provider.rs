@@ -24,13 +24,11 @@ pub trait Provider: Send + Sync {
             .find(|model| model.id == *model_id)
     }
 
+    fn set_model_catalog(&mut self, _catalog: std::sync::Arc<crate::ModelCatalog>) {}
+
     async fn cache_models(&self) -> Result<()>;
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
-
-    fn script_tool_transport(&self, _model_id: &ModelId) -> ScriptToolTransport {
-        ScriptToolTransport::TextEnvelope
-    }
 
     fn cache_warming_policy(&self, _model_id: &ModelId) -> Option<crate::CacheWarmingPolicy> {
         None
@@ -57,16 +55,21 @@ pub trait Provider: Send + Sync {
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptToolTransport {
-    TextEnvelope,
-    NativeCustom,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptToolDefinition {
     pub name: String,
     pub description: String,
+}
+
+impl ScriptToolDefinition {
+    pub const NAME: &str = "kraai_nushell";
+
+    pub fn nushell() -> Self {
+        Self {
+            name: Self::NAME.to_string(),
+            description: "Execute a Nushell script. Supply the complete script, beginning with a metadata comment containing timeout, such as # timeout=30sec.".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

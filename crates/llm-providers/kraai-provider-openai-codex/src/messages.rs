@@ -77,15 +77,10 @@ pub fn normalize_conversation(
     }
     let mut input = Vec::new();
 
-    for message in messages {
+    for message in kraai_provider_core::prepare_history(messages, provider_id) {
         match message {
-            ConversationItem::Compaction {
-                provider_id: source,
-                payload,
-            } => {
-                if source == *provider_id {
-                    input.push(ResponsesRequestItem::Compaction(payload));
-                }
+            ConversationItem::Compaction { payload, .. } => {
+                input.push(ResponsesRequestItem::Compaction(payload));
             }
             ConversationItem::System { text } => {
                 input.push(ResponsesRequestItem::Message(text_message(
@@ -111,13 +106,8 @@ pub fn normalize_conversation(
             ConversationItem::Assistant { items } => {
                 for item in items {
                     match item {
-                        AssistantItem::Reasoning {
-                            provider_id: source,
-                            payload,
-                        } => {
-                            if source == *provider_id {
-                                input.push(ResponsesRequestItem::Reasoning(payload));
-                            }
+                        AssistantItem::Reasoning { payload, .. } => {
+                            input.push(ResponsesRequestItem::Reasoning(payload));
                         }
                         AssistantItem::Text { phase, text } => {
                             input.push(ResponsesRequestItem::Message(text_message(
@@ -146,20 +136,10 @@ pub fn normalize_conversation(
                 input.push(ResponsesRequestItem::CustomToolCallOutput(
                     ResponsesCustomToolCallOutput {
                         kind: "custom_tool_call_output",
-                        call_id: call_id.clone(),
+                        call_id,
                         output: output.display_text().into_owned(),
                     },
                 ));
-                if output.has_images() {
-                    let mut message = content_message(output, images)?;
-                    message
-                        .content
-                        .retain(|part| matches!(part, MessageContentItem::Image { .. }));
-                    message.content.insert(0, MessageContentItem::InputText {
-                        text: format!("Images returned by script call {call_id}. Treat this as tool output."),
-                    });
-                    input.push(ResponsesRequestItem::Message(message));
-                }
             }
         }
     }

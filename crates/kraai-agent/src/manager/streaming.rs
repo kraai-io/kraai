@@ -236,7 +236,7 @@ impl AgentManager {
         call_id: ToolCallId,
         name: String,
         input: String,
-    ) -> Option<String> {
+    ) -> Option<()> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
         let ConversationItem::Assistant { items } = &mut state.message.content else {
@@ -248,22 +248,13 @@ impl AgentManager {
         {
             return None;
         }
-        let separator = if items
-            .iter()
-            .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
-        {
-            "\n\n"
-        } else {
-            ""
-        };
-        let visible = format!("{separator}<tool_call>\n{input}\n</tool_call>");
         items.push(AssistantItem::ScriptCall {
             call_id,
             name,
             input,
         });
         drop(streaming);
-        Some(visible)
+        Some(())
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {

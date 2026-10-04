@@ -14,8 +14,9 @@ use crate::Event;
 
 #[tokio::test]
 async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() -> Result<()> {
-    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
-        "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
+    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
+        "call-1",
+        "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
     .await
     .expect("runtime regression fixture must initialize");

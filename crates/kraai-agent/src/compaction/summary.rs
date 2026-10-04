@@ -73,6 +73,9 @@ impl ContextCompaction {
                             ..
                         } => text.push_str(&delta),
                         ProviderStreamEvent::Usage(usage) => observer.save_usage(usage).await?,
+                        ProviderStreamEvent::ScriptCall { .. } => {
+                            return Err(eyre!("Compaction returned an unexpected tool call"));
+                        }
                         _ => {}
                     }
                 }
@@ -90,8 +93,8 @@ impl ContextCompaction {
                             .ok_or_else(|| eyre!("Missing compaction item"))?,
                     })
                 } else {
-                    if text.is_empty() {
-                        text = "(no summary available)".into();
+                    if text.trim().is_empty() {
+                        return Err(eyre!("Compaction returned an empty summary"));
                     }
                     Ok(ConversationItem::Assistant {
                         items: vec![AssistantItem::Text {

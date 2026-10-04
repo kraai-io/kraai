@@ -25,19 +25,20 @@ async function localProvider(t, replies, { codex = false } = {}) {
         }] } : { data: [{ id: 'test-model' }] }));
       } else {
         const index = requests.length;
-        const content = replies[index] ?? 'Done';
+        const reply = replies[index] ?? 'Done';
+        const toolCall = typeof reply === 'object';
         requests.push(JSON.parse(body));
         response.setHeader('Content-Type', 'text/event-stream');
         if (codex) {
-          const script = content.match(/^<tool_call>\n([\s\S]*)\n<\/tool_call>$/);
-          const event = script ? {
+          const event = toolCall ? {
             type: 'response.output_item.done',
-            item: { type: 'custom_tool_call', call_id: `call-${index}`, name: 'kraai_nushell', input: script[1] },
-          } : { type: 'response.output_text.delta', item_id: `message-${index}`, delta: content };
+            item: { type: 'custom_tool_call', call_id: `call-${index}`, name: 'kraai_nushell', input: reply.input },
+          } : { type: 'response.output_text.delta', item_id: `message-${index}`, delta: reply };
           response.end([event, { type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 10 } } }]
             .map(value => `data: ${JSON.stringify(value)}\n\n`).join(''));
         } else {
-          response.end(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`);
+          const delta = toolCall ? { tool_calls: [{ index: 0, id: `call-${index}`, type: 'function', function: { name: 'kraai_nushell', arguments: JSON.stringify(reply) } }] } : { content: reply };
+          response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: toolCall ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
         }
       }
     });

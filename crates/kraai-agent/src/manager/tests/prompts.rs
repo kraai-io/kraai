@@ -272,50 +272,30 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
         request.provider_request.messages.get(1),
         Some(ConversationItem::User { .. })
     ));
-    assert!(prefix.contains("<tool_call>"));
-    assert!(prefix.contains("</tool_call>"));
+    assert!(!prefix.contains("<tool_call>"));
+    assert!(request.provider_request.script_tool.is_some());
+    assert!(!prefix.contains("</tool_call>"));
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
     Ok(())
 }
 
 #[tokio::test]
-async fn script_examples_are_present_for_both_transports() -> Result<()> {
+async fn script_examples_use_the_shared_tool_prompt() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let session = manager.require_session(&session_id).await?;
     let profile = manager.resolve_selected_profile(&session)?;
-    let mut previous_examples = None;
-
-    for transport in [
-        kraai_provider_core::ScriptToolTransport::TextEnvelope,
-        kraai_provider_core::ScriptToolTransport::NativeCustom,
-    ] {
-        let prompt = manager
-            .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir, transport)
-            .await?;
-        let prefix = prompt.prefix;
-
-        let examples = prefix
-            .split("```nu\n")
-            .skip(1)
-            .map(|block| {
-                block
-                    .split_once("\n```")
-                    .map(|(script, _)| script.to_owned())
-                    .ok_or_else(|| eyre!("unclosed Nushell example"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        assert!(!examples.is_empty());
-        for example in &examples {
-            assert!(example.trim_start().starts_with("# timeout="));
-        }
-        if let Some(previous) = previous_examples {
-            assert_eq!(examples, previous);
-        }
-        previous_examples = Some(examples);
+    let prompt = manager
+        .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
+        .await?;
+    assert!(prompt.prefix.contains("kraai_nushell"));
+    for block in prompt.prefix.split("```nu\n").skip(1) {
+        let (script, _) = block
+            .split_once("\n```")
+            .ok_or_else(|| eyre!("unclosed Nushell example"))?;
+        assert!(script.trim_start().starts_with("# timeout="));
     }
-
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -380,12 +360,7 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
             ])?;
         }
         let prompt = manager
-            .build_turn_system_prompt(
-                &session_id,
-                &profile,
-                &session.workspace_dir,
-                kraai_provider_core::ScriptToolTransport::NativeCustom,
-            )
+            .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
             .await?;
         let context = prompt
             .prefix

@@ -1,8 +1,5 @@
 use super::*;
 
-const SCRIPT_TOOL_NAME: &str = "kraai_nushell";
-const SCRIPT_TOOL_DESCRIPTION: &str = "Execute a Nushell script. Input must be plaintext Nushell beginning with a metadata comment containing timeout, such as # timeout=30sec.";
-
 impl AgentManager {
     pub async fn prepare_start_stream(
         &mut self,
@@ -12,10 +9,6 @@ impl AgentManager {
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
         self.finish_pending_message_rollback(session_id).await?;
-        let script_tool_transport = self
-            .providers
-            .script_tool_transport(&provider_id, &model_id)
-            .unwrap_or(ScriptToolTransport::TextEnvelope);
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
@@ -76,19 +69,14 @@ impl AgentManager {
             .await;
         let prepared = async {
             let mut prompt = self
-                .build_turn_system_prompt(
-                    session_id,
-                    &profile,
-                    &workspace_dir,
-                    script_tool_transport,
-                )
+                .build_turn_system_prompt(session_id, &profile, &workspace_dir)
                 .await?;
             let (request, compaction, notifications) = self
                 .build_model_context(
                     session_id,
                     context,
                     &prompt,
-                    script_tool_definition(script_tool_transport),
+                    Some(ScriptToolDefinition::nushell()),
                     max_context,
                     (&provider_id, &model_id),
                 )
@@ -154,7 +142,6 @@ impl AgentManager {
             model_id,
             provider_request,
             context_compaction,
-            script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         })
     }
@@ -203,11 +190,11 @@ impl AgentManager {
         let context = self
             .get_model_history(&tip_id, (&provider_id, &model_id))
             .await?;
-        let script_tool_transport = self
-            .providers
-            .script_tool_transport(&provider_id, &model_id)?;
+        self.providers.get_provider(&provider_id).ok_or_else(|| {
+            kraai_provider_core::ProviderError::ProviderNotFound(provider_id.clone())
+        })?;
         let mut system_prompt = self
-            .build_turn_system_prompt(session_id, &profile, &workspace_dir, script_tool_transport)
+            .build_turn_system_prompt(session_id, &profile, &workspace_dir)
             .await?;
 
         let max_context = self
@@ -218,7 +205,7 @@ impl AgentManager {
                 session_id,
                 context,
                 &system_prompt,
-                script_tool_definition(script_tool_transport),
+                Some(ScriptToolDefinition::nushell()),
                 max_context,
                 (&provider_id, &model_id),
             )
@@ -248,15 +235,7 @@ impl AgentManager {
             model_id,
             provider_request,
             context_compaction,
-            script_tool_transport,
             context_notifications: system_prompt.context_notifications,
         }))
     }
-}
-
-fn script_tool_definition(transport: ScriptToolTransport) -> Option<ScriptToolDefinition> {
-    (transport == ScriptToolTransport::NativeCustom).then(|| ScriptToolDefinition {
-        name: SCRIPT_TOOL_NAME.to_string(),
-        description: SCRIPT_TOOL_DESCRIPTION.to_string(),
-    })
 }

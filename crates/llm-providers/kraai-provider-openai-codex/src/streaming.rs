@@ -1,8 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use color_eyre::eyre::{Result, eyre};
-use futures::{StreamExt, stream, stream::BoxStream};
-use kraai_provider_core::{ProviderStreamEvent, SseEvent};
+use color_eyre::eyre::{Result, ensure, eyre};
+use futures::stream::BoxStream;
+use kraai_provider_core::{
+    ProviderError, ProviderStreamEvent, SseEvent, StreamStatus, adapt_provider_stream,
+};
 use kraai_types::{AssistantPhase, ToolCallId};
 
 use crate::wire::{ResponsesError, ResponsesStreamEvent, ResponsesUsage};
@@ -10,164 +12,144 @@ use crate::wire::{ResponsesError, ResponsesStreamEvent, ResponsesUsage};
 pub(crate) fn adapt_responses_stream(
     source: BoxStream<'static, Result<SseEvent>>,
 ) -> BoxStream<'static, Result<ProviderStreamEvent>> {
-    stream::unfold(
-        (source, false, HashMap::<String, AssistantPhase>::new()),
-        |(mut source, finished, mut phases)| async move {
-            if finished {
-                return None;
+    let mut completion = Completion::default();
+    adapt_provider_stream(
+        source,
+        "OpenAI response stream ended before response.completed",
+        move |event, pending| {
+            let SseEvent::Data(payload) = event else {
+                return Err(ProviderError::StreamInterrupted(
+                    "OpenAI response stream ended before response.completed".into(),
+                )
+                .into());
+            };
+            let event: ResponsesStreamEvent = serde_json::from_str(&payload)?;
+            if event.kind == "error" {
+                let error: ResponsesError = serde_json::from_str(&payload)?;
+                return Err(eyre!(
+                    "OpenAI response stream failed: {}",
+                    format_response_error(error)
+                ));
             }
-
-            loop {
-                let event = match source.next().await {
-                    Some(Ok(SseEvent::Data(payload))) => {
-                        match serde_json::from_str::<ResponsesStreamEvent>(&payload) {
-                            Ok(event) if event.kind == "error" => {
-                                let error = match serde_json::from_str::<ResponsesError>(&payload) {
-                                    Ok(error) => eyre!(
-                                        "OpenAI response stream failed: {}",
-                                        format_response_error(error)
-                                    ),
-                                    Err(error) => eyre!(error),
-                                };
-                                return Some((Err(error), (source, true, phases)));
-                            }
-                            Ok(event) => event,
-                            Err(error) => {
-                                return Some((Err(eyre!(error)), (source, true, phases)));
-                            }
-                        }
-                    }
-                    Some(Ok(SseEvent::Done)) | None => {
-                        return Some((
-                            Err(kraai_provider_core::ProviderError::StreamInterrupted("OpenAI response stream ended before response.completed".into()).into()),
-                            (source, true, phases),
-                        ));
-                    }
-                    Some(Err(error)) => return Some((Err(error), (source, true, phases))),
-                };
-
-                match event.kind.as_str() {
-                    "response.output_item.added" => {
-                        if let Some(item) = event.item
-                            && item.kind == "message"
-                            && let Some(item_id) = item.id
-                        {
-                            phases.insert(item_id, parse_phase(item.phase.as_deref()));
-                        }
-                    }
-                    "response.output_text.delta" => {
-                        if let Some(delta) = event.delta {
-                            let Some(item_id) = event.item_id else {
-                                return Some((
-                                    Err(eyre!("OpenAI output text delta omitted item_id")),
-                                    (source, true, phases),
-                                ));
-                            };
-                            let phase = phases
-                                .get(&item_id)
-                                .copied()
-                                .unwrap_or(AssistantPhase::FinalAnswer);
-                            return Some((
-                                Ok(ProviderStreamEvent::TextDelta {
-                                    item_id,
-                                    phase,
-                                    delta,
-                                }),
-                                (source, false, phases),
-                            ));
-                        }
-                    }
-                    "response.output_item.done" => {
-                        if let Some(item) = &event.item && item.kind == "compaction" {
-                            let result = if item.extra.get("encrypted_content")
-                                .and_then(serde_json::Value::as_str).is_none_or(str::is_empty) {
-                                Err(eyre!("OpenAI compaction item omitted encrypted content"))
-                            } else {
-                                serde_json::to_value(item).map(|payload| ProviderStreamEvent::Compaction { payload }).map_err(Into::into)
-                            };
-                            let failed = result.is_err();
-                            return Some((result, (source, failed, phases)));
-                        }
-                        if let Some(item) = &event.item
-                            && item.kind == "reasoning"
-                            && item.extra.get("encrypted_content").is_some_and(|value| !value.is_null())
-                        {
-                            let result = if item.id.as_deref().is_none_or(str::is_empty)
-                                || item.extra.get("encrypted_content").and_then(serde_json::Value::as_str).is_none_or(str::is_empty)
-                            {
-                                Err(eyre!("OpenAI encrypted reasoning item is missing a valid id or encrypted content"))
-                            } else {
-                                serde_json::to_value(item).map(|payload| ProviderStreamEvent::Reasoning { payload }).map_err(Into::into)
-                            };
-                            let failed = result.is_err();
-                            return Some((result, (source, failed, phases)));
-                        }
-                        if let Some(item) = event.item
-                            && item.kind == "custom_tool_call"
-                        {
-                            let Some(call_id) = item.call_id else {
-                                return Some((
-                                    Err(eyre!("OpenAI custom tool call omitted call_id")),
-                                    (source, true, phases),
-                                ));
-                            };
-                            let Some(name) = item.name else {
-                                return Some((
-                                    Err(eyre!("OpenAI custom tool call omitted name")),
-                                    (source, true, phases),
-                                ));
-                            };
-                            let Some(input) = item.input else {
-                                return Some((
-                                    Err(eyre!("OpenAI custom tool call omitted input")),
-                                    (source, true, phases),
-                                ));
-                            };
-                            let call_id = match ToolCallId::try_new(call_id) {
-                                Ok(call_id) => call_id,
-                                Err(error) => {
-                                    return Some((Err(eyre!(error)), (source, true, phases)));
-                                }
-                            };
-                            return Some((
-                                Ok(ProviderStreamEvent::ScriptCall {
-                                    call_id,
-                                    name,
-                                    input,
-                                }),
-                                (source, false, phases),
-                            ));
-                        }
-                    }
-                    "response.completed" => {
-                        let usage = event
-                            .response
-                            .and_then(|response| response.usage)
-                            .and_then(normalize_usage);
-                        return Some((
-                            usage.map_or_else(
-                                || Err(eyre!("OpenAI response.completed event omitted usage")),
-                                |usage| Ok(ProviderStreamEvent::Usage(usage)),
-                            ),
-                            (source, true, phases),
-                        ));
-                    }
-                    "response.failed" | "response.incomplete" => {
-                        let detail = event
-                            .response
-                            .map(format_response_failure)
-                            .unwrap_or_else(|| String::from("no failure details were provided"));
-                        return Some((
-                            Err(eyre!("OpenAI response stream failed: {detail}")),
-                            (source, true, phases),
-                        ));
-                    }
-                    _ => {}
-                }
-            }
+            completion.ingest(event, pending)
         },
     )
-    .boxed()
+}
+
+#[derive(Default)]
+struct Completion {
+    phases: HashMap<String, AssistantPhase>,
+}
+
+impl Completion {
+    fn ingest(
+        &mut self,
+        event: ResponsesStreamEvent,
+        pending: &mut VecDeque<ProviderStreamEvent>,
+    ) -> Result<StreamStatus> {
+        match event.kind.as_str() {
+            "response.output_item.added" => {
+                if let Some(item) = event.item
+                    && item.kind == "message"
+                    && let Some(item_id) = item.id
+                {
+                    self.phases
+                        .insert(item_id, parse_phase(item.phase.as_deref()));
+                }
+            }
+            "response.output_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let item_id = event
+                        .item_id
+                        .ok_or_else(|| eyre!("OpenAI output text delta omitted item_id"))?;
+                    let phase = self
+                        .phases
+                        .get(&item_id)
+                        .copied()
+                        .unwrap_or(AssistantPhase::FinalAnswer);
+                    pending.push_back(ProviderStreamEvent::TextDelta {
+                        item_id,
+                        phase,
+                        delta,
+                    });
+                }
+            }
+            "response.output_item.done" => {
+                if let Some(item) = event.item {
+                    match item.kind.as_str() {
+                        "compaction" => {
+                            ensure!(
+                                item.extra
+                                    .get("encrypted_content")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|content| !content.is_empty()),
+                                "OpenAI compaction item omitted encrypted content"
+                            );
+                            pending.push_back(ProviderStreamEvent::Compaction {
+                                payload: serde_json::to_value(item)?,
+                            });
+                        }
+                        "reasoning"
+                            if item
+                                .extra
+                                .get("encrypted_content")
+                                .is_some_and(|value| !value.is_null()) =>
+                        {
+                            ensure!(
+                                item.id.as_deref().is_some_and(|id| !id.is_empty())
+                                    && item
+                                        .extra
+                                        .get("encrypted_content")
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|content| !content.is_empty()),
+                                "OpenAI encrypted reasoning item is missing a valid id or encrypted content"
+                            );
+                            pending.push_back(ProviderStreamEvent::Reasoning {
+                                payload: serde_json::to_value(item)?,
+                            });
+                        }
+                        "custom_tool_call" => {
+                            let call_id = item
+                                .call_id
+                                .ok_or_else(|| eyre!("OpenAI custom tool call omitted call_id"))?;
+                            let name = item
+                                .name
+                                .ok_or_else(|| eyre!("OpenAI custom tool call omitted name"))?;
+                            let input = item
+                                .input
+                                .ok_or_else(|| eyre!("OpenAI custom tool call omitted input"))?;
+                            let call_id =
+                                ToolCallId::try_new(call_id).map_err(|error| eyre!(error))?;
+                            pending.push_back(ProviderStreamEvent::ScriptCall {
+                                call_id,
+                                name,
+                                input,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "response.completed" => {
+                let usage = event
+                    .response
+                    .and_then(|response| response.usage)
+                    .and_then(normalize_usage)
+                    .ok_or_else(|| eyre!("OpenAI response.completed event omitted usage"))?;
+                pending.push_back(ProviderStreamEvent::Usage(usage));
+                return Ok(StreamStatus::Complete);
+            }
+            "response.failed" | "response.incomplete" => {
+                let detail = event
+                    .response
+                    .map(format_response_failure)
+                    .unwrap_or_else(|| String::from("no failure details were provided"));
+                return Err(eyre!("OpenAI response stream failed: {detail}"));
+            }
+            _ => {}
+        }
+        Ok(StreamStatus::Continue)
+    }
 }
 
 fn parse_phase(phase: Option<&str>) -> AssistantPhase {
@@ -234,6 +216,7 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 )]
 mod tests {
     use super::*;
+    use futures::{StreamExt, stream};
     use std::time::Duration;
 
     #[tokio::test]

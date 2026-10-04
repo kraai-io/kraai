@@ -1,7 +1,24 @@
 use kraai_types::{SandboxCapabilities, SandboxCapability};
 
+use crate::ProtocolError;
 use crate::duration::parse_duration;
-use crate::{ProtocolError, ScriptBlock};
+use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptBlock {
+    pub input: String,
+    pub source: Vec<u8>,
+    pub timeout: Duration,
+    pub requested_capabilities: SandboxCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidScriptBlock {
+    pub input: String,
+    pub source: Vec<u8>,
+    pub timeout: Option<Duration>,
+    pub requested_capabilities: SandboxCapabilities,
+}
 
 pub const SCRIPT_METADATA_PREFIX: &str = "#";
 

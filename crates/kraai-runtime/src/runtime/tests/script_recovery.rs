@@ -20,10 +20,12 @@ async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, Comple
 pub(super) async fn completed_script_with_image(
     include_image: bool,
 ) -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain(
-        "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
+    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
+        "call-1",
+        "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
-    .await else {
+    .await
+    else {
         return Ok(None);
     };
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;

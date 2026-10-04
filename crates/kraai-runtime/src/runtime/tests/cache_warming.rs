@@ -7,7 +7,7 @@ use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use kraai_provider_core::{
     CacheWarmingPolicy, Model, ModelConfig, Provider, ProviderManager, ProviderRequest,
-    ProviderRequestContext, ProviderStreamEvent, ScriptToolTransport,
+    ProviderRequestContext, ProviderStreamEvent,
 };
 use kraai_types::{AssistantPhase, ConversationItem, ModelId, ProviderId, TokenUsage, ToolCallId};
 use tokio_util::sync::CancellationToken;
@@ -54,9 +54,7 @@ impl Provider for WarmingProvider {
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }
-    fn script_tool_transport(&self, _model: &ModelId) -> ScriptToolTransport {
-        ScriptToolTransport::NativeCustom
-    }
+
     fn cache_warming_policy(&self, _model: &ModelId) -> Option<CacheWarmingPolicy> {
         Some(CacheWarmingPolicy {
             min_requests_between_warmups: if matches!(self.result, WarmResult::InvalidPolicy) {

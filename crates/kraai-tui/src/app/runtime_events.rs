@@ -12,6 +12,7 @@ impl App {
                 Event::SessionError { .. }
                     | Event::StreamStart { .. }
                     | Event::StreamChunk { .. }
+                    | Event::ScriptCall { .. }
                     | Event::StreamComplete { .. }
                     | Event::StreamError { .. }
                     | Event::ContinuationFailed { .. }
@@ -88,7 +89,7 @@ impl App {
                 self.last_statusline_animation_tick = None;
                 self.last_stream_history_request = None;
                 self.stream_event_content
-                    .insert(MessageId::new(message_id), String::new());
+                    .insert(MessageId::new(message_id), StreamEventContent::default());
                 self.request_stream_history_sync(&session_id, Instant::now());
             }
             Event::StreamChunk {
@@ -107,6 +108,41 @@ impl App {
                 }
                 if apply_state && !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
                     self.request_stream_history_sync(&session_id, Instant::now());
+                }
+            }
+            Event::ScriptCall {
+                session_id,
+                message_id,
+                call_id,
+                name,
+                input,
+            } => {
+                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    return;
+                }
+                if self.is_ci_mode() {
+                    self.write_ci_output(&format!("\n\n```nu\n{input}\n```\n"));
+                }
+                if apply_state {
+                    let message_id = MessageId::new(message_id);
+                    let event_content = self
+                        .stream_event_content
+                        .entry(message_id.clone())
+                        .or_default();
+                    event_content.script_call = Some(AssistantItem::ScriptCall {
+                        call_id,
+                        name,
+                        input,
+                    });
+                    if let Some(message) = self.state.chat_history.get_mut(&message_id) {
+                        if matches!(message.status, MessageStatus::Streaming { .. }) {
+                            event_content.merge_into(&mut message.content);
+                            self.invalidate_chat_cache();
+                            self.clamp_chat_scroll();
+                        }
+                    } else {
+                        self.request_stream_history_sync(&session_id, Instant::now());
+                    }
                 }
             }
             Event::StreamComplete {

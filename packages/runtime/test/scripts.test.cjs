@@ -15,7 +15,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
     mkdirSync(workspace);
     writeFileSync(join(storage, 'AGENTS.md'), 'Use the storage-root-only instruction.');
     const provider = await localProvider(t, [
-      '<tool_call>\n# timeout=10sec permissions=workspace-read\n42\n</tool_call>',
+      { input: '# timeout=10sec permissions=workspace-read\n42' },
       'Completed',
     ]);
     const runtime = createRuntime({ storage_root: storage });
@@ -28,21 +28,25 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
     const session = unwrap(await runtime.createSessionWith({ workspace_dir: workspace, profile_id: profile }));
     const events = runtime.subscribe();
     unwrap(await runtime.sendMessage(session, 'Calculate', 'test-model', 'local'));
+    let call;
     for (;;) {
       const read = await events.next();
       assert.equal(read.type, 'event');
       const event = read.value.event;
       if (typeof event !== 'object') continue;
       assert.ok(!('SessionError' in event) && !('StreamError' in event), JSON.stringify(event));
+      if ('ScriptCall' in event) call = event.ScriptCall;
       if ('ScriptResultReady' in event) {
         const history = unwrap(await runtime.getChatHistory(session));
         const result = Object.values(history).find(message => message.content.type === 'script_result');
+        assert.equal(call.name, 'kraai_nushell');
+        assert.equal(call.call_id, result.content.call_id);
         assert.equal(event.ScriptResultReady.status, 'completed', JSON.stringify(result));
         assert.match(result.content.output.filter((part) => part.type === "text").map((part) => part.text).join("\n"), /42/);
         break;
       }
     }
-    assert.ok(provider.requests[0].messages.some(message => message.content.includes('storage-root-only instruction')));
+    assert.ok(provider.requests[0].messages.some(message => typeof message.content === 'string' && message.content.includes('storage-root-only instruction')));
     events.close();
     unwrap(await runtime.shutdown());
   });
@@ -58,7 +62,7 @@ for (const { codex, symlinked } of fileContextCases) {
     writeFileSync(join(workspace, 'sample.txt'), 'original\r\nsecond line\n');
     const sessionWorkspace = symlinked ? join(directory, 'workspace-link') : workspace;
     if (symlinked) symlinkSync(workspace, sessionWorkspace, process.platform === 'win32' ? 'junction' : 'dir');
-    const script = source => `<tool_call>\n# timeout=10sec\n${source}\n</tool_call>`;
+    const script = source => ({ input: `# timeout=10sec\n${source}` });
     const provider = await localProvider(t, [
       script('kraai-open-files sample.txt'),
       script('42'),

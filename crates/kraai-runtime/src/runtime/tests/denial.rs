@@ -21,8 +21,9 @@ async fn denial_history_failure_cleans_up_turn_and_drains_queue() -> Result<()> 
 
 async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
     let harness = RuntimeTestHarness::new(vec![
-        vec![ScriptedChunk::plain(
-            "<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n^cargo test",
         )],
         vec![ScriptedChunk::plain("Queued message handled")],
     ])

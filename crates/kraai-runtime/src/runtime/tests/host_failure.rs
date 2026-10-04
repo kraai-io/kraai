@@ -9,12 +9,14 @@ use crate::runtime::script_execution::CompletedScriptExecution;
 #[tokio::test]
 async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_sessions() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
-        vec![ScriptedChunk::plain(
-            "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
         )],
         vec![ScriptedChunk::plain("must not continue")],
     ])
-    .await else {
+    .await
+    else {
         return Ok(());
     };
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;

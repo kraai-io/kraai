@@ -418,3 +418,84 @@ fn snapshot_cannot_swallow_a_ci_approval_failure() {
         Some("CI mode cannot answer a script capability escalation prompt")
     );
 }
+
+#[test]
+fn live_script_calls_remain_structured_across_duplicate_events_and_stale_history() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.chat_history = snapshot_with_message(1, false).history;
+    let event = Event::ScriptCall {
+        session_id: "session".into(),
+        message_id: "answer".into(),
+        call_id: kraai_types::ToolCallId::new("call"),
+        name: "kraai_nushell".into(),
+        input: "# timeout=1sec\nprint '</tool_call>'".into(),
+    };
+    harness.app.handle_runtime_event(event.clone());
+    harness.app.handle_runtime_event(event);
+    let mut stale = snapshot_with_message(1, false).history;
+    harness.app.merge_local_streaming_content(&mut stale);
+    assert!(
+        matches!(stale.get(&MessageId::new("answer")).map(|message| &message.content),
+        Some(ConversationItem::Assistant { items }) if matches!(items.as_slice(),
+            [kraai_types::AssistantItem::Text { .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
+            if input == "# timeout=1sec\nprint '</tool_call>'"))
+    );
+}
+
+#[test]
+fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshots() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some("session".into());
+    harness.app.handle_runtime_event(Event::StreamStart {
+        session_id: "session".into(),
+        message_id: "answer".into(),
+    });
+    harness.app.handle_runtime_event(Event::StreamChunk {
+        session_id: "session".into(),
+        message_id: "answer".into(),
+        chunk: "answer text".into(),
+    });
+    let call = Event::ScriptCall {
+        session_id: "session".into(),
+        message_id: "answer".into(),
+        call_id: kraai_types::ToolCallId::new("call"),
+        name: "kraai_nushell".into(),
+        input: "# timeout=1sec\nls".into(),
+    };
+    harness.app.handle_runtime_event(call.clone());
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::ChatHistory {
+            session_id: "session".into(),
+            result: Ok(Default::default()),
+        });
+
+    let mut stale = snapshot_with_message(1, false);
+    stale
+        .history
+        .get_mut(&MessageId::new("answer"))
+        .unwrap()
+        .content = ConversationItem::Assistant {
+        items: vec![kraai_types::AssistantItem::Text {
+            phase: kraai_types::AssistantPhase::FinalAnswer,
+            text: "answer".into(),
+        }],
+    };
+    for _ in 0..2 {
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                session_id: "session".into(),
+                result: Box::new(Ok(stale.clone())),
+            });
+        assert!(matches!(
+            &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
+            ConversationItem::Assistant { items }
+                if matches!(items.as_slice(),
+                    [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { call_id, input, .. }]
+                    if text == "answer text" && call_id.as_str() == "call" && input == "# timeout=1sec\nls")
+        ));
+        harness.app.handle_runtime_event(call.clone());
+    }
+}

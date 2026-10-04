@@ -109,7 +109,7 @@ pub struct App {
     startup_message_sent: bool,
     startup_sync: StartupSync,
     ci_error: Option<String>,
-    stream_event_content: HashMap<MessageId, String>,
+    stream_event_content: HashMap<MessageId, StreamEventContent>,
     state: AppState,
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
@@ -125,6 +125,24 @@ pub struct App {
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 const STREAM_HISTORY_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_millis(50);
 const INPUT_HISTORY_LIMIT: usize = 100;
+
+#[derive(Default)]
+struct StreamEventContent {
+    text: String,
+    script_call: Option<AssistantItem>,
+}
+
+impl StreamEventContent {
+    fn merge_into(&self, content: &mut ConversationItem) {
+        merge_newer_streaming_prefix(content, &self.text);
+        if let Some(call @ AssistantItem::ScriptCall { call_id, .. }) = &self.script_call
+            && let ConversationItem::Assistant { items } = content
+            && !items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: existing, .. } if existing == call_id))
+        {
+            items.push(call.clone());
+        }
+    }
+}
 
 #[cfg(test)]
 #[expect(
@@ -214,13 +232,16 @@ impl App {
             .stream_event_content
             .entry(message_id.clone())
             .or_default();
-        event_content.push_str(chunk);
+        event_content.text.push_str(chunk);
 
         let Some(message) = self.state.chat_history.get_mut(&message_id) else {
             return false;
         };
-        let changed =
-            merge_stream_chunk_into_cached_content(&mut message.content, event_content, chunk);
+        let changed = merge_stream_chunk_into_cached_content(
+            &mut message.content,
+            &mut event_content.text,
+            chunk,
+        );
         if changed {
             self.invalidate_chat_cache();
             self.clamp_chat_scroll();
@@ -258,14 +279,20 @@ impl App {
             if let Some(current) = self.state.chat_history.get(message_id)
                 && matches!(current.status, MessageStatus::Streaming { .. })
             {
-                merge_newer_streaming_prefix(
-                    &mut incoming.content,
-                    &current.content.display_text(),
-                );
+                if matches!(&current.content, ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))
+                    && !matches!(&incoming.content, ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))
+                {
+                    incoming.content = current.content.clone();
+                } else {
+                    merge_newer_streaming_prefix(
+                        &mut incoming.content,
+                        &current.content.display_text(),
+                    );
+                }
             }
 
             if let Some(event_content) = self.stream_event_content.get(message_id) {
-                merge_newer_streaming_prefix(&mut incoming.content, event_content);
+                event_content.merge_into(&mut incoming.content);
             }
         }
     }
