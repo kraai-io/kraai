@@ -233,7 +233,7 @@ pub(super) enum RuntimeResponse {
     },
     PasteImage {
         request_id: u64,
-        result: RuntimeResult<ImageAttachment>,
+        result: RuntimeResult<Option<ImageAttachment>>,
     },
     SaveSettings(RuntimeResult<()>),
     ChatHistory {

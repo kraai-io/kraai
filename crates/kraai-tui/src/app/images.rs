@@ -84,17 +84,17 @@ impl App {
     pub(super) fn finish_image_import(
         &mut self,
         request_id: u64,
-        result: kraai_runtime::RuntimeResult<ImageAttachment>,
+        result: kraai_runtime::RuntimeResult<Option<ImageAttachment>>,
     ) {
         let Some(range) = self.state.draft_images.pending_range(request_id) else {
             return;
         };
         match result {
-            Ok(image) => {
+            Ok(Some(image)) => {
                 self.state.status = format!("Attached {}×{} image", image.width, image.height);
                 self.state.draft_images.finish(request_id, image);
             }
-            Err(error) => {
+            Ok(None) | Err(_) => {
                 let cursor = self.state.input_cursor;
                 let end = range.end;
                 let start = range.start;
@@ -110,7 +110,11 @@ impl App {
                     .state
                     .draft_images
                     .renumber(&mut self.state.input, self.state.input_cursor);
-                self.set_error(format!("Image paste failed: {error}"));
+                if let Err(error) = result {
+                    self.set_error(format!("Image paste failed: {error}"));
+                } else if self.state.status == "Loading clipboard image" {
+                    self.state.status.clear();
+                }
             }
         }
     }

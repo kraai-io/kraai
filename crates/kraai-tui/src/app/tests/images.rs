@@ -41,7 +41,7 @@ fn paste(harness: &mut TestHarness) {
         .app
         .handle_runtime_response(RuntimeResponse::PasteImage {
             request_id,
-            result: Ok(image()),
+            result: Ok(Some(image())),
         });
 }
 
@@ -60,7 +60,7 @@ fn ctrl_v_inserts_at_cursor_without_losing_typing_during_import() {
         .app
         .handle_runtime_response(RuntimeResponse::PasteImage {
             request_id: id,
-            result: Ok(image()),
+            result: Ok(Some(image())),
         });
     let content = harness.app.compose_message(&harness.app.state.input);
     assert!(
@@ -156,14 +156,14 @@ fn late_import_cannot_restore_deleted_cleared_or_switched_chips() {
             .app
             .handle_runtime_response(RuntimeResponse::PasteImage {
                 request_id: old,
-                result: Ok(image()),
+                result: Ok(Some(image())),
             });
         assert!(harness.app.state.draft_images.pending());
         harness
             .app
             .handle_runtime_response(RuntimeResponse::PasteImage {
                 request_id: new,
-                result: Ok(image()),
+                result: Ok(Some(image())),
             });
         assert!(!harness.app.state.draft_images.pending());
         assert_eq!(harness.app.state.draft_images.len(), 1);
@@ -179,11 +179,44 @@ fn failed_clipboard_read_removes_only_its_chip() {
     harness.app.insert_input_text("new ");
     harness.app.finish_image_import(
         id,
-        Err(kraai_runtime::RuntimeError::unavailable("no image")),
+        Err(kraai_runtime::RuntimeError::unavailable("clipboard busy")),
     );
     assert_eq!(harness.app.state.input, "before new after");
     assert_eq!(harness.app.state.input_cursor, 11);
     assert!(!harness.app.state.draft_images.pending());
+    assert!(harness.app.state.last_error.is_some());
+    assert!(harness.app.state.status.contains("clipboard busy"));
+}
+
+#[test]
+fn missing_clipboard_image_preserves_draft_and_typing_without_an_error() {
+    for typed in ["", "new "] {
+        let mut harness = test_harness();
+        paste(&mut harness);
+        harness.app.insert_input_text("before after");
+        harness.app.state.input_cursor -= "after".len();
+        let before = harness.app.state.input.clone();
+        let cursor = harness.app.state.input_cursor;
+        let id = begin_paste(&mut harness);
+        harness.app.insert_input_text(typed);
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::PasteImage {
+                request_id: id,
+                result: Ok(None),
+            });
+        let mut expected = before;
+        expected.insert_str(cursor, typed);
+        assert_eq!(harness.app.state.input, expected);
+        assert_eq!(harness.app.state.input_cursor, cursor + typed.len());
+        assert_eq!(harness.app.state.draft_images.len(), 1);
+        assert!(!harness.app.state.draft_images.pending());
+        assert!(harness.app.state.last_error.is_none());
+        assert!(!harness.app.state.error_open);
+        assert_ne!(harness.app.state.status, "Loading clipboard image");
+        paste(&mut harness);
+        assert_eq!(harness.app.state.draft_images.len(), 2);
+    }
 }
 
 #[test]
@@ -342,7 +375,9 @@ fn automatic_session_creation_preserves_next_draft_and_pending_paste() {
             result: Ok("created".into()),
         });
     assert_eq!(harness.app.state.input, "next draft [Image #1]");
-    harness.app.finish_image_import(request_id, Ok(image()));
+    harness
+        .app
+        .finish_image_import(request_id, Ok(Some(image())));
     assert_eq!(
         harness
             .app
@@ -362,7 +397,9 @@ fn recovery_preserves_pending_chip_and_completion_identity() {
         .recover_message_draft(MessageContent(vec![ContentPart::Image { image: image() }]));
     assert_eq!(harness.app.state.input, "[Image #1]\n\n[Image #2]");
     assert!(harness.app.state.draft_images.pending());
-    harness.app.finish_image_import(request_id, Ok(image()));
+    harness
+        .app
+        .finish_image_import(request_id, Ok(Some(image())));
     assert_eq!(
         harness
             .app
@@ -442,7 +479,7 @@ fn new_chat_clears_a_sessionless_draft_and_ignores_its_pending_image() {
     let mut harness = test_harness();
     let id = begin_paste(&mut harness);
     harness.app.start_new_chat();
-    harness.app.finish_image_import(id, Ok(image()));
+    harness.app.finish_image_import(id, Ok(Some(image())));
     assert!(harness.app.state.input.is_empty());
     assert_eq!(harness.app.state.draft_images.len(), 0);
 }
@@ -518,7 +555,7 @@ fn editor_keeps_an_image_that_finishes_loading_while_open() -> color_eyre::Resul
     let id = begin_paste(&mut harness);
     let original = harness.app.state.input.clone();
     let (editor_text, labels) = harness.app.state.draft_images.editor(&original);
-    harness.app.finish_image_import(id, Ok(image()));
+    harness.app.finish_image_import(id, Ok(Some(image())));
     harness
         .app
         .apply_edited_prompt(editor_text, None, &original, &labels)?;
