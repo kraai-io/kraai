@@ -36,13 +36,13 @@ async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing()
             catalog
                 .metadata(None, Some(endpoint), "vision")
                 .await
-                .is_none()
+                .is_some()
         );
         assert!(
             catalog
                 .lookup(None, Some(endpoint), "vision")
                 .await
-                .is_none()
+                .is_some()
         );
     }
     assert!(
@@ -61,11 +61,12 @@ async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing()
 #[test]
 fn cached_snapshot_preserves_payload_and_rejects_invalid_data() -> color_eyre::Result<()> {
     let value = serde_json::json!({
+        "version": CACHE_VERSION,
         "fetched_at": 123,
         "providers": {
             "fixture": {
                 "api": "https://fixture.test/v1",
-                "models": {"model": {"cost": {"input": 2, "output": 8}}}
+                "models": {"model": {"canonical_model_id":"fixture/model","cost": {"input": 2, "output": 8}}}
             }
         }
     });
@@ -270,3 +271,6 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
     );
     Ok(())
 }
+
+#[path = "model_catalog/resolution_tests.rs"]
+mod resolution_tests;

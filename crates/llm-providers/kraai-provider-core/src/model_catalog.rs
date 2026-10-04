@@ -10,9 +10,14 @@ use tokio::sync::RwLock;
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 24 * 60 * 60;
+const CACHE_VERSION: u32 = 1;
+
+mod resolution;
 
 #[derive(Default, Serialize, Deserialize)]
 struct Snapshot {
+    #[serde(default)]
+    version: u32,
     fetched_at: u64,
     providers: BTreeMap<String, CatalogProvider>,
 }
@@ -25,6 +30,8 @@ struct CatalogProvider {
 
 #[derive(Serialize, Deserialize)]
 struct CatalogModel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    canonical_model_id: Option<String>,
     cost: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
@@ -85,8 +92,7 @@ impl ModelCatalog {
 
     pub async fn refresh(&self) {
         let now = crate::pricing::now();
-        let fetched_at = self.snapshot.read().await.fetched_at;
-        if fetched_at <= now && now - fetched_at < MAX_AGE {
+        if self.snapshot.read().await.is_fresh(now) {
             return;
         }
         let last = self.attempted_at.load(Ordering::Relaxed);
@@ -124,6 +130,7 @@ impl ModelCatalog {
                 return Err(color_eyre::eyre::eyre!("Model catalog is empty"));
             }
             let snapshot = Snapshot {
+                version: CACHE_VERSION,
                 fetched_at: crate::pricing::now(),
                 providers,
             };
@@ -162,45 +169,19 @@ impl ModelCatalog {
         model: &str,
     ) -> Option<(Value, String, u64)> {
         let snapshot = self.snapshot.read().await;
-        let (provider_id, provider) = snapshot.provider(provider, api)?;
-        let cost = provider.models.get(model)?.cost.as_ref()?;
+        let (provider_id, model_id, model) = snapshot.model(provider, api, model)?;
+        let cost = model.cost.as_ref()?;
         Some((
             cost.clone(),
-            format!("models.dev/{provider_id}/{model}"),
+            format!("models.dev/{provider_id}/{model_id}"),
             snapshot.fetched_at,
         ))
     }
 }
 
 impl Snapshot {
-    fn provider<'a>(
-        &'a self,
-        provider: Option<&str>,
-        api: Option<&str>,
-    ) -> Option<(&'a String, &'a CatalogProvider)> {
-        let (provider_id, provider) = if let Some(id) = provider {
-            self.providers.get_key_value(id)?
-        } else {
-            let api = api?.trim_end_matches('/');
-            let mut matches = self.providers.iter().filter(|(_, provider)| {
-                provider
-                    .api
-                    .as_deref()
-                    .is_some_and(|url| url.trim_end_matches('/') == api)
-            });
-            let matched = matches.next();
-            if matches.next().is_some() {
-                return None;
-            }
-            matched.or_else(|| {
-                let provider = match api {
-                    "https://api.groq.com/openai/v1" => "groq",
-                    _ => return None,
-                };
-                self.providers.get_key_value(provider)
-            })?
-        };
-        Some((provider_id, provider))
+    fn is_fresh(&self, now: u64) -> bool {
+        self.version == CACHE_VERSION && self.fetched_at <= now && now - self.fetched_at < MAX_AGE
     }
 }
 
@@ -212,8 +193,7 @@ impl ModelCatalog {
         model: &str,
     ) -> Option<CatalogModelMetadata> {
         let snapshot = self.snapshot.read().await;
-        let (_, provider) = snapshot.provider(provider, api)?;
-        let model = provider.models.get(model)?;
+        let (_, _, model) = snapshot.model(provider, api, model)?;
         let metadata = CatalogModelMetadata {
             name: model.name.clone(),
             max_context: model

@@ -107,12 +107,12 @@ pub fn pricing_fields(model: bool) -> Vec<FieldDefinition> {
             ("price_reasoning", "Reasoning USD / million tokens"),
         ]
     } else {
-        &[("pricing_provider", "models.dev provider ID")]
+        &[("pricing_provider", "Pricing Provider Override")]
     };
     fields.iter().map(|&(key, label)| FieldDefinition {
         key: key.into(), label: label.into(), value_kind: FieldValueKind::String,
         required: false, secret: false, default_value: None,
-        help_text: Some(if model { "Decimal USD rate, for example 2.50. Input and output are both required. Missing cache rates leave cached requests unpriced." } else { "Optional provider ID for custom endpoints. Otherwise match the API base URL." }.into()),
+        help_text: Some(if model { "Decimal USD rate, for example 2.50. Input and output are both required. Missing cache rates leave cached requests unpriced." } else { "Optional models.dev provider ID for prices only. Otherwise use the model catalog's automatic resolution or provider override." }.into()),
     }).collect()
 }
 
