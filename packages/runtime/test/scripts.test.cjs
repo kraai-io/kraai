@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
@@ -48,12 +48,16 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
   });
 }
 
-for (const codex of [false, true]) {
-  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands`, { timeout: 30000 }, async t => {
+const fileContextCases = [false, true].flatMap(codex =>
+  [false, true].map(symlinked => ({ codex, symlinked })));
+for (const { codex, symlinked } of fileContextCases) {
+  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: 30000 }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-file-context-'));
     const workspace = join(directory, 'workspace');
     mkdirSync(workspace);
     writeFileSync(join(workspace, 'sample.txt'), 'original\r\nsecond line\n');
+    const sessionWorkspace = symlinked ? join(directory, 'workspace-link') : workspace;
+    if (symlinked) symlinkSync(workspace, sessionWorkspace, process.platform === 'win32' ? 'junction' : 'dir');
     const script = source => `<tool_call>\n# timeout=10sec\n${source}\n</tool_call>`;
     const provider = await localProvider(t, [
       script('kraai-open-files sample.txt'),
@@ -70,7 +74,7 @@ for (const codex of [false, true]) {
     });
     assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
     unwrap(await runtime.saveSettings(provider.settings));
-    const session = unwrap(await runtime.createSessionWith({ workspace_dir: workspace, profile_id: 'coding-no-sandbox' }));
+    const session = unwrap(await runtime.createSessionWith({ workspace_dir: sessionWorkspace, profile_id: 'coding-no-sandbox' }));
     const events = runtime.subscribe();
     t.after(() => events.close());
     unwrap(await runtime.sendMessage(session, 'Exercise the opened files', 'test-model', 'local'));
@@ -101,6 +105,15 @@ for (const codex of [false, true]) {
     assert.match(text(messages[5].at(-1)), /1\|updated\r\n/);
     const history = unwrap(await runtime.getChatHistory(session));
     assert.ok(!Object.values(history).some(message => message.content.type === 'file_context'));
+    const context = JSON.parse(readFileSync(
+      join(directory, 'storage', 'data', 'context-state', `${session}.json`), 'utf8'));
+    const pins = context.events.flatMap(event => event.mutations)
+      .filter(mutation => mutation.kind === 'pin-file');
+    assert.equal(pins.length, 2);
+    for (const pin of pins) {
+      assert.equal(pin.scope.kind, 'workspace');
+      assert.equal(realpathSync.native(pin.scope.root), realpathSync.native(workspace));
+    }
     unwrap(await runtime.shutdown());
   });
 }

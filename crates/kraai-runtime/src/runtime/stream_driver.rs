@@ -123,7 +123,7 @@ impl RuntimeCore {
                     request_id = %message_id,
                     position,
                     bytes = text.len(),
-                    "Provider request file context:\n{text}"
+                    "Provider request file context"
                 );
             }
         }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, ensure, eyre};
@@ -18,6 +19,22 @@ pub struct ContextStateDocument {
     pub events: Vec<ContextStateEvent>,
     #[serde(default)]
     pub snapshots: Vec<FileContextSnapshot>,
+}
+
+impl ContextStateDocument {
+    fn push_event(&mut self, event: ContextStateEvent) {
+        let closed: HashSet<_> = event
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                ContextStateMutation::UnpinFile { path, .. } => Some(path),
+                ContextStateMutation::PinFile { .. } => None,
+            })
+            .collect();
+        self.snapshots
+            .retain(|snapshot| !closed.contains(&snapshot.path));
+        self.events.push(event);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,7 +167,7 @@ impl FileContextStateStore {
             source,
             mutations,
         };
-        document.events.push(event.clone());
+        document.push_event(event.clone());
         let path = self.document_path(session_id)?;
         let bytes = serde_json::to_vec_pretty(&document)
             .context("Failed to serialize context state document")?;
@@ -230,7 +247,7 @@ impl ContextStateStore for FileContextStateStore {
         }
         document.snapshots = snapshots;
         if !removals.is_empty() {
-            document.events.push(ContextStateEvent {
+            document.push_event(ContextStateEvent {
                 id: Ulid::generate().to_string(),
                 source: ContextStateEventSource::Runtime {
                     component: "file-context-refresh".into(),
