@@ -466,19 +466,31 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
 }
 
 #[tokio::test]
-async fn empty_fallback_response_is_installed_without_rejection() -> Result<()> {
-    let (context, providers, _, root) = fixture(false, vec![], false);
-    let outcome = context
-        .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
-    ensure!(
-        outcome
-            .request
-            .messages
-            .iter()
-            .any(|item| item.display_text().contains("(no summary available)"))
-    );
-    tokio::fs::remove_dir_all(root).await?;
+async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
+    for events in [
+        vec![],
+        vec![ProviderStreamEvent::ScriptCall {
+            call_id: ToolCallId::new("unexpected"),
+            name: "kraai_nushell".into(),
+            input: "# timeout=1sec\nls".into(),
+        }],
+    ] {
+        let (context, providers, _, root) = fixture(false, events, false);
+        ensure!(
+            context
+                .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
+                .await
+                .is_err()
+        );
+        ensure!(
+            context
+                .store
+                .get(&MessageId::new("result"))
+                .await?
+                .is_none()
+        );
+        tokio::fs::remove_dir_all(root).await?;
+    }
     Ok(())
 }
 
@@ -642,7 +654,11 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
                 payload: serde_json::json!({"type":"compaction","encrypted_content":"opaque"}),
             }]
         } else {
-            vec![]
+            vec![ProviderStreamEvent::TextDelta {
+                item_id: "summary".into(),
+                phase: AssistantPhase::FinalAnswer,
+                delta: "Screenshot inspected".into(),
+            }]
         };
         let (mut context, providers, requests, root) = fixture(native, events, false);
         let user = ConversationItem::User {
@@ -727,3 +743,6 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
+
+#[path = "chat_completions_tests.rs"]
+mod chat_completions;

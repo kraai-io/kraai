@@ -9,7 +9,7 @@ use kraai_persistence::{
 };
 use kraai_provider_core::{
     Model, ProviderManager, ProviderManagerConfig, ProviderRegistry, ProviderRequest,
-    ScriptToolDefinition, ScriptToolTransport,
+    ScriptToolDefinition,
 };
 use kraai_types::{
     AgentProfilesState, AssistantItem, AssistantPhase, ChatRole, ConversationItem, Message,
@@ -70,7 +70,6 @@ pub struct PendingStreamRequest {
     pub provider_id: ProviderId,
     pub model_id: ModelId,
     pub provider_request: ProviderRequest,
-    pub script_tool_transport: ScriptToolTransport,
     pub context_notifications: Vec<String>,
     pub context_compaction: Option<crate::ContextCompaction>,
 }

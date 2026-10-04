@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<RequestMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<FunctionTool>>,
+    pub tool_choice: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,9 +21,77 @@ pub struct ChatCompletionStreamOptions {
 }
 
 #[derive(Debug, Serialize)]
-pub struct RequestMessage {
-    pub role: &'static str,
-    pub content: RequestContent,
+#[serde(tag = "role", rename_all = "lowercase")]
+pub enum RequestMessage {
+    System {
+        content: String,
+    },
+    User {
+        content: RequestContent,
+    },
+    Assistant {
+        #[serde(flatten)]
+        reasoning: crate::reasoning::Reasoning,
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<FunctionCall>,
+    },
+    Tool {
+        tool_call_id: kraai_types::ToolCallId,
+        content: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionTool {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: FunctionDefinition,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+impl From<kraai_provider_core::ScriptToolDefinition> for FunctionTool {
+    fn from(tool: kraai_provider_core::ScriptToolDefinition) -> Self {
+        Self {
+            kind: "function",
+            function: FunctionDefinition {
+                name: tool.name,
+                description: tool.description,
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": { "input": { "type": "string", "description": "Complete Nushell script, including its metadata comment." } },
+                    "required": ["input"],
+                    "additionalProperties": false,
+                }),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionCall {
+    pub id: kraai_types::ToolCallId,
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: FunctionArguments,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionArguments {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptArguments {
+    pub input: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,13 +130,34 @@ pub struct ChatCompletionError {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionChunkChoice {
+    #[serde(default)]
+    pub index: usize,
     pub delta: ChatCompletionChunkDelta,
     pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionChunkDelta {
+    #[serde(flatten)]
+    pub reasoning: crate::reasoning::Reasoning,
     pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+    pub refusal: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolCallDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub function: Option<FunctionDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FunctionDelta {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -106,4 +200,33 @@ pub struct ListModelsResponse {
 #[derive(Debug, Deserialize)]
 pub struct ListModelEntry {
     pub id: String,
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "wire tests assert after fallible serialization"
+)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn disabled_tools_preserve_an_explicit_empty_list_for_tool_history() -> color_eyre::Result<()> {
+        for (tools, expected) in [(None, None), (Some(Vec::new()), Some(json!([])))] {
+            let request = ChatCompletionRequest {
+                model: "fixture".into(),
+                messages: Vec::new(),
+                tools,
+                tool_choice: "none",
+                parallel_tool_calls: None,
+                stream: true,
+                stream_options: None,
+            };
+            let encoded = serde_json::to_value(request)?;
+            assert_eq!(encoded.get("tools"), expected.as_ref());
+            assert_eq!(encoded.get("tool_choice"), Some(&json!("none")));
+        }
+        Ok(())
+    }
 }

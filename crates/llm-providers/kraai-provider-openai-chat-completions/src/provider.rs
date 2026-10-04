@@ -7,7 +7,7 @@ use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
     ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
     ProviderRequestContext, ProviderStreamEvent, ResolvedImages, build_streaming_http_client,
-    finite_request, send_with_retry, stream_sse_data, validate_image_support,
+    finite_request, send_with_retry, stream_sse_data,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -19,7 +19,9 @@ use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
 use crate::streaming::adapt_chat_completion_stream;
-use crate::wire::{ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse};
+use crate::wire::{
+    ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse, RequestMessage,
+};
 
 pub struct ChatCompletionsProvider<P> {
     id: ProviderId,
@@ -29,6 +31,8 @@ pub struct ChatCompletionsProvider<P> {
     only_listed_models: bool,
     cached_models: RwLock<BTreeMap<ModelId, Model>>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
+    model_catalog: Option<std::sync::Arc<kraai_provider_core::ModelCatalog>>,
+    catalog_provider: Option<String>,
     _profile: PhantomData<P>,
 }
 
@@ -85,6 +89,10 @@ where
         self.cached_models.read().await.get(model_id).cloned()
     }
 
+    fn set_model_catalog(&mut self, catalog: std::sync::Arc<kraai_provider_core::ModelCatalog>) {
+        self.model_catalog = Some(catalog);
+    }
+
     async fn cache_models(&self) -> Result<()> {
         let response = send_with_retry(
             "list models",
@@ -102,6 +110,9 @@ where
         let response = ensure_success_response("list models", response).await?;
         let models = response.json::<ListModelsResponse>().await?;
 
+        if let Some(catalog) = &self.model_catalog {
+            catalog.initialize().await;
+        }
         let mut cache = BTreeMap::new();
 
         for model in models.data {
@@ -111,19 +122,22 @@ where
             if self.only_listed_models && configured.is_none() {
                 continue;
             }
+            let catalog = match &self.model_catalog {
+                Some(catalog) => {
+                    catalog
+                        .metadata(
+                            self.catalog_provider.as_deref(),
+                            Some(&self.base_url),
+                            &raw_id,
+                        )
+                        .await
+                }
+                None => None,
+            };
 
             cache.insert(
                 id.clone(),
-                Model {
-                    id,
-                    name: configured
-                        .and_then(|entry| entry.name.clone())
-                        .unwrap_or(raw_id),
-                    max_context: configured.and_then(|entry| entry.max_context),
-                    supports_images: configured
-                        .and_then(|entry| entry.supports_images)
-                        .unwrap_or(false),
-                },
+                configured.cloned().unwrap_or_default().resolve(id, catalog),
             );
         }
         let previous = std::mem::replace(&mut *self.cached_models.write().await, cache);
@@ -144,21 +158,45 @@ where
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
-        if provider_request.script_tool.is_some() {
-            return Err(eyre!(
-                "text-envelope provider received a native script tool definition"
-            ));
-        }
         let supports_images = self
             .model_configs
             .get(model_id)
             .and_then(|metadata| metadata.supports_images)
-            .unwrap_or(false);
-        validate_image_support(&provider_request.messages, model_id, supports_images)?;
-        let images = ResolvedImages::resolve(&provider_request.messages, request_context).await?;
+            .unwrap_or(
+                self.get_model(model_id)
+                    .await
+                    .is_some_and(|model| model.supports_images),
+            );
+        let images = ResolvedImages::for_model(
+            &provider_request.messages,
+            model_id,
+            supports_images,
+            request_context,
+        )
+        .await?;
+        let tool_name = provider_request
+            .script_tool
+            .as_ref()
+            .map(|tool| tool.name.clone());
+        let messages = normalize_chat_messages(provider_request.messages, &images, &self.id)?;
+        let has_tool_history = messages.iter().any(|message| match message {
+            RequestMessage::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
+            RequestMessage::Tool { .. } => true,
+            _ => false,
+        });
+        let tools = (tool_name.is_some() || has_tool_history).then(|| {
+            provider_request
+                .script_tool
+                .into_iter()
+                .map(Into::into)
+                .collect()
+        });
         let request = ChatCompletionRequest {
+            tools,
+            tool_choice: if tool_name.is_some() { "auto" } else { "none" },
+            parallel_tool_calls: tool_name.as_ref().map(|_| false),
             model: model_id.to_string(),
-            messages: normalize_chat_messages(provider_request.messages, &images)?,
+            messages,
             stream: true,
             stream_options: Some(ChatCompletionStreamOptions {
                 include_usage: true,
@@ -171,6 +209,7 @@ where
 
         Ok(adapt_chat_completion_stream(
             stream_sse_data(response),
+            tool_name,
             reqwest::Url::parse(&self.base_url)
                 .ok()
                 .is_some_and(|url| url.host_str() == Some("openrouter.ai")),
@@ -198,7 +237,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     ))
 }
 
-fn create_provider<P>(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>>
+fn create_provider<P>(id: ProviderId, config: DynamicConfig) -> Result<ChatCompletionsProvider<P>>
 where
     P: ChatCompletionsProfile,
 {
@@ -209,7 +248,10 @@ where
         .and_then(DynamicValue::as_bool)
         .unwrap_or(true);
 
-    Ok(Box::new(ChatCompletionsProvider::<P> {
+    let catalog_provider = P::pricing_catalog(&config).provider;
+    Ok(ChatCompletionsProvider::<P> {
+        model_catalog: None,
+        catalog_provider,
         id,
         client: build_streaming_http_client()?,
         base_url,
@@ -218,7 +260,7 @@ where
         cached_models: RwLock::new(BTreeMap::new()),
         model_configs: BTreeMap::new(),
         _profile: PhantomData,
-    }))
+    })
 }
 
 pub struct OpenAiChatCompletionsFactory;
@@ -235,7 +277,9 @@ impl ProviderFactory for OpenAiChatCompletionsFactory {
     }
 
     fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
-        create_provider::<GenericChatCompletionsProfile>(id, config)
+        Ok(Box::new(create_provider::<GenericChatCompletionsProfile>(
+            id, config,
+        )?))
     }
 
     fn validate_provider_config(
@@ -263,7 +307,9 @@ impl ProviderFactory for OpenAiFactory {
     }
 
     fn create(id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
-        create_provider::<OpenAiChatCompletionsProfile>(id, config)
+        Ok(Box::new(create_provider::<OpenAiChatCompletionsProfile>(
+            id, config,
+        )?))
     }
 
     fn validate_provider_config(
@@ -295,6 +341,37 @@ mod tests {
     use kraai_provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn provider_creation_uses_the_same_catalog_identity_as_pricing() {
+        let credentials = DynamicConfig::from([("api_key".into(), DynamicValue::from("fixture"))]);
+        let direct = create_provider::<OpenAiChatCompletionsProfile>(
+            ProviderId::new("direct"),
+            credentials.clone(),
+        )
+        .unwrap();
+        assert_eq!(direct.catalog_provider.as_deref(), Some("openai"));
+        for (endpoint, override_id, expected) in [
+            ("https://api.openai.com/v1/", None, Some("openai")),
+            ("https://api.openai.com/v1", Some("custom"), Some("custom")),
+            ("https://proxy.test/v1", Some("custom"), Some("custom")),
+            ("https://api.groq.com/openai/v1", None, None),
+        ] {
+            let mut config = credentials.clone();
+            config.insert("base_url".into(), DynamicValue::from(endpoint));
+            if let Some(id) = override_id {
+                config.insert("catalog_provider".into(), DynamicValue::from(id));
+            }
+            let pricing = GenericChatCompletionsProfile::pricing_catalog(&config);
+            let provider = create_provider::<GenericChatCompletionsProfile>(
+                ProviderId::new("compatible"),
+                config,
+            )
+            .unwrap();
+            assert_eq!(provider.catalog_provider.as_deref(), expected);
+            assert_eq!(provider.catalog_provider, pricing.provider);
+        }
+    }
 
     fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
         let mut current = Some(error);
@@ -406,7 +483,7 @@ mod tests {
             },
             ScriptedResponse::Status {
                 status_line: "200 OK",
-                body: "data: {\"choices\":[{\"delta\":{\"content\":\"ok after retry\"}}]}\n\ndata: [DONE]\n\n",
+                body: "data: {\"choices\":[{\"delta\":{\"content\":\"ok after retry\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
             },
         ])
         .await;
@@ -427,6 +504,8 @@ mod tests {
             only_listed_models: false,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
+            model_catalog: None,
+            catalog_provider: None,
             _profile: PhantomData,
         };
 
@@ -484,6 +563,8 @@ mod tests {
             only_listed_models: false,
             cached_models: RwLock::new(BTreeMap::new()),
             model_configs: BTreeMap::new(),
+            model_catalog: None,
+            catalog_provider: None,
             _profile: PhantomData,
         };
         let events = provider
@@ -558,6 +639,8 @@ mod tests {
                         max_context: Some(4096),
                     },
                 )]),
+                model_catalog: None,
+                catalog_provider: None,
                 _profile: PhantomData,
             };
             let metadata = |models: Vec<Model>| {

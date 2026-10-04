@@ -16,6 +16,12 @@ async function consume() {
       const chunk: string = event.value.event.StreamChunk.chunk;
       void chunk;
     }
+    if (typeof event.value.event === 'object' && 'ScriptCall' in event.value.event) {
+      const input: string = event.value.event.ScriptCall.input;
+      const callId: string = event.value.event.ScriptCall.call_id;
+      void input;
+      void callId;
+    }
   } else if (event.type === 'lagged') {
     const skipped: number = event.skipped;
     void skipped;

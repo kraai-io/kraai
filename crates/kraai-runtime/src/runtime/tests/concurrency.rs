@@ -40,13 +40,6 @@ impl kraai_provider_core::Provider for HandoffProvider {
         Ok(())
     }
 
-    fn script_tool_transport(
-        &self,
-        _model_id: &kraai_types::ModelId,
-    ) -> kraai_provider_core::ScriptToolTransport {
-        kraai_provider_core::ScriptToolTransport::NativeCustom
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &kraai_types::ModelId,
@@ -254,8 +247,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .events
         .wait_for("script call before usage drain completes", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::StreamChunk { session_id: id, chunk, .. }
-                if id == &session_id && chunk.contains("<tool_call>"))
+                matches!(event, Event::ScriptCall { session_id: id, .. } if id == &session_id)
             })
         })
         .await;

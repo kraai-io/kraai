@@ -1,8 +1,3 @@
-#![expect(
-    clippy::expect_used,
-    reason = "module-level regex constants are statically validated during development"
-)]
-
 use kraai_types::{ChatRole, Message};
 use ratatui::{
     buffer::Buffer,
@@ -10,16 +5,13 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::Widget,
 };
-use regex::Regex;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
 mod wrapping;
 
-static TOOL_CALL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*\n?(.*?)</tool_call>").expect("valid regex"));
 const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
@@ -247,48 +239,30 @@ impl<'a> ChatHistory<'a> {
         lines
     }
 
-    fn render_assistant_message(content: &str, width: usize) -> Vec<RenderedLine> {
+    fn render_assistant_message(
+        items: &[kraai_types::AssistantItem],
+        width: usize,
+    ) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
-        let normal_style = Style::default().fg(Color::White);
-
-        let mut cursor = 0usize;
-        let mut found_tool_call = false;
-
-        for caps in TOOL_CALL_RE.captures_iter(content) {
-            let Some(full_match) = caps.get(0) else {
-                continue;
+        let style = Style::default().fg(Color::White);
+        for item in items {
+            let block = match item {
+                kraai_types::AssistantItem::Reasoning { .. } => continue,
+                kraai_types::AssistantItem::Text { text, .. } => {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    markdown::render_message(&normalize_terminal_text(text), width, style)
+                }
+                kraai_types::AssistantItem::ScriptCall { input, .. } => {
+                    Self::render_script_card(&normalize_terminal_text(input), width)
+                }
             };
-            found_tool_call = true;
-
-            let before = &content[cursor..full_match.start()];
-            if !before.trim().is_empty() {
-                let before_lines = markdown::render_message(before, width, normal_style);
-                markdown::append_block(&mut lines, before_lines, normal_style);
-            }
-
-            if let Some(source) = caps.get(1).map(|m| m.as_str()) {
-                let card_lines = Self::render_script_card(source, width);
-                markdown::append_block(&mut lines, card_lines, normal_style);
-            }
-
-            cursor = full_match.end();
+            markdown::append_block(&mut lines, block, style);
         }
-
-        if !found_tool_call {
-            let mut parsed = markdown::render_message(content, width, normal_style);
-            lines.append(&mut parsed);
-        } else {
-            let tail = &content[cursor..];
-            if !tail.trim().is_empty() {
-                let parsed = markdown::render_message(tail, width, normal_style);
-                markdown::append_block(&mut lines, parsed, normal_style);
-            }
-        }
-
         if lines.is_empty() {
-            lines.push(Self::single_span_line(String::new(), normal_style));
+            lines.push(Self::single_span_line(String::new(), style));
         }
-
         lines
     }
 
@@ -434,12 +408,18 @@ impl<'a> ChatHistory<'a> {
                 lines.push(Self::single_span_line(String::new(), user_style));
                 lines
             }
-            ChatRole::Assistant => Self::add_message_gutter(
-                Self::render_assistant_message(&content, content_width),
-                '•',
-            ),
+            ChatRole::Assistant => {
+                let kraai_types::ConversationItem::Assistant { items } = &msg.content else {
+                    return Vec::new();
+                };
+                Self::add_message_gutter(Self::render_assistant_message(items, content_width), '•')
+            }
             ChatRole::ToolCallResult => Self::add_message_gutter(
-                Self::render_assistant_message(&content, content_width),
+                markdown::render_message(
+                    &content,
+                    content_width,
+                    Style::default().fg(Color::White),
+                ),
                 '•',
             ),
             ChatRole::System => Vec::new(),
@@ -626,6 +606,28 @@ mod tests {
         }
     }
 
+    fn script_message(before: &str, input: &str, after: &str) -> Message {
+        let mut message = message("1", ChatRole::Assistant, "");
+        message.content = ConversationItem::Assistant {
+            items: vec![
+                AssistantItem::Text {
+                    phase: AssistantPhase::Commentary,
+                    text: before.into(),
+                },
+                AssistantItem::ScriptCall {
+                    call_id: ToolCallId::new("call"),
+                    name: "kraai_nushell".into(),
+                    input: input.into(),
+                },
+                AssistantItem::Text {
+                    phase: AssistantPhase::FinalAnswer,
+                    text: after.into(),
+                },
+            ],
+        };
+        message
+    }
+
     #[test]
     fn wraps_unicode_without_panicking() {
         let wrapped = ChatHistory::wrap_with_prefix("你好你好", 4, "", "");
@@ -773,10 +775,10 @@ mod tests {
 
     #[test]
     fn renders_assistant_script_call_in_pretty_format() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "<tool_call>\n# timeout=10sec permissions=workspace-read\nopen /tmp/a.txt | lines | first 10\n</tool_call>",
+        let assistant = script_message(
+            "",
+            "# timeout=10sec permissions=workspace-read\nopen /tmp/a.txt | lines | first 10",
+            "",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
@@ -794,11 +796,7 @@ mod tests {
 
     #[test]
     fn renders_mixed_assistant_text_and_script_call() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "before\n<tool_call>\n# timeout=1sec\nls\n</tool_call>\nafter",
-        );
+        let assistant = script_message("before\n", "# timeout=1sec\nls", "\nafter");
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
@@ -819,12 +817,32 @@ mod tests {
     }
 
     #[test]
-    fn renders_script_source_without_parsing_nushell() {
-        let assistant = message(
+    fn tool_delimiters_inside_scripts_and_prose_are_not_parsed() {
+        let script = script_message("", "# timeout=1sec\nprint '</tool_call>'\nprint 'tail'", "");
+        let lines = ChatHistory::build_message_lines(&script, 120);
+        let text = lines
+            .iter()
+            .map(ChatHistory::line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("print '</tool_call>'"));
+        assert!(text.contains("print 'tail'"));
+        let prose = message(
             "1",
             ChatRole::Assistant,
-            "<tool_call>\n# timeout=1sec\nthis is not parsed here\n</tool_call>",
+            "Example: <tool_call>hello</tool_call>",
         );
+        let lines = ChatHistory::build_message_lines(&prose, 120);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| ChatHistory::line_text(line).contains("Nushell"))
+        );
+    }
+
+    #[test]
+    fn renders_script_source_without_parsing_nushell() {
+        let assistant = script_message("", "# timeout=1sec\nthis is not parsed here", "");
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
@@ -928,11 +946,7 @@ mod tests {
 
     #[test]
     fn skips_leading_blank_line_before_assistant_script_call() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "<tool_call>\n# timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>",
-        );
+        let assistant = script_message("", "# timeout=5sec\nkraai-open-files /tmp/a.txt", "");
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);
         let lines = history.build_rendered_lines(120);
@@ -943,11 +957,7 @@ mod tests {
 
     #[test]
     fn script_cards_trim_outer_blank_lines_without_losing_internal_spacing() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "before\n\n<tool_call>\n# timeout=1sec\n\nls\n\n   \n</tool_call>",
-        );
+        let assistant = script_message("before\n\n", "# timeout=1sec\n\nls\n\n   ", "");
         let lines = ChatHistory::build_message_lines(&assistant, 80);
         assert_eq!(
             lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
@@ -964,10 +974,10 @@ mod tests {
 
     #[test]
     fn skips_whitespace_only_tail_after_assistant_script_call() {
-        let assistant = message(
-            "1",
-            ChatRole::Assistant,
-            "<tool_call>\n# timeout=5sec\nkraai-open-files /tmp/a.txt\n</tool_call>\n       \n\n          \n          ",
+        let assistant = script_message(
+            "",
+            "# timeout=5sec\nkraai-open-files /tmp/a.txt",
+            "\n       \n\n          \n          ",
         );
         let refs = [&assistant];
         let history = ChatHistory::new(&refs, 0, true);

@@ -1,4 +1,3 @@
-mod catalog;
 mod config;
 mod policy;
 
@@ -9,8 +8,8 @@ use futures::{StreamExt, stream::BoxStream};
 use kraai_types::{ModelId, ProviderId, RequestCost, TokenRates, TokenUsage};
 use tokio_util::task::AbortOnDropHandle;
 
+use crate::model_catalog::{ModelCatalog as Catalog, parse_rates};
 use crate::{ProviderManagerConfig, ProviderStreamEvent};
-use catalog::Catalog;
 use config::PricingConfig;
 
 pub use config::{pricing_fields, validate_pricing_config};
@@ -19,7 +18,7 @@ pub use policy::{ProviderPricingCatalog, ProviderPricingPolicy};
 #[derive(Clone, Default)]
 pub struct Pricing {
     configs: Arc<BTreeMap<ProviderId, PricingConfig>>,
-    catalog: Arc<Catalog>,
+    pub(crate) catalog: Arc<Catalog>,
     refresh_task: Arc<Mutex<Option<AbortOnDropHandle<()>>>>,
 }
 
@@ -68,7 +67,7 @@ impl Pricing {
         if !self.uses_catalog() {
             return;
         }
-        self.catalog.load().await;
+        self.catalog.initialize().await;
         self.catalog.refresh().await;
     }
 
@@ -179,11 +178,7 @@ impl PriceQuote {
                 cost,
                 source,
                 timestamp,
-            } => (
-                catalog::parse_rates(cost, usage)?,
-                source.clone(),
-                *timestamp,
-            ),
+            } => (parse_rates(cost, usage)?, source.clone(), *timestamp),
         };
         Some(RequestCost {
             amount: rates.estimate(usage)?,

@@ -4,6 +4,7 @@ mod auth;
 mod messages;
 mod profile;
 mod provider;
+mod reasoning;
 mod streaming;
 mod wire;
 

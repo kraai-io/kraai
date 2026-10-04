@@ -22,9 +22,11 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
     fn pricing_catalog(config: &DynamicConfig) -> ProviderPricingCatalog {
         let mut catalog = ProviderPricingCatalog::from_config(config);
         catalog.api = catalog.api.or_else(Self::default_base_url);
-        catalog.provider = (catalog.api.as_deref().map(|url| url.trim_end_matches('/'))
-            == Some("https://api.openai.com/v1"))
-        .then(|| String::from("openai"));
+        catalog.provider = catalog.provider.or_else(|| {
+            (catalog.api.as_deref().map(|url| url.trim_end_matches('/'))
+                == Some("https://api.openai.com/v1"))
+            .then(|| String::from("openai"))
+        });
         catalog
     }
 
@@ -35,6 +37,12 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
             protocol_family: String::from("openai-chat-completions"),
             description: Self::DESCRIPTION.to_string(),
             provider_fields: vec![
+                FieldDefinition {
+                    key: "catalog_provider".into(), label: "models.dev Provider".into(),
+                    value_kind: FieldValueKind::String, required: false, secret: false,
+                    help_text: Some("Optional models.dev provider ID for model capabilities and pricing when the endpoint cannot be matched automatically".into()),
+                    default_value: None,
+                },
                 FieldDefinition {
                     key: String::from("base_url"),
                     label: String::from("Base URL"),
@@ -84,6 +92,14 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
 
     fn validate_provider_config(config: &DynamicConfig) -> Vec<ValidationError> {
         let mut errors = Vec::new();
+        if let Some(value) = config.get("catalog_provider")
+            && value.as_str().is_none_or(|id| id.trim().is_empty())
+        {
+            errors.push(ValidationError {
+                field: "catalog_provider".into(),
+                message: "models.dev provider ID must be a non-empty string".into(),
+            });
+        }
 
         if Self::TYPE_ID == "openai-chat-completions"
             && config
@@ -218,6 +234,14 @@ mod tests {
                 DynamicValue::Bool(false),
             )]));
             assert_eq!(invalid_catalog, default_catalog);
+            let explicit = (policy.catalog)(&DynamicConfig::from([
+                (
+                    "base_url".into(),
+                    DynamicValue::from("https://api.openai.com/v1"),
+                ),
+                ("catalog_provider".into(), DynamicValue::from("  custom  ")),
+            ]));
+            assert_eq!(explicit.provider.as_deref(), Some("custom"));
         }
     }
 }

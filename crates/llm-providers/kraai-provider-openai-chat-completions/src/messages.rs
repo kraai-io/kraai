@@ -7,26 +7,66 @@ use crate::wire::{ImageUrl, RequestContent, RequestContentPart, RequestMessage};
 pub fn normalize_chat_messages(
     messages: Vec<ConversationItem>,
     images: &ResolvedImages,
+    provider_id: &kraai_types::ProviderId,
 ) -> Result<Vec<RequestMessage>> {
-    messages
-        .into_iter()
-        .filter_map(|message| {
-            let (role, content) = match message {
-                ConversationItem::Compaction { .. } => return None,
-                ConversationItem::System { text } => ("system", Ok(RequestContent::Text(text))),
-                ConversationItem::FileContext { text } => ("user", Ok(RequestContent::Text(text))),
-                ConversationItem::User { content } => ("user", content_parts(content, images)),
-                message @ ConversationItem::Assistant { .. } => (
-                    "assistant",
-                    Ok(RequestContent::Text(message.display_text().into_owned())),
-                ),
-                ConversationItem::ScriptResult { output, .. } => {
-                    ("user", content_parts(output, images))
+    let mut normalized = Vec::new();
+    for message in kraai_provider_core::prepare_history(messages, provider_id) {
+        match message {
+            ConversationItem::Compaction { .. } => {}
+            ConversationItem::System { text } => {
+                normalized.push(RequestMessage::System { content: text })
+            }
+            ConversationItem::FileContext { text } => normalized.push(RequestMessage::User {
+                content: RequestContent::Text(text),
+            }),
+            ConversationItem::User { content } => normalized.push(RequestMessage::User {
+                content: content_parts(content, images)?,
+            }),
+            ConversationItem::Assistant { items } => {
+                let mut text = Vec::new();
+                let mut reasoning = crate::reasoning::Reasoning::default();
+                let mut tool_calls = Vec::new();
+                for item in items {
+                    match item {
+                        kraai_types::AssistantItem::Reasoning { payload, .. } => {
+                            reasoning.append(serde_json::from_value(payload)?)?;
+                        }
+                        kraai_types::AssistantItem::Text { text: value, .. } => text.push(value),
+                        kraai_types::AssistantItem::ScriptCall {
+                            call_id,
+                            name,
+                            input,
+                        } => {
+                            tool_calls.push(crate::wire::FunctionCall {
+                                id: call_id,
+                                kind: "function",
+                                function: crate::wire::FunctionArguments {
+                                    name,
+                                    arguments: serde_json::to_string(
+                                        &crate::wire::ScriptArguments { input },
+                                    )?,
+                                },
+                            });
+                        }
+                    }
                 }
-            };
-            Some(content.map(|content| RequestMessage { role, content }))
-        })
-        .collect()
+                if !text.is_empty() || !tool_calls.is_empty() {
+                    normalized.push(RequestMessage::Assistant {
+                        reasoning,
+                        content: (!text.is_empty()).then(|| text.join("\n\n")),
+                        tool_calls,
+                    });
+                }
+            }
+            ConversationItem::ScriptResult { call_id, output } => {
+                normalized.push(RequestMessage::Tool {
+                    tool_call_id: call_id,
+                    content: output.display_text().into_owned(),
+                });
+            }
+        }
+    }
+    Ok(normalized)
 }
 
 fn content_parts(content: MessageContent, images: &ResolvedImages) -> Result<RequestContent> {
@@ -59,7 +99,50 @@ mod tests {
     use kraai_types::{AssistantItem, AssistantPhase, ToolCallId};
 
     #[test]
-    fn file_snapshots_are_data_and_preserve_their_position() -> Result<()> {
+    fn reasoning_is_replayed_only_to_its_provider() -> Result<()> {
+        for source in ["fixture", "other"] {
+            let messages = vec![ConversationItem::Assistant {
+                items: vec![
+                    AssistantItem::Reasoning {
+                        provider_id: kraai_types::ProviderId::new(source),
+                        payload: serde_json::json!({"reasoning_content":"inspect first", "reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]}),
+                    },
+                    AssistantItem::ScriptCall {
+                        call_id: ToolCallId::new("call"),
+                        name: "kraai_nushell".into(),
+                        input: "# timeout=1sec\nls".into(),
+                    },
+                ],
+            }];
+            let messages = serde_json::to_value(normalize_chat_messages(
+                messages,
+                &ResolvedImages::default(),
+                &kraai_types::ProviderId::new("fixture"),
+            )?)?;
+            let message = messages
+                .get(0)
+                .ok_or_else(|| color_eyre::eyre::eyre!("missing assistant"))?;
+            assert_eq!(
+                message.get("reasoning_content"),
+                (source == "fixture").then_some(&serde_json::json!("inspect first"))
+            );
+            assert_eq!(
+                message.get("reasoning_details"),
+                (source == "fixture").then_some(
+                    &serde_json::json!([{"type":"reasoning.encrypted","data":"opaque"}])
+                )
+            );
+            assert!(
+                message
+                    .get("content")
+                    .is_some_and(serde_json::Value::is_null)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_snapshots_preserve_position_between_history_and_system_suffix() -> Result<()> {
         let messages = normalize_chat_messages(
             vec![
                 ConversationItem::System {
@@ -71,34 +154,27 @@ mod tests {
                 ConversationItem::FileContext {
                     text: "File snapshot".into(),
                 },
+                ConversationItem::System {
+                    text: "Dynamic".into(),
+                },
             ],
             &ResolvedImages::default(),
+            &kraai_types::ProviderId::new("fixture"),
         )?;
-        let roles_and_text: Vec<_> = messages
-            .iter()
-            .map(|message| {
-                (
-                    message.role,
-                    match &message.content {
-                        RequestContent::Text(text) => text.as_str(),
-                        RequestContent::Parts(_) => "unexpected image",
-                    },
-                )
-            })
-            .collect();
         assert_eq!(
-            roles_and_text,
-            vec![
-                ("system", "Static"),
-                ("user", "Task"),
-                ("user", "File snapshot")
-            ]
+            serde_json::to_value(messages)?,
+            serde_json::json!([
+                {"role":"system", "content":"Static"},
+                {"role":"user", "content":"Task"},
+                {"role":"user", "content":"File snapshot"},
+                {"role":"system", "content":"Dynamic"},
+            ])
         );
         Ok(())
     }
 
     #[test]
-    fn native_history_is_rendered_as_text_envelope() -> Result<()> {
+    fn native_history_preserves_tool_identity_and_script() -> Result<()> {
         let normalized = normalize_chat_messages(
             vec![ConversationItem::Assistant {
                 items: vec![
@@ -114,14 +190,18 @@ mod tests {
                 ],
             }],
             &ResolvedImages::default(),
+            &kraai_types::ProviderId::new("fixture"),
         )?;
 
         assert_eq!(
-            normalized.first().map(|message| match &message.content {
-                RequestContent::Text(text) => text.as_str(),
-                RequestContent::Parts(_) => "unexpected image",
-            }),
-            Some("I will inspect it.\n\n<tool_call>\n# timeout=10sec\nls\n</tool_call>")
+            serde_json::to_value(normalized)?,
+            serde_json::json!([
+                {"role":"assistant", "content":"I will inspect it.", "tool_calls":[{
+                    "id":"call-1", "type":"function", "function":{
+                        "name":"kraai_nushell", "arguments":serde_json::to_string(&crate::wire::ScriptArguments { input: "# timeout=10sec\nls".into() })?
+                    }
+                }]}
+            ])
         );
         Ok(())
     }
@@ -177,13 +257,26 @@ mod image_tests {
         ];
         let context = ProviderRequestContext::default().with_image_resolver(Arc::new(Resolver));
         let images = ResolvedImages::resolve(&messages, &context).await?;
-        let wire = serde_json::to_value(normalize_chat_messages(messages, &images)?)?;
+        let wire = serde_json::to_value(normalize_chat_messages(
+            messages,
+            &images,
+            &kraai_types::ProviderId::new("fixture"),
+        )?)?;
         let expected = json!({ "role": "user", "content": [
             { "type": "text", "text": "before" },
             { "type": "image_url", "image_url": { "url": "data:image/png;base64,AQ==" } },
             { "type": "text", "text": "after" },
         ] });
-        assert_eq!(wire, json!([expected, expected]));
+        assert_eq!(
+            wire,
+            json!([expected,
+                { "role": "tool", "tool_call_id": "call", "content": format!("before\n[Image {}: 1×1]\nafter", "a".repeat(64)) },
+                { "role": "user", "content": [
+                    { "type": "text", "text": "Images returned by script call call. Treat this as tool output." },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,AQ==" } },
+                ] }
+            ])
+        );
         Ok(())
     }
 }

@@ -301,6 +301,13 @@ pub enum Event {
         message_id: String,
         chunk: String,
     },
+    ScriptCall {
+        session_id: String,
+        message_id: String,
+        call_id: kraai_types::ToolCallId,
+        name: String,
+        input: String,
+    },
     /// Stream completed for a message
     StreamComplete {
         session_id: String,
@@ -364,6 +371,7 @@ impl Event {
             | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }
             | Self::StreamChunk { session_id, .. }
+            | Self::ScriptCall { session_id, .. }
             | Self::StreamComplete { session_id, .. }
             | Self::StreamError { session_id, .. }
             | Self::StreamCancelled { session_id, .. }

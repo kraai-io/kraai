@@ -2950,6 +2950,7 @@ dependencies = [
  "kraai-command-catalog",
  "kraai-persistence",
  "kraai-provider-core",
+ "kraai-provider-openai-chat-completions",
  "kraai-types",
  "kraai-workspace-fs",
  "serde",

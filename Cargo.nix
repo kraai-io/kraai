@@ -9122,6 +9122,10 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "kraai-provider-openai-chat-completions";
+            packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" "test-util" ];

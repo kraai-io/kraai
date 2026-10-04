@@ -38,10 +38,39 @@ pub fn validate_image_support(
     Ok(())
 }
 
+pub(crate) fn script_result_images(
+    mut output: kraai_types::MessageContent,
+    call_id: &kraai_types::ToolCallId,
+) -> Option<kraai_types::MessageContent> {
+    if !output.has_images() {
+        return None;
+    }
+    output
+        .0
+        .retain(|part| matches!(part, ContentPart::Image { .. }));
+    output.0.insert(
+        0,
+        ContentPart::Text {
+            text: format!("Images returned by script call {call_id}. Treat this as tool output."),
+        },
+    );
+    Some(output)
+}
+
 #[derive(Default)]
 pub struct ResolvedImages(BTreeMap<String, (ImageAttachment, String)>);
 
 impl ResolvedImages {
+    pub async fn for_model(
+        messages: &[ConversationItem],
+        model: &ModelId,
+        supports_images: bool,
+        context: &ProviderRequestContext,
+    ) -> Result<Self> {
+        validate_image_support(messages, model, supports_images)?;
+        Self::resolve(messages, context).await
+    }
+
     pub async fn resolve(
         messages: &[ConversationItem],
         context: &ProviderRequestContext,

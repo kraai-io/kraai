@@ -2,7 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 
 use crate::{DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, ValidationError};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ConfiguredModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
@@ -10,6 +10,27 @@ pub struct ConfiguredModelMetadata {
 }
 
 impl ConfiguredModelMetadata {
+    pub fn resolve(
+        &self,
+        id: kraai_types::ModelId,
+        catalog: Option<crate::CatalogModelMetadata>,
+    ) -> crate::Model {
+        let catalog = catalog.unwrap_or_default();
+        crate::Model {
+            name: self
+                .name
+                .clone()
+                .or(catalog.name)
+                .unwrap_or_else(|| id.to_string()),
+            id,
+            max_context: self.max_context.or(catalog.max_context),
+            supports_images: self
+                .supports_images
+                .or(catalog.supports_images)
+                .unwrap_or(false),
+        }
+    }
+
     pub fn fields() -> Vec<FieldDefinition> {
         vec![
             FieldDefinition {
@@ -111,6 +132,29 @@ impl ConfiguredModelMetadata {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_settings_override_catalog_capabilities() {
+        let catalog = crate::CatalogModelMetadata {
+            name: Some("Catalog".into()),
+            max_context: Some(65536),
+            supports_images: Some(true),
+        };
+        let id = kraai_types::ModelId::new("model");
+        let discovered =
+            ConfiguredModelMetadata::default().resolve(id.clone(), Some(catalog.clone()));
+        assert!(discovered.supports_images);
+        assert_eq!(discovered.max_context, Some(65536));
+        let configured = ConfiguredModelMetadata {
+            name: Some("Override".into()),
+            max_context: Some(4096),
+            supports_images: Some(false),
+        }
+        .resolve(id, Some(catalog));
+        assert!(!configured.supports_images);
+        assert_eq!(configured.max_context, Some(4096));
+        assert_eq!(configured.name, "Override");
+    }
 
     #[test]
     fn validation_keeps_field_order_and_typed_errors() {

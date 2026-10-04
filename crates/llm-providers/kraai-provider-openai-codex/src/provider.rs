@@ -8,8 +8,8 @@ use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue,
     FieldDefinition, FieldValueKind, Model, ModelConfig, Provider, ProviderDefinition,
     ProviderPricingPolicy, ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
-    ScriptToolTransport, ValidationError, finite_request, send_with_retry as send_http_with_retry,
-    stream_sse_data, streaming_http_client_builder,
+    ValidationError, finite_request, send_with_retry as send_http_with_retry, stream_sse_data,
+    streaming_http_client_builder,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::header::{ACCEPT, HeaderValue};
@@ -372,10 +372,6 @@ impl Provider for OpenAiCodexProvider {
         Ok(())
     }
 
-    fn script_tool_transport(&self, _model_id: &ModelId) -> ScriptToolTransport {
-        ScriptToolTransport::NativeCustom
-    }
-
     fn cache_warming_policy(
         &self,
         _model_id: &ModelId,
@@ -470,13 +466,10 @@ impl OpenAiCodexProvider {
             .read()
             .await
             .supports_images(model_id, &self.model_configs)?;
-        kraai_provider_core::validate_image_support(
+        let images = kraai_provider_core::ResolvedImages::for_model(
             &provider_request.messages,
             model_id,
             supports_images,
-        )?;
-        let images = kraai_provider_core::ResolvedImages::resolve(
-            &provider_request.messages,
             request_context,
         )
         .await?;
@@ -806,26 +799,6 @@ mod tests {
         assert_eq!(
             provider.endpoint("codex/responses"),
             "http://127.0.0.1:4321/backend-api/codex/responses"
-        );
-    }
-
-    #[test]
-    fn codex_models_use_native_custom_tools() {
-        let Some(provider) = provider() else {
-            return;
-        };
-
-        assert_eq!(
-            provider.script_tool_transport(&ModelId::new("gpt-5.6-sol-high")),
-            ScriptToolTransport::NativeCustom
-        );
-        assert_eq!(
-            provider.script_tool_transport(&ModelId::new("gpt-6-astra-ultra")),
-            ScriptToolTransport::NativeCustom
-        );
-        assert_eq!(
-            provider.script_tool_transport(&ModelId::new("custom-experimental-model")),
-            ScriptToolTransport::NativeCustom
         );
     }
 

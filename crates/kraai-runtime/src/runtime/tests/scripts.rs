@@ -169,8 +169,10 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
 async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![
-            ScriptedChunk::plain(
-                "I need to run the tests.\n<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>ignored in-boundary chunk",
+            ScriptedChunk::plain("I need to run the tests."),
+            ScriptedChunk::native_call(
+                "call-1",
+                "# timeout=30sec permissions=workspace-write\n^cargo test",
             ),
             ScriptedChunk::plain("ignored trailing output"),
             ScriptedChunk::usage(TokenUsage {
@@ -179,7 +181,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
                 output_tokens: 12,
                 reasoning_tokens: 6,
                 cache_read_tokens: 4,
-                    ..Default::default()
+                ..Default::default()
             }),
         ],
         vec![ScriptedChunk::plain("The requested escalation was denied.")],
@@ -326,8 +328,9 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
 
 #[tokio::test]
 async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Result<()> {
-    let mut chunks = vec![ScriptedChunk::plain(
-        "<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
+    let mut chunks = vec![ScriptedChunk::native_call(
+        "call-1",
+        "# timeout=30sec permissions=workspace-write\n^cargo test",
     )];
     chunks.extend(
         std::iter::repeat_with(|| ScriptedChunk::plain("discarded trailing output"))
@@ -389,8 +392,9 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
 #[tokio::test]
 async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![vec![
-        ScriptedChunk::plain(
-            "<tool_call>\n# timeout=30sec permissions=workspace-write\n^cargo test\n</tool_call>",
+        ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n^cargo test",
         ),
         ScriptedChunk::error("transport failed after completed script"),
     ]])
@@ -474,8 +478,9 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
 #[tokio::test]
 async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
-        vec![ScriptedChunk::plain(
-            "<tool_call>\n# permissions=network\nhttp get https://example.com\n</tool_call>",
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# permissions=network\nhttp get https://example.com",
         )],
         vec![ScriptedChunk::plain("The script request was invalid.")],
     ])
@@ -525,8 +530,9 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
 #[tokio::test]
 async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(vec![
-        vec![ScriptedChunk::plain(
-            "<tool_call>\n# timeout=30sec permissions=workspace-write\n'changed' | save result.txt\n</tool_call>",
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
         )],
         vec![ScriptedChunk::plain(
             "The pending approval was cancelled without running the script.",

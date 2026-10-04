@@ -28,7 +28,12 @@ impl ProviderPricingCatalog {
                 .get("base_url")
                 .and_then(DynamicValue::as_str)
                 .map(|value| value.trim().to_string()),
-            provider: None,
+            provider: config
+                .get("catalog_provider")
+                .and_then(DynamicValue::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
         }
     }
 }

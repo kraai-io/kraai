@@ -8,7 +8,7 @@ use kraai_types::{ModelId, ProviderId};
 use crate::config::{ModelConfig, ProviderManagerConfig};
 use crate::definition::ValidationError;
 use crate::error::{ProviderError, ProviderModelCacheRefreshError};
-use crate::provider::{Model, Provider, ProviderRequest, ScriptToolTransport};
+use crate::provider::{Model, Provider, ProviderRequest};
 use crate::registry::ProviderRegistry;
 use crate::request_context::ProviderRequestContext;
 use crate::stream::ProviderStreamEvent;
@@ -32,7 +32,8 @@ impl ProviderManager {
         Self::default()
     }
 
-    pub fn register_provider(&mut self, id: ProviderId, provider: Box<dyn Provider>) {
+    pub fn register_provider(&mut self, id: ProviderId, mut provider: Box<dyn Provider>) {
+        provider.set_model_catalog(self.pricing.catalog.clone());
         Arc::make_mut(&mut self.providers).insert(id, Arc::from(provider));
         self.cache_warming = Default::default();
     }
@@ -110,6 +111,7 @@ impl ProviderManager {
                     break;
                 };
                 let registry = registry.clone();
+                let catalog = pricing.catalog.clone();
                 let models = models_by_provider.remove(&provider_id).unwrap_or_default();
                 tasks.spawn(async move {
                     let mut provider = registry.create_provider(
@@ -117,6 +119,7 @@ impl ProviderManager {
                         provider_config.id.clone(),
                         provider_config.config,
                     )?;
+                    provider.set_model_catalog(catalog);
                     for model in models {
                         provider.register_model(model).await?;
                     }
@@ -215,18 +218,6 @@ impl ProviderManager {
         } else {
             Err(ProviderError::ModelCacheRefreshFailed(failures).into())
         }
-    }
-
-    pub fn script_tool_transport(
-        &self,
-        provider_id: &ProviderId,
-        model_id: &ModelId,
-    ) -> Result<ScriptToolTransport> {
-        let provider = self
-            .providers
-            .get(provider_id)
-            .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        Ok(provider.script_tool_transport(model_id))
     }
 
     pub fn supports_native_compaction(

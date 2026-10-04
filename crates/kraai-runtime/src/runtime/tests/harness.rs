@@ -104,7 +104,6 @@ impl ScriptedChunk {
 struct ScriptedProvider {
     id: ProviderId,
     scripts: StdMutex<VecDeque<Vec<ScriptedChunk>>>,
-    native_custom_tool: bool,
 }
 
 #[async_trait]
@@ -125,33 +124,18 @@ impl kraai_provider_core::Provider for ScriptedProvider {
         Ok(())
     }
 
-    fn script_tool_transport(
-        &self,
-        _model_id: &ModelId,
-    ) -> kraai_provider_core::ScriptToolTransport {
-        if self.native_custom_tool {
-            kraai_provider_core::ScriptToolTransport::NativeCustom
-        } else {
-            kraai_provider_core::ScriptToolTransport::TextEnvelope
-        }
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
         request: ProviderRequest,
         _request_context: &kraai_provider_core::ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<kraai_provider_core::ProviderStreamEvent>>> {
-        if self.native_custom_tool {
-            let tool = request
-                .script_tool
-                .as_ref()
-                .ok_or_else(|| eyre!("native scripted provider did not receive a tool"))?;
-            if tool.name != "kraai_nushell" {
-                return Err(eyre!("unexpected native tool name: {}", tool.name));
-            }
-        } else if request.script_tool.is_some() {
-            return Err(eyre!("text scripted provider received a native tool"));
+        let tool = request
+            .script_tool
+            .as_ref()
+            .ok_or_else(|| eyre!("scripted provider did not receive a tool"))?;
+        if tool.name != "kraai_nushell" {
+            return Err(eyre!("unexpected tool name: {}", tool.name));
         }
 
         let script = self
@@ -309,7 +293,6 @@ impl RuntimeTestHarness {
             Box::new(ScriptedProvider {
                 id: ProviderId::new("mock"),
                 scripts: StdMutex::new(scripts.into()),
-                native_custom_tool: false,
             }),
         );
         Self::new_with_parts(providers).await
@@ -322,7 +305,6 @@ impl RuntimeTestHarness {
             Box::new(ScriptedProvider {
                 id: ProviderId::new("mock-native"),
                 scripts: StdMutex::new(scripts.into()),
-                native_custom_tool: true,
             }),
         );
         Self::new_with_parts(providers).await
