@@ -1,6 +1,6 @@
 use kraai_types::ScriptExecutionStatus;
 
-const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Rerun the command with an explicit text encoding to inspect it.";
+const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
 
 #[derive(Debug, Clone, Copy)]
 pub struct ToolCallResultView<'a> {
@@ -102,7 +102,7 @@ mod tests {
             diagnostic: None,
         });
         assert!(rendered.contains("encoding=\"binary\" byte_count=\"3\""));
-        assert!(rendered.contains("Rerun the command with an explicit text encoding"));
+        assert!(rendered.contains(super::BINARY_OUTPUT_MESSAGE));
         assert!(!rendered.contains("/wD+"));
     }
 

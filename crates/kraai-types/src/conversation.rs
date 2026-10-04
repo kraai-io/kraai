@@ -147,6 +147,9 @@ pub enum AssistantItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConversationItem {
+    FileContext {
+        text: String,
+    },
     Compaction {
         provider_id: ProviderId,
         #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
@@ -171,7 +174,7 @@ impl ConversationItem {
     pub fn role(&self) -> ChatRole {
         match self {
             Self::System { .. } => ChatRole::System,
-            Self::User { .. } => ChatRole::User,
+            Self::User { .. } | Self::FileContext { .. } => ChatRole::User,
             Self::Assistant { .. } | Self::Compaction { .. } => ChatRole::Assistant,
             Self::ScriptResult { .. } => ChatRole::ToolCallResult,
         }
@@ -179,7 +182,7 @@ impl ConversationItem {
 
     pub fn text(&self) -> Option<&str> {
         match self {
-            Self::System { text } => Some(text),
+            Self::System { text } | Self::FileContext { text } => Some(text),
             Self::User { content } => content.as_text(),
             Self::Assistant { .. } | Self::ScriptResult { .. } | Self::Compaction { .. } => None,
         }
@@ -195,7 +198,7 @@ impl ConversationItem {
     pub fn display_text(&self) -> Cow<'_, str> {
         match self {
             Self::Compaction { .. } => Cow::Borrowed(""),
-            Self::System { text } => Cow::Borrowed(text),
+            Self::System { text } | Self::FileContext { text } => Cow::Borrowed(text),
             Self::User { content } => content.display_text(),
             Self::Assistant { items } => render_assistant_items(items),
             Self::ScriptResult { output, .. } => output.display_text(),

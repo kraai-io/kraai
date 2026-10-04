@@ -19,6 +19,9 @@ impl ContextCompaction {
         requests: &mut Vec<RequestUsage>,
     ) -> Result<ConversationItem> {
         let mut request = self.original.clone();
+        request
+            .messages
+            .retain(|item| !matches!(item, ConversationItem::FileContext { .. }));
         request.cacheable_messages = None;
         if !native {
             request.script_tool = None;

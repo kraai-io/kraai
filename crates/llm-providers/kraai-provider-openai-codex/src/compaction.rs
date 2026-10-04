@@ -45,7 +45,7 @@ fn encrypted_bytes(payload: &serde_json::Value) -> usize {
 
 fn visible_bytes(item: &ConversationItem) -> usize {
     match item {
-        ConversationItem::System { text } => text.len(),
+        ConversationItem::System { text } | ConversationItem::FileContext { text } => text.len(),
         ConversationItem::User { content } => content.display_text().len(),
         ConversationItem::Compaction { payload, .. } => encrypted_bytes(payload),
         ConversationItem::ScriptResult { output, .. } => output.display_text().len(),

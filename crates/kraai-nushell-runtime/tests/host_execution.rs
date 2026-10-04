@@ -658,3 +658,10 @@ mod http;
 
 #[path = "host_execution/output.rs"]
 mod output;
+
+#[path = "host_execution/edit_examples.rs"]
+mod edit_examples;
+
+#[cfg(unix)]
+#[path = "host_execution/exit_status.rs"]
+mod exit_status;

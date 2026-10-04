@@ -16,9 +16,10 @@ use prefix::{Prefix, fingerprints};
 #[derive(Clone, Copy, Debug)]
 pub struct CacheWarmingPolicy {
     pub min_prefix_bytes: usize,
-    pub min_growth_tokens: usize,
+    pub min_uncached_tokens: usize,
     pub min_requests_between_warmups: usize,
-    pub max_requests_between_warmups: usize,
+    pub fallback_requests_between_warmups: usize,
+    pub payback_requests: usize,
     pub refresh_after: Duration,
 }
 
@@ -26,9 +27,10 @@ impl Default for CacheWarmingPolicy {
     fn default() -> Self {
         Self {
             min_prefix_bytes: 8192,
-            min_growth_tokens: 1024,
+            min_uncached_tokens: 2048,
             min_requests_between_warmups: 2,
-            max_requests_between_warmups: 5,
+            fallback_requests_between_warmups: 5,
+            payback_requests: 5,
             refresh_after: Duration::from_secs(300),
         }
     }
@@ -111,7 +113,8 @@ impl ProviderManager {
             return Ok(None);
         };
         if policy.min_requests_between_warmups == 0
-            || policy.max_requests_between_warmups < policy.min_requests_between_warmups
+            || policy.fallback_requests_between_warmups < policy.min_requests_between_warmups
+            || policy.payback_requests == 0
         {
             return Err(eyre!("Invalid cache warming interval bounds"));
         }
@@ -133,18 +136,11 @@ impl ProviderManager {
         let state = self
             .cache_warming
             .state(provider_id, model_id, session_id)?;
-        let suffix = fingerprints(
-            request
-                .messages
-                .get(boundary..)
-                .ok_or_else(|| eyre!("Invalid cacheable message boundary"))?,
-        )?
-        .0;
         {
             let mut entry = state
                 .lock()
                 .map_err(|error| eyre!("Cache warming state poisoned: {error}"))?;
-            entry.feedback.synchronize(&prefix, &suffix);
+            entry.feedback.synchronize(&prefix);
             if entry.feedback.has_no_discount() {
                 return Ok(None);
             }
@@ -156,30 +152,48 @@ impl ProviderManager {
                 .last_attempt
                 .max(entry.last_prefix_use)
                 .is_none_or(|last| now.duration_since(last) >= policy.refresh_after);
-            let changed = entry
-                .completed
-                .as_ref()
-                .is_none_or(|old| !prefix.extends(&old.prefix));
-            let grown = entry.completed.as_ref().is_some_and(|old| {
-                prefix != old.prefix
-                    && entry
-                        .feedback
-                        .predicted_prefix(&prefix)
-                        .is_none_or(|tokens| {
-                            tokens - old.input_tokens as f64 >= policy.min_growth_tokens as f64
-                        })
-            });
             let interval = if entry.last_attempt_succeeded {
                 entry.feedback.interval(policy, &prefix)
             } else {
-                policy.max_requests_between_warmups
+                policy.fallback_requests_between_warmups
             };
-            if !expired && (entry.requests < interval || !changed && !grown) {
+            if !expired && entry.requests < interval {
+                return Ok(None);
+            }
+            let uncached = entry.feedback.uncached_tokens(&prefix, expired);
+            let worthwhile_gap = uncached.map_or_else(
+                || {
+                    expired
+                        || entry
+                            .completed
+                            .as_ref()
+                            .is_none_or(|old| old.prefix != prefix)
+                },
+                |tokens| tokens >= policy.min_uncached_tokens as f64,
+            );
+            if !worthwhile_gap {
+                return Ok(None);
+            }
+            let payback = entry.feedback.payback(policy, &prefix, expired);
+            if let Some(estimate) = &payback
+                && estimate.expected_saving <= estimate.warmup_cost
+            {
+                tracing::debug!(
+                    uncached_tokens = uncached,
+                    warmup_cost_usd = estimate.warmup_cost / 1e15,
+                    expected_saving_usd = estimate.expected_saving / 1e15,
+                    "Deferring cache warm-up: expected reuse does not cover its cost"
+                );
                 return Ok(None);
             }
             tracing::debug!(
                 interval,
                 requests = entry.requests,
+                uncached_tokens = uncached,
+                warmup_cost_usd = payback.as_ref().map(|estimate| estimate.warmup_cost / 1e15),
+                expected_saving_usd = payback
+                    .as_ref()
+                    .map(|estimate| estimate.expected_saving / 1e15),
                 "Scheduling cache warm-up"
             );
             entry.last_attempt_succeeded = false;

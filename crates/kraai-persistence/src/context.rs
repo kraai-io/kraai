@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Context, Result, eyre};
+use color_eyre::eyre::{Context, Result, ensure, eyre};
 use kraai_types::{
     CommandInvocationId, ContextStateEvent, ContextStateEventSource, ContextStateMutation,
-    ScriptExecutionId,
+    MessageId, ScriptExecutionId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -14,13 +15,43 @@ use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct ContextStateDocument {
-    events: Vec<ContextStateEvent>,
+pub struct ContextStateDocument {
+    pub events: Vec<ContextStateEvent>,
+    #[serde(default)]
+    pub snapshots: Vec<FileContextSnapshot>,
+}
+
+impl ContextStateDocument {
+    fn push_event(&mut self, event: ContextStateEvent) {
+        let closed: HashSet<_> = event
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                ContextStateMutation::UnpinFile { path, .. } => Some(path),
+                ContextStateMutation::PinFile { .. } => None,
+            })
+            .collect();
+        self.snapshots
+            .retain(|snapshot| !closed.contains(&snapshot.path));
+        self.events.push(event);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileContextSnapshot {
+    pub path: PathBuf,
+    pub opened_event: String,
+    pub anchor: MessageId,
+    pub text: String,
 }
 
 #[async_trait::async_trait]
 pub trait ContextStateStore: Send + Sync {
-    async fn list(&self, session_id: &str) -> Result<Vec<ContextStateEvent>>;
+    async fn load(&self, session_id: &str) -> Result<ContextStateDocument>;
+
+    async fn list(&self, session_id: &str) -> Result<Vec<ContextStateEvent>> {
+        Ok(self.load(session_id).await?.events)
+    }
 
     async fn append_command(
         &self,
@@ -38,6 +69,18 @@ pub trait ContextStateStore: Send + Sync {
         component: &str,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent>;
+
+    async fn snapshots(&self, session_id: &str) -> Result<Vec<FileContextSnapshot>> {
+        Ok(self.load(session_id).await?.snapshots)
+    }
+
+    async fn save_snapshots(
+        &self,
+        session_id: &str,
+        through_event: Option<&str>,
+        snapshots: Vec<FileContextSnapshot>,
+        removals: Vec<ContextStateMutation>,
+    ) -> Result<()>;
 
     async fn delete(&self, session_id: &str) -> Result<()>;
 }
@@ -124,7 +167,7 @@ impl FileContextStateStore {
             source,
             mutations,
         };
-        document.events.push(event.clone());
+        document.push_event(event.clone());
         let path = self.document_path(session_id)?;
         let bytes = serde_json::to_vec_pretty(&document)
             .context("Failed to serialize context state document")?;
@@ -140,9 +183,9 @@ impl FileContextStateStore {
 
 #[async_trait::async_trait]
 impl ContextStateStore for FileContextStateStore {
-    async fn list(&self, session_id: &str) -> Result<Vec<ContextStateEvent>> {
+    async fn load(&self, session_id: &str) -> Result<ContextStateDocument> {
         let _guard = self.session_locks.lock(session_id).await;
-        Ok(self.load_document(session_id).await?.events)
+        self.load_document(session_id).await
     }
 
     async fn append_command(
@@ -179,6 +222,45 @@ impl ContextStateStore for FileContextStateStore {
                 component: component.to_owned(),
             },
             mutations,
+        )
+        .await
+    }
+
+    async fn save_snapshots(
+        &self,
+        session_id: &str,
+        through_event: Option<&str>,
+        snapshots: Vec<FileContextSnapshot>,
+        removals: Vec<ContextStateMutation>,
+    ) -> Result<()> {
+        let guard = self.session_locks.lock(session_id).await;
+        let mut document = self.load_document(session_id).await?;
+        ensure!(
+            document.events.last().map(|event| event.id.as_str()) == through_event,
+            "File context changed while snapshots were being refreshed"
+        );
+        if document.snapshots == snapshots && removals.is_empty() {
+            return Ok(());
+        }
+        for snapshot in &snapshots {
+            MessageId::try_new(snapshot.anchor.as_str()).map_err(|error| eyre!(error))?;
+        }
+        document.snapshots = snapshots;
+        if !removals.is_empty() {
+            document.push_event(ContextStateEvent {
+                id: Ulid::generate().to_string(),
+                source: ContextStateEventSource::Runtime {
+                    component: "file-context-refresh".into(),
+                },
+                mutations: removals,
+            });
+        }
+        let path = self.document_path(session_id)?;
+        let bytes = serde_json::to_vec_pretty(&document)?;
+        complete_commit(
+            guard,
+            async move { atomic_write(&path, &bytes).await },
+            "File context snapshot commit failed",
         )
         .await
     }
@@ -372,3 +454,7 @@ mod tests {
         let _ = fs::remove_dir_all(data_dir).await;
     }
 }
+
+#[cfg(test)]
+#[path = "context/snapshot_tests.rs"]
+mod snapshot_tests;

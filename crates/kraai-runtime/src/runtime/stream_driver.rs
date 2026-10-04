@@ -115,6 +115,18 @@ impl RuntimeCore {
                 }
             }
         }
+        #[cfg(debug_assertions)]
+        for (position, item) in provider_request.messages.iter().enumerate() {
+            if let kraai_types::ConversationItem::FileContext { text } = item {
+                tracing::info!(
+                    session_id = %session_id,
+                    request_id = %message_id,
+                    position,
+                    bytes = text.len(),
+                    "Provider request file context"
+                );
+            }
+        }
         let warmup = match providers.prepare_cache_warmup(
             &provider_id,
             &model_id,

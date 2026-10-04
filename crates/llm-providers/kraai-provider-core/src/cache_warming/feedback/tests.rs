@@ -77,13 +77,13 @@ fn output_and_reasoning_prices_affect_the_interval() -> Result<()> {
     });
     assert_eq!(
         feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?),
-        5
+        8
     );
     Ok(())
 }
 
 #[test]
-fn no_discount_is_detected_and_missing_prices_use_the_maximum_interval() -> Result<()> {
+fn no_discount_is_detected_and_missing_prices_use_the_fallback_interval() -> Result<()> {
     let mut feedback = feedback(10000, 900)?;
     feedback.rates = None;
     assert_eq!(
@@ -100,14 +100,13 @@ fn no_discount_is_detected_and_missing_prices_use_the_maximum_interval() -> Resu
 }
 
 #[test]
-fn changed_pinned_files_and_rewritten_history_reset_growth() -> Result<()> {
+fn changed_pinned_files_preserve_estimates_but_rewritten_history_resets_them() -> Result<()> {
     let mut feedback = feedback(40000, 900)?;
-    feedback.synchronize(&prefix(6)?, &[99]);
-    assert!(feedback.predicted_prefix(&prefix(6)?).is_none());
-    assert_eq!(
-        feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?),
-        5
-    );
+    feedback.observe(prefix(6)?, vec![99], &usage(100000, 20000), None);
+    assert_eq!(feedback.predicted_prefix(&prefix(6)?), Some(40000.0));
+    assert_eq!(feedback.mean_growth(), Some(900.0));
+    feedback.observe(prefix(7)?, vec![99], &usage(100500, 20000), None);
+    assert_eq!(feedback.predicted_prefix(&prefix(7)?), Some(40500.0));
     let changed = Prefix::new(
         &[ConversationItem::User {
             content: "compacted".into(),
@@ -115,7 +114,7 @@ fn changed_pinned_files_and_rewritten_history_reset_growth() -> Result<()> {
         &None,
     )?;
     let mut feedback = super::tests::feedback(40000, 900)?;
-    feedback.synchronize(&changed, &[42]);
+    feedback.synchronize(&changed);
     assert!(feedback.growth.is_empty());
     assert!(feedback.predicted_prefix(&changed).is_none());
     Ok(())
@@ -155,5 +154,127 @@ fn recent_growth_replaces_older_samples_and_flat_history_does_not_warm_more_ofte
         5
     );
     assert_eq!(feedback.predicted_prefix(&prefix(11)?), Some(39100.0));
+    Ok(())
+}
+
+#[test]
+fn intervals_cover_different_reasoning_costs_without_a_five_request_cap() -> Result<()> {
+    for (reasoning, expected) in [(95, 5), (1000, 6), (4000, 8), (10000, 12)] {
+        let mut feedback = feedback(80000, 1000)?;
+        feedback.output.clear();
+        feedback.observe_warmup(&TokenUsage {
+            output_tokens: 363,
+            reasoning_tokens: reasoning,
+            ..usage(80000, 60000)
+        });
+        assert_eq!(
+            feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?),
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn separate_reasoning_price_changes_interval_and_payback() -> Result<()> {
+    let mut feedback = feedback(80000, 1000)?;
+    feedback.output.clear();
+    let mut warmup = usage(80000, 60000);
+    warmup.output_tokens = 363;
+    warmup.reasoning_tokens = 1000;
+    let rates = warmup
+        .cost
+        .as_mut()
+        .and_then(|cost| cost.rates.as_mut())
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing rates"))?;
+    rates.reasoning = Some(Usd(500));
+    feedback.observe_warmup(&warmup);
+    assert_eq!(
+        feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?),
+        12
+    );
+    let payback = feedback
+        .payback(CacheWarmingPolicy::default(), &prefix(6)?, false)
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing payback"))?;
+    assert_eq!(
+        payback.warmup_cost,
+        80000.0 + 43000.0 * 9.0 + 363.0 * 50.0 + 1000.0 * 500.0
+    );
+    Ok(())
+}
+
+#[test]
+fn payback_charges_all_input_and_generation_before_crediting_reuse() -> Result<()> {
+    for (tokens, cached, output, reasoning, profitable) in [
+        (79751, 78336, 1349, 0, false),
+        (49620, 49152, 528, 0, false),
+        (29550, 19968, 119, 20, true),
+        (9588, 0, 2185, 0, true),
+        (80000, 60000, 363, 10000, false),
+    ] {
+        let mut feedback = Feedback::default();
+        let prefix = prefix(0)?;
+        let warmup = CompletedWarmup {
+            prefix: prefix.clone(),
+            input_tokens: tokens,
+        };
+        feedback.observe_warmup(&TokenUsage {
+            output_tokens: output,
+            reasoning_tokens: reasoning,
+            ..usage(tokens, cached)
+        });
+        feedback.observe(
+            prefix.clone(),
+            vec![42],
+            &usage(tokens + 5000, cached),
+            Some(&warmup),
+        );
+        let payback = feedback
+            .payback(CacheWarmingPolicy::default(), &prefix, false)
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing payback"))?;
+        let gap = (tokens - cached) as f64;
+        assert_eq!(
+            payback.warmup_cost,
+            tokens as f64 + gap * 9.0 + (output + reasoning) as f64 * 50.0
+        );
+        assert_eq!(payback.expected_saving, 5.0 * 0.85 * 9.0 * gap);
+        assert_eq!(payback.expected_saving > payback.warmup_cost, profitable);
+    }
+    Ok(())
+}
+
+#[test]
+fn repeated_measurements_update_cache_hits_and_expiration_discards_them() -> Result<()> {
+    let mut feedback = feedback(40000, 900)?;
+    let prefix = prefix(5)?;
+    for (cached, gap) in [(39000, 100.0), (10000, 29100.0), (44000, 0.0)] {
+        feedback.observe(prefix.clone(), vec![42], &usage(44536, cached), None);
+        assert_eq!(feedback.uncached_tokens(&prefix, false), Some(gap));
+        assert_eq!(feedback.uncached_tokens(&prefix, true), Some(39100.0));
+        assert_eq!(feedback.mean_growth(), Some(900.0));
+    }
+    assert_eq!(
+        feedback.uncached_tokens(&super::tests::prefix(6)?, false),
+        Some(900.0)
+    );
+    Ok(())
+}
+
+#[test]
+fn expensive_generation_samples_age_out() -> Result<()> {
+    let mut feedback = feedback(80000, 1000)?;
+    feedback.output.clear();
+    feedback.observe_warmup(&TokenUsage {
+        reasoning_tokens: 10000,
+        ..usage(80000, 60000)
+    });
+    assert!(feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?) > 5);
+    for _ in 0..SAMPLE_COUNT {
+        feedback.observe_warmup(&usage(80000, 60000));
+    }
+    assert_eq!(
+        feedback.interval(CacheWarmingPolicy::default(), &prefix(6)?),
+        4
+    );
     Ok(())
 }

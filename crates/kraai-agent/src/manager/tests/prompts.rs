@@ -16,16 +16,17 @@ fn request_prefix(request: &PendingStreamRequest) -> &str {
         .expect("request should start with its instruction prefix")
 }
 
-fn request_suffix(request: &PendingStreamRequest) -> &str {
+fn request_file_context(request: &PendingStreamRequest) -> String {
     request
         .provider_request
         .messages
-        .last()
-        .and_then(|message| match message {
-            ConversationItem::System { text } => Some(text.as_str()),
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::FileContext { text } => Some(text.as_str()),
             _ => None,
         })
-        .expect("request should end with its dynamic context")
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[tokio::test]
@@ -163,8 +164,8 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
         )
         .await?;
 
-    let system_prompt = request_suffix(&request);
-    assert!(system_prompt.contains("Opened Files"));
+    let system_prompt = request_file_context(&request);
+    assert!(system_prompt.contains("Opened file:"));
     assert!(system_prompt.contains(file_path_str.as_str()));
     assert!(system_prompt.contains("1|new contents"));
     assert!(system_prompt.contains("2|second line"));
@@ -214,18 +215,21 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
             .count(),
         1,
     );
-    let system_prompt = request_suffix(&request);
-    assert!(system_prompt.contains("Pinned File Updates"));
+    let system_prompt = request_file_context(&request);
+    assert!(system_prompt.contains("automatically unpinned"));
     assert!(system_prompt.contains("removed.txt"));
     assert!(!system_prompt.contains("[temporarily unavailable:"));
 
     let next_refresh = crate::context_state::refresh_context_state(
         manager.context_state_store.as_ref(),
         &session_id,
+        &request.message_id,
+        &[],
+        None,
     )
     .await?;
     assert!(next_refresh.notifications.is_empty());
-    assert!(next_refresh.prompt.is_empty());
+    assert!(next_refresh.snapshots.is_empty());
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
@@ -317,7 +321,7 @@ async fn script_examples_are_present_for_both_transports() -> Result<()> {
 }
 
 #[tokio::test]
-async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()> {
+async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
@@ -336,14 +340,84 @@ async fn coding_prefix_includes_profile_and_edit_command_guidance() -> Result<()
 
     let system_prompt = request_prefix(&request);
 
-    assert!(system_prompt.contains(include_str!("../../profiles/build_code.md").trim()));
+    let session = manager.require_session(&session_id).await?;
+    assert!(
+        manager
+            .resolve_selected_profile(&session)?
+            .system_prompt
+            .is_empty()
+    );
     let edit_command = kraai_command_catalog::EDIT_FILE;
     assert!(system_prompt.contains(edit_command.description));
     assert!(system_prompt.contains(edit_command.signature_help));
     for example in edit_command.examples {
         assert!(system_prompt.contains(example.script_input));
+        assert!(system_prompt.contains(example.setup));
+        assert!(system_prompt.contains(example.outcome));
     }
 
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn execution_context_reports_selected_profile_grants_and_policy() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let session = manager.require_session(&session_id).await?;
+    let mut profile = manager.resolve_selected_profile(&session)?;
+    profile.permissions =
+        kraai_types::SandboxPermissionSet::new([kraai_types::SandboxCapability::WorkspaceRead])?;
+    profile.permission_rules = kraai_types::CapabilityPermissionRules::new([(
+        kraai_types::SandboxCapability::Network,
+        kraai_types::EscalationPolicy::Deny,
+    )]);
+    profile.escalation_policy = kraai_types::EscalationPolicy::Prompt;
+    for unsandboxed in [false, true] {
+        if unsandboxed {
+            profile.permissions = kraai_types::SandboxPermissionSet::new([
+                kraai_types::SandboxCapability::NoSandbox,
+            ])?;
+        }
+        let prompt = manager
+            .build_turn_system_prompt(
+                &session_id,
+                &profile,
+                &session.workspace_dir,
+                kraai_provider_core::ScriptToolTransport::NativeCustom,
+            )
+            .await?;
+        let context = prompt
+            .prefix
+            .split_once("# Execution Context\n")
+            .and_then(|(_, tail)| tail.lines().next())
+            .ok_or_else(|| eyre!("missing execution context"))?;
+        let context: serde_json::Value = serde_json::from_str(context)?;
+        assert_eq!(
+            context.get("workspace"),
+            Some(&serde_json::json!(session.workspace_dir))
+        );
+        assert_eq!(
+            context.get("platform"),
+            Some(&serde_json::json!(std::env::consts::OS))
+        );
+        assert_eq!(
+            context.get("granted_capabilities"),
+            Some(&serde_json::json!([if unsandboxed {
+                "no-sandbox"
+            } else {
+                "workspace-read"
+            }]))
+        );
+        assert_eq!(
+            context.get("default_escalation_policy"),
+            Some(&serde_json::json!("prompt"))
+        );
+        assert_eq!(
+            context.get("capability_policy_overrides"),
+            Some(&serde_json::json!({"network": "deny"}))
+        );
+    }
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -533,7 +607,7 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
         .await?
         .expect("continuation request should exist");
 
-    let system_prompt = request_suffix(&request);
+    let system_prompt = request_file_context(&request);
     assert!(system_prompt.contains("1|current"));
     assert!(matches!(
         request.provider_request.messages.first(),
@@ -619,7 +693,8 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         prompt.find("Global working agreements").unwrap()
             < prompt.find("Project agreements").unwrap()
     );
-    assert!(prompt.contains("Workspace instructions take precedence over user-level instructions"));
+    assert!(prompt.contains("workspace AGENTS.md overrides global AGENTS.md"));
+    assert!(prompt.contains("Explicit user requests override AGENTS.md"));
     manager.complete_message(&request.message_id).await?;
 
     for contents in [

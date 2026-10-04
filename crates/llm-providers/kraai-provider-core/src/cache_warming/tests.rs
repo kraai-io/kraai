@@ -233,6 +233,14 @@ fn priced_usage(input: usize) -> TokenUsage {
 }
 
 fn observe(manager: &ProviderManager, request: &ProviderRequest, input: usize) -> Result<()> {
+    observe_usage(manager, request, &priced_usage(input))
+}
+
+fn observe_usage(
+    manager: &ProviderManager,
+    request: &ProviderRequest,
+    usage: &TokenUsage,
+) -> Result<()> {
     manager
         .cache_usage_observer(
             &ProviderId::new("mock"),
@@ -241,7 +249,7 @@ fn observe(manager: &ProviderManager, request: &ProviderRequest, input: usize) -
             &crate::ProviderRequestContext::with_prompt_cache_key("session".into()),
         )?
         .ok_or_else(|| eyre!("missing observer"))?
-        .observe(&priced_usage(input))
+        .observe(usage)
 }
 
 fn append(request: &mut ProviderRequest, text: String) -> Result<()> {
@@ -278,17 +286,21 @@ fn scheduling_adapts_to_observed_tokens_even_when_serialized_growth_is_tiny() ->
 }
 
 #[test]
-fn minimum_token_growth_prevents_warming_large_byte_changes() -> Result<()> {
+fn small_uncached_gap_prevents_warming_large_byte_changes() -> Result<()> {
     let manager = manager();
     let mut request = request();
     prepare(&manager, &request)?
         .ok_or_else(|| eyre!("missing warmup"))?
         .complete(&priced_usage(10000))?;
-    observe(&manager, &request, 15436)?;
+    let mut usage = priced_usage(15436);
+    usage.input_tokens = 5452;
+    usage.cache_read_tokens = 9984;
+    observe_usage(&manager, &request, &usage)?;
     for turn in 1..=10 {
         append(&mut request, "large serialized growth ".repeat(1000))?;
         assert!(prepare(&manager, &request)?.is_none());
-        observe(&manager, &request, 15436 + turn * 10)?;
+        usage.input_tokens = 5452 + turn * 10;
+        observe_usage(&manager, &request, &usage)?;
     }
     Ok(())
 }
@@ -391,5 +403,70 @@ fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
             .len(),
         1
     );
+    Ok(())
+}
+
+#[test]
+fn cache_hits_can_defer_warming_and_cache_loss_can_trigger_it_without_growth() -> Result<()> {
+    let manager = manager();
+    let request = request();
+    prepare(&manager, &request)?
+        .ok_or_else(|| eyre!("missing warmup"))?
+        .complete(&priced_usage(40000))?;
+    let mut usage = priced_usage(45436);
+    usage.cache_read_tokens = 39936;
+    usage.input_tokens = 5500;
+    observe_usage(&manager, &request, &usage)?;
+    for _ in 0..10 {
+        assert!(prepare(&manager, &request)?.is_none());
+    }
+    usage.cache_read_tokens = 0;
+    usage.input_tokens = 45436;
+    observe_usage(&manager, &request, &usage)?;
+    assert!(prepare(&manager, &request)?.is_some());
+    Ok(())
+}
+
+#[test]
+fn insufficient_payback_defers_even_an_expired_prefix() -> Result<()> {
+    let mut manager = manager();
+    let mut provider = MockProvider::new("mock");
+    provider.warming = Some(CacheWarmingPolicy {
+        refresh_after: Duration::ZERO,
+        ..Default::default()
+    });
+    manager.register_provider(ProviderId::new("mock"), Box::new(provider));
+    let request = request();
+    let mut warmup_usage = priced_usage(10000);
+    warmup_usage.reasoning_tokens = 40000;
+    prepare(&manager, &request)?
+        .ok_or_else(|| eyre!("missing warmup"))?
+        .complete(&warmup_usage)?;
+    observe(&manager, &request, 15436)?;
+    for _ in 0..20 {
+        assert!(prepare(&manager, &request)?.is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn provider_reconfiguration_discards_feedback_and_leaves_existing_snapshots_isolated() -> Result<()>
+{
+    let mut manager = manager();
+    let request = request();
+    let mut usage = priced_usage(40000);
+    usage.reasoning_tokens = 100000;
+    prepare(&manager, &request)?
+        .ok_or_else(|| eyre!("missing warmup"))?
+        .complete(&usage)?;
+    observe(&manager, &request, 45436)?;
+    let previous = manager.clone();
+    let mut provider = MockProvider::new("mock");
+    provider.warming = Some(CacheWarmingPolicy::default());
+    manager.register_provider(ProviderId::new("mock"), Box::new(provider));
+    assert!(prepare(&manager, &request)?.is_some());
+    for _ in 0..10 {
+        assert!(prepare(&previous, &request)?.is_none());
+    }
     Ok(())
 }

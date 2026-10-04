@@ -14,6 +14,7 @@ pub fn normalize_chat_messages(
             let (role, content) = match message {
                 ConversationItem::Compaction { .. } => return None,
                 ConversationItem::System { text } => ("system", Ok(RequestContent::Text(text))),
+                ConversationItem::FileContext { text } => ("user", Ok(RequestContent::Text(text))),
                 ConversationItem::User { content } => ("user", content_parts(content, images)),
                 message @ ConversationItem::Assistant { .. } => (
                     "assistant",
@@ -58,7 +59,7 @@ mod tests {
     use kraai_types::{AssistantItem, AssistantPhase, ToolCallId};
 
     #[test]
-    fn system_prefix_and_suffix_stay_around_history() -> Result<()> {
+    fn file_snapshots_are_data_and_preserve_their_position() -> Result<()> {
         let messages = normalize_chat_messages(
             vec![
                 ConversationItem::System {
@@ -67,8 +68,8 @@ mod tests {
                 ConversationItem::User {
                     content: "Task".into(),
                 },
-                ConversationItem::System {
-                    text: "Dynamic".into(),
+                ConversationItem::FileContext {
+                    text: "File snapshot".into(),
                 },
             ],
             &ResolvedImages::default(),
@@ -90,7 +91,7 @@ mod tests {
             vec![
                 ("system", "Static"),
                 ("user", "Task"),
-                ("system", "Dynamic")
+                ("user", "File snapshot")
             ]
         );
         Ok(())

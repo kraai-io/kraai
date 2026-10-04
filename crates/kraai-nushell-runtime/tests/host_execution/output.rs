@@ -1,6 +1,6 @@
 use super::*;
 
-async fn assert_script(source: &str, stdout: &str) {
+pub(super) async fn assert_script(source: &str, stdout: &str) {
     let workspace = TestWorkspace::new();
     let result = execute(
         plan(source.as_bytes().to_vec(), &workspace),

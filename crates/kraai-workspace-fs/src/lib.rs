@@ -4,6 +4,9 @@ mod atomic_write;
 mod edits;
 mod error;
 
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+mod scoped_unix;
+
 pub use edits::{ExactTextEdit, apply_exact_edits};
 pub use error::{ScopedReadError, WorkspaceFsError};
 
@@ -166,7 +169,11 @@ pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadErro
             source: std::io::Error::from_raw_os_error(error.raw_os_error()),
         },
     })?;
-    let file = File::from(descriptor);
+    validate_scoped_file(File::from(descriptor), path)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn validate_scoped_file(file: File, path: &Path) -> Result<File, ScopedReadError> {
     let metadata = file.metadata().map_err(|source| ScopedReadError::Inspect {
         path: path.to_path_buf(),
         source,
@@ -180,7 +187,10 @@ pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadErro
 #[cfg(windows)]
 pub use windows::open_scoped_file;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+pub use scoped_unix::open_scoped_file;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn open_scoped_file(_root: &Path, path: &Path) -> Result<File, ScopedReadError> {
     Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
 }
@@ -265,8 +275,8 @@ mod tests {
             &[ExactTextEdit {
                 start_line: 2,
                 end_line: 2,
-                old_text: String::from("beta"),
-                new_text: String::from("gamma"),
+                old_text: String::from("beta\n"),
+                new_text: String::from("gamma\n"),
             }],
         )
         .unwrap();
@@ -301,8 +311,8 @@ mod tests {
             &[ExactTextEdit {
                 start_line: 1,
                 end_line: 1,
-                old_text: String::from("original"),
-                new_text: String::from("replacement"),
+                old_text: String::from("original\n"),
+                new_text: String::from("replacement\n"),
             }],
         )
         .unwrap();
@@ -412,9 +422,16 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn scoped_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
+        assert_scoped_reads_reject_fifos(open_scoped_file);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn assert_scoped_reads_reject_fifos(
+        open_file: fn(&Path, &Path) -> Result<File, ScopedReadError>,
+    ) {
         for replace_root in [false, true] {
             let directory = temp_dir("scoped-fifo");
             let root = directory.join("workspace");
@@ -432,7 +449,7 @@ mod tests {
             nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
             let (send, receive) = std::sync::mpsc::channel();
             let reader = std::thread::spawn(move || {
-                send.send(open_scoped_file(&root, &path)).unwrap();
+                send.send(open_file(&root, &path)).unwrap();
             });
             let result = receive.recv_timeout(std::time::Duration::from_secs(1));
             let reader_completed = if result.is_err() {
@@ -463,7 +480,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn scoped_read_survives_atomic_replacement_but_rejects_escape_symlinks() {
         use std::os::unix::fs::symlink;

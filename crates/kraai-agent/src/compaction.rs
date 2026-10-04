@@ -1,7 +1,10 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::{CompactionCheckpoint, FileCompactionStore, RequestUsageStore};
+use kraai_persistence::{
+    CompactionCheckpoint, FileCompactionStore, FileContextSnapshot, RequestUsageStore,
+};
 use kraai_provider_core::{ProviderManager, ProviderRequest};
 use kraai_types::{ConversationItem, Message, ModelId, ProviderId, RequestUsage};
 
@@ -16,7 +19,8 @@ pub struct ContextCompaction {
     pub(crate) session_id: String,
     pub(crate) original: ProviderRequest,
     pub(crate) prefix: String,
-    pub(crate) suffix: String,
+    pub(crate) snapshots: Vec<FileContextSnapshot>,
+    pub(crate) file_notifications: Vec<String>,
     pub(crate) history: Vec<Message>,
     pub(crate) previous: Option<CompactionCheckpoint>,
     pub(crate) on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
@@ -40,7 +44,7 @@ pub struct CompactionOutcome {
 
 pub(crate) fn assemble(
     prefix: &str,
-    suffix: &str,
+    snapshots: &[FileContextSnapshot],
     previous: Option<&CompactionCheckpoint>,
     history: &[Message],
     tool: Option<kraai_provider_core::ScriptToolDefinition>,
@@ -51,39 +55,28 @@ pub(crate) fn assemble(
     if let Some(checkpoint) = previous {
         messages.extend(checkpoint.replacement.clone());
     }
-    messages.extend(history.iter().map(|message| message.content.clone()));
-    let cacheable_messages = if suffix.is_empty() {
-        None
-    } else {
-        let boundary = if history.is_empty()
-            && messages
-                .iter()
-                .any(|item| matches!(item, ConversationItem::Compaction { .. }))
-        {
-            messages
-                .iter()
-                .rposition(|item| matches!(item, ConversationItem::User { .. }))
-                .or_else(|| {
-                    messages
-                        .iter()
-                        .position(|item| matches!(item, ConversationItem::Compaction { .. }))
-                })
-                .unwrap_or(messages.len())
-        } else {
-            messages.len()
+    let retained: HashSet<_> = history.iter().map(|message| &message.id).collect();
+    let mut anchored: HashMap<_, Vec<_>> = HashMap::new();
+    for snapshot in snapshots {
+        let item = ConversationItem::FileContext {
+            text: snapshot.text.clone(),
         };
-        messages.insert(
-            boundary,
-            ConversationItem::System {
-                text: suffix.to_string(),
-            },
-        );
-        Some(boundary)
-    };
+        if retained.contains(&snapshot.anchor) {
+            anchored.entry(&snapshot.anchor).or_default().push(item);
+        } else {
+            messages.push(item);
+        }
+    }
+    for message in history {
+        messages.push(message.content.clone());
+        if let Some(files) = anchored.remove(&message.id) {
+            messages.extend(files);
+        }
+    }
     let mut request = ProviderRequest {
         messages,
         script_tool: tool,
-        cacheable_messages,
+        cacheable_messages: None,
     };
     limit_request_images(&mut request);
     request
@@ -142,14 +135,16 @@ impl ContextCompaction {
             usage: requests.last().and_then(|request| request.usage.clone()),
         };
         self.store.save(&checkpoint).await?;
+        let mut request = assemble(
+            &self.prefix,
+            &self.snapshots,
+            Some(&checkpoint),
+            &[],
+            self.original.script_tool.clone(),
+        );
+        crate::context_state::append_notifications(&mut request, &self.file_notifications);
         Ok(CompactionOutcome {
-            request: assemble(
-                &self.prefix,
-                &self.suffix,
-                Some(&checkpoint),
-                &[],
-                self.original.script_tool.clone(),
-            ),
+            request,
             notification: "Conversation context compacted.".into(),
             requests,
         })

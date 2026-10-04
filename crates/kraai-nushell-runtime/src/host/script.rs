@@ -72,7 +72,14 @@ fn evaluate_source(
         let pipeline =
             nu_engine::eval_block::<WithoutDebug>(engine, stack, &block, PipelineData::empty())?;
         super::apply_variable_deletions(engine, stack);
+        let byte_stream_span = match &pipeline.body {
+            PipelineData::ByteStream(stream, _) => Some(stream.span()),
+            _ => None,
+        };
         super::output::render(engine, pipeline.body, false, false)?;
+        if let Some(span) = byte_stream_span {
+            stack.set_last_exit_code(0, span);
+        }
         if nu_experimental::PIPE_FAIL.get() {
             nu_protocol::process::check_exit_status_future(pipeline.exit)?;
         }
