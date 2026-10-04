@@ -29,3 +29,4 @@ pub use builder::RuntimeBuilder;
 mod tests;
 
 mod images;
+mod mcp_auth;

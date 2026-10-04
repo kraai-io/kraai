@@ -7,8 +7,16 @@ pub(crate) fn command_registry(
     let close_files = kraai_command_close_files::CloseFilesCommand::registration(context.clone())?;
     let edit_file = kraai_command_edit_file::EditFileCommand::registration(context.clone())?;
     let web_search = kraai_command_web_search::WebSearchCommand::registration(context.clone())?;
-    let view_image = kraai_command_view_image::ViewImageCommand::registration(context)?;
-    CommandRegistry::new([open_files, close_files, edit_file, web_search, view_image])
+    let view_image = kraai_command_view_image::ViewImageCommand::registration(context.clone())?;
+    let mcp = kraai_command_mcp::McpCommand::registration(context)?;
+    CommandRegistry::new([
+        open_files,
+        close_files,
+        edit_file,
+        web_search,
+        view_image,
+        mcp,
+    ])
 }
 
 #[cfg(test)]
@@ -22,6 +30,12 @@ mod tests {
     use super::*;
 
     struct UnusedEffects;
+
+    impl kraai_command_core::McpClient for UnusedEffects {
+        fn execute(&self, _: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
 
     impl StateEffectClient for UnusedEffects {
         fn apply(
@@ -58,6 +72,7 @@ mod tests {
     )]
     fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
         let registry = command_registry(CommandContext::new(
+            Arc::new(UnusedEffects),
             Arc::new(UnusedEffects),
             Arc::new(UnusedEffects),
             Arc::new(UnusedEffects),

@@ -11,6 +11,7 @@ color-eyre = { workspace = true }
 directories = { workspace = true }
 futures = { workspace = true }
 kraai-command-catalog = { workspace = true }
+kraai-mcp.workspace = true
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
 kraai-types = { workspace = true }

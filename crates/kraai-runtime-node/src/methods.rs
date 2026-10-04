@@ -111,6 +111,10 @@ runtime_methods! {
     cancel_stream(session_id: String) -> bool;
     continue_session(session_id: String) -> ContinueSessionOutcome;
     get_openai_codex_auth_status() -> OpenAiCodexAuthStatus;
+    get_mcp_auth_statuses() -> Vec<McpAuthStatus>;
+    start_mcp_login(server: String) -> McpAuthStatus;
+    cancel_mcp_login(server: String) -> McpAuthStatus;
+    logout_mcp(server: String) -> McpAuthStatus;
     start_openai_codex_browser_login() -> ();
     start_openai_codex_device_code_login() -> ();
     cancel_openai_codex_login() -> ();

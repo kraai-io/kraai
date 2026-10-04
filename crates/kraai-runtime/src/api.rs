@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use kraai_mcp::McpAuthStatus;
 use kraai_persistence::SessionMeta;
 pub use kraai_provider_openai_codex::{
     OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
@@ -353,6 +354,9 @@ pub enum Event {
     OpenAiCodexAuthUpdated {
         status: OpenAiCodexAuthStatus,
     },
+    McpAuthUpdated {
+        status: McpAuthStatus,
+    },
 }
 
 impl Event {
@@ -375,6 +379,7 @@ impl Event {
             | Self::HistoryUpdated { session_id } => Some(session_id),
             Self::ConfigLoaded
             | Self::ServiceError { .. }
+            | Self::McpAuthUpdated { .. }
             | Self::OpenAiCodexAuthUpdated { .. } => None,
         }
     }

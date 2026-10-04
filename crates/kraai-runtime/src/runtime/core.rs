@@ -115,6 +115,7 @@ impl RuntimeCore {
         let background_tasks = [
             self.spawn_config_watcher(),
             self.spawn_openai_auth_forwarder(),
+            self.spawn_mcp_auth_forwarder().await,
         ];
         match self.load_providers_config_and_emit().await {
             Ok(()) => match self.recover_script_executions().await {
@@ -161,6 +162,9 @@ impl RuntimeCore {
         }
 
         self.stop_active_work().await;
+
+        let mcp = self.agent_manager.read().await.mcp();
+        mcp.shutdown().await;
 
         for task in background_tasks {
             task.abort();

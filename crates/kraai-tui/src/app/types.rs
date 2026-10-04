@@ -30,6 +30,7 @@ pub(super) enum UiMode {
     AgentMenu,
     ModelMenu,
     ProvidersMenu,
+    Mcp,
     SessionsMenu,
     Help,
 }
@@ -144,6 +145,17 @@ pub(super) enum RuntimeRequest {
     ListProviderDefinitions,
     GetSettings,
     GetOpenAiCodexAuthStatus,
+    GetMcpAuthStatuses,
+    StartMcpLogin {
+        server: String,
+        request_id: u64,
+    },
+    CancelMcpLogin {
+        server: String,
+    },
+    LogoutMcp {
+        server: String,
+    },
     StartOpenAiCodexBrowserLogin,
     StartOpenAiCodexDeviceCodeLogin,
     CancelOpenAiCodexLogin,
@@ -214,6 +226,13 @@ pub(super) enum RuntimeResponse {
     ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),
     Settings(RuntimeResult<SettingsDocument>),
     OpenAiCodexAuthStatus(RuntimeResult<ProviderAuthStatus>),
+    McpAuthStatuses(RuntimeResult<Vec<kraai_runtime::McpAuthStatus>>),
+    StartMcpLogin {
+        server: String,
+        request_id: u64,
+        result: RuntimeResult<kraai_runtime::McpAuthStatus>,
+    },
+    McpAuthStatus(RuntimeResult<kraai_runtime::McpAuthStatus>),
     StartOpenAiCodexBrowserLogin(RuntimeResult<ProviderAuthStatus>),
     StartOpenAiCodexDeviceCodeLogin(RuntimeResult<ProviderAuthStatus>),
     CancelOpenAiCodexLogin(RuntimeResult<ProviderAuthStatus>),

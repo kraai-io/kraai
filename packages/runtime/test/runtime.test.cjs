@@ -67,6 +67,17 @@ test('startup failures remain observable and can be shut down', { timeout: 30000
   unwrap(await runtime.shutdown());
 });
 
+test('MCP auth methods return statuses and structured errors', { timeout: 30000 }, async t => {
+  const runtime = fixture(t).create();
+  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.getMcpAuthStatuses()), []);
+  for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
+    const result = await runtime[method]('missing-server');
+    assert.equal(result.Err.kind, 'internal');
+    assert.match(result.Err.message, /missing-server/);
+  }
+});
+
 test('streams a reply from a local provider and persists the conversation', { timeout: 30000 }, async (t) => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Hello from Rust']);

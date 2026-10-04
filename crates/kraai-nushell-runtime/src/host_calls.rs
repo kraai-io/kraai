@@ -24,6 +24,7 @@ use protocol::{
 
 #[derive(Serialize, Deserialize)]
 enum Request {
+    Mcp(kraai_types::McpRequest),
     StateEffect(StateEffectRequest),
     WebSearch(WebSearchRequest),
     ImageAttachment { base64: String },
@@ -32,6 +33,7 @@ enum Request {
 
 #[derive(Serialize, Deserialize)]
 enum Response {
+    Mcp(Result<serde_json::Value, String>),
     StateEffect(StateEffectAck),
     WebSearch(Result<WebSearchResponse, String>),
     ImageAttachment(Result<ImageAttachment, String>),
@@ -117,7 +119,7 @@ impl StateEffectClient for DescriptorClient {
                     None => Ok(()),
                 }
             }
-            Response::WebSearch(_) | Response::ImageAttachment(_) => {
+            Response::WebSearch(_) | Response::ImageAttachment(_) | Response::Mcp(_) => {
                 Err(StateEffectError::new("unexpected host response"))
             }
         }
@@ -128,9 +130,18 @@ impl WebSearchClient for DescriptorClient {
     fn search(&self, request: WebSearchRequest) -> Result<WebSearchResponse, String> {
         match self.call(|_| Request::WebSearch(request))? {
             Response::WebSearch(result) => result,
-            Response::StateEffect(_) | Response::ImageAttachment(_) => {
+            Response::StateEffect(_) | Response::ImageAttachment(_) | Response::Mcp(_) => {
                 Err(String::from("unexpected host response"))
             }
+        }
+    }
+}
+
+impl kraai_command_core::McpClient for DescriptorClient {
+    fn execute(&self, request: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+        match self.call(|_| Request::Mcp(request))? {
+            Response::Mcp(result) => result,
+            _ => Err(String::from("unexpected MCP host response")),
         }
     }
 }
@@ -157,6 +168,7 @@ impl ImageAttachmentClient for DescriptorClient {
 }
 
 pub(crate) struct HostServices {
+    pub(crate) mcp: Arc<dyn kraai_mcp::McpHost>,
     pub(crate) effects: Arc<dyn StateEffectHandler>,
     pub(crate) web: Arc<dyn kraai_web::WebSearch>,
     pub(crate) images: Arc<dyn ImageAttachmentHandler>,
@@ -183,11 +195,24 @@ pub(crate) async fn serve(
             .checked_add(1)
             .ok_or(HostProtocolError::SequenceExhausted)?;
         let response = match frame.payload {
-            Request::ExistingImage { id } => {
+            Request::Mcp(request) => {
                 let result = if !active_commands
                     .iter()
-                    .any(|command| command == kraai_command_catalog::VIEW_IMAGE.id)
+                    .any(|id| id == kraai_command_catalog::MCP.id)
                 {
+                    Err(String::from("MCP command is not enabled"))
+                } else if let Err(error) = request.validate() {
+                    Err(error)
+                } else {
+                    services.mcp.execute(request).await
+                };
+                Response::Mcp(result)
+            }
+            Request::ExistingImage { id } => {
+                let result = if !active_commands.iter().any(|command| {
+                    command == kraai_command_catalog::VIEW_IMAGE.id
+                        || command == kraai_command_catalog::MCP.id
+                }) {
                     Err(String::from("view image command is not enabled"))
                 } else if let Err(error) = validate_image_id(&id) {
                     Err(error)
@@ -197,10 +222,10 @@ pub(crate) async fn serve(
                 Response::ImageAttachment(result)
             }
             Request::ImageAttachment { base64 } => {
-                let result = if !active_commands
-                    .iter()
-                    .any(|id| id == kraai_command_catalog::VIEW_IMAGE.id)
-                {
+                let result = if !active_commands.iter().any(|id| {
+                    id == kraai_command_catalog::VIEW_IMAGE.id
+                        || id == kraai_command_catalog::MCP.id
+                }) {
                     Err(String::from("view image command is not enabled"))
                 } else {
                     match decode_image(&base64) {

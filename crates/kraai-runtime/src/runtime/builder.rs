@@ -18,6 +18,7 @@ use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle
 
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
+    mcp_config_path: Option<PathBuf>,
     provider_config_path: Option<PathBuf>,
     nushell_host_path: Option<PathBuf>,
     script_runtime_roots: Option<Vec<PathBuf>>,
@@ -36,6 +37,7 @@ struct RuntimeParts {
 }
 
 struct RuntimeHostOptions {
+    mcp_config_path: Option<PathBuf>,
     nushell_host_path: Option<PathBuf>,
     script_runtime_roots: Option<Vec<PathBuf>>,
     storage_root: Option<PathBuf>,
@@ -73,6 +75,7 @@ impl RuntimeBuilder {
     /// Create a new runtime builder.
     pub fn new() -> Self {
         Self {
+            mcp_config_path: None,
             provider_config_path: None,
             nushell_host_path: None,
             script_runtime_roots: None,
@@ -83,6 +86,11 @@ impl RuntimeBuilder {
 
     pub fn storage_root(mut self, path: PathBuf) -> Self {
         self.storage_root = Some(path);
+        self
+    }
+
+    pub fn mcp_config_path(mut self, path: PathBuf) -> Self {
+        self.mcp_config_path = Some(path);
         self
     }
 
@@ -124,6 +132,7 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            mcp_config_path: self.mcp_config_path,
             nushell_host_path: self.nushell_host_path,
             script_runtime_roots: self.script_runtime_roots,
             storage_root: self.storage_root,
@@ -181,6 +190,7 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            mcp_config_path: self.mcp_config_path,
             nushell_host_path: self.nushell_host_path,
             script_runtime_roots: self.script_runtime_roots,
             storage_root: self.storage_root,
@@ -287,6 +297,18 @@ impl RuntimeBuilder {
             )),
             storage_root.clone(),
         )));
+
+        let mcp_config_path = host_options
+            .mcp_config_path
+            .or_else(|| std::env::var_os("KRAAI_MCP_CONFIG").map(PathBuf::from))
+            .unwrap_or_else(|| storage_root.join("mcp.toml"));
+        let mcp_config = kraai_mcp::McpConfig::load(&mcp_config_path)
+            .await
+            .map_err(|error| eyre!(error))?;
+        let mcp =
+            kraai_mcp::McpManager::with_auth_storage(mcp_config, storage_root.join("mcp-auth"))
+                .map_err(|error| eyre!(error))?;
+        agent_manager.write().await.set_mcp(Arc::new(mcp));
 
         let runtime = RuntimeCore {
             image_store: Arc::new(kraai_persistence::FileImageStore::new(&data_dir)),

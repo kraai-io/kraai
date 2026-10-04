@@ -258,6 +258,7 @@ impl App {
     }
 
     pub(super) fn request_sync(&mut self) {
+        self.request(RuntimeRequest::GetMcpAuthStatuses);
         self.request(RuntimeRequest::ListModels);
         self.request(RuntimeRequest::ListSessions);
         self.request(RuntimeRequest::ListUserInputHistory {

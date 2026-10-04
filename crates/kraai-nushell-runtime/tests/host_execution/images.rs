@@ -9,6 +9,45 @@ use kraai_types::ImageAttachment;
 #[derive(Default)]
 struct RecordingImages(Mutex<Vec<Vec<u8>>>);
 
+struct McpImages;
+
+#[async_trait::async_trait]
+impl kraai_mcp::McpHost for McpImages {
+    async fn execute(&self, _: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({"content": [
+            {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="},
+            {"type": "image", "mimeType": "image/png", "data": "d29ybGQ="}
+        ]}))
+    }
+}
+
+#[tokio::test]
+async fn mcp_images_attach_without_enabling_view_image()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let workspace = TestWorkspace::new();
+    let images = Arc::new(RecordingImages::default());
+    let mut plan = plan(
+        "kraai-mcp call fixture images {} | to json --raw",
+        &workspace,
+    );
+    plan.active_commands = vec![String::from("kraai-mcp")];
+    plan.mcp = Arc::new(McpImages);
+    plan.image_attachment_handler = images.clone();
+    let result = execute(plan, CancellationToken::new()).await?;
+    assert_eq!(
+        result.output.termination,
+        Termination::Exited { code: Some(0) }
+    );
+    assert_eq!(
+        *images.0.lock().map_err(|error| error.to_string())?,
+        vec![b"hello".to_vec(), b"world".to_vec()]
+    );
+    let output = String::from_utf8(result.output.stdout)?;
+    assert!(output.contains("attachment"));
+    assert!(!output.contains("aGVsbG8="));
+    Ok(())
+}
+
 impl ImageAttachmentHandler for RecordingImages {
     fn attach_existing(
         &self,

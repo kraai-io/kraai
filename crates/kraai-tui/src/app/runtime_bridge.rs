@@ -125,13 +125,7 @@ pub(super) fn spawn_runtime_bridge(
     let clipboard =
         super::clipboard_worker::ClipboardWorker::spawn(runtime.clone(), res_tx.clone());
     std::thread::spawn(move || {
-        let executor = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                RuntimeError::unavailable(format!("failed to create tokio runtime: {error}"))
-            });
-        let bridge = RequestBridge { runtime, executor };
+        let bridge = RequestBridge::new(runtime);
         while let Ok(request) = ordered_rx.recv() {
             let _ = res_tx.send(bridge.dispatch(request));
         }
@@ -163,6 +157,16 @@ struct RequestBridge {
 }
 
 impl RequestBridge {
+    fn new(runtime: RuntimeHandle) -> Self {
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                RuntimeError::unavailable(format!("failed to create tokio runtime: {error}"))
+            });
+        Self { runtime, executor }
+    }
+
     fn execute<'a, T, F>(
         &'a self,
         request: impl FnOnce(&'a RuntimeHandle) -> F,
@@ -200,6 +204,23 @@ impl RequestBridge {
                     .execute(|runtime| runtime.get_openai_codex_auth_status())
                     .map(map_openai_codex_auth_status);
                 RuntimeResponse::OpenAiCodexAuthStatus(result)
+            }
+            RuntimeRequest::GetMcpAuthStatuses => RuntimeResponse::McpAuthStatuses(
+                self.execute(|runtime| runtime.get_mcp_auth_statuses()),
+            ),
+            RuntimeRequest::StartMcpLogin { server, request_id } => {
+                let result = self.execute(|runtime| runtime.start_mcp_login(server.clone()));
+                RuntimeResponse::StartMcpLogin {
+                    server,
+                    request_id,
+                    result,
+                }
+            }
+            RuntimeRequest::CancelMcpLogin { server } => RuntimeResponse::McpAuthStatus(
+                self.execute(|runtime| runtime.cancel_mcp_login(server)),
+            ),
+            RuntimeRequest::LogoutMcp { server } => {
+                RuntimeResponse::McpAuthStatus(self.execute(|runtime| runtime.logout_mcp(server)))
             }
             RuntimeRequest::StartOpenAiCodexBrowserLogin => {
                 let result = self

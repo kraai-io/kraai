@@ -40,6 +40,21 @@ macro_rules! command_metadata {
 }
 
 command_metadata! {
+    MCP;
+    id: "kraai-mcp";
+    name: "kraai-mcp";
+    description: "Discover and call tools on configured MCP servers. Works without sandbox network access. Search returns matching definitions with schemas; describe returns one full definition. Calls return MCP content and optional structuredContent. Tool errors stop the pipeline. Images attach to the script result. Calls are never automatically retried; after a timeout or disconnect the operation may have completed.";
+    signature_help: "kraai-mcp servers | tools <server> | describe <server> <tool> | search <query> [--limit <int>] | call <server> <tool> <arguments-record>";
+    examples: [
+        {
+            description: "Find tools with their argument schemas",
+            timeout: "30sec",
+            script: "kraai-mcp search 'search issues' --limit 3",
+        },
+    ];
+}
+
+command_metadata! {
     OPEN_FILES;
     id: "kraai-open-files";
     name: "kraai-open-files";
