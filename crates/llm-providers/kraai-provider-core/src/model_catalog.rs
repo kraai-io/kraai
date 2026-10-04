@@ -58,6 +58,12 @@ pub struct CatalogModelMetadata {
     pub supports_images: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CatalogPricingSource {
+    Manufacturer,
+    Provider,
+}
+
 #[derive(Default)]
 pub struct ModelCatalog {
     snapshot: RwLock<Snapshot>,
@@ -162,14 +168,21 @@ impl ModelCatalog {
         drop(previous);
     }
 
-    pub async fn lookup(
+    pub(crate) async fn lookup(
         &self,
         provider: Option<&str>,
         api: Option<&str>,
         model: &str,
+        source: CatalogPricingSource,
     ) -> Option<(Value, String, u64)> {
         let snapshot = self.snapshot.read().await;
-        let (provider_id, model_id, model) = snapshot.model(provider, api, model)?;
+        let resolved = snapshot.model(provider, api, model)?;
+        let (provider_id, model_id, model) = match (source, &resolved.2.canonical_model_id) {
+            (CatalogPricingSource::Manufacturer, Some(canonical)) => {
+                snapshot.canonical_model(canonical)?
+            }
+            _ => resolved,
+        };
         let cost = model.cost.as_ref()?;
         Some((
             cost.clone(),

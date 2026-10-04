@@ -25,7 +25,12 @@ async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing()
         );
         assert_eq!(
             catalog
-                .lookup(None, Some(endpoint), "vision")
+                .lookup(
+                    None,
+                    Some(endpoint),
+                    "vision",
+                    CatalogPricingSource::Manufacturer
+                )
                 .await
                 .map(|(_, source, _)| source),
             Some("models.dev/groq/vision".into())
@@ -40,7 +45,12 @@ async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing()
         );
         assert!(
             catalog
-                .lookup(None, Some(endpoint), "vision")
+                .lookup(
+                    None,
+                    Some(endpoint),
+                    "vision",
+                    CatalogPricingSource::Manufacturer
+                )
                 .await
                 .is_some()
         );
@@ -111,20 +121,37 @@ async fn matches_serving_endpoint_and_context_tier() -> color_eyre::Result<()> {
         ..Default::default()
     };
     let direct = catalog
-        .lookup(None, Some("https://direct.test/v1/"), "model")
+        .lookup(
+            None,
+            Some("https://direct.test/v1/"),
+            "model",
+            CatalogPricingSource::Manufacturer,
+        )
         .await;
     assert!(direct.is_some_and(|(cost, source, timestamp)| {
         parse_rates(&cost, &usage).is_some_and(|rates| rates.input == Usd(4_000_000_000))
             && source == "models.dev/direct/model"
             && timestamp == 123
     }));
-    let reseller = catalog.lookup(Some("reseller"), None, "model").await;
+    let reseller = catalog
+        .lookup(
+            Some("reseller"),
+            None,
+            "model",
+            CatalogPricingSource::Provider,
+        )
+        .await;
     assert!(reseller.is_some_and(|(cost, _, _)| {
         parse_rates(&cost, &usage).is_some_and(|rates| rates.input == Usd(1_000_000_000))
     }));
     assert!(
         catalog
-            .lookup(None, Some("https://unknown.test/v1"), "model")
+            .lookup(
+                None,
+                Some("https://unknown.test/v1"),
+                "model",
+                CatalogPricingSource::Manufacturer
+            )
             .await
             .is_none()
     );
@@ -274,3 +301,6 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
 
 #[path = "model_catalog/resolution_tests.rs"]
 mod resolution_tests;
+
+#[path = "model_catalog/pricing_tests.rs"]
+mod pricing_tests;

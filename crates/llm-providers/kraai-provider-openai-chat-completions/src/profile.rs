@@ -40,7 +40,7 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
                 FieldDefinition {
                     key: "catalog_provider".into(), label: "models.dev Provider".into(),
                     value_kind: FieldValueKind::String, required: false, secret: false,
-                    help_text: Some("Optional models.dev provider override for capabilities and pricing. Otherwise match the endpoint or the model's canonical catalog identity.".into()),
+                    help_text: Some("Optional models.dev provider override for model identification and capabilities. Otherwise match the endpoint or the model's canonical catalog identity.".into()),
                     default_value: None,
                 },
                 FieldDefinition {

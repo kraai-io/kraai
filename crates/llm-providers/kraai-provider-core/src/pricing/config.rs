@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use color_eyre::eyre::{Result, eyre};
 use kraai_types::{ModelId, TokenRates, Usd};
 
+use crate::model_catalog::CatalogPricingSource;
+
 use crate::{
     DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, ModelConfig, ProviderConfig,
     ProviderPricingPolicy, ValidationError,
@@ -20,6 +22,7 @@ const RATE_FIELDS: [&str; 5] = [
 pub(super) struct PricingConfig {
     pub provider: Option<String>,
     pub api: Option<String>,
+    pub source: CatalogPricingSource,
     pub subscription: bool,
     pub models: BTreeMap<ModelId, TokenRates>,
 }
@@ -40,17 +43,22 @@ impl PricingConfig {
             })
             .collect::<Result<_>>()?;
         let catalog = (policy.catalog)(&provider.config);
-        let catalog_provider = provider
+        let pricing_provider = provider
             .config
             .get("pricing_provider")
             .and_then(DynamicValue::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(String::from)
-            .or(catalog.provider);
+            .map(String::from);
+        let source = if pricing_provider.is_some() {
+            CatalogPricingSource::Provider
+        } else {
+            CatalogPricingSource::Manufacturer
+        };
         Ok(Self {
-            provider: catalog_provider,
+            provider: pricing_provider.or(catalog.provider),
             api: catalog.api,
+            source,
             subscription: policy.subscription,
             models,
         })
@@ -112,7 +120,7 @@ pub fn pricing_fields(model: bool) -> Vec<FieldDefinition> {
     fields.iter().map(|&(key, label)| FieldDefinition {
         key: key.into(), label: label.into(), value_kind: FieldValueKind::String,
         required: false, secret: false, default_value: None,
-        help_text: Some(if model { "Decimal USD rate, for example 2.50. Input and output are both required. Missing cache rates leave cached requests unpriced." } else { "Optional models.dev provider ID for prices only. Otherwise use the model catalog's automatic resolution or provider override." }.into()),
+        help_text: Some(if model { "Decimal USD rate, for example 2.50. Input and output are both required. Missing cache rates leave cached requests unpriced." } else { "Optional models.dev provider ID to override estimated prices. Otherwise prefer the model manufacturer's catalog prices. Reported charges take precedence." }.into()),
     }).collect()
 }
 

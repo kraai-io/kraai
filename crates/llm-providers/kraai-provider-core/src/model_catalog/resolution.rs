@@ -56,7 +56,7 @@ impl Snapshot {
         Some((provider, model, entry))
     }
 
-    fn canonical_model(&self, canonical: &str) -> Option<(&str, &str, &CatalogModel)> {
+    pub(super) fn canonical_model(&self, canonical: &str) -> Option<(&str, &str, &CatalogModel)> {
         let (provider, model) = canonical.split_once('/')?;
         let resolved = self.exact_model(provider, model)?;
         if resolved

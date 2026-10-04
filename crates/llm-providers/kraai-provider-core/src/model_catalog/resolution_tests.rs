@@ -35,7 +35,12 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() -> color_eyre::Resu
             Some(context)
         );
         let result = catalog
-            .lookup(None, Some("http://localhost:8080/v1"), model)
+            .lookup(
+                None,
+                Some("http://localhost:8080/v1"),
+                model,
+                CatalogPricingSource::Manufacturer,
+            )
             .await;
         assert!(result.is_some_and(|(cost, actual_source, timestamp)| {
             cost.get("input") == Some(&serde_json::json!(input))
@@ -56,7 +61,7 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() -> color_eyre::Resu
         );
         assert!(
             catalog
-                .lookup(provider, api, "gpt-6.1-sol")
+                .lookup(provider, api, "gpt-6.1-sol", CatalogPricingSource::Provider)
                 .await
                 .is_some_and(
                     |(cost, source, _)| cost.get("input") == Some(&serde_json::json!(99))
@@ -71,7 +76,12 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() -> color_eyre::Resu
         );
         assert!(
             catalog
-                .lookup(provider, api, "openai/gpt-6.1-sol")
+                .lookup(
+                    provider,
+                    api,
+                    "openai/gpt-6.1-sol",
+                    CatalogPricingSource::Manufacturer
+                )
                 .await
                 .is_none()
         );

@@ -123,6 +123,7 @@ impl Pricing {
                     config.provider.as_deref(),
                     config.api.as_deref(),
                     pricing_model.as_str(),
+                    config.source,
                 )
                 .await
         } else {
