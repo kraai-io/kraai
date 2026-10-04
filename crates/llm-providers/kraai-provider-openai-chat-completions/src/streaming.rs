@@ -98,7 +98,12 @@ impl Completion {
                     delta,
                 });
             }
-            for delta in choice.delta.tool_calls.unwrap_or_default() {
+            let tool_calls = choice.delta.tool_calls.unwrap_or_default();
+            ensure!(
+                tool_calls.len() <= 1,
+                "Provider emitted more than one tool call"
+            );
+            for delta in tool_calls {
                 self.append_call(delta, tool_name)?;
             }
             if let Some(reason) = choice.finish_reason {

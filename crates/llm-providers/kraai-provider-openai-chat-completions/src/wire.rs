@@ -147,6 +147,7 @@ pub struct ChatCompletionChunkDelta {
 
 #[derive(Debug, Deserialize)]
 pub struct ToolCallDelta {
+    #[serde(default)]
     pub index: usize,
     pub id: Option<String>,
     #[serde(rename = "type")]
@@ -212,8 +213,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn disabled_tools_preserve_an_explicit_empty_list_for_tool_history() -> color_eyre::Result<()> {
-        for (tools, expected) in [(None, None), (Some(Vec::new()), Some(json!([])))] {
+    fn disabled_tools_can_retain_a_declaration_for_tool_history() -> color_eyre::Result<()> {
+        let tool = || FunctionTool::from(kraai_provider_core::ScriptToolDefinition::nushell());
+        for (tools, expected) in [(None, None), (Some(vec![tool()]), Some(json!([tool()])))] {
             let request = ChatCompletionRequest {
                 model: "fixture".into(),
                 messages: Vec::new(),

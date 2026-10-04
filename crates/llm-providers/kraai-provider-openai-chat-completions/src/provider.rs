@@ -6,8 +6,8 @@ use futures::stream::BoxStream;
 use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
     ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
-    ProviderRequestContext, ProviderStreamEvent, ResolvedImages, build_streaming_http_client,
-    finite_request, send_with_retry, stream_sse_data,
+    ProviderRequestContext, ProviderStreamEvent, ResolvedImages, ScriptToolDefinition,
+    build_streaming_http_client, finite_request, send_with_retry, stream_sse_data,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -184,13 +184,10 @@ where
             RequestMessage::Tool { .. } => true,
             _ => false,
         });
-        let tools = (tool_name.is_some() || has_tool_history).then(|| {
-            provider_request
-                .script_tool
-                .into_iter()
-                .map(Into::into)
-                .collect()
-        });
+        let tools = provider_request
+            .script_tool
+            .or_else(|| has_tool_history.then(ScriptToolDefinition::nushell))
+            .map(|tool| vec![tool.into()]);
         let request = ChatCompletionRequest {
             tools,
             tool_choice: if tool_name.is_some() { "auto" } else { "none" },

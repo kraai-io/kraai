@@ -50,6 +50,51 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
 }
 
 #[tokio::test]
+async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()> {
+    let events = collect(
+        vec![
+            data(json!({"choices":[{"delta":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"kraai_nushell","arguments":"{\"input\":\""}}]}}]})),
+            data(json!({"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"ls\"}"}}]}}]})),
+            data(finish("tool_calls")),
+            Ok(SseEvent::Done),
+        ],
+        true,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    assert_eq!(events.len(), 1);
+    assert!(
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_calls_without_indexes_never_emit_a_script() {
+    for chunks in [
+        vec![json!({"choices":[{"delta":{"tool_calls":[
+            {"id":"call-1","type":"function","function":{"name":"kraai_nushell","arguments":"{\"input\":\""}},
+            {"function":{"arguments":"ls\"}"}}
+        ]}}]})],
+        vec![
+            json!({"choices":[{"delta":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"kraai_nushell","arguments":"{\"input\":\""}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"id":"call-2","function":{"arguments":"ls\"}"}}]}}]}),
+        ],
+    ] {
+        let mut source: Vec<_> = chunks.into_iter().map(data).collect();
+        source.extend([data(finish("tool_calls")), Ok(SseEvent::Done)]);
+        let events = collect(source, true).await;
+        assert!(events.iter().any(Result::is_err));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. })))
+        );
+    }
+}
+
+#[tokio::test]
 async fn malformed_or_incomplete_calls_never_emit_a_script() {
     let good = r##"{"input":"# timeout=1sec\nls"}"##;
     let mut extra = call(good);
@@ -136,7 +181,10 @@ async fn completed_call_does_not_wait_for_trailing_usage_or_done() -> Result<()>
 
 #[tokio::test]
 async fn disabled_tools_and_oversized_arguments_are_rejected() {
-    for (arguments, tools) in [("{}".into(), false), ("x".repeat(MAX_TOOL_BYTES + 1), true)] {
+    for (arguments, tools) in [
+        (r#"{"input":"ls"}"#.into(), false),
+        ("x".repeat(MAX_TOOL_BYTES + 1), true),
+    ] {
         let events = collect(
             vec![
                 data(call(&arguments)),

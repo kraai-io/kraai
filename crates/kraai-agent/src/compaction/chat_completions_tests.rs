@@ -126,7 +126,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
     let first = requests
         .first()
         .ok_or_else(|| eyre!("missing summary request"))?;
-    ensure!(first.get("tools") == Some(&json!([])));
+    ensure!(first.pointer("/tools/0/function/name") == Some(&json!("kraai_nushell")));
     ensure!(first.get("tool_choice") == Some(&json!("none")));
     ensure!(first.get("parallel_tool_calls").is_none());
     let messages = first
@@ -154,6 +154,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         .get(1)
         .ok_or_else(|| eyre!("missing resumed request"))?;
     ensure!(resumed.get("tool_choice") == Some(&json!("auto")));
+    ensure!(first.get("tools") == resumed.get("tools"));
     ensure!(resumed.get("parallel_tool_calls") == Some(&json!(false)));
     ensure!(
         resumed

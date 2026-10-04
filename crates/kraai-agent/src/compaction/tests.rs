@@ -150,10 +150,7 @@ fn fixture(
         &snapshots("pinned files"),
         None,
         &history,
-        Some(kraai_provider_core::ScriptToolDefinition {
-            name: "kraai_nushell".into(),
-            description: "Run script".into(),
-        }),
+        Some(kraai_provider_core::ScriptToolDefinition::nushell()),
     );
     let context = ContextCompaction {
         store: FileCompactionStore::new(&root),
