@@ -3,7 +3,6 @@ use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::Result;
 use kraai_types::MessageStatus;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
@@ -516,25 +515,7 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
 
 #[tokio::test]
 async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result<()> {
-    let data_dir = super::common::test_dir("stream-failure");
-    tokio::fs::create_dir_all(&data_dir).await.unwrap();
-
-    let message_store = Arc::new(kraai_persistence::FileMessageStore::new(&data_dir));
-    let session_store = Arc::new(kraai_persistence::FileSessionStore::new(
-        &data_dir,
-        message_store.clone(),
-    ));
-    let context_state_store = Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
-    let manager_providers = ProviderManager::new();
-    let mut manager = AgentManager::new(
-        manager_providers,
-        PathBuf::from("/tmp/default-workspace"),
-        message_store,
-        session_store,
-        context_state_store,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
-        data_dir.clone(),
-    );
+    let (mut manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -554,11 +535,10 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
             &session_id,
             String::from("trigger failure").into(),
             ModelId::new("mock-model"),
-            ProviderId::new("missing-provider"),
+            ProviderId::new("mock"),
         )
         .await?;
-    let result = manager
-        .cloned_provider_manager()
+    let result = ProviderManager::new()
         .generate_reply_stream(
             request.provider_id,
             &request.model_id,

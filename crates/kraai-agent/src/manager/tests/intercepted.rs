@@ -76,15 +76,17 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
             ProviderId::new("mock"),
         )
         .await?;
-    let rejected = manager
-        .prepare_intercepted_stream(
-            &session_id,
-            vec!["queued".into()],
-            ModelId::new("new-model"),
-            ProviderId::new("mock-alternate"),
-        )
-        .await?;
-    assert!(rejected.is_none());
+    for messages in [Vec::new(), vec!["queued".into()]] {
+        let rejected = manager
+            .prepare_messages_stream(
+                &session_id,
+                messages,
+                ModelId::new("new-model"),
+                ProviderId::new("mock-alternate"),
+            )
+            .await?;
+        assert!(rejected.is_none());
+    }
     manager.complete_message(&first.message_id).await?;
     let continuation = manager
         .prepare_continuation_stream(&session_id)
@@ -119,7 +121,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
         ConversationStore::new(manager.message_store.clone(), store.clone());
     let messages = vec!["one".into(), "two".into(), "three".into()];
     let error = manager
-        .prepare_intercepted_stream(
+        .prepare_messages_stream(
             &session_id,
             messages.clone(),
             ModelId::new("new-model"),
@@ -157,7 +159,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
     );
     assert!(
         manager
-            .prepare_intercepted_stream(
+            .prepare_messages_stream(
                 &session_id,
                 messages.clone(),
                 ModelId::new("mock-model"),
@@ -170,7 +172,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
 
     store.remaining.store(usize::MAX, Ordering::SeqCst);
     let retry = manager
-        .prepare_intercepted_stream(
+        .prepare_messages_stream(
             &session_id,
             messages,
             ModelId::new("mock-model"),

@@ -64,7 +64,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
     tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT")).await?;
     assert!(
         manager
-            .prepare_intercepted_stream(
+            .prepare_messages_stream(
                 &session,
                 vec!["queued".into()],
                 ModelId::new("mock-model"),

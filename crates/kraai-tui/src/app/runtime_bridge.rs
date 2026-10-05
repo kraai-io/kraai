@@ -360,8 +360,13 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.cancel_stream(session_id));
                 RuntimeResponse::CancelStream(result)
             }
-            RuntimeRequest::ContinueSession { session_id } => {
-                let result = self.execute(|runtime| runtime.continue_session(session_id));
+            RuntimeRequest::ContinueSession {
+                session_id,
+                model_id,
+                provider_id,
+            } => {
+                let result = self
+                    .execute(|runtime| runtime.continue_session(session_id, model_id, provider_id));
                 RuntimeResponse::ContinueSession(result)
             }
         }

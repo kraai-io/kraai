@@ -121,6 +121,8 @@ pub(crate) enum Command {
     },
     ContinueSession {
         session_id: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
         response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
     },
     GetOpenAiCodexAuthStatus {

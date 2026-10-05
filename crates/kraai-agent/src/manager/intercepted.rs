@@ -1,9 +1,7 @@
 use super::*;
 
 impl AgentManager {
-    /// Append queued messages after existing script results and prepare one provider call.
-    /// Failed preparation restores turn settings and rolls back the appended history.
-    pub async fn prepare_intercepted_stream(
+    pub async fn prepare_messages_stream(
         &mut self,
         session_id: &str,
         messages: Vec<kraai_types::MessageContent>,
@@ -11,15 +9,15 @@ impl AgentManager {
         provider_id: ProviderId,
     ) -> Result<Option<PendingStreamRequest>> {
         self.finish_pending_message_rollback(session_id).await?;
-        if messages.is_empty() {
-            return self.prepare_continuation_stream(session_id).await;
-        }
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
         }
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
+        if messages.is_empty() && session.tip_id.is_none() {
+            return Ok(None);
+        }
         let selected_profile = Arc::new(self.resolve_selected_profile(&session)?);
         let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
         let previous_state = state.clone();
@@ -64,6 +62,9 @@ impl AgentManager {
                     _ => rollback_error,
                 });
             }
+        }
+        if matches!(result, Ok(Some(_))) {
+            self.last_used_profile_id = Some(profile.id.clone());
         }
         result
     }

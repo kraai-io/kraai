@@ -2,6 +2,7 @@ mod basic;
 mod cache_warming;
 mod compaction;
 mod concurrency;
+mod continuation;
 mod deletion;
 mod denial;
 mod harness;
