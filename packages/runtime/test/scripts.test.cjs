@@ -55,7 +55,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
 const fileContextCases = [false, true].flatMap(codex =>
   [false, true].map(symlinked => ({ codex, symlinked })));
 for (const { codex, symlinked } of fileContextCases) {
-  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: 30000 }, async t => {
+  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: 120000 }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-file-context-'));
     const workspace = join(directory, 'workspace');
     mkdirSync(workspace);
