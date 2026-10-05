@@ -2,6 +2,7 @@ mod ancestry;
 mod cancellation;
 mod common;
 mod compaction;
+mod continuation;
 mod file_context;
 mod history;
 mod intercepted;

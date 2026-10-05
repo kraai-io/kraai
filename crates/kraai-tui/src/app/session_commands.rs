@@ -34,23 +34,9 @@ impl App {
             return;
         }
 
-        if !self.state.config_loaded {
-            self.state.status = String::from("Config not loaded yet");
-            return;
-        }
-
-        let Some(provider_id) = self.state.selected_provider_id.clone() else {
-            self.state.status = String::from("No provider selected. Use /model");
+        let Some((model_id, provider_id)) = self.submission_model() else {
             return;
         };
-        let Some(model_id) = self.state.selected_model_id.clone() else {
-            self.state.status = String::from("No model selected. Use /model");
-            return;
-        };
-        if self.state.selected_profile_id.is_none() {
-            self.state.status = String::from("No agent selected. Use /agent");
-            return;
-        }
 
         let is_queueing = self.state.is_streaming
             || self.state.script_phase == ScriptPhase::Executing
@@ -100,6 +86,28 @@ impl App {
         });
         self.clear_message_draft();
         self.state.status = String::from("Creating session");
+    }
+
+    fn submission_model(&mut self) -> Option<(String, String)> {
+        if !self.state.config_loaded {
+            self.state.status = String::from("Config not loaded yet");
+            return None;
+        }
+
+        let Some(provider_id) = self.state.selected_provider_id.clone() else {
+            self.state.status = String::from("No provider selected. Use /model");
+            return None;
+        };
+        let Some(model_id) = self.state.selected_model_id.clone() else {
+            self.state.status = String::from("No model selected. Use /model");
+            return None;
+        };
+        if self.state.selected_profile_id.is_none() {
+            self.state.status = String::from("No agent selected. Use /agent");
+            return None;
+        }
+
+        Some((model_id, provider_id))
     }
 
     pub(super) fn handle_command(&mut self, command_line: &str) {
@@ -174,7 +182,14 @@ impl App {
                         String::from("Cannot continue while the current turn is active");
                     return;
                 }
-                self.request(RuntimeRequest::ContinueSession { session_id });
+                let Some((model_id, provider_id)) = self.submission_model() else {
+                    return;
+                };
+                self.request(RuntimeRequest::ContinueSession {
+                    session_id,
+                    model_id,
+                    provider_id,
+                });
             }
             "help" => {
                 self.state.help_scroll.set(0);

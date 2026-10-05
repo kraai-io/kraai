@@ -366,9 +366,19 @@ impl RuntimeHandle {
     pub async fn continue_session(
         &self,
         session_id: String,
+        model_id: String,
+        provider_id: String,
     ) -> RuntimeResult<ContinueSessionOutcome> {
+        let model_id = ModelId::try_new(model_id).map_err(|error| {
+            RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
+        })?;
+        let provider_id = ProviderId::try_new(provider_id).map_err(|error| {
+            RuntimeError::invalid_argument(format!("invalid provider_id: {error}"))
+        })?;
         self.request(|response| Command::ContinueSession {
             session_id,
+            model_id,
+            provider_id,
             response,
         })
         .await

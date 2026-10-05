@@ -432,9 +432,13 @@ impl RuntimeCore {
             }
             Command::ContinueSession {
                 session_id,
+                model_id,
+                provider_id,
                 response,
             } => {
-                let result = self.start_continuation(session_id).await;
+                let result = self
+                    .start_continuation(session_id, model_id, provider_id)
+                    .await;
                 let _ = response.send(result);
             }
             Command::GetOpenAiCodexAuthStatus { response } => {

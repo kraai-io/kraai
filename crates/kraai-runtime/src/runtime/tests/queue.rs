@@ -94,7 +94,11 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
     // caller's barrier. It must finish even though no command slot can free up.
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        runtime.start_continuation("missing-session".into()),
+        runtime.start_continuation(
+            "missing-session".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        ),
     )
     .await?;
     assert!(result.is_err());
@@ -171,14 +175,24 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
         .restore_queued_messages(&session_id, vec![message("first")])
         .await;
     let agent = runtime.agent_manager.write().await;
-    let first = runtime.start_continuation(session_id.clone());
+    let first = runtime.start_continuation(
+        session_id.clone(),
+        kraai_types::ModelId::new("mock-model"),
+        kraai_types::ProviderId::new("missing"),
+    );
     tokio::pin!(first);
     assert!(poll!(&mut first).is_pending());
     runtime
         .restore_queued_messages(&session_id, vec![message("second")])
         .await;
     assert!(matches!(
-        runtime.start_continuation(session_id.clone()).await?,
+        runtime
+            .start_continuation(
+                session_id.clone(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("mock")
+            )
+            .await?,
         crate::ContinueSessionOutcome::NothingToContinue
     ));
     // Both entry points must coalesce before trying to acquire the agent lock.
@@ -342,7 +356,11 @@ async fn failed_interception_preserves_turn_and_pending_workspace() -> Result<()
     assert!(
         tokio::time::timeout(
             Duration::from_secs(1),
-            runtime.start_continuation(session_id.clone()),
+            runtime.start_continuation(
+                session_id.clone(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("missing")
+            ),
         )
         .await?
         .is_err()

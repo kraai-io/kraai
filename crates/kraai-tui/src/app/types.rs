@@ -204,6 +204,8 @@ pub(super) enum RuntimeRequest {
     },
     ContinueSession {
         session_id: String,
+        model_id: String,
+        provider_id: String,
     },
 }
 

@@ -265,7 +265,7 @@ impl RuntimeCore {
         let stream_request = {
             let mut agent = self.agent_manager.write().await;
             let result = agent
-                .prepare_intercepted_stream(&session_id, contents, model_id, provider_id)
+                .prepare_messages_stream(&session_id, contents, model_id, provider_id)
                 .await;
             if result.is_err() {
                 agent.clear_active_turn(&session_id);

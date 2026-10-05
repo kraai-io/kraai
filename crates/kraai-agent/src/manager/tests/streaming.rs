@@ -184,7 +184,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
         .await?;
     let messages = vec!["queued one".into(), "queued two".into()];
     let result = manager
-        .prepare_intercepted_stream(
+        .prepare_messages_stream(
             &session_id,
             messages.clone(),
             ModelId::new("mock-model"),
@@ -198,7 +198,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
     );
     manager.complete_message(&first.message_id).await?;
     let retry = manager
-        .prepare_intercepted_stream(
+        .prepare_messages_stream(
             &session_id,
             messages,
             ModelId::new("mock-model"),
@@ -327,7 +327,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         .await?;
 
     let intercepted = manager
-        .prepare_intercepted_stream(
+        .prepare_messages_stream(
             &session_id,
             vec!["queued one".into(), "queued two".into()],
             ModelId::new("new-model"),

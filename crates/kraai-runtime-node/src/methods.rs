@@ -109,7 +109,7 @@ runtime_methods! {
     approve_script(session_id: String, execution_id: String) -> ();
     deny_script(session_id: String, execution_id: String) -> ();
     cancel_stream(session_id: String) -> bool;
-    continue_session(session_id: String) -> ContinueSessionOutcome;
+    continue_session(session_id: String, model_id: String, provider_id: String) -> ContinueSessionOutcome;
     get_openai_codex_auth_status() -> OpenAiCodexAuthStatus;
     start_openai_codex_browser_login() -> ();
     start_openai_codex_device_code_login() -> ();

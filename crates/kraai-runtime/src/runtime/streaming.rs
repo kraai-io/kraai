@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use futures::FutureExt;
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::ProviderManager;
-use kraai_types::MessageId;
+use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::Notify;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
@@ -30,6 +30,8 @@ impl RuntimeCore {
     pub(crate) async fn start_continuation(
         &self,
         session_id: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         if self.is_stopping() {
             return Ok(ContinueSessionOutcome::NothingToContinue);
@@ -37,7 +39,7 @@ impl RuntimeCore {
         let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         };
-        self.continue_prepared_session(session_id, preparation)
+        self.continue_prepared_session(session_id, preparation, Some((model_id, provider_id)))
             .await
     }
 
@@ -45,6 +47,7 @@ impl RuntimeCore {
         &self,
         session_id: String,
         preparation: SessionPreparation,
+        selection: Option<(ModelId, ProviderId)>,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         if self.is_stopping() {
             return Ok(ContinueSessionOutcome::NothingToContinue);
@@ -64,16 +67,21 @@ impl RuntimeCore {
             let intercepted = !queued_messages.is_empty();
             let continuation = {
                 let mut agent = self.agent_manager.write().await;
-                let result = if let Some(last_message) = queued_messages.last() {
+                let selected_model = selection.clone().or_else(|| {
+                    queued_messages
+                        .last()
+                        .map(|message| (message.model_id.clone(), message.provider_id.clone()))
+                });
+                let result = if let Some((model_id, provider_id)) = selected_model {
                     agent
-                        .prepare_intercepted_stream(
+                        .prepare_messages_stream(
                             &session_id,
                             queued_messages
                                 .iter()
                                 .map(|message| message.message.clone())
                                 .collect(),
-                            last_message.model_id.clone(),
-                            last_message.provider_id.clone(),
+                            model_id,
+                            provider_id,
                         )
                         .await
                 } else {
@@ -140,7 +148,7 @@ impl RuntimeCore {
             let _state_guard = runtime.session_state_barrier.read().await;
             let preparation = runtime.session_preparations.begin(&session_id).await;
             if let Err(error) = runtime
-                .continue_prepared_session(session_id.clone(), preparation)
+                .continue_prepared_session(session_id.clone(), preparation, None)
                 .await
             {
                 emit_event(

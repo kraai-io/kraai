@@ -119,7 +119,8 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
     tokio::time::timeout(Duration::from_secs(1), store.entered.notified()).await?;
 
     let handle = harness.handle.clone();
-    let continuation = handle.continue_session(session_id.clone());
+    let continuation =
+        handle.continue_session(session_id.clone(), "mock-model".into(), "mock".into());
     tokio::pin!(continuation);
     let early_result = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -173,7 +174,10 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
                 if call_id.as_str() == "handoff-call")
         }));
         assert_eq!(
-            harness.handle.continue_session(session_id.clone()).await?,
+            harness
+                .handle
+                .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+                .await?,
             ContinueSessionOutcome::NothingToContinue
         );
         assert!(received.try_recv().is_err());
@@ -269,7 +273,10 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         assert!(snapshot.session.is_running);
         assert!(snapshot.session.is_streaming);
         assert_eq!(
-            harness.handle.continue_session(session_id.clone()).await?,
+            harness
+                .handle
+                .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+                .await?,
             ContinueSessionOutcome::NothingToContinue
         );
     }
@@ -453,7 +460,10 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
     })
     .await?;
     assert_eq!(
-        harness.handle.continue_session(session_id.clone()).await?,
+        harness
+            .handle
+            .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+            .await?,
         ContinueSessionOutcome::NothingToContinue
     );
     drop(preparation);
@@ -820,7 +830,13 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
     assert!(poll!(&mut shutdown).is_pending());
     let continuation = async {
         let _guard = runtime.session_state_barrier.read().await;
-        runtime.start_continuation(session_id.clone()).await
+        runtime
+            .start_continuation(
+                session_id.clone(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("mock"),
+            )
+            .await
     };
     tokio::pin!(continuation);
     assert!(poll!(&mut continuation).is_pending());
