@@ -1,12 +1,10 @@
 use super::{CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
-use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub(super) struct TerminalPalette {
     pub(super) muted: Option<Color>,
     pending: bool,
-    deadline: Option<Instant>,
     response: String,
     held: Vec<CrosstermEvent>,
 }
@@ -20,23 +18,18 @@ pub(super) enum PaletteEvent {
 impl TerminalPalette {
     pub(super) fn request(&mut self) {
         #[cfg(unix)]
-        {
-            use std::io::Write;
-            self.pending = std::io::stdout()
-                .write_all(b"\x1b]4;8;?\x07")
-                .and_then(|()| std::io::stdout().flush())
-                .is_ok();
-            self.deadline = self
-                .pending
-                .then(|| Instant::now() + Duration::from_secs(1));
-        }
+        self.request_with(&mut std::io::stdout().lock());
+    }
+
+    #[cfg(any(unix, test))]
+    fn request_with(&mut self, output: &mut impl std::io::Write) {
+        self.pending = output
+            .write_all(b"\x1b]4;8;?\x07")
+            .and_then(|()| output.flush())
+            .is_ok();
     }
 
     pub(super) fn filter(&mut self, event: CrosstermEvent) -> PaletteEvent {
-        if let Some(mut held) = self.expire(Instant::now()) {
-            held.push(event);
-            return PaletteEvent::Replay(held);
-        }
         if !self.pending {
             return PaletteEvent::Pass(event);
         }
@@ -70,7 +63,6 @@ impl TerminalPalette {
             if let Some(color) = parse_color(&self.response) {
                 self.muted = Some(color);
                 self.pending = false;
-                self.deadline = None;
                 self.held.clear();
                 self.response.clear();
                 return PaletteEvent::Consumed;
@@ -78,7 +70,8 @@ impl TerminalPalette {
             return self.replay();
         }
         if let KeyCode::Char(ch) = key.code
-            && key.modifiers.is_empty()
+            && (key.modifiers.is_empty()
+                || key.modifiers == KeyModifiers::SHIFT && ch.is_ascii_uppercase())
         {
             self.response.push(ch);
             self.held.push(event);
@@ -99,20 +92,8 @@ impl TerminalPalette {
     }
 
     fn replay(&mut self) -> PaletteEvent {
-        self.pending = false;
-        self.deadline = None;
         self.response.clear();
         PaletteEvent::Replay(std::mem::take(&mut self.held))
-    }
-
-    pub(super) fn expire(&mut self, now: Instant) -> Option<Vec<CrosstermEvent>> {
-        if !self.deadline.is_some_and(|deadline| now >= deadline) {
-            return None;
-        }
-        self.pending = false;
-        self.deadline = None;
-        self.response.clear();
-        Some(std::mem::take(&mut self.held))
     }
 }
 
@@ -138,62 +119,110 @@ fn parse_color(response: &str) -> Option<Color> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn timeout_releases_partial_input_and_stops_intercepting_keys() {
-        let now = Instant::now();
-        let start = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
-        for partial in [false, true] {
-            let mut palette = TerminalPalette {
-                pending: true,
-                deadline: Some(now + Duration::from_secs(1)),
-                ..Default::default()
-            };
-            if partial {
-                assert!(matches!(
-                    palette.filter(start.clone()),
-                    PaletteEvent::Consumed
-                ));
-            }
-            assert!(palette.expire(now).is_none());
-            assert_eq!(
-                palette.expire(now + Duration::from_secs(1)),
-                Some(if partial { vec![start.clone()] } else { vec![] })
-            );
-            assert!(matches!(
-                palette.filter(start.clone()),
-                PaletteEvent::Pass(_)
-            ));
-            assert!(palette.expire(now + Duration::from_secs(2)).is_none());
-        }
+    fn start() -> CrosstermEvent {
+        CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT))
+    }
+
+    fn character(ch: char) -> CrosstermEvent {
+        CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char(ch),
+            if ch.is_ascii_uppercase() {
+                KeyModifiers::SHIFT
+            } else {
+                KeyModifiers::NONE
+            },
+        ))
     }
 
     #[test]
-    fn malformed_reply_disables_capture_and_late_input_is_replayed_in_order() {
-        let start = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
+    fn delayed_and_partial_replies_never_become_input() {
+        let mut palette = TerminalPalette::default();
+        let mut query = Vec::new();
+        palette.request_with(&mut query);
+        assert_eq!(query, b"\x1b]4;8;?\x07");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(matches!(palette.filter(start()), PaletteEvent::Consumed));
+        for ch in "4;8;rgb:5858/".chars() {
+            assert!(matches!(
+                palette.filter(character(ch)),
+                PaletteEvent::Consumed
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        for ch in "5252/7373".chars() {
+            assert!(matches!(
+                palette.filter(character(ch)),
+                PaletteEvent::Consumed
+            ));
+        }
+        assert!(matches!(
+            palette.filter(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char('g'),
+                KeyModifiers::CONTROL,
+            ))),
+            PaletteEvent::Consumed
+        ));
+        assert_eq!(palette.muted, Some(Color::Rgb(88, 82, 115)));
+        assert!(matches!(
+            palette.filter(character('x')),
+            PaletteEvent::Pass(_)
+        ));
+    }
+
+    #[test]
+    fn unrelated_input_does_not_disable_reply_capture() {
         let mut palette = TerminalPalette {
             pending: true,
             ..Default::default()
         };
-        palette.filter(start.clone());
+        assert!(matches!(
+            palette.filter(character('x')),
+            PaletteEvent::Pass(_)
+        ));
+        palette.filter(start());
+        let key = character('x');
+        match palette.filter(key.clone()) {
+            PaletteEvent::Replay(events) => assert_eq!(events, vec![start(), key]),
+            _ => unreachable!(),
+        }
+        assert!(matches!(palette.filter(start()), PaletteEvent::Consumed));
+        for ch in "4;8;rgb:AAAA/BBBB/CCCC".chars() {
+            assert!(matches!(
+                palette.filter(character(ch)),
+                PaletteEvent::Consumed
+            ));
+        }
         assert!(matches!(
             palette.filter(CrosstermEvent::Key(KeyEvent::new(
                 KeyCode::Char('g'),
-                KeyModifiers::CONTROL
+                KeyModifiers::CONTROL,
             ))),
-            PaletteEvent::Replay(_)
+            PaletteEvent::Consumed
         ));
-        assert!(matches!(
-            palette.filter(start.clone()),
-            PaletteEvent::Pass(_)
-        ));
-        palette.pending = true;
-        palette.filter(start.clone());
-        palette.deadline = Some(Instant::now());
-        let next = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-        match palette.filter(next.clone()) {
-            PaletteEvent::Replay(events) => assert_eq!(events, vec![start, next]),
-            _ => unreachable!(),
+        assert_eq!(palette.muted, Some(Color::Rgb(170, 187, 204)));
+    }
+
+    #[test]
+    fn unterminated_candidates_have_bounded_buffering() {
+        let mut palette = TerminalPalette {
+            pending: true,
+            ..Default::default()
+        };
+        let events: Vec<_> = std::iter::once(start())
+            .chain("4;8;rgb:".chars().map(character))
+            .chain(std::iter::repeat_n(character('a'), 100))
+            .collect();
+        let mut replayed = Vec::new();
+        for event in &events {
+            match palette.filter(event.clone()) {
+                PaletteEvent::Pass(event) => replayed.push(event),
+                PaletteEvent::Replay(events) => replayed.extend(events),
+                PaletteEvent::Consumed => {}
+            }
+            assert!(palette.held.len() <= 23);
         }
+        assert_eq!(replayed, events);
+        assert!(palette.held.is_empty());
     }
 
     #[test]
