@@ -22,13 +22,13 @@ fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
         released
             .recv()
             .map_err(|error| RuntimeError::unavailable(error.to_string()))?;
-        Ok(ImageAttachment {
+        Ok(Some(ImageAttachment {
             id: "a".repeat(64),
             mime_type: "image/png".into(),
             width: 1,
             height: 1,
             byte_length: 1,
-        })
+        }))
     });
     let router =
         std::thread::spawn(move || route_requests(receiver, ordered, |id| worker.submit(id)));
@@ -79,7 +79,7 @@ async fn clipboard_helper_caps_both_output_streams_and_returns_complete_bytes()
         8,
     )
     .await?;
-    assert_eq!(bytes, b"image");
+    assert_eq!(bytes.as_deref(), Some(b"image".as_slice()));
     for script in [
         "while :; do printf 0123456789; done",
         "while :; do printf 0123456789 >&2; done",
@@ -91,6 +91,26 @@ async fn clipboard_helper_caps_both_output_streams_and_returns_complete_bytes()
         read_helper(shell("exit 1"), Duration::from_secs(2), 8)
             .await
             .is_err()
+    );
+    assert!(
+        read_helper(shell("exit 0"), Duration::from_secs(2), 8)
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clipboard_helper_reports_missing_image_without_an_error() -> color_eyre::Result<()> {
+    let command = shell(&format!(
+        "exit {}",
+        crate::clipboard_image::NO_IMAGE_EXIT_CODE
+    ));
+    assert!(
+        read_helper(command, Duration::from_secs(2), 8)
+            .await?
+            .is_none()
     );
     Ok(())
 }

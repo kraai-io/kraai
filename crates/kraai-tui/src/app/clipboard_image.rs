@@ -3,13 +3,22 @@ use std::io::Write;
 use kraai_runtime::{RuntimeError, RuntimeResult};
 use kraai_types::image::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 
-fn read() -> RuntimeResult<Vec<u8>> {
+fn read() -> RuntimeResult<Option<Vec<u8>>> {
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|error| RuntimeError::unavailable(format!("Clipboard unavailable: {error}")))?;
-    let image = clipboard.get_image().map_err(|error| {
-        RuntimeError::unavailable(format!("Cannot read a clipboard image: {error}"))
-    })?;
-    encode(image)
+    encode_clipboard_result(clipboard.get_image())
+}
+
+fn encode_clipboard_result(
+    result: Result<arboard::ImageData<'_>, arboard::Error>,
+) -> RuntimeResult<Option<Vec<u8>>> {
+    match result {
+        Ok(image) => encode(image).map(Some),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(error) => Err(RuntimeError::unavailable(format!(
+            "Cannot read a clipboard image: {error}"
+        ))),
+    }
 }
 
 fn encode(image: arboard::ImageData<'_>) -> RuntimeResult<Vec<u8>> {
@@ -57,6 +66,7 @@ impl std::io::Write for BoundedImage {
 }
 
 pub(crate) const HELPER_ARG: &str = "--kraai-internal-clipboard-image";
+pub(crate) const NO_IMAGE_EXIT_CODE: i32 = 2;
 
 pub(crate) fn run_internal() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);
@@ -68,12 +78,19 @@ pub(crate) fn run_internal() -> Option<i32> {
         std::process::exit(124);
     });
     let result = prepare_helper().and_then(|()| read()).and_then(|bytes| {
-        std::io::stdout().lock().write_all(&bytes).map_err(|error| {
-            RuntimeError::unavailable(format!("Cannot return clipboard image: {error}"))
-        })
+        let Some(bytes) = bytes else {
+            return Ok(NO_IMAGE_EXIT_CODE);
+        };
+        std::io::stdout()
+            .lock()
+            .write_all(&bytes)
+            .map_err(|error| {
+                RuntimeError::unavailable(format!("Cannot return clipboard image: {error}"))
+            })?;
+        Ok(0)
     });
     Some(match result {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(error) => {
             let _ = writeln!(std::io::stderr().lock(), "{error}");
             1
@@ -120,6 +137,25 @@ fn prepare_helper() -> RuntimeResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_image_is_empty_but_clipboard_failures_remain_errors() -> color_eyre::Result<()> {
+        color_eyre::eyre::ensure!(
+            encode_clipboard_result(Err(arboard::Error::ContentNotAvailable))?.is_none()
+        );
+        color_eyre::eyre::ensure!(
+            encode_clipboard_result(Err(arboard::Error::ClipboardOccupied)).is_err()
+        );
+        color_eyre::eyre::ensure!(
+            encode_clipboard_result(Ok(arboard::ImageData {
+                width: 1,
+                height: 1,
+                bytes: vec![255; 4].into(),
+            }))?
+            .is_some()
+        );
+        Ok(())
+    }
 
     #[test]
     fn encodes_clipboard_pixels_and_rejects_invalid_dimensions() -> color_eyre::Result<()> {

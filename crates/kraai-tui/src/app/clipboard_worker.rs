@@ -33,8 +33,12 @@ impl ClipboardWorker {
                 })?;
                 let mut command = tokio::process::Command::new(executable);
                 command.arg(crate::clipboard_image::HELPER_ARG);
-                let bytes = read_helper(command, Duration::from_secs(15), MAX_IMAGE_BYTES).await?;
-                runtime.import_image(bytes).await
+                let Some(bytes) =
+                    read_helper(command, Duration::from_secs(15), MAX_IMAGE_BYTES).await?
+                else {
+                    return Ok(None);
+                };
+                runtime.import_image(bytes).await.map(Some)
             }),
             Err(error) => Err(error.clone()),
         })
@@ -42,7 +46,7 @@ impl ClipboardWorker {
 
     fn spawn_job(
         responses: Sender<RuntimeResponse>,
-        mut job: impl FnMut() -> RuntimeResult<ImageAttachment> + Send + 'static,
+        mut job: impl FnMut() -> RuntimeResult<Option<ImageAttachment>> + Send + 'static,
     ) -> Self {
         let (requests, receiver) = bounded(1);
         let busy = Arc::new(AtomicBool::new(false));
@@ -93,7 +97,7 @@ async fn read_helper(
     mut command: tokio::process::Command,
     timeout: Duration,
     max_bytes: usize,
-) -> RuntimeResult<Vec<u8>> {
+) -> RuntimeResult<Option<Vec<u8>>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -116,6 +120,9 @@ async fn read_helper(
             read_bounded(stdout, max_bytes),
             read_bounded(stderr, 4096)
         )?;
+        if status.code() == Some(crate::clipboard_image::NO_IMAGE_EXIT_CODE) {
+            return Ok(None);
+        }
         if !status.success() {
             return Err(std::io::Error::other(format!(
                 "Clipboard helper failed: {}",
@@ -125,7 +132,7 @@ async fn read_helper(
         if bytes.is_empty() {
             return Err(std::io::Error::other("Clipboard helper returned no image"));
         }
-        Ok(bytes)
+        Ok(Some(bytes))
     })
     .await;
     let error = match outcome {
