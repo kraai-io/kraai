@@ -118,12 +118,21 @@ impl App {
             },
             RuntimeResponse::McpAuthStatuses(result) => match result {
                 Ok(statuses) => {
+                    self.state.mcp_error = None;
                     for status in statuses {
                         self.apply_mcp_auth_status(status);
                     }
-                    self.state.status = self.mcp_auth_summary();
+                    self.state.mcp_loaded = true;
+                    if self
+                        .state
+                        .mcp_selected
+                        .as_ref()
+                        .is_none_or(|name| !self.state.mcp_auth.contains_key(name))
+                    {
+                        self.state.mcp_selected = self.state.mcp_auth.keys().next().cloned();
+                    }
                 }
-                Err(error) => self.set_error(format!("MCP auth failed: {error}")),
+                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
             },
             RuntimeResponse::StartMcpLogin {
                 server,
@@ -142,13 +151,15 @@ impl App {
                         .is_some_and(|intent| intent.request_id == request_id)
                     {
                         self.state.mcp_browser_intent.remove(&server);
-                        self.set_error(format!("MCP login failed for {server}: {error}"));
+                        self.state
+                            .mcp_feedback
+                            .insert(server.clone(), format!("MCP login failed: {error}"));
                     }
                 }
             },
             RuntimeResponse::McpAuthStatus(result) => match result {
                 Ok(status) => self.apply_mcp_auth_status(status),
-                Err(error) => self.set_error(format!("MCP auth failed: {error}")),
+                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
             },
             RuntimeResponse::CreateSession {
                 creation_id,

@@ -176,28 +176,7 @@ impl App {
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
-            UiMode::Mcp => match key_event.code {
-                KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,
-                KeyCode::Up => self
-                    .state
-                    .mcp_scroll
-                    .set(self.state.mcp_scroll.get().saturating_sub(1)),
-                KeyCode::Down => self
-                    .state
-                    .mcp_scroll
-                    .set(self.state.mcp_scroll.get().saturating_add(1)),
-                KeyCode::PageUp => self
-                    .state
-                    .mcp_scroll
-                    .set(self.state.mcp_scroll.get().saturating_sub(10)),
-                KeyCode::PageDown => self
-                    .state
-                    .mcp_scroll
-                    .set(self.state.mcp_scroll.get().saturating_add(10)),
-                KeyCode::Home => self.state.mcp_scroll.set(0),
-                KeyCode::End => self.state.mcp_scroll.set(usize::MAX),
-                _ => {}
-            },
+            UiMode::Mcp => self.handle_mcp_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
             UiMode::Help => match key_event.code {
                 KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,
