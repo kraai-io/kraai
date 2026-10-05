@@ -73,9 +73,36 @@ test('MCP auth methods return statuses and structured errors', { timeout: 30000 
   assert.deepEqual(unwrap(await runtime.getMcpAuthStatuses()), []);
   for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
     const result = await runtime[method]('missing-server');
-    assert.equal(result.Err.kind, 'internal');
+    assert.equal(result.Err.kind, 'not_found');
     assert.match(result.Err.message, /missing-server/);
   }
+});
+
+test('MCP auth distinguishes unsupported login from credential storage failures', { timeout: 30000 }, async t => {
+  const { directory, create } = fixture(t);
+  writeFileSync(join(directory, 'mcp.toml'), `
+[servers.local]
+transport = { type = "stdio", command = "unused-mcp-fixture" }
+[servers.static]
+transport = { type = "http", url = "http://mcp.internal/mcp", bearer_token_env = "UNUSED_MCP_TOKEN" }
+[servers.disabled]
+enabled = false
+transport = { type = "stdio", command = "unused-mcp-fixture" }
+[servers.oauth]
+transport = { type = "http", url = "https://example.test/mcp" }
+`);
+  writeFileSync(join(directory, 'mcp-auth'), 'blocks credential directory creation');
+  const runtime = create();
+  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
+    assert.equal((await runtime[method]('disabled')).Err.kind, 'not_found');
+    for (const server of ['local', 'static']) {
+      const result = await runtime[method](server);
+      assert.equal(result.Err.kind, 'invalid_argument');
+      assert.match(result.Err.message, /OAuth login is available/);
+    }
+  }
+  assert.equal((await runtime.logoutMcp('oauth')).Err.kind, 'internal');
 });
 
 test('streams a reply from a local provider and persists the conversation', { timeout: 30000 }, async (t) => {

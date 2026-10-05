@@ -9,8 +9,9 @@ mod server;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use color_eyre::eyre::Report;
 use futures::{StreamExt, stream};
-use kraai_types::McpRequest;
+use kraai_types::{DomainError, McpRequest};
 use serde_json::{Value, json};
 
 pub use auth::{McpAuthState, McpAuthStatus};
@@ -95,29 +96,31 @@ impl McpManager {
         statuses
     }
 
-    fn auth(&self, name: &str) -> Result<&Arc<auth::Auth>, String> {
+    fn auth(&self, name: &str) -> Result<&Arc<auth::Auth>, DomainError> {
         self.server(name)?.auth.as_ref().ok_or_else(|| {
-            String::from("OAuth login is available for HTTP MCP servers without bearer_token_env")
+            DomainError::invalid_argument(
+                "OAuth login is available for HTTP MCP servers without bearer_token_env",
+            )
         })
     }
 
-    pub async fn start_login(&self, name: &str) -> Result<McpAuthStatus, String> {
-        self.auth(name)?.start().await
+    pub async fn start_login(&self, name: &str) -> Result<McpAuthStatus, Report> {
+        self.auth(name)?.start().await.map_err(Report::msg)
     }
 
-    pub async fn cancel_login(&self, name: &str) -> Result<McpAuthStatus, String> {
-        self.auth(name)?.cancel(false).await
+    pub async fn cancel_login(&self, name: &str) -> Result<McpAuthStatus, Report> {
+        self.auth(name)?.cancel(false).await.map_err(Report::msg)
     }
 
-    pub async fn logout(&self, name: &str) -> Result<McpAuthStatus, String> {
-        self.auth(name)?.cancel(true).await
+    pub async fn logout(&self, name: &str) -> Result<McpAuthStatus, Report> {
+        self.auth(name)?.cancel(true).await.map_err(Report::msg)
     }
 
-    fn server(&self, name: &str) -> Result<&Server, String> {
+    fn server(&self, name: &str) -> Result<&Server, DomainError> {
         self.servers
             .get(name)
             .map(Arc::as_ref)
-            .ok_or_else(|| format!("MCP server {name:?} is not enabled"))
+            .ok_or_else(|| DomainError::not_found(format!("MCP server {name:?} is not enabled")))
     }
 
     fn server_list(&self) -> Value {
@@ -168,11 +171,12 @@ impl McpHost for McpManager {
         let result = match request {
             McpRequest::Servers => self.server_list(),
             McpRequest::Tools { server } => {
-                json!(self.server(&server)?.tools().await?.into_iter().map(|tool| json!({"server": server, "name": tool.name, "description": tool.description})).collect::<Vec<_>>())
+                json!(self.server(&server).map_err(|error| error.to_string())?.tools().await?.into_iter().map(|tool| json!({"server": server, "name": tool.name, "description": tool.description})).collect::<Vec<_>>())
             }
             McpRequest::Describe { server, tool } => {
                 let definition = self
-                    .server(&server)?
+                    .server(&server)
+                    .map_err(|error| error.to_string())?
                     .tools()
                     .await?
                     .into_iter()
@@ -191,7 +195,12 @@ impl McpHost for McpManager {
                 server,
                 tool,
                 arguments,
-            } => self.server(&server)?.call(tool, arguments).await?,
+            } => {
+                self.server(&server)
+                    .map_err(|error| error.to_string())?
+                    .call(tool, arguments)
+                    .await?
+            }
         };
         if serde_json::to_vec(&result)
             .map_err(|error| error.to_string())?

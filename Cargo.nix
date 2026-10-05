@@ -9556,6 +9556,10 @@ rec {
             packageId = "base64 0.23.1";
           }
           {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
             name = "futures";
             packageId = "futures";
           }

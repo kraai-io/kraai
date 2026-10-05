@@ -446,24 +446,15 @@ impl RuntimeCore {
             }
             Command::StartMcpLogin { server, response } => {
                 let mcp = self.agent_manager.read().await.mcp();
-                let result = mcp
-                    .start_login(&server)
-                    .await
-                    .map_err(RuntimeError::internal);
-                let _ = response.send(result);
+                respond(response, mcp.start_login(&server).await);
             }
             Command::CancelMcpLogin { server, response } => {
                 let mcp = self.agent_manager.read().await.mcp();
-                let result = mcp
-                    .cancel_login(&server)
-                    .await
-                    .map_err(RuntimeError::internal);
-                let _ = response.send(result);
+                respond(response, mcp.cancel_login(&server).await);
             }
             Command::LogoutMcp { server, response } => {
                 let mcp = self.agent_manager.read().await.mcp();
-                let result = mcp.logout(&server).await.map_err(RuntimeError::internal);
-                let _ = response.send(result);
+                respond(response, mcp.logout(&server).await);
             }
             Command::StartOpenAiCodexBrowserLogin { response } => {
                 let result = self.openai_codex_auth.start_browser_login().await;
