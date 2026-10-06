@@ -167,6 +167,7 @@ pub struct Session {
     pub updated_at: u64,
     pub title: Option<String>,
     pub selected_profile_id: Option<String>,
+    pub selected_model: Option<kraai_types::ModelSelection>,
     pub profile_locked: bool,
     pub waiting_for_approval: bool,
     pub is_streaming: bool,
@@ -183,6 +184,7 @@ impl Session {
             updated_at: meta.updated_at,
             title: meta.title,
             selected_profile_id: meta.selected_profile_id,
+            selected_model: meta.selected_model,
             profile_locked: false,
             waiting_for_approval: false,
             is_streaming: false,
@@ -271,6 +273,19 @@ pub struct RuntimeEvent {
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    TurnCompleted {
+        session_id: String,
+    },
+    ScriptPrepared {
+        session_id: String,
+        execution_id: String,
+        call_id: String,
+        source: String,
+    },
+    ScriptStarted {
+        session_id: String,
+        call_id: String,
+    },
     RequestUsageUpdated {
         session_id: String,
         request: Box<kraai_types::RequestUsage>,
@@ -342,7 +357,9 @@ pub enum Event {
     ScriptResultReady {
         session_id: String,
         execution_id: String,
-        status: String,
+        call_id: String,
+        output: kraai_types::MessageContent,
+        outcome: kraai_types::ScriptExecutionOutcome,
     },
     ContextStateChanged {
         session_id: String,
@@ -370,7 +387,10 @@ impl Event {
     /// Returns the session this event concerns, if any.
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Self::RequestUsageUpdated { session_id, .. }
+            Self::TurnCompleted { session_id }
+            | Self::ScriptPrepared { session_id, .. }
+            | Self::ScriptStarted { session_id, .. }
+            | Self::RequestUsageUpdated { session_id, .. }
             | Self::TurnTimingChanged { session_id, .. }
             | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }

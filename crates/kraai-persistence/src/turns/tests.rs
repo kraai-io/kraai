@@ -46,6 +46,7 @@ fn untitled_session(id: &str, tip_id: Option<&MessageId>, updated_at: u64) -> Se
         updated_at,
         title: None,
         selected_profile_id: None,
+        selected_model: None,
     }
 }
 
@@ -354,6 +355,10 @@ fn append_request(
             },
         },
         ChatRole::ToolCallResult => ConversationItem::ScriptResult {
+            outcome: kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
             call_id: ToolCallId::new("test-call"),
             output: content.to_string().into(),
         },

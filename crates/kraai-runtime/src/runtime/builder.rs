@@ -24,6 +24,7 @@ pub struct RuntimeBuilder {
     script_runtime_roots: Option<Vec<PathBuf>>,
     storage_root: Option<PathBuf>,
     use_current_executable_as_nushell_host: bool,
+    resume_recovered_turns: bool,
 }
 
 struct RuntimeParts {
@@ -44,6 +45,7 @@ struct RuntimeHostOptions {
     provider_config_path_override: Option<PathBuf>,
     use_current_executable_as_nushell_host: bool,
     initialize_tracing: bool,
+    resume_recovered_turns: bool,
 }
 
 impl RuntimeParts {
@@ -81,6 +83,7 @@ impl RuntimeBuilder {
             script_runtime_roots: None,
             storage_root: None,
             use_current_executable_as_nushell_host: false,
+            resume_recovered_turns: true,
         }
     }
 
@@ -106,6 +109,11 @@ impl RuntimeBuilder {
 
     pub fn provider_config_path(mut self, path: PathBuf) -> Self {
         self.provider_config_path = Some(path);
+        self
+    }
+
+    pub fn resume_recovered_turns(mut self, resume: bool) -> Self {
+        self.resume_recovered_turns = resume;
         self
     }
 
@@ -139,6 +147,7 @@ impl RuntimeBuilder {
             provider_config_path_override: self.provider_config_path,
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: true,
+            resume_recovered_turns: self.resume_recovered_turns,
         };
         let thread_startup_tx = startup_tx.clone();
 
@@ -197,6 +206,7 @@ impl RuntimeBuilder {
             provider_config_path_override: self.provider_config_path,
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: false,
+            resume_recovered_turns: self.resume_recovered_turns,
         };
         let task_startup_tx = startup_tx.clone();
         let task = runtime.spawn(async move {
@@ -334,6 +344,7 @@ impl RuntimeBuilder {
                 script_runtime_roots: host_options.script_runtime_roots,
                 use_current_executable_as_nushell_host: host_options
                     .use_current_executable_as_nushell_host,
+                resume_recovered_turns: host_options.resume_recovered_turns,
             }),
             startup_tx,
         };

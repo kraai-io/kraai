@@ -43,6 +43,16 @@ rec {
   # You can override the features with
   # workspaceMembers."${crateName}".build.override { features = [ "default" "feature1" ... ]; }.
   workspaceMembers = {
+    "kraai-acp" = rec {
+      packageId = "kraai-acp";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-acp";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-agent" = rec {
       packageId = "kraai-agent";
       build = internal.buildRustCrateWithFeatures {
@@ -378,6 +388,190 @@ rec {
           }
         ];
 
+      };
+      "agent-client-protocol" = rec {
+        crateName = "agent-client-protocol";
+        version = "2.2.0";
+        edition = "2024";
+        sha256 = "0qqpd7nmap730m0124pshqgpark3x31vq295s21sp21cgdcq1xqk";
+        libName = "agent_client_protocol";
+        authors = [
+          "Zed <hi@zed.dev>"
+        ];
+        dependencies = [
+          {
+            name = "agent-client-protocol-derive";
+            packageId = "agent-client-protocol-derive";
+          }
+          {
+            name = "agent-client-protocol-schema";
+            packageId = "agent-client-protocol-schema";
+            features = [ "tracing" ];
+          }
+          {
+            name = "async-io";
+            packageId = "async-io";
+            target = { target, features }: (!(builtins.elem "wasm" target."family"));
+          }
+          {
+            name = "async-process";
+            packageId = "async-process";
+            target = { target, features }: (!(builtins.elem "wasm" target."family"));
+          }
+          {
+            name = "blocking";
+            packageId = "blocking";
+            target = { target, features }: (!(builtins.elem "wasm" target."family"));
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "futures-concurrency";
+            packageId = "futures-concurrency";
+          }
+          {
+            name = "rustc-hash";
+            packageId = "rustc-hash";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((target."unix" or false) && (!(builtins.elem "wasm" target."family")));
+            features = [ "std" "process" ];
+          }
+          {
+            name = "schemars";
+            packageId = "schemars 1.2.2";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" "rc" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            features = [ "preserve_order" "raw_value" ];
+          }
+          {
+            name = "shell-words";
+            packageId = "shell-words";
+            target = { target, features }: (!(builtins.elem "wasm" target."family"));
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+          }
+          {
+            name = "uuid";
+            packageId = "uuid";
+            features = [ "v4" ];
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_System_Threading" ];
+          }
+        ];
+        features = {
+          "unstable" = [ "unstable_end_turn_token_usage" "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_plan_operations" "unstable_session_compaction" "unstable_session_fork" "unstable_session_notices" ];
+          "unstable_end_turn_token_usage" = [ "agent-client-protocol-schema/unstable_end_turn_token_usage" ];
+          "unstable_llm_providers" = [ "agent-client-protocol-schema/unstable_llm_providers" ];
+          "unstable_mcp_over_acp" = [ "agent-client-protocol-schema/unstable_mcp_over_acp" ];
+          "unstable_plan_operations" = [ "agent-client-protocol-schema/unstable_plan_operations" ];
+          "unstable_protocol_v2" = [ "agent-client-protocol-schema/unstable_protocol_v2" ];
+          "unstable_session_compaction" = [ "agent-client-protocol-schema/unstable_session_compaction" ];
+          "unstable_session_fork" = [ "agent-client-protocol-schema/unstable_session_fork" ];
+          "unstable_session_notices" = [ "agent-client-protocol-schema/unstable_session_notices" ];
+          "wasm_js" = [ "uuid/js" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
+      "agent-client-protocol-derive" = rec {
+        crateName = "agent-client-protocol-derive";
+        version = "2.2.0";
+        edition = "2024";
+        sha256 = "1pi9ja4j49whki8md5c7n6n6fxg8dq91lqb4bam97qg027xkp2gl";
+        procMacro = true;
+        libName = "agent_client_protocol_derive";
+        authors = [
+          "Zed <hi@zed.dev>"
+        ];
+        dependencies = [
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+          }
+        ];
+
+      };
+      "agent-client-protocol-schema" = rec {
+        crateName = "agent-client-protocol-schema";
+        version = "1.9.1";
+        edition = "2024";
+        sha256 = "038ybi6fql2i3djv3md3q1fff0c527fvxlbx3k4h4pb6w5wmln8x";
+        libName = "agent_client_protocol_schema";
+        authors = [
+          "Zed <hi@zed.dev>"
+        ];
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "derive_more";
+            packageId = "derive_more";
+            features = [ "from" "display" ];
+          }
+          {
+            name = "schemars";
+            packageId = "schemars 1.2.2";
+            optional = true;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" "rc" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            features = [ "preserve_order" "raw_value" ];
+          }
+          {
+            name = "serde_with";
+            packageId = "serde_with";
+            features = [ "json" ];
+          }
+          {
+            name = "strum";
+            packageId = "strum";
+            features = [ "derive" ];
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "default" = [ "schemars" ];
+          "schemars" = [ "dep:schemars" "serde_with/schemars_1" ];
+          "tracing" = [ "dep:tracing" ];
+          "unstable" = [ "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_nes" "unstable_plan_operations" "unstable_session_fork" "unstable_session_compaction" "unstable_session_notices" "unstable_end_turn_token_usage" ];
+        };
+        resolvedDefaultFeatures = [ "default" "schemars" "tracing" ];
       };
       "ahash" = rec {
         crateName = "ahash";
@@ -908,6 +1102,288 @@ rec {
           "default" = [ "std" ];
           "serde" = [ "dep:serde" ];
           "zeroize" = [ "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "async-channel" = rec {
+        crateName = "async-channel";
+        version = "2.5.0";
+        edition = "2021";
+        sha256 = "1ljq24ig8lgs2555myrrjighycpx2mbjgrm3q7lpa6rdsmnxjklj";
+        libName = "async_channel";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "concurrent-queue";
+            packageId = "concurrent-queue";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "event-listener-strategy";
+            packageId = "event-listener-strategy";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-core";
+            packageId = "futures-core";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "portable-atomic" = [ "concurrent-queue/portable-atomic" "event-listener-strategy/portable-atomic" "dep:portable-atomic-util" "dep:portable-atomic" ];
+          "std" = [ "concurrent-queue/std" "event-listener-strategy/std" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "async-io" = rec {
+        crateName = "async-io";
+        version = "2.6.0";
+        edition = "2021";
+        sha256 = "1z16s18bm4jxlmp6rif38mvn55442yd3wjvdfhvx4hkgxf7qlss5";
+        libName = "async_io";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "concurrent-queue";
+            packageId = "concurrent-queue";
+          }
+          {
+            name = "futures-io";
+            packageId = "futures-io";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
+          }
+          {
+            name = "futures-lite";
+            packageId = "futures-lite";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "parking";
+            packageId = "parking";
+          }
+          {
+            name = "polling";
+            packageId = "polling";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            usesDefaultFeatures = false;
+            features = [ "fs" "net" "std" ];
+          }
+          {
+            name = "slab";
+            packageId = "slab";
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" ];
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "autocfg";
+            packageId = "autocfg";
+          }
+        ];
+        features = {
+          "tracing" = [ "dep:tracing" ];
+        };
+      };
+      "async-lock" = rec {
+        crateName = "async-lock";
+        version = "3.4.2";
+        edition = "2021";
+        sha256 = "04c3xrrdrfrvh9v0ajxrangpy38qi76qq268zslphnxxjqjpy3r9";
+        libName = "async_lock";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "event-listener";
+            packageId = "event-listener";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "event-listener-strategy";
+            packageId = "event-listener-strategy";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "loom" = [ "event-listener/loom" "dep:loom" ];
+          "std" = [ "event-listener/std" "event-listener-strategy/std" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "async-process" = rec {
+        crateName = "async-process";
+        version = "2.5.0";
+        edition = "2021";
+        sha256 = "0xfswxmng6835hjlfhv7k0jrfp7czqxpfj6y2s5dsp05q0g94l7w";
+        libName = "async_process";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "async-channel";
+            packageId = "async-channel";
+            target = { target, features }: ((target."windows" or false) || ("linux" == target."os" or null));
+          }
+          {
+            name = "async-io";
+            packageId = "async-io";
+          }
+          {
+            name = "async-lock";
+            packageId = "async-lock";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "async-signal";
+            packageId = "async-signal";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "async-task";
+            packageId = "async-task";
+            target = { target, features }: ((target."windows" or false) || ("linux" == target."os" or null));
+          }
+          {
+            name = "blocking";
+            packageId = "blocking";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "event-listener";
+            packageId = "event-listener";
+          }
+          {
+            name = "futures-lite";
+            packageId = "futures-lite";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "std" "fs" "process" ];
+          }
+        ];
+        features = {
+          "tracing" = [ "dep:tracing" ];
+        };
+      };
+      "async-signal" = rec {
+        crateName = "async-signal";
+        version = "0.2.14";
+        edition = "2021";
+        sha256 = "11dlpb15la279r5cazppy18gbk2xzzl60ahzl19m1kr0l2psmdaj";
+        libName = "async_signal";
+        authors = [
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "async-io";
+            packageId = "async-io";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "async-lock";
+            packageId = "async-lock";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "atomic-waker";
+            packageId = "atomic-waker";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "futures-core";
+            packageId = "futures-core";
+          }
+          {
+            name = "futures-io";
+            packageId = "futures-io";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "process" "std" ];
+          }
+          {
+            name = "signal-hook-registry";
+            packageId = "signal-hook-registry";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "slab";
+            packageId = "slab";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" "Win32_System_Console" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "async-io";
+            packageId = "async-io";
+          }
+        ];
+
+      };
+      "async-task" = rec {
+        crateName = "async-task";
+        version = "4.7.1";
+        edition = "2021";
+        sha256 = "1pp3avr4ri2nbh7s6y9ws0397nkx1zymmcr14sq761ljarh3axcb";
+        libName = "async_task";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+        ];
+        features = {
+          "default" = [ "std" ];
+          "portable-atomic" = [ "dep:portable-atomic" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
@@ -1775,6 +2251,46 @@ rec {
           "zeroize" = [ "dep:zeroize" ];
         };
       };
+      "blocking" = rec {
+        crateName = "blocking";
+        version = "1.7.0";
+        edition = "2021";
+        sha256 = "1ykd0gj18r4v4b8r692hds5dsg2w6y9fq4nlxs2l7fbcvwll63m7";
+        dependencies = [
+          {
+            name = "async-channel";
+            packageId = "async-channel";
+          }
+          {
+            name = "async-task";
+            packageId = "async-task";
+          }
+          {
+            name = "futures-io";
+            packageId = "futures-io";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
+          }
+          {
+            name = "futures-lite";
+            packageId = "futures-lite";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "piper";
+            packageId = "piper";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "futures-lite";
+            packageId = "futures-lite";
+          }
+        ];
+        features = {
+          "tracing" = [ "dep:tracing" ];
+        };
+      };
       "borsh" = rec {
         crateName = "borsh";
         version = "1.8.0";
@@ -1896,6 +2412,39 @@ rec {
           "unsafe" = [ "alloc-no-stdlib/unsafe" "alloc-stdlib/unsafe" ];
         };
         resolvedDefaultFeatures = [ "alloc-stdlib" "std" ];
+      };
+      "bs58" = rec {
+        crateName = "bs58";
+        version = "0.5.1";
+        edition = "2021";
+        sha256 = "1x3v51n5n2s3l0rgrsn142akdf331n2qsa75pscw71fi848vm25z";
+        dependencies = [
+          {
+            name = "tinyvec";
+            packageId = "tinyvec";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "grab_spare_slice" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tinyvec";
+            packageId = "tinyvec";
+            features = [ "rustc_1_55" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "tinyvec?/alloc" ];
+          "cb58" = [ "sha2" ];
+          "check" = [ "sha2" ];
+          "default" = [ "std" ];
+          "sha2" = [ "dep:sha2" ];
+          "smallvec" = [ "dep:smallvec" ];
+          "std" = [ "alloc" "tinyvec?/std" ];
+          "tinyvec" = [ "dep:tinyvec" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "std" ];
       };
       "bstr" = rec {
         crateName = "bstr";
@@ -2914,6 +3463,31 @@ rec {
         };
         resolvedDefaultFeatures = [ "serde" "std" ];
       };
+      "concurrent-queue" = rec {
+        crateName = "concurrent-queue";
+        version = "2.5.0";
+        edition = "2021";
+        sha256 = "0wrr3mzq2ijdkxwndhf79k952cp4zkz35ray8hvsxl96xrx1k82c";
+        libName = "concurrent_queue";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "Taiki Endo <te316e89@gmail.com>"
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "crossbeam-utils";
+            packageId = "crossbeam-utils";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "loom" = [ "dep:loom" ];
+          "portable-atomic" = [ "dep:portable-atomic" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
+      };
       "console" = rec {
         crateName = "console";
         version = "0.16.4";
@@ -3147,7 +3721,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             optional = true;
           }
           {
@@ -3877,6 +4451,32 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "suggestions" ];
       };
+      "darling 0.24.1" = rec {
+        crateName = "darling";
+        version = "0.24.1";
+        edition = "2021";
+        sha256 = "1v625grpyqddgaslgc0kzha41vzqy91yyg80ra9vjc363f8ga5zd";
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "darling_core";
+            packageId = "darling_core 0.24.1";
+          }
+          {
+            name = "darling_macro";
+            packageId = "darling_macro 0.24.1";
+          }
+        ];
+        features = {
+          "default" = [ "suggestions" ];
+          "diagnostics" = [ "darling_core/diagnostics" ];
+          "serde" = [ "darling_core/serde" ];
+          "suggestions" = [ "darling_core/suggestions" ];
+        };
+        resolvedDefaultFeatures = [ "default" "suggestions" ];
+      };
       "darling_core 0.21.3" = rec {
         crateName = "darling_core";
         version = "0.21.3";
@@ -3959,6 +4559,45 @@ rec {
         };
         resolvedDefaultFeatures = [ "strsim" "suggestions" ];
       };
+      "darling_core 0.24.1" = rec {
+        crateName = "darling_core";
+        version = "0.24.1";
+        edition = "2021";
+        sha256 = "1zyxlb9ypzb3pzm0l8jy09x2kvd7x7qd50b1z0caxal5fk7y4dv8";
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "ident_case";
+            packageId = "ident_case";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "strsim";
+            packageId = "strsim";
+            optional = true;
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+            features = [ "full" "extra-traits" ];
+          }
+        ];
+        features = {
+          "serde" = [ "dep:serde" ];
+          "strsim" = [ "dep:strsim" ];
+          "suggestions" = [ "strsim" ];
+        };
+        resolvedDefaultFeatures = [ "strsim" "suggestions" ];
+      };
       "darling_macro 0.21.3" = rec {
         crateName = "darling_macro";
         version = "0.21.3";
@@ -4005,6 +4644,31 @@ rec {
           {
             name = "syn";
             packageId = "syn 2.0.119";
+          }
+        ];
+
+      };
+      "darling_macro 0.24.1" = rec {
+        crateName = "darling_macro";
+        version = "0.24.1";
+        edition = "2021";
+        sha256 = "1197l1qqsxssys3nnz58x36nv5kzpbjipsxv6dw2yazh7rf17ira";
+        procMacro = true;
+        authors = [
+          "Ted Driggs <ted.driggs@outlook.com>"
+        ];
+        dependencies = [
+          {
+            name = "darling_core";
+            packageId = "darling_core 0.24.1";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
           }
         ];
 
@@ -4128,6 +4792,14 @@ rec {
         authors = [
           "Jacob Pratt <jacob@jhpratt.dev>"
         ];
+        dependencies = [
+          {
+            name = "serde_core";
+            packageId = "serde_core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
         features = {
           "macros" = [ "dep:deranged-macros" ];
           "num" = [ "dep:num-traits" ];
@@ -4139,7 +4811,7 @@ rec {
           "rand09" = [ "dep:rand09" ];
           "serde" = [ "dep:serde_core" ];
         };
-        resolvedDefaultFeatures = [ "default" ];
+        resolvedDefaultFeatures = [ "default" "serde" ];
       };
       "derive_more" = rec {
         crateName = "derive_more";
@@ -4185,7 +4857,7 @@ rec {
           "try_unwrap" = [ "derive_more-impl/try_unwrap" ];
           "unwrap" = [ "derive_more-impl/unwrap" ];
         };
-        resolvedDefaultFeatures = [ "debug" "default" "display" "is_variant" "std" ];
+        resolvedDefaultFeatures = [ "debug" "default" "display" "from" "is_variant" "std" ];
       };
       "derive_more-impl" = rec {
         crateName = "derive_more-impl";
@@ -4248,7 +4920,7 @@ rec {
           "try_unwrap" = [ "dep:convert_case" ];
           "unwrap" = [ "dep:convert_case" ];
         };
-        resolvedDefaultFeatures = [ "debug" "default" "display" "is_variant" ];
+        resolvedDefaultFeatures = [ "debug" "default" "display" "from" "is_variant" ];
       };
       "derive_setters" = rec {
         crateName = "derive_setters";
@@ -4676,6 +5348,17 @@ rec {
         ];
 
       };
+      "dyn-clone" = rec {
+        crateName = "dyn-clone";
+        version = "1.0.20";
+        edition = "2018";
+        sha256 = "0m956cxcg8v2n8kmz6xs5zl13k2fak3zkapzfzzp7pxih6hix26h";
+        libName = "dyn_clone";
+        authors = [
+          "David Tolnay <dtolnay@gmail.com>"
+        ];
+
+      };
       "either" = rec {
         crateName = "either";
         version = "1.16.0";
@@ -4890,6 +5573,68 @@ rec {
           "std" = [ "num-traits/std" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "event-listener" = rec {
+        crateName = "event-listener";
+        version = "5.4.2";
+        edition = "2021";
+        sha256 = "1lk9sv7r07l58jk263s18896l55mx9jv0g1rm4hj2mpi3paas8ss";
+        libName = "event_listener";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "parking";
+            packageId = "parking";
+            optional = true;
+            target = { target, features }: (!(builtins.elem "wasm" target."family"));
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "critical-section" = [ "dep:critical-section" ];
+          "default" = [ "std" ];
+          "loom" = [ "parking?/loom" "dep:loom" ];
+          "parking" = [ "dep:parking" ];
+          "portable-atomic" = [ "portable-atomic-util" "portable_atomic_crate" ];
+          "portable-atomic-util" = [ "dep:portable-atomic-util" ];
+          "portable_atomic_crate" = [ "dep:portable_atomic_crate" ];
+          "std" = [ "parking" ];
+        };
+        resolvedDefaultFeatures = [ "default" "parking" "std" ];
+      };
+      "event-listener-strategy" = rec {
+        crateName = "event-listener-strategy";
+        version = "0.5.4";
+        edition = "2021";
+        sha256 = "14rv18av8s7n8yixg38bxp5vg2qs394rl1w052by5npzmbgz7scb";
+        libName = "event_listener_strategy";
+        authors = [
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "event-listener";
+            packageId = "event-listener";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "loom" = [ "event-listener/loom" ];
+          "portable-atomic" = [ "event-listener/portable-atomic" ];
+          "std" = [ "event-listener/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
       };
       "eyre" = rec {
         crateName = "eyre";
@@ -5863,6 +6608,49 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "default" "futures-sink" "sink" "std" ];
       };
+      "futures-concurrency" = rec {
+        crateName = "futures-concurrency";
+        version = "7.7.1";
+        edition = "2021";
+        sha256 = "19lfx85mc4p15pj86bsyzv2f7690iw47bylgy63mpm71m76dhp0p";
+        libName = "futures_concurrency";
+        authors = [
+          "Yoshua Wuyts <yoshuawuyts@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "fixedbitset";
+            packageId = "fixedbitset 0.5.7";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-core";
+            packageId = "futures-core";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-lite";
+            packageId = "futures-lite";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pin-project";
+            packageId = "pin-project";
+          }
+          {
+            name = "smallvec";
+            packageId = "smallvec";
+            optional = true;
+          }
+        ];
+        features = {
+          "alloc" = [ "dep:fixedbitset" "dep:smallvec" "futures-lite/alloc" ];
+          "default" = [ "std" ];
+          "std" = [ "alloc" "futures-lite/std" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+      };
       "futures-core" = rec {
         crateName = "futures-core";
         version = "0.3.34";
@@ -5915,7 +6703,55 @@ rec {
         features = {
           "default" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "std" ];
+        resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "futures-lite" = rec {
+        crateName = "futures-lite";
+        version = "2.6.1";
+        edition = "2021";
+        sha256 = "1ba4dg26sc168vf60b1a23dv1d8rcf3v3ykz2psb7q70kxh113pp";
+        libName = "futures_lite";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "Contributors to futures-rs"
+        ];
+        dependencies = [
+          {
+            name = "fastrand";
+            packageId = "fastrand";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-core";
+            packageId = "futures-core";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-io";
+            packageId = "futures-io";
+            optional = true;
+          }
+          {
+            name = "parking";
+            packageId = "parking";
+            optional = true;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "default" = [ "race" "std" ];
+          "fastrand" = [ "dep:fastrand" ];
+          "futures-io" = [ "dep:futures-io" ];
+          "memchr" = [ "dep:memchr" ];
+          "parking" = [ "dep:parking" ];
+          "race" = [ "fastrand" ];
+          "std" = [ "alloc" "fastrand/std" "futures-io" "parking" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "fastrand" "futures-io" "parking" "race" "std" ];
       };
       "futures-macro" = rec {
         crateName = "futures-macro";
@@ -6520,7 +7356,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             features = [ "std" ];
           }
           {
@@ -6596,6 +7432,28 @@ rec {
           "std" = [ "alloc" ];
         };
         resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+      };
+      "hashbrown 0.12.3" = rec {
+        crateName = "hashbrown";
+        version = "0.12.3";
+        edition = "2021";
+        sha256 = "1268ka4750pyg2pbgsr43f0289l5zah4arir2k4igx5a8c6fg7la";
+        authors = [
+          "Amanieu d'Antras <amanieu@gmail.com>"
+        ];
+        features = {
+          "ahash" = [ "dep:ahash" ];
+          "ahash-compile-time-rng" = [ "ahash/compile-time-rng" ];
+          "alloc" = [ "dep:alloc" ];
+          "bumpalo" = [ "dep:bumpalo" ];
+          "compiler_builtins" = [ "dep:compiler_builtins" ];
+          "core" = [ "dep:core" ];
+          "default" = [ "ahash" "inline-more" ];
+          "rayon" = [ "dep:rayon" ];
+          "rustc-dep-of-std" = [ "nightly" "core" "compiler_builtins" "alloc" "rustc-internal-api" ];
+          "serde" = [ "dep:serde" ];
+        };
+        resolvedDefaultFeatures = [ "raw" ];
       };
       "hashbrown 0.15.5" = rec {
         crateName = "hashbrown";
@@ -8020,7 +8878,42 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
-      "indexmap" = rec {
+      "indexmap 1.9.3" = rec {
+        crateName = "indexmap";
+        version = "1.9.3";
+        edition = "2021";
+        sha256 = "16dxmy7yvk51wvnih3a3im6fp5lmx0wx76i03n06wyak6cwhw1xx";
+        dependencies = [
+          {
+            name = "hashbrown";
+            packageId = "hashbrown 0.12.3";
+            usesDefaultFeatures = false;
+            features = [ "raw" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "autocfg";
+            packageId = "autocfg";
+          }
+        ];
+        features = {
+          "arbitrary" = [ "dep:arbitrary" ];
+          "quickcheck" = [ "dep:quickcheck" ];
+          "rayon" = [ "dep:rayon" ];
+          "rustc-rayon" = [ "dep:rustc-rayon" ];
+          "serde" = [ "dep:serde" ];
+          "serde-1" = [ "serde" ];
+        };
+        resolvedDefaultFeatures = [ "serde" "serde-1" "std" ];
+      };
+      "indexmap 2.14.0" = rec {
         crateName = "indexmap";
         version = "2.14.0";
         edition = "2024";
@@ -9083,6 +9976,106 @@ rec {
           {
             name = "libc";
             packageId = "libc";
+          }
+        ];
+
+      };
+      "kraai-acp" = rec {
+        crateName = "kraai-acp";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "kraai-acp";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-acp; };
+        libName = "kraai_acp";
+        dependencies = [
+          {
+            name = "agent-client-protocol";
+            packageId = "agent-client-protocol";
+          }
+          {
+            name = "base64";
+            packageId = "base64 0.23.1";
+          }
+          {
+            name = "blocking";
+            packageId = "blocking";
+          }
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" ];
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "kraai-mcp";
+            packageId = "kraai-mcp";
+          }
+          {
+            name = "kraai-runtime";
+            packageId = "kraai-runtime";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            features = [ "raw_value" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+          }
+          {
+            name = "tracing-subscriber";
+            packageId = "tracing-subscriber";
+            features = [ "env-filter" "fmt" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "axum";
+            packageId = "axum";
+            usesDefaultFeatures = false;
+            features = [ "http1" "json" "tokio" ];
+          }
+          {
+            name = "image";
+            packageId = "image";
+            usesDefaultFeatures = false;
+            features = [ "jpeg" "png" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 
@@ -12876,7 +13869,7 @@ rec {
         dependencies = [
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "miette";
@@ -13160,7 +14153,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "indicatif";
@@ -14102,7 +15095,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "log";
@@ -16063,6 +17056,19 @@ rec {
         };
         resolvedDefaultFeatures = [ "ansi" "ansi-str" "ansitok" "fnv" "std" ];
       };
+      "parking" = rec {
+        crateName = "parking";
+        version = "2.2.1";
+        edition = "2018";
+        sha256 = "1fnfgmzkfpjd69v4j9x737b1k8pnn054bvzcn5dm3pkgq595d3gk";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "The Rust Project Developers"
+        ];
+        features = {
+          "loom" = [ "dep:loom" ];
+        };
+      };
       "parking_lot" = rec {
         crateName = "parking_lot";
         version = "0.12.5";
@@ -16377,7 +17383,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             usesDefaultFeatures = false;
           }
         ];
@@ -16576,6 +17582,45 @@ rec {
           "unicase" = [ "dep:unicase" ];
         };
       };
+      "pin-project" = rec {
+        crateName = "pin-project";
+        version = "1.1.13";
+        edition = "2021";
+        sha256 = "09091qp946lpmjz4yp0xil1r5v4hgc91fi19dg5csayhdqrv4ri4";
+        libName = "pin_project";
+        dependencies = [
+          {
+            name = "pin-project-internal";
+            packageId = "pin-project-internal";
+          }
+        ];
+
+      };
+      "pin-project-internal" = rec {
+        crateName = "pin-project-internal";
+        version = "1.1.13";
+        edition = "2021";
+        sha256 = "12rzlh07i1sdgrvzj6wgkka5bjqyvbfsl8knq6qi7g16m7q9aqy9";
+        procMacro = true;
+        libName = "pin_project_internal";
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            usesDefaultFeatures = false;
+            features = [ "parsing" "printing" "clone-impls" "proc-macro" "full" "visit-mut" ];
+          }
+        ];
+
+      };
       "pin-project-lite" = rec {
         crateName = "pin-project-lite";
         version = "0.2.17";
@@ -16583,6 +17628,41 @@ rec {
         sha256 = "1kfmwvs271si96zay4mm8887v5khw0c27jc9srw1a75ykvgj54x8";
         libName = "pin_project_lite";
 
+      };
+      "piper" = rec {
+        crateName = "piper";
+        version = "0.2.5";
+        edition = "2018";
+        sha256 = "1hd3j94mw5dwc457gs9ssb2r5b9iipywndf5srqx7pj38jd4fdf8";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "atomic-waker";
+            packageId = "atomic-waker";
+          }
+          {
+            name = "fastrand";
+            packageId = "fastrand";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "futures-io";
+            packageId = "futures-io";
+            optional = true;
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "futures-io" = [ "dep:futures-io" ];
+          "portable-atomic" = [ "atomic-waker/portable-atomic" "portable_atomic_crate" "portable-atomic-util" ];
+          "portable-atomic-util" = [ "dep:portable-atomic-util" ];
+          "portable_atomic_crate" = [ "dep:portable_atomic_crate" ];
+          "std" = [ "fastrand/std" "futures-io" ];
+        };
+        resolvedDefaultFeatures = [ "default" "futures-io" "std" ];
       };
       "pkg-config" = rec {
         crateName = "pkg-config";
@@ -16653,6 +17733,53 @@ rec {
         features = {
           "unstable" = [ "crc32fast/nightly" ];
           "zlib-rs" = [ "flate2/zlib-rs" ];
+        };
+      };
+      "polling" = rec {
+        crateName = "polling";
+        version = "3.11.0";
+        edition = "2021";
+        sha256 = "0622qfbxi3gb0ly2c99n3xawp878fkrd1sl83hjdhisx11cly3jx";
+        authors = [
+          "Stjepan Glavina <stjepang@gmail.com>"
+          "John Nunley <dev@notgull.net>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "concurrent-queue";
+            packageId = "concurrent-queue";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "hermit-abi";
+            packageId = "hermit-abi";
+            target = { target, features }: ("hermit" == target."os" or null);
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((target."unix" or false) || ("fuchsia" == target."os" or null) || ("vxworks" == target."os" or null));
+            features = [ "event" "fs" "pipe" "process" "std" "time" ];
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Threading" "Win32_System_WindowsProgramming" ];
+          }
+        ];
+        features = {
+          "tracing" = [ "dep:tracing" ];
         };
       };
       "pori" = rec {
@@ -16886,7 +18013,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "nix";
@@ -19179,7 +20306,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             features = [ "serde" ];
           }
           {
@@ -20168,6 +21295,166 @@ rec {
         ];
 
       };
+      "schemars 0.9.0" = rec {
+        crateName = "schemars";
+        version = "0.9.0";
+        edition = "2021";
+        sha256 = "0pqncln5hqbzbl2r3yayyr4a82jjf93h2cfxrn0xamvx77wr3lac";
+        authors = [
+          "Graham Esau <gesau@hotmail.co.uk>"
+        ];
+        dependencies = [
+          {
+            name = "dyn-clone";
+            packageId = "dyn-clone";
+          }
+          {
+            name = "ref-cast";
+            packageId = "ref-cast";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+        features = {
+          "arrayvec07" = [ "dep:arrayvec07" ];
+          "bigdecimal04" = [ "dep:bigdecimal04" ];
+          "bytes1" = [ "dep:bytes1" ];
+          "chrono04" = [ "dep:chrono04" ];
+          "default" = [ "derive" "std" ];
+          "derive" = [ "schemars_derive" ];
+          "either1" = [ "dep:either1" ];
+          "indexmap2" = [ "dep:indexmap2" ];
+          "jiff02" = [ "dep:jiff02" ];
+          "preserve_order" = [ "serde_json/preserve_order" ];
+          "raw_value" = [ "serde_json/raw_value" ];
+          "rust_decimal1" = [ "dep:rust_decimal1" ];
+          "schemars_derive" = [ "dep:schemars_derive" ];
+          "semver1" = [ "dep:semver1" ];
+          "smallvec1" = [ "dep:smallvec1" ];
+          "smol_str02" = [ "dep:smol_str02" ];
+          "url2" = [ "dep:url2" ];
+          "uuid1" = [ "dep:uuid1" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
+      };
+      "schemars 1.2.2" = rec {
+        crateName = "schemars";
+        version = "1.2.2";
+        edition = "2021";
+        sha256 = "0jng632s64njf9vghr3i1l4m15h4y85m5vhg7vkwdkdnjg978wk8";
+        authors = [
+          "Graham Esau <gesau@hotmail.co.uk>"
+        ];
+        dependencies = [
+          {
+            name = "dyn-clone";
+            packageId = "dyn-clone";
+          }
+          {
+            name = "ref-cast";
+            packageId = "ref-cast";
+          }
+          {
+            name = "schemars_derive";
+            packageId = "schemars_derive";
+            optional = true;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+        features = {
+          "arrayvec07" = [ "dep:arrayvec07" ];
+          "bigdecimal04" = [ "dep:bigdecimal04" ];
+          "bytes1" = [ "dep:bytes1" ];
+          "chrono04" = [ "dep:chrono04" ];
+          "default" = [ "derive" "std" ];
+          "derive" = [ "schemars_derive" ];
+          "either1" = [ "dep:either1" ];
+          "indexmap2" = [ "dep:indexmap2" ];
+          "jiff02" = [ "dep:jiff02" ];
+          "preserve_order" = [ "serde_json/preserve_order" ];
+          "raw_value" = [ "serde_json/raw_value" ];
+          "rust_decimal1" = [ "dep:rust_decimal1" ];
+          "schemars_derive" = [ "dep:schemars_derive" ];
+          "semver1" = [ "dep:semver1" ];
+          "smallvec1" = [ "dep:smallvec1" ];
+          "smol_str02" = [ "dep:smol_str02" ];
+          "smol_str03" = [ "dep:smol_str03" ];
+          "url2" = [ "dep:url2" ];
+          "uuid1" = [ "dep:uuid1" ];
+        };
+        resolvedDefaultFeatures = [ "default" "derive" "schemars_derive" "std" ];
+      };
+      "schemars_derive" = rec {
+        crateName = "schemars_derive";
+        version = "1.2.2";
+        edition = "2021";
+        sha256 = "1fp2wkdk32nv66swy7k7pz7sxygn634snlppih5jzbs6ddqng36r";
+        procMacro = true;
+        authors = [
+          "Graham Esau <gesau@hotmail.co.uk>"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "serde_derive_internals";
+            packageId = "serde_derive_internals";
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+            features = [ "extra-traits" ];
+          }
+        ];
+
+      };
       "scopeguard" = rec {
         crateName = "scopeguard";
         version = "1.2.0";
@@ -20456,6 +21743,36 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
+      "serde_derive_internals" = rec {
+        crateName = "serde_derive_internals";
+        version = "0.30.0";
+        edition = "2021";
+        sha256 = "1gd9n45na7n79nr54ghfl79rygkbzw2ybk3wyr6nlp83rry16lpq";
+        libPath = "lib.rs";
+        authors = [
+          "Erick Tryzelaar <erick.tryzelaar@gmail.com>"
+          "David Tolnay <dtolnay@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+            usesDefaultFeatures = false;
+            features = [ "clone-impls" "derive" "parsing" "printing" ];
+          }
+        ];
+
+      };
       "serde_json" = rec {
         crateName = "serde_json";
         version = "1.0.151";
@@ -20468,7 +21785,7 @@ rec {
         dependencies = [
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             optional = true;
           }
           {
@@ -20510,7 +21827,7 @@ rec {
           "preserve_order" = [ "indexmap" "std" ];
           "std" = [ "memchr/std" "serde_core/std" ];
         };
-        resolvedDefaultFeatures = [ "default" "indexmap" "preserve_order" "raw_value" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "indexmap" "preserve_order" "raw_value" "std" ];
       };
       "serde_path_to_error" = rec {
         crateName = "serde_path_to_error";
@@ -20595,6 +21912,181 @@ rec {
         ];
 
       };
+      "serde_with" = rec {
+        crateName = "serde_with";
+        version = "3.24.0";
+        edition = "2021";
+        sha256 = "0vr90v2hwls5zr3hksz6anjsl0aq5lgbds5fb7qzh3kq7hcxr6nz";
+        authors = [
+          "Jonas Bushart"
+          "Marcin Kaźmierczak"
+        ];
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64 0.23.1";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "bs58";
+            packageId = "bs58";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            rename = "chrono_0_4";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "serde" ];
+          }
+          {
+            name = "hex";
+            packageId = "hex";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap 1.9.3";
+            rename = "indexmap_1";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "serde-1" ];
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap 2.14.0";
+            rename = "indexmap_2";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "serde" ];
+          }
+          {
+            name = "jiff";
+            packageId = "jiff";
+            rename = "jiff_0_2";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "schemars";
+            packageId = "schemars 0.9.0";
+            rename = "schemars_0_9";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "schemars";
+            packageId = "schemars 1.2.2";
+            rename = "schemars_1";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "serde_core";
+            packageId = "serde_core";
+            usesDefaultFeatures = false;
+            features = [ "result" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "serde_with_macros";
+            packageId = "serde_with_macros";
+            optional = true;
+          }
+          {
+            name = "time";
+            packageId = "time";
+            rename = "time_0_3";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "schemars";
+            packageId = "schemars 0.9.0";
+            rename = "schemars_0_9";
+          }
+          {
+            name = "schemars";
+            packageId = "schemars 1.2.2";
+            rename = "schemars_1";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            features = [ "preserve_order" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "serde_core/alloc" "base64?/alloc" "bs58?/alloc" "chrono_0_4?/alloc" "hex?/alloc" "jiff_0_2?/alloc" "serde_json?/alloc" "time_0_3?/alloc" ];
+          "base58" = [ "dep:bs58" "alloc" ];
+          "base64" = [ "dep:base64" "alloc" ];
+          "chrono" = [ "chrono_0_4" ];
+          "chrono_0_4" = [ "dep:chrono_0_4" ];
+          "default" = [ "std" "macros" ];
+          "guide" = [ "dep:document-features" "macros" "std" ];
+          "hashbrown_0_14" = [ "dep:hashbrown_0_14" "alloc" ];
+          "hashbrown_0_15" = [ "dep:hashbrown_0_15" "alloc" ];
+          "hashbrown_0_16" = [ "dep:hashbrown_0_16" "alloc" ];
+          "hashbrown_0_17" = [ "dep:hashbrown_0_17" "alloc" ];
+          "hex" = [ "dep:hex" "alloc" ];
+          "indexmap" = [ "indexmap_1" ];
+          "indexmap_1" = [ "dep:indexmap_1" "alloc" ];
+          "indexmap_2" = [ "dep:indexmap_2" "alloc" ];
+          "jiff_0_2" = [ "dep:jiff_0_2" ];
+          "json" = [ "dep:serde_json" "alloc" ];
+          "macros" = [ "dep:serde_with_macros" ];
+          "schemars_0_8" = [ "dep:schemars_0_8" "std" "serde_with_macros?/schemars_0_8" "dep:serde_json" ];
+          "schemars_0_9" = [ "dep:schemars_0_9" "alloc" "serde_with_macros?/schemars_0_9" "dep:serde_json" ];
+          "schemars_1" = [ "dep:schemars_1" "alloc" "serde_with_macros?/schemars_1" "dep:serde_json" ];
+          "smallvec_1" = [ "dep:smallvec_1" ];
+          "std" = [ "alloc" "bs58?/std" "serde_core/std" "chrono_0_4?/clock" "chrono_0_4?/std" "indexmap_1?/std" "indexmap_2?/std" "jiff_0_2?/std" "jiff_0_2?/tz-system" "jiff_0_2?/tzdb-bundle-platform" "jiff_0_2?/tzdb-concatenated" "jiff_0_2?/tzdb-zoneinfo" "time_0_3?/serde-well-known" "time_0_3?/std" "schemars_0_9?/std" "schemars_1?/std" ];
+          "time_0_3" = [ "dep:time_0_3" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "json" "macros" "schemars_1" "std" ];
+      };
+      "serde_with_macros" = rec {
+        crateName = "serde_with_macros";
+        version = "3.24.0";
+        edition = "2021";
+        sha256 = "0jbfryy4zfbv8mqgx2av8kxs9vd7i82pxx0dp6xknri8iv3bn5ry";
+        procMacro = true;
+        authors = [
+          "Jonas Bushart"
+        ];
+        dependencies = [
+          {
+            name = "darling";
+            packageId = "darling 0.24.1";
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 3.0.5";
+            features = [ "extra-traits" "full" "parsing" ];
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "schemars_1" ];
+      };
       "serde_yaml_ng" = rec {
         crateName = "serde_yaml_ng";
         version = "0.10.0";
@@ -20606,7 +22098,7 @@ rec {
         dependencies = [
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "itoa";
@@ -20774,6 +22266,20 @@ rec {
         features = {
           "loom" = [ "dep:loom" ];
         };
+      };
+      "shell-words" = rec {
+        crateName = "shell-words";
+        version = "1.1.1";
+        edition = "2015";
+        sha256 = "0xzd5p53xl0ndnk63r0by52rhdrh6pd37szfxszkg73zb6ffcvyw";
+        libName = "shell_words";
+        authors = [
+          "Tomasz Miąsko <tomasz.miasko@gmail.com>"
+        ];
+        features = {
+          "default" = [ "std" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "shlex 1.3.0" = rec {
         crateName = "shlex";
@@ -21459,7 +22965,7 @@ rec {
           "proc-macro" = [ "proc-macro2/proc-macro" "quote?/proc-macro" ];
           "test" = [ "syn-test-suite/all-features" ];
         };
-        resolvedDefaultFeatures = [ "clone-impls" "default" "derive" "full" "parsing" "printing" "proc-macro" "visit-mut" ];
+        resolvedDefaultFeatures = [ "clone-impls" "default" "derive" "extra-traits" "full" "parsing" "printing" "proc-macro" "visit-mut" ];
       };
       "sync_wrapper" = rec {
         crateName = "sync_wrapper";
@@ -22404,7 +23910,7 @@ rec {
           "std" = [ "alloc" ];
           "wasm-bindgen" = [ "dep:js-sys" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "formatting" "local-offset" "macros" "parsing" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "formatting" "local-offset" "macros" "parsing" "serde" "serde-well-known" "std" ];
       };
       "time-core" = rec {
         crateName = "time-core";
@@ -22442,7 +23948,7 @@ rec {
         ];
         features = {
         };
-        resolvedDefaultFeatures = [ "formatting" "parsing" ];
+        resolvedDefaultFeatures = [ "formatting" "parsing" "serde" ];
       };
       "tinystr" = rec {
         crateName = "tinystr";
@@ -22508,7 +24014,7 @@ rec {
           "std" = [ "alloc" ];
           "tinyvec_macros" = [ "dep:tinyvec_macros" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "tinyvec_macros" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "grab_spare_slice" "std" "tinyvec_macros" ];
       };
       "tinyvec_macros" = rec {
         crateName = "tinyvec_macros";
@@ -22852,7 +24358,7 @@ rec {
         dependencies = [
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -22937,7 +24443,7 @@ rec {
         dependencies = [
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
             features = [ "std" ];
           }
           {
@@ -23643,13 +25149,22 @@ rec {
         crateName = "ts-rs-macros";
         version = "12.0.1";
         edition = "2021";
-        sha256 = "1ajjnsl39fz492mrqpjkkrrh8s5shl5ghjv7kvpqhydwa7m0xn9q";
+        workspace_member = null;
+        src = pkgs.fetchgit {
+          url = "https://github.com/Aleph-Alpha/ts-rs";
+          rev = "a6bbbd183aae4142c273e3ff2042d30a3b1a808f";
+          sha256 = "0zhwi4457nv5wyb9rzlway280sh6cwb6244ycfs630dk9hh8sdcy";
+        };
         procMacro = true;
         libName = "ts_rs_macros";
         authors = [
           "Moritz Bischof <moritz.bischof1@gmail.com>"
         ];
         dependencies = [
+          {
+            name = "indexmap";
+            packageId = "indexmap 2.14.0";
+          }
           {
             name = "proc-macro2";
             packageId = "proc-macro2";
@@ -30491,7 +32006,7 @@ rec {
           }
           {
             name = "indexmap";
-            packageId = "indexmap";
+            packageId = "indexmap 2.14.0";
           }
           {
             name = "memchr";

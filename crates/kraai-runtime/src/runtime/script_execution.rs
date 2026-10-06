@@ -50,15 +50,10 @@ pub(crate) struct PendingScriptApproval {
 
 impl CompletedScriptExecution {
     pub(crate) fn render_result(&self) -> Result<kraai_types::MessageContent> {
-        let status = self.record.status.ok_or_else(|| {
-            eyre!(
-                "Execution {} finished without a terminal status",
-                self.record.id
-            )
-        })?;
+        let outcome = self.record.outcome()?;
         let text = render_tool_call_result(ToolCallResultView {
-            status,
-            exit_code: self.record.exit_code,
+            status: outcome.status,
+            exit_code: outcome.exit_code,
             elapsed_millis: self.record.elapsed_millis(),
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,
@@ -131,6 +126,10 @@ impl RuntimeCore {
             .mark_running(&execution_id)
             .await
             .with_context(|| format!("Failed to mark execution {execution_id} running"))?;
+        self.send_event(crate::Event::ScriptStarted {
+            session_id: request.session_id.clone(),
+            call_id: request.call_id.to_string(),
+        });
         let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
         let output_store = self.execution_store.clone();
         let output_execution_id = execution_id.clone();
@@ -158,7 +157,11 @@ impl RuntimeCore {
             plan.runtime_roots.push(host_directory.to_path_buf());
         }
         plan.active_commands = request.profile.commands;
-        plan.mcp = self.agent_manager.read().await.mcp();
+        plan.mcp = self
+            .agent_manager
+            .read()
+            .await
+            .session_mcp(&request.session_id);
         plan.nushell_startup = request.profile.nushell_startup;
         plan.output_events = Some(output_tx);
         plan.image_attachment_handler = Arc::new(super::images::DurableImageAttachments {

@@ -1,0 +1,29 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-acp"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+agent-client-protocol.workspace = true
+base64.workspace = true
+blocking.workspace = true
+clap.workspace = true
+color-eyre.workspace = true
+futures.workspace = true
+kraai-mcp.workspace = true
+kraai-runtime.workspace = true
+kraai-types.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+image.workspace = true
+tempfile.workspace = true

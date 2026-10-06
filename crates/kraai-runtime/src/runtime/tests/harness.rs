@@ -406,6 +406,7 @@ path = \"inherit\"\n",
             config: Arc::new(RuntimeConfig {
                 provider_config_path: data_dir.join("providers.toml"),
                 use_current_executable_as_nushell_host: false,
+                resume_recovered_turns: true,
                 nushell_host_path: None,
                 script_runtime_roots: None,
             }),
@@ -428,6 +429,7 @@ path = \"inherit\"\n",
             while let Some(command) = runtime_for_task.next_command(&mut command_rx).await {
                 if let Command::Shutdown { response } = command {
                     runtime_for_task.stop_active_work().await;
+                    runtime_for_task.shutdown_mcp().await;
                     if let Some(response) = response {
                         let _ = response.send(Ok(()));
                     }

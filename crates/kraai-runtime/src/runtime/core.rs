@@ -46,11 +46,13 @@ pub(crate) struct RuntimeCore {
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
 }
 
+#[derive(Clone)]
 pub(crate) struct RuntimeConfig {
     pub(crate) provider_config_path: PathBuf,
     pub(crate) nushell_host_path: Option<PathBuf>,
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
+    pub(crate) resume_recovered_turns: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -163,8 +165,7 @@ impl RuntimeCore {
 
         self.stop_active_work().await;
 
-        let mcp = self.agent_manager.read().await.mcp();
-        mcp.shutdown().await;
+        self.shutdown_mcp().await;
 
         for task in background_tasks {
             task.abort();

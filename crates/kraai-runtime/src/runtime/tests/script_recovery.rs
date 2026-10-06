@@ -17,6 +17,35 @@ async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, Comple
     completed_script_with_image(false).await
 }
 
+#[tokio::test]
+async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> {
+    let Some((harness, session_id, completed)) = completed_script().await? else {
+        return Ok(());
+    };
+    reopen_agent(&harness).await?;
+    let mut runtime = harness.runtime.clone();
+    Arc::make_mut(&mut runtime.config).resume_recovered_turns = false;
+
+    runtime.recover_script_executions().await?;
+
+    assert!(
+        !runtime
+            .agent_manager
+            .read()
+            .await
+            .is_profile_locked(&session_id)
+    );
+    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    assert!(!snapshot.session.is_running);
+    let expected = completed.record.outcome()?;
+    assert!(matches!(
+        snapshot.history.get(&completed.record.result_message_id).map(|message| &message.content),
+        Some(ConversationItem::ScriptResult { outcome, .. }) if *outcome == expected
+    ));
+    harness.shutdown().await;
+    Ok(())
+}
+
 pub(super) async fn completed_script_with_image(
     include_image: bool,
 ) -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>> {
@@ -104,6 +133,7 @@ pub(super) async fn completed_script_with_image(
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
                 completed.render_result()?,
+                completed.record.outcome()?,
             )
             .await?;
         manager.clear_active_turn(&session_id);

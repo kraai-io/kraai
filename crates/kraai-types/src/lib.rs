@@ -5,7 +5,9 @@ mod context_state;
 mod cost;
 mod effect;
 mod mcp;
+mod model;
 pub use mcp::McpRequest;
+pub use model::ModelSelection;
 mod error;
 pub mod image;
 mod permissions;
@@ -30,7 +32,9 @@ pub use policy::{
     SandboxPermissionSet,
 };
 pub use profile::{EnvironmentPolicy, NushellStartup, PathPolicy, ScriptProfileSnapshot};
-pub use script::{ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream};
+pub use script::{
+    ScriptExecutionOutcome, ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream,
+};
 
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
@@ -314,6 +318,10 @@ mod tests {
                 content: text.into(),
             },
             ConversationItem::ScriptResult {
+                outcome: crate::ScriptExecutionOutcome {
+                    status: crate::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call"),
                 output: text.into(),
             },

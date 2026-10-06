@@ -71,6 +71,10 @@ impl RuntimeHandle {
         self.event_tx.subscribe()
     }
 
+    pub fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+        self.event_tx.subscribe_session(session_id)
+    }
+
     pub fn startup_status(&self) -> RuntimeStartupState {
         self.startup_rx.borrow().clone()
     }
@@ -149,6 +153,43 @@ impl RuntimeHandle {
         .await
     }
 
+    pub async fn get_session_model(
+        &self,
+        session_id: String,
+    ) -> RuntimeResult<Option<kraai_types::ModelSelection>> {
+        self.request(|response| Command::GetSessionModel {
+            session_id,
+            response,
+        })
+        .await
+    }
+
+    pub async fn set_session_model(
+        &self,
+        session_id: String,
+        selection: kraai_types::ModelSelection,
+    ) -> RuntimeResult<()> {
+        self.request(|response| Command::SetSessionModel {
+            session_id,
+            selection,
+            response,
+        })
+        .await
+    }
+
+    pub async fn set_session_mcp_servers(
+        &self,
+        session_id: String,
+        config: kraai_mcp::McpConfig,
+    ) -> RuntimeResult<()> {
+        self.request(|response| Command::SetSessionMcpServers {
+            session_id,
+            config,
+            response,
+        })
+        .await
+    }
+
     /// Save the editable settings document and reload providers.
     pub async fn save_settings(&self, settings: SettingsDocument) -> RuntimeResult<()> {
         self.request(|response| Command::SaveSettings { settings, response })
@@ -185,6 +226,11 @@ impl RuntimeHandle {
         bytes: Vec<u8>,
     ) -> RuntimeResult<kraai_types::ImageAttachment> {
         self.request(|response| Command::ImportImage { bytes, response })
+            .await
+    }
+
+    pub async fn read_image(&self, image: kraai_types::ImageAttachment) -> RuntimeResult<Vec<u8>> {
+        self.request(|response| Command::ReadImage { image, response })
             .await
     }
 
@@ -363,11 +409,40 @@ impl RuntimeHandle {
         .await
     }
 
+    pub async fn cancel_turn(&self, session_id: String) -> RuntimeResult<bool> {
+        self.request(|response| Command::CancelTurn {
+            session_id,
+            response,
+        })
+        .await
+    }
+
     pub async fn continue_session(
         &self,
         session_id: String,
         model_id: String,
         provider_id: String,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
+        self.request_continuation(session_id, model_id, provider_id, false)
+            .await
+    }
+
+    pub async fn continue_turn(
+        &self,
+        session_id: String,
+        model_id: String,
+        provider_id: String,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
+        self.request_continuation(session_id, model_id, provider_id, true)
+            .await
+    }
+
+    async fn request_continuation(
+        &self,
+        session_id: String,
+        model_id: String,
+        provider_id: String,
+        wait_for_preparation: bool,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
@@ -379,6 +454,7 @@ impl RuntimeHandle {
             session_id,
             model_id,
             provider_id,
+            wait_for_preparation,
             response,
         })
         .await

@@ -41,7 +41,9 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
         const result = Object.values(history).find(message => message.content.type === 'script_result');
         assert.equal(call.name, 'kraai_nushell');
         assert.equal(call.call_id, result.content.call_id);
-        assert.equal(event.ScriptResultReady.status, 'completed', JSON.stringify(result));
+        assert.equal(event.ScriptResultReady.outcome.status, 'completed', JSON.stringify(result));
+        assert.equal(event.ScriptResultReady.outcome.exit_code, 0);
+        assert.deepEqual(event.ScriptResultReady.outcome, result.content.outcome);
         assert.match(result.content.output.filter((part) => part.type === "text").map((part) => part.text).join("\n"), /42/);
         break;
       }
@@ -90,7 +92,7 @@ for (const { codex, symlinked } of fileContextCases) {
       for (const name of ['SessionError', 'StreamError', 'ContinuationFailed']) {
         assert.ok(!(name in event), JSON.stringify(event));
       }
-      if ('ScriptResultReady' in event) assert.equal(event.ScriptResultReady.status, 'completed');
+      if ('ScriptResultReady' in event) assert.equal(event.ScriptResultReady.outcome.status, 'completed');
       if ('StreamComplete' in event && provider.requests.length === 6) break;
     }
     const messages = provider.requests.map(request => request.input ?? request.messages);

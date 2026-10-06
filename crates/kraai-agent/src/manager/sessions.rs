@@ -39,6 +39,7 @@ impl AgentManager {
             ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
             mcp: Arc::default(),
+            session_mcp: BTreeMap::new(),
             providers,
             default_workspace_dir,
             user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),
@@ -91,6 +92,7 @@ impl AgentManager {
             updated_at: now,
             title: None,
             selected_profile_id: Some(selected_profile_id.clone()),
+            selected_model: None,
         };
 
         self.session_store.save(&session).await?;
@@ -294,6 +296,9 @@ impl AgentManager {
     pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
         self.abort_streaming_messages_for_session(session_id)
             .await?;
+        if let Some(mcp) = self.session_mcp.remove(session_id) {
+            mcp.shutdown().await;
+        }
         self.session_states.remove(session_id);
         self.session_store.delete(session_id).await?;
         self.pending_message_rollbacks.remove(session_id);
@@ -359,6 +364,36 @@ impl AgentManager {
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
         Ok(())
+    }
+
+    pub async fn get_session_model(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<kraai_types::ModelSelection>> {
+        Ok(self.require_session(session_id).await?.selected_model)
+    }
+
+    pub async fn set_session_model(
+        &mut self,
+        session_id: &str,
+        selection: kraai_types::ModelSelection,
+    ) -> Result<()> {
+        if self.is_turn_active(session_id) {
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "Cannot change model while the current turn is active"
+            )));
+        }
+        let mut session = self.require_session(session_id).await?;
+        let provider = self
+            .providers
+            .get_provider(&selection.provider_id)
+            .ok_or_else(|| eyre!(kraai_types::DomainError::not_found("Unknown provider")))?;
+        if provider.get_model(&selection.model_id).await.is_none() {
+            return Err(eyre!(kraai_types::DomainError::not_found("Unknown model")));
+        }
+        session.selected_model = Some(selection);
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await
     }
 
     pub async fn get_workspace_dir_state(

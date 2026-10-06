@@ -85,6 +85,10 @@ mod tests {
                 encrypted.clone(),
                 call.clone(),
                 ConversationItem::ScriptResult {
+                    outcome: kraai_types::ScriptExecutionOutcome {
+                        status: kraai_types::ScriptExecutionStatus::Completed,
+                        exit_code: Some(0),
+                    },
                     call_id: ToolCallId::new("call"),
                     output: "x".repeat(10000).into(),
                 },
@@ -99,7 +103,7 @@ mod tests {
         assert_eq!(request.messages.first(), Some(&encrypted));
         assert_eq!(request.messages.get(1), Some(&call));
         assert!(
-            matches!(request.messages.get(2), Some(ConversationItem::ScriptResult { call_id, output }) if call_id.as_str() == "call" && output.as_text() == Some(TRUNCATED_OUTPUT))
+            matches!(request.messages.get(2), Some(ConversationItem::ScriptResult { call_id, output, .. }) if call_id.as_str() == "call" && output.as_text() == Some(TRUNCATED_OUTPUT))
         );
     }
     #[test]
@@ -123,6 +127,10 @@ mod tests {
         );
         let mut request = ProviderRequest {
             messages: vec![ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call"),
                 output,
             }],

@@ -11,6 +11,8 @@ pub(crate) struct RuntimeEventSender {
 
 struct EventState {
     tx: broadcast::Sender<RuntimeEvent>,
+    sessions: std::collections::HashMap<String, broadcast::Sender<RuntimeEvent>>,
+    capacity: usize,
     sequence: u64,
     timers: std::collections::HashMap<String, crate::TurnTimer>,
 }
@@ -21,6 +23,8 @@ impl RuntimeEventSender {
         Self {
             state: Arc::new(Mutex::new(EventState {
                 tx,
+                sessions: Default::default(),
+                capacity,
                 sequence: 0,
                 timers: Default::default(),
             })),
@@ -54,12 +58,26 @@ impl RuntimeEventSender {
         drop(state);
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "service failures reach independent session receivers in any order"
+    )]
     fn publish(state: &mut EventState, event: Event) {
         state.sequence += 1;
-        let _ = state.tx.send(RuntimeEvent {
+        let event = RuntimeEvent {
             sequence: state.sequence,
             event,
-        });
+        };
+        if let Some(session_id) = event.event.session_id() {
+            if let Some(sender) = state.sessions.get(session_id) {
+                let _ = sender.send(event.clone());
+            }
+        } else if matches!(event.event, Event::ServiceError { .. }) {
+            for sender in state.sessions.values() {
+                let _ = sender.send(event.clone());
+            }
+        }
+        let _ = state.tx.send(event);
     }
 
     pub(crate) fn remove_timer(&self, session_id: &str) {
@@ -111,6 +129,19 @@ impl RuntimeEventSender {
             .subscribe()
     }
 
+    pub(crate) fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .sessions
+            .retain(|_, sender| sender.receiver_count() > 0);
+        let capacity = state.capacity;
+        state
+            .sessions
+            .entry(session_id.to_string())
+            .or_insert_with(|| broadcast::channel(capacity).0)
+            .subscribe()
+    }
+
     #[cfg(test)]
     pub(crate) fn latest_sequence(&self) -> u64 {
         self.state
@@ -123,6 +154,69 @@ impl RuntimeEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "assertions validate event isolation after fallible channel reads"
+    )]
+    fn scoped_subscribers_are_isolated_and_receive_service_failures()
+    -> Result<(), broadcast::error::TryRecvError> {
+        let sender = RuntimeEventSender::new(2);
+        let mut first = sender.subscribe_session("first");
+        let mut second = sender.subscribe_session("second");
+        for _ in 0..1025 {
+            sender.send(Event::StreamChunk {
+                session_id: "second".into(),
+                message_id: "message".into(),
+                chunk: "text".into(),
+            });
+        }
+        assert!(matches!(
+            first.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            second.try_recv(),
+            Err(broadcast::error::TryRecvError::Lagged(_))
+        ));
+        sender.send(Event::ServiceError {
+            error: crate::RuntimeError::unavailable("service stopped"),
+        });
+        assert!(matches!(
+            first.try_recv()?.event,
+            Event::ServiceError { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "assertions validate event ordering after fallible channel reads"
+    )]
+    fn scoped_channels_preserve_order_and_release_detached_sessions()
+    -> Result<(), broadcast::error::TryRecvError> {
+        let sender = RuntimeEventSender::new(4);
+        let mut first = sender.subscribe_session("first");
+        let mut global = sender.subscribe();
+        sender.send(Event::StreamChunk {
+            session_id: "first".into(),
+            message_id: "message".into(),
+            chunk: "text".into(),
+        });
+        assert_eq!(first.try_recv()?.sequence, global.try_recv()?.sequence);
+        drop(first);
+        let _second = sender.subscribe_session("second");
+        let state = sender
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(!state.sessions.contains_key("first"));
+        assert!(state.sessions.contains_key("second"));
+        drop(state);
+        Ok(())
+    }
 
     #[test]
     fn terminal_events_do_not_finish_a_turn_before_cleanup() {

@@ -56,6 +56,15 @@ pub struct ScriptExecutionRecord {
 }
 
 impl ScriptExecutionRecord {
+    pub fn outcome(&self) -> Result<kraai_types::ScriptExecutionOutcome> {
+        Ok(kraai_types::ScriptExecutionOutcome {
+            status: self
+                .status
+                .ok_or_else(|| eyre!("Execution {} has no terminal status", self.id))?,
+            exit_code: self.exit_code,
+        })
+    }
+
     pub fn elapsed_millis(&self) -> Option<u64> {
         self.started_at_millis
             .map(|started| self.updated_at_millis.saturating_sub(started))

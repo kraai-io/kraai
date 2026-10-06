@@ -2,6 +2,7 @@
 members = [
   "crates/kraai-mcp",
   "crates/commands/kraai-command-mcp",
+  "crates/kraai-acp",
   "crates/kraai-agent",
   "crates/kraai-web",
   "crates/commands/kraai-command-web-search",
@@ -39,6 +40,7 @@ opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true      # Ensures debug symbols are removed.
 
 [workspace.dependencies]
+agent-client-protocol = "2.2.0"
 kraai-agent = { path = "crates/kraai-agent" }
 kraai-command-catalog = { path = "crates/kraai-command-catalog" }
 kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
@@ -78,6 +80,7 @@ axum = { version = "0.8.9", default-features = false, features = [
   "tokio",
 ] }
 base64 = "0.23.0"
+blocking = "1.6.2"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
@@ -146,3 +149,6 @@ napi-derive = "3.6.3"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
 webbrowser = "1.2.4"
 windows-sys = "0.61.2"
+
+[patch.crates-io]
+ts-rs-macros = { git = "https://github.com/Aleph-Alpha/ts-rs", rev = "a6bbbd183aae4142c273e3ff2042d30a3b1a808f" }

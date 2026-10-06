@@ -58,7 +58,9 @@ pub fn normalize_chat_messages(
                     });
                 }
             }
-            ConversationItem::ScriptResult { call_id, output } => {
+            ConversationItem::ScriptResult {
+                call_id, output, ..
+            } => {
                 normalized.push(RequestMessage::Tool {
                     tool_call_id: call_id,
                     content: output.display_text().into_owned(),
@@ -251,6 +253,10 @@ mod image_tests {
                 content: content.clone(),
             },
             ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call"),
                 output: content,
             },

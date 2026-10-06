@@ -167,6 +167,7 @@ pub enum ConversationItem {
     ScriptResult {
         call_id: ToolCallId,
         output: MessageContent,
+        outcome: crate::ScriptExecutionOutcome,
     },
 }
 

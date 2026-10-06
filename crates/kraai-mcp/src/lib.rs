@@ -4,9 +4,10 @@ mod auth;
 mod cancellation;
 mod catalog;
 mod config;
+mod headers;
 mod server;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use color_eyre::eyre::Report;
@@ -27,6 +28,8 @@ pub trait McpHost: Send + Sync {
 
 pub struct McpManager {
     servers: BTreeMap<String, Arc<Server>>,
+    owned_servers: Vec<Arc<Server>>,
+    aliases: BTreeSet<String>,
     prompt_max_bytes: usize,
     auth_events: tokio::sync::broadcast::Sender<McpAuthStatus>,
 }
@@ -35,6 +38,8 @@ impl Default for McpManager {
     fn default() -> Self {
         Self {
             servers: BTreeMap::new(),
+            owned_servers: Vec::new(),
+            aliases: BTreeSet::new(),
             prompt_max_bytes: 16384,
             auth_events: tokio::sync::broadcast::channel(64).0,
         }
@@ -43,37 +48,59 @@ impl Default for McpManager {
 
 impl McpManager {
     pub fn new(config: McpConfig) -> Result<Self, String> {
-        Self::build(config, None)
+        Self::build(config, None, tokio::sync::broadcast::channel(64).0)
     }
 
     pub fn with_auth_storage(config: McpConfig, root: std::path::PathBuf) -> Result<Self, String> {
-        Self::build(config, Some(root))
+        Self::build(config, Some(root), tokio::sync::broadcast::channel(64).0)
     }
 
-    fn build(config: McpConfig, root: Option<std::path::PathBuf>) -> Result<Self, String> {
+    fn build(
+        config: McpConfig,
+        root: Option<std::path::PathBuf>,
+        auth_events: tokio::sync::broadcast::Sender<McpAuthStatus>,
+    ) -> Result<Self, String> {
         config.validate()?;
-        let auth_events = tokio::sync::broadcast::channel(64).0;
+        let aliases = config.servers.keys().cloned().collect();
+        let servers: BTreeMap<_, _> = config
+            .servers
+            .into_iter()
+            .filter(|(_, server)| server.enabled)
+            .map(|(name, config)| {
+                let server = Arc::new_cyclic(|weak| {
+                    Server::new(
+                        config,
+                        name.clone(),
+                        root.as_deref(),
+                        weak.clone(),
+                        auth_events.clone(),
+                    )
+                });
+                (name, server)
+            })
+            .collect();
         Ok(Self {
             prompt_max_bytes: config.prompt_max_bytes,
-            servers: config
-                .servers
-                .into_iter()
-                .filter(|(_, server)| server.enabled)
-                .map(|(name, config)| {
-                    let server = Arc::new_cyclic(|weak| {
-                        Server::new(
-                            config,
-                            name.clone(),
-                            root.as_deref(),
-                            weak.clone(),
-                            auth_events.clone(),
-                        )
-                    });
-                    (name, server)
-                })
-                .collect(),
+            owned_servers: servers.values().cloned().collect(),
+            servers,
+            aliases,
             auth_events,
         })
+    }
+
+    pub fn with_session_servers(&self, config: McpConfig) -> Result<Self, String> {
+        if let Some(alias) = config
+            .servers
+            .keys()
+            .find(|alias| self.aliases.contains(*alias))
+        {
+            return Err(format!("MCP server alias {alias:?} is already configured"));
+        }
+        let mut overlay = Self::new(config)?;
+        overlay.servers.extend(self.servers.clone());
+        overlay.aliases.extend(self.aliases.iter().cloned());
+        overlay.prompt_max_bytes = self.prompt_max_bytes;
+        Ok(overlay)
     }
 
     pub fn subscribe_auth(&self) -> tokio::sync::broadcast::Receiver<McpAuthStatus> {
@@ -99,7 +126,7 @@ impl McpManager {
     fn auth(&self, name: &str) -> Result<&Arc<auth::Auth>, DomainError> {
         self.server(name)?.auth.as_ref().ok_or_else(|| {
             DomainError::invalid_argument(
-                "OAuth login is available for HTTP MCP servers without bearer_token_env",
+                "OAuth login is available for HTTP MCP servers without explicit authorization",
             )
         })
     }
@@ -156,8 +183,8 @@ impl McpManager {
     }
 
     pub async fn shutdown(&self) {
-        stream::iter(self.servers.clone())
-            .map(|(_, server)| async move { server.shutdown().await })
+        stream::iter(self.owned_servers.iter().cloned())
+            .map(|server| async move { server.shutdown().await })
             .buffer_unordered(8)
             .collect::<Vec<_>>()
             .await;

@@ -83,7 +83,13 @@ impl RuntimeCore {
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
         let _state_guard = if matches!(
             &command,
-            Command::GetSessionSnapshot { .. } | Command::CancelStream { .. }
+            Command::GetSessionSnapshot { .. }
+                | Command::CancelStream { .. }
+                | Command::CancelTurn { .. }
+                | Command::ContinueSession {
+                    wait_for_preparation: true,
+                    ..
+                }
         ) {
             None
         } else {
@@ -205,6 +211,9 @@ impl RuntimeCore {
                     .await
                     .map_err(crate::RuntimeError::internal);
                 let _ = response.send(result);
+            }
+            Command::ReadImage { image, response } => {
+                respond(response, self.image_store.read(&image).await);
             }
             Command::SendMessage {
                 session_id,
@@ -400,6 +409,43 @@ impl RuntimeCore {
                     });
                 respond(response, usage);
             }
+            Command::GetSessionModel {
+                session_id,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.agent_manager
+                        .read()
+                        .await
+                        .get_session_model(&session_id)
+                        .await,
+                );
+            }
+            Command::SetSessionModel {
+                session_id,
+                selection,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.agent_manager
+                        .write()
+                        .await
+                        .set_session_model(&session_id, selection)
+                        .await,
+                );
+            }
+            Command::SetSessionMcpServers {
+                session_id,
+                config,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.set_session_mcp_servers(&session_id, config).await,
+                );
+            }
             Command::GetPendingScript {
                 session_id,
                 response,
@@ -430,16 +476,35 @@ impl RuntimeCore {
                 let cancelled = self.cancel_stream(session_id).await;
                 respond(response, cancelled);
             }
+            Command::CancelTurn {
+                session_id,
+                response,
+            } => {
+                let cancelled = self.cancel_turn(session_id).await;
+                respond(response, cancelled);
+            }
             Command::ContinueSession {
                 session_id,
                 model_id,
                 provider_id,
+                wait_for_preparation,
                 response,
             } => {
-                let result = self
-                    .start_continuation(session_id, model_id, provider_id)
-                    .await;
-                let _ = response.send(result);
+                if wait_for_preparation {
+                    let runtime = self.clone();
+                    tokio::spawn(async move {
+                        let _state_guard = runtime.session_state_barrier.read().await;
+                        let result = runtime
+                            .start_continuation_when_ready(session_id, model_id, provider_id)
+                            .await;
+                        let _ = response.send(result);
+                    });
+                } else {
+                    let result = self
+                        .start_continuation(session_id, model_id, provider_id)
+                        .await;
+                    let _ = response.send(result);
+                }
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 let _ = response.send(Ok(self.openai_codex_auth.get_status().await));

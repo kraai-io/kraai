@@ -230,6 +230,7 @@ fn session_snapshot_at(
             updated_at: 0,
             title: None,
             selected_profile_id: Some(String::from("coding")),
+            selected_model: None,
             profile_locked: pending_script.is_some(),
             waiting_for_approval: pending_script.is_some(),
             is_streaming: false,
@@ -545,6 +546,10 @@ fn evaluation_metrics_count_script_results() {
             id: MessageId::new("result"),
             parent_id: None,
             content: kraai_types::ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: kraai_types::ToolCallId::new("call-1"),
                 output: String::from("<tool_call_result status=\"completed\" />").into(),
             },

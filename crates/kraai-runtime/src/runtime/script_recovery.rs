@@ -83,11 +83,19 @@ impl RuntimeCore {
                     completed.record.profile.id.clone(),
                     completed.record.call_id.clone(),
                     result,
+                    completed.record.outcome()?,
                 )
                 .await?;
 
             let tip = self.agent_manager.read().await.get_tip(&session_id).await?;
             if tip.as_ref() == Some(&result_message_id) {
+                if !self.config.resume_recovered_turns {
+                    self.agent_manager
+                        .write()
+                        .await
+                        .clear_active_turn(&session_id);
+                    continue;
+                }
                 if completed.record.status == Some(ScriptExecutionStatus::HostUnavailable) {
                     self.fail_script_turn(&session_id, &host_failure(&completed))
                         .await;
@@ -98,13 +106,13 @@ impl RuntimeCore {
                     .await
                     .prepare_script_recovery(&session_id, &completed.record.source_message_id)
                     .await?;
-                continuations.push(session_id);
+                continuations.push((session_id, result_message_id));
             }
         }
         continuations.sort();
         continuations.dedup();
-        for session_id in continuations {
-            self.spawn_continuation(session_id);
+        for (session_id, expected_tip) in continuations {
+            self.spawn_continuation(session_id, expected_tip);
         }
         Ok(())
     }

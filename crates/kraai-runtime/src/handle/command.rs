@@ -68,6 +68,10 @@ pub(crate) enum Command {
         bytes: Vec<u8>,
         response: oneshot::Sender<RuntimeResult<kraai_types::ImageAttachment>>,
     },
+    ReadImage {
+        image: kraai_types::ImageAttachment,
+        response: oneshot::Sender<RuntimeResult<Vec<u8>>>,
+    },
     StartQueuedMessages {
         session_id: String,
     },
@@ -116,6 +120,20 @@ pub(crate) enum Command {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<Option<SessionContextUsage>>>,
     },
+    GetSessionModel {
+        session_id: String,
+        response: oneshot::Sender<RuntimeResult<Option<kraai_types::ModelSelection>>>,
+    },
+    SetSessionModel {
+        session_id: String,
+        selection: kraai_types::ModelSelection,
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
+    SetSessionMcpServers {
+        session_id: String,
+        config: kraai_mcp::McpConfig,
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
     GetPendingScript {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<Option<crate::PendingScriptInfo>>>,
@@ -134,10 +152,15 @@ pub(crate) enum Command {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<bool>>,
     },
+    CancelTurn {
+        session_id: String,
+        response: oneshot::Sender<RuntimeResult<bool>>,
+    },
     ContinueSession {
         session_id: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        wait_for_preparation: bool,
         response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
     },
     GetOpenAiCodexAuthStatus {

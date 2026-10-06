@@ -87,3 +87,53 @@ async fn old_connection_cannot_overwrite_new_login_status() {
         super::McpAuthState::Authenticated
     ));
 }
+
+#[tokio::test]
+async fn session_auth_events_are_isolated_from_base_and_sibling_aliases() {
+    let config = |name: &str| -> crate::McpConfig {
+        toml::from_str(&format!(
+            "[servers.{name}]\ntransport = {{ type = 'http', url = 'http://127.0.0.1:9/mcp' }}"
+        ))
+        .unwrap()
+    };
+    let base = crate::McpManager::new(config("configured")).unwrap();
+    let first = base.with_session_servers(config("attached")).unwrap();
+    let second = base.with_session_servers(config("attached")).unwrap();
+    let mut base_events = base.subscribe_auth();
+    let mut first_events = first.subscribe_auth();
+    let mut second_events = second.subscribe_auth();
+    let attached = first
+        .servers
+        .get("attached")
+        .unwrap()
+        .auth
+        .as_ref()
+        .unwrap();
+    assert!(attached.path.is_none());
+    attached.publish(super::McpAuthState::Starting, None).await;
+    assert_eq!(first_events.try_recv().unwrap().server, "attached");
+    assert!(matches!(
+        base_events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    assert!(matches!(
+        second_events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    base.servers
+        .get("configured")
+        .unwrap()
+        .auth
+        .as_ref()
+        .unwrap()
+        .publish(super::McpAuthState::Starting, None)
+        .await;
+    assert_eq!(base_events.try_recv().unwrap().server, "configured");
+    assert!(matches!(
+        first_events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    first.shutdown().await;
+    second.shutdown().await;
+    base.shutdown().await;
+}

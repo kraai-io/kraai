@@ -323,6 +323,10 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             String::from("coding"),
             call_id,
             String::from("42").into(),
+            kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
         )
         .await?;
 

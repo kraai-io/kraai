@@ -27,7 +27,9 @@ pub fn prepare_history(
                         _ => true,
                     });
                 }
-                ConversationItem::ScriptResult { call_id, output } if output.has_images() => {
+                ConversationItem::ScriptResult {
+                    call_id, output, ..
+                } if output.has_images() => {
                     let text = output.display_text().into_owned();
                     following = script_result_images(std::mem::take(output), call_id)
                         .map(|content| ConversationItem::User { content });
@@ -64,6 +66,10 @@ mod tests {
             input: "ls".into(),
         };
         let result = ConversationItem::ScriptResult {
+            outcome: kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
             call_id: ToolCallId::new("call"),
             output: "files".into(),
         };
