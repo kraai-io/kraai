@@ -444,6 +444,22 @@ impl RuntimeCore {
             Command::GetOpenAiCodexAuthStatus { response } => {
                 let _ = response.send(Ok(self.openai_codex_auth.get_status().await));
             }
+            Command::GetMcpAuthStatuses { response } => {
+                let mcp = self.agent_manager.read().await.mcp();
+                let _ = response.send(Ok(mcp.auth_statuses().await));
+            }
+            Command::StartMcpLogin { server, response } => {
+                let mcp = self.agent_manager.read().await.mcp();
+                respond(response, mcp.start_login(&server).await);
+            }
+            Command::CancelMcpLogin { server, response } => {
+                let mcp = self.agent_manager.read().await.mcp();
+                respond(response, mcp.cancel_login(&server).await);
+            }
+            Command::LogoutMcp { server, response } => {
+                let mcp = self.agent_manager.read().await.mcp();
+                respond(response, mcp.logout(&server).await);
+            }
             Command::StartOpenAiCodexBrowserLogin { response } => {
                 let result = self.openai_codex_auth.start_browser_login().await;
                 respond(response, result.map(|_| ()).map_err(Into::into));

@@ -158,6 +158,7 @@ impl RuntimeCore {
             plan.runtime_roots.push(host_directory.to_path_buf());
         }
         plan.active_commands = request.profile.commands;
+        plan.mcp = self.agent_manager.read().await.mcp();
         plan.nushell_startup = request.profile.nushell_startup;
         plan.output_events = Some(output_tx);
         plan.image_attachment_handler = Arc::new(super::images::DurableImageAttachments {

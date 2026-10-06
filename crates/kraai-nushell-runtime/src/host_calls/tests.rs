@@ -74,6 +74,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
                 server_execution_id,
                 secret,
                 HostServices {
+                    mcp: Arc::new(kraai_mcp::McpManager::default()),
                     effects: Arc::new(crate::RejectStateEffects),
                     web: Arc::new(kraai_web::ExaSearch::default()),
                     images,

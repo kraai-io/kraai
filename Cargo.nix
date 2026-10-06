@@ -93,6 +93,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-command-mcp" = rec {
+      packageId = "kraai-command-mcp";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-command-mcp";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-command-open-files" = rec {
       packageId = "kraai-command-open-files";
       build = internal.buildRustCrateWithFeatures {
@@ -127,6 +137,16 @@ rec {
       packageId = "kraai-eval";
       build = internal.buildRustCrateWithFeatures {
         packageId = "kraai-eval";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "kraai-mcp" = rec {
+      packageId = "kraai-mcp";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-mcp";
       };
 
       # Debug support which might change between releases.
@@ -667,7 +687,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -692,7 +712,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -826,7 +846,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_DataExchange" "Win32_System_Memory" "Win32_System_Ole" "Win32_UI_Shell" ];
           }
@@ -4465,7 +4485,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_UI_Shell" "Win32_Foundation" "Win32_Globalization" "Win32_System_Com" ];
           }
@@ -4797,7 +4817,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -8016,6 +8036,27 @@ rec {
             packageId = "hashbrown 0.17.1";
             usesDefaultFeatures = false;
           }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: false;
+          }
+          {
+            name = "serde_core";
+            packageId = "serde_core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            usesDefaultFeatures = false;
+            features = [ "derive" ];
+          }
         ];
         features = {
           "arbitrary" = [ "dep:arbitrary" ];
@@ -8026,7 +8067,7 @@ rec {
           "serde" = [ "dep:serde_core" "dep:serde" ];
           "sval" = [ "dep:sval" ];
         };
-        resolvedDefaultFeatures = [ "default" "std" ];
+        resolvedDefaultFeatures = [ "default" "serde" "std" ];
       };
       "indicatif" = rec {
         crateName = "indicatif";
@@ -8341,7 +8382,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: ("windows" == target."os" or null);
             features = [ "Win32_Storage_FileSystem" ];
           }
@@ -9070,6 +9111,10 @@ rec {
             packageId = "kraai-command-catalog";
           }
           {
+            name = "kraai-mcp";
+            packageId = "kraai-mcp";
+          }
+          {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
           }
@@ -9196,6 +9241,10 @@ rec {
             name = "nu-protocol";
             packageId = "nu-protocol";
           }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
         ];
 
       };
@@ -9225,6 +9274,44 @@ rec {
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
+          }
+        ];
+
+      };
+      "kraai-command-mcp" = rec {
+        crateName = "kraai-command-mcp";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-mcp; };
+        libName = "kraai_command_mcp";
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64 0.23.1";
+          }
+          {
+            name = "kraai-command-catalog";
+            packageId = "kraai-command-catalog";
+          }
+          {
+            name = "kraai-command-core";
+            packageId = "kraai-command-core";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "nu-engine";
+            packageId = "nu-engine";
+          }
+          {
+            name = "nu-protocol";
+            packageId = "nu-protocol";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
         ];
 
@@ -9457,6 +9544,107 @@ rec {
         ];
 
       };
+      "kraai-mcp" = rec {
+        crateName = "kraai-mcp";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-mcp; };
+        libName = "kraai_mcp";
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "base64";
+            packageId = "base64 0.23.1";
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "http";
+            packageId = "http";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "reqwest";
+            packageId = "reqwest 0.13.5";
+            features = [ "json" "stream" ];
+          }
+          {
+            name = "rmcp";
+            packageId = "rmcp";
+            usesDefaultFeatures = false;
+            features = [ "auth" "client" "transport-child-process" "transport-streamable-http-client-reqwest" "reqwest" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.0";
+          }
+          {
+            name = "sse-stream";
+            packageId = "sse-stream";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+            features = [ "rt" ];
+          }
+          {
+            name = "toml";
+            packageId = "toml";
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+          }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            features = [ "serde-json-impl" ];
+          }
+          {
+            name = "url";
+            packageId = "url";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "axum";
+            packageId = "axum";
+            usesDefaultFeatures = false;
+            features = [ "http1" "json" "tokio" ];
+          }
+        ];
+
+      };
       "kraai-nushell-runtime" = rec {
         crateName = "kraai-nushell-runtime";
         version = "0.1.0";
@@ -9496,6 +9684,10 @@ rec {
             packageId = "kraai-command-edit-file";
           }
           {
+            name = "kraai-command-mcp";
+            packageId = "kraai-command-mcp";
+          }
+          {
             name = "kraai-command-open-files";
             packageId = "kraai-command-open-files";
           }
@@ -9506,6 +9698,10 @@ rec {
           {
             name = "kraai-command-web-search";
             packageId = "kraai-command-web-search";
+          }
+          {
+            name = "kraai-mcp";
+            packageId = "kraai-mcp";
           }
           {
             name = "kraai-sandbox";
@@ -9951,6 +10147,10 @@ rec {
           {
             name = "kraai-command-catalog";
             packageId = "kraai-command-catalog";
+          }
+          {
+            name = "kraai-mcp";
+            packageId = "kraai-mcp";
           }
           {
             name = "kraai-nushell-runtime";
@@ -12489,7 +12689,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             rename = "windows";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
@@ -14593,6 +14793,78 @@ rec {
         ];
 
       };
+      "oauth2" = rec {
+        crateName = "oauth2";
+        version = "5.0.0";
+        edition = "2021";
+        sha256 = "0zfn67m93qfh9gyxxx1hj6yprk9dkr3hm1mi4ni23pqlj3kikqji";
+        authors = [
+          "Alex Crichton <alex@alexcrichton.com>"
+          "Florin Lipan <florinlipan@gmail.com>"
+          "David A. Ramos <ramos@cs.stanford.edu>"
+        ];
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            features = [ "clock" "serde" "std" "wasmbind" ];
+          }
+          {
+            name = "getrandom";
+            packageId = "getrandom 0.2.17";
+            target = { target, features }: ("wasm32" == target."arch" or null);
+            features = [ "js" ];
+          }
+          {
+            name = "http";
+            packageId = "http";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.8.6";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "serde_path_to_error";
+            packageId = "serde_path_to_error";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+          {
+            name = "url";
+            packageId = "url";
+            features = [ "serde" ];
+          }
+        ];
+        features = {
+          "curl" = [ "dep:curl" ];
+          "default" = [ "reqwest" "rustls-tls" ];
+          "native-tls" = [ "reqwest/native-tls" ];
+          "reqwest" = [ "dep:reqwest" ];
+          "reqwest-blocking" = [ "reqwest/blocking" ];
+          "rustls-tls" = [ "reqwest/rustls-tls" ];
+          "ureq" = [ "dep:ureq" ];
+        };
+      };
       "objc2" = rec {
         crateName = "objc2";
         version = "0.6.4";
@@ -15618,7 +15890,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.45.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Pipes" "Win32_Security" ];
           }
@@ -16597,6 +16869,69 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "proc-macro" ];
       };
+      "process-wrap" = rec {
+        crateName = "process-wrap";
+        version = "10.0.1";
+        edition = "2024";
+        sha256 = "1nn8scmdbgppyz1krhb190pvj62nafs1lw15gf789p6jf9vbj88z";
+        libName = "process_wrap";
+        authors = [
+          "Félix Saparelli <felix@passcod.name>"
+        ];
+        dependencies = [
+          {
+            name = "futures";
+            packageId = "futures";
+            optional = true;
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap";
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "poll" "signal" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "io-util" "macros" "process" "rt" ];
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+            optional = true;
+          }
+          {
+            name = "windows";
+            packageId = "windows";
+            optional = true;
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "io-util" "macros" "process" "rt" "rt-multi-thread" "time" ];
+          }
+        ];
+        features = {
+          "creation-flags" = [ "dep:windows" "windows/Win32_System_Threading" ];
+          "default" = [ "creation-flags" "job-object" "kill-on-drop" "process-group" "process-session" "tracing" ];
+          "job-object" = [ "dep:windows" "windows/Win32_Security" "windows/Win32_System_Diagnostics_ToolHelp" "windows/Win32_System_IO" "windows/Win32_System_JobObjects" "windows/Win32_System_Threading" ];
+          "process-session" = [ "process-group" ];
+          "std" = [ "dep:nix" ];
+          "tokio1" = [ "dep:nix" "dep:futures" "dep:tokio" ];
+          "tracing" = [ "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "creation-flags" "default" "job-object" "kill-on-drop" "process-group" "process-session" "tokio1" "tracing" ];
+      };
       "procfs" = rec {
         crateName = "procfs";
         version = "0.18.0";
@@ -17028,7 +17363,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_IO" "Win32_Networking_WinSock" ];
           }
@@ -17141,6 +17476,19 @@ rec {
         ];
         dependencies = [
           {
+            name = "libc";
+            packageId = "libc";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "rand_chacha";
+            packageId = "rand_chacha 0.3.1";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "rand_core";
             packageId = "rand_core 0.6.4";
           }
@@ -17156,7 +17504,7 @@ rec {
           "std" = [ "rand_core/std" "rand_chacha/std" "alloc" "getrandom" "libc" ];
           "std_rng" = [ "rand_chacha" ];
         };
-        resolvedDefaultFeatures = [ "small_rng" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "libc" "rand_chacha" "small_rng" "std" "std_rng" ];
       };
       "rand 0.9.4" = rec {
         crateName = "rand";
@@ -17170,7 +17518,7 @@ rec {
         dependencies = [
           {
             name = "rand_chacha";
-            packageId = "rand_chacha";
+            packageId = "rand_chacha 0.9.0";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -17190,7 +17538,37 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "default" "os_rng" "small_rng" "std" "std_rng" "thread_rng" ];
       };
-      "rand_chacha" = rec {
+      "rand_chacha 0.3.1" = rec {
+        crateName = "rand_chacha";
+        version = "0.3.1";
+        edition = "2018";
+        sha256 = "123x2adin558xbhvqb8w4f6syjsdkmqff8cxwhmjacpsl1ihmhg6";
+        authors = [
+          "The Rand Project Developers"
+          "The Rust Project Developers"
+          "The CryptoCorrosion Contributors"
+        ];
+        dependencies = [
+          {
+            name = "ppv-lite86";
+            packageId = "ppv-lite86";
+            usesDefaultFeatures = false;
+            features = [ "simd" ];
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "serde" = [ "dep:serde" ];
+          "serde1" = [ "serde" ];
+          "std" = [ "ppv-lite86/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
+      };
+      "rand_chacha 0.9.0" = rec {
         crateName = "rand_chacha";
         version = "0.9.0";
         edition = "2021";
@@ -17246,12 +17624,20 @@ rec {
           "The Rand Project Developers"
           "The Rust Project Developers"
         ];
+        dependencies = [
+          {
+            name = "getrandom";
+            packageId = "getrandom 0.2.17";
+            optional = true;
+          }
+        ];
         features = {
           "getrandom" = [ "dep:getrandom" ];
           "serde" = [ "dep:serde" ];
           "serde1" = [ "serde" ];
           "std" = [ "alloc" "getrandom" "getrandom/std" ];
         };
+        resolvedDefaultFeatures = [ "alloc" "getrandom" "std" ];
       };
       "rand_core 0.9.5" = rec {
         crateName = "rand_core";
@@ -18747,6 +19133,174 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "default" "dev_urandom_fallback" "wasm32_unknown_unknown_js" ];
       };
+      "rmcp" = rec {
+        crateName = "rmcp";
+        version = "3.5.0";
+        edition = "2024";
+        sha256 = "1lx2317yndxzy5vi9jzs0h7nzwizixwjywqbljny83xfjjch3rzs";
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+            optional = true;
+          }
+          {
+            name = "base64";
+            packageId = "base64 0.23.1";
+            optional = true;
+          }
+          {
+            name = "bytes";
+            packageId = "bytes";
+            optional = true;
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null));
+            features = [ "serde" "clock" "std" "oldtime" ];
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+            usesDefaultFeatures = false;
+            target = { target, features }: (!((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null)));
+            features = [ "serde" "now" ];
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "http";
+            packageId = "http";
+            optional = true;
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap";
+            features = [ "serde" ];
+          }
+          {
+            name = "oauth2";
+            packageId = "oauth2";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+          {
+            name = "process-wrap";
+            packageId = "process-wrap";
+            optional = true;
+            features = [ "tokio1" ];
+          }
+          {
+            name = "reqwest";
+            packageId = "reqwest 0.13.5";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "json" "stream" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" "rc" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "sse-stream";
+            packageId = "sse-stream";
+            optional = true;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "sync" "macros" "rt" "time" ];
+          }
+          {
+            name = "tokio-stream";
+            packageId = "tokio-stream";
+            optional = true;
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+          }
+          {
+            name = "url";
+            packageId = "url";
+            optional = true;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            features = [ "arbitrary_precision" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
+          }
+          {
+            name = "url";
+            packageId = "url";
+          }
+        ];
+        features = {
+          "__reqwest" = [ "dep:reqwest" ];
+          "auth" = [ "dep:async-trait" "dep:oauth2" "__reqwest" "dep:url" ];
+          "auth-client-credentials-jwt" = [ "auth" "dep:jsonwebtoken" "uuid" ];
+          "auth-enterprise-managed" = [ "auth" "base64" ];
+          "base64" = [ "dep:base64" ];
+          "client" = [ "dep:tokio-stream" ];
+          "client-side-sse" = [ "dep:sse-stream" "dep:http" "dep:bytes" "base64" ];
+          "default" = [ "base64" "macros" "server" ];
+          "elicitation" = [ "dep:url" ];
+          "local" = [ "rmcp-macros?/local" ];
+          "macros" = [ "dep:rmcp-macros" "dep:pastey" ];
+          "request-state" = [ "dep:hmac" "dep:sha2" "dep:zeroize" "base64" ];
+          "reqwest" = [ "__reqwest" "reqwest?/rustls" ];
+          "reqwest-native-tls" = [ "__reqwest" "reqwest?/native-tls" ];
+          "reqwest-tls-no-provider" = [ "__reqwest" "reqwest?/rustls-no-provider" ];
+          "schemars" = [ "dep:schemars" ];
+          "server" = [ "transport-async-rw" "schemars" "dep:pastey" "uuid" ];
+          "server-side-http" = [ "uuid" "dep:rand" "dep:tokio-stream" "dep:http" "dep:http-body" "dep:http-body-util" "dep:bytes" "dep:sse-stream" "tower" "base64" ];
+          "tower" = [ "dep:tower-service" ];
+          "transport-async-rw" = [ "tokio/io-util" "tokio-util/codec" ];
+          "transport-child-process" = [ "transport-async-rw" "tokio/process" "dep:process-wrap" ];
+          "transport-io" = [ "transport-async-rw" "tokio/io-std" ];
+          "transport-streamable-http-client" = [ "client-side-sse" "transport-worker" ];
+          "transport-streamable-http-client-reqwest" = [ "transport-streamable-http-client" "__reqwest" ];
+          "transport-streamable-http-client-unix-socket" = [ "transport-streamable-http-client" "dep:hyper" "dep:hyper-util" "dep:http-body-util" "dep:http" "dep:bytes" "tokio/net" ];
+          "transport-streamable-http-server" = [ "transport-streamable-http-server-session" "server-side-http" "transport-worker" ];
+          "transport-streamable-http-server-session" = [ "transport-async-rw" "dep:async-trait" "dep:tokio-stream" ];
+          "transport-worker" = [ "dep:tokio-stream" ];
+          "uuid" = [ "dep:uuid" ];
+          "which-command" = [ "transport-child-process" "dep:which" ];
+        };
+        resolvedDefaultFeatures = [ "__reqwest" "auth" "base64" "client" "client-side-sse" "reqwest" "transport-async-rw" "transport-child-process" "transport-streamable-http-client" "transport-streamable-http-client-reqwest" "transport-worker" ];
+      };
       "rmp" = rec {
         crateName = "rmp";
         version = "0.8.15";
@@ -19198,7 +19752,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -19470,7 +20024,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -20531,7 +21085,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" ];
           }
@@ -20602,6 +21156,42 @@ rec {
         features = {
           "bindgen" = [ "dep:bindgen" ];
         };
+      };
+      "sse-stream" = rec {
+        crateName = "sse-stream";
+        version = "0.2.6";
+        edition = "2021";
+        sha256 = "1d6gbn1pydbd3j3bk87vkgfwf0hidr0l0vjkfk2dpldby2pwfnn2";
+        libName = "sse_stream";
+        authors = [
+          "4t145 <u4t145@163.com>"
+        ];
+        dependencies = [
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "futures-util";
+            packageId = "futures-util";
+          }
+          {
+            name = "http-body";
+            packageId = "http-body";
+          }
+          {
+            name = "http-body-util";
+            packageId = "http-body-util";
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+        ];
+        features = {
+          "tracing" = [ "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -21144,7 +21734,7 @@ rec {
           }
           {
             name = "getrandom";
-            packageId = "getrandom 0.3.4";
+            packageId = "getrandom 0.4.3";
             optional = true;
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || (target."windows" or false) || ("wasi" == target."os" or null));
@@ -21163,7 +21753,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -21222,7 +21812,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.60.2";
+            packageId = "windows-sys 0.61.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_Threading" "Win32_Security" ];
@@ -21251,7 +21841,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" ];
           }
@@ -22139,6 +22729,51 @@ rec {
           "zlib" = [ "rustls/zlib" ];
         };
         resolvedDefaultFeatures = [ "aws-lc-rs" "aws_lc_rs" "ring" "tls12" ];
+      };
+      "tokio-stream" = rec {
+        crateName = "tokio-stream";
+        version = "0.1.19";
+        edition = "2021";
+        sha256 = "02s2ag7j40z8kx3yjy2g28l1wangawp3f1wlnwk7r99b105nzl53";
+        libName = "tokio_stream";
+        authors = [
+          "Tokio Contributors <team@tokio.rs>"
+        ];
+        dependencies = [
+          {
+            name = "futures-core";
+            packageId = "futures-core";
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "sync" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
+          }
+        ];
+        features = {
+          "default" = [ "time" ];
+          "fs" = [ "tokio/fs" ];
+          "full" = [ "time" "net" "io-util" "fs" "rt" "sync" "signal" ];
+          "io-util" = [ "tokio/io-util" ];
+          "net" = [ "tokio/net" ];
+          "rt" = [ "tokio/rt" ];
+          "signal" = [ "tokio/signal" ];
+          "sync" = [ "tokio/sync" "tokio-util" ];
+          "time" = [ "tokio/time" ];
+          "tokio-util" = [ "dep:tokio-util" ];
+        };
+        resolvedDefaultFeatures = [ "default" "time" ];
       };
       "tokio-util" = rec {
         crateName = "tokio-util";
@@ -23696,11 +24331,21 @@ rec {
             optional = true;
             usesDefaultFeatures = false;
           }
+          {
+            name = "serde_derive";
+            packageId = "serde_derive";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         devDependencies = [
           {
             name = "serde";
             packageId = "serde";
+          }
+          {
+            name = "serde_derive";
+            packageId = "serde_derive";
           }
         ];
         features = {
@@ -23708,7 +24353,7 @@ rec {
           "serde" = [ "dep:serde" "dep:serde_derive" ];
           "std" = [ "idna/std" "percent-encoding/std" "form_urlencoded/std" "serde?/std" ];
         };
-        resolvedDefaultFeatures = [ "default" "std" ];
+        resolvedDefaultFeatures = [ "default" "serde" "std" ];
       };
       "urlencoding" = rec {
         crateName = "urlencoding";
@@ -26009,7 +26654,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.48.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -26728,7 +27373,7 @@ rec {
           "default" = [ "std" ];
           "std" = [ "windows-collections/std" "windows-core/std" "windows-future/std" "windows-numerics/std" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemInformation" "Wdk_System_SystemServices" "Wdk_System_Threading" "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Diagnostics_ToolHelp" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_Kernel" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Performance" "Win32_System_Power" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_Rpc" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Variant" "Win32_System_WindowsProgramming" "Win32_System_Wmi" "Win32_UI" "Win32_UI_Shell" "default" "std" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemInformation" "Wdk_System_SystemServices" "Wdk_System_Threading" "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Diagnostics_ToolHelp" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_Kernel" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Performance" "Win32_System_Power" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_Rpc" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Variant" "Win32_System_WindowsProgramming" "Win32_System_Wmi" "Win32_UI" "Win32_UI_Shell" "default" "std" ];
       };
       "windows-collections" = rec {
         crateName = "windows-collections";
@@ -27253,7 +27898,7 @@ rec {
           "Win32_UI_WindowsAndMessaging" = [ "Win32_UI" ];
           "Win32_UI_Wpf" = [ "Win32_UI" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_System" "Win32_System_Pipes" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Globalization" "default" ];
       };
       "windows-sys 0.48.0" = rec {
         crateName = "windows-sys";
@@ -27547,7 +28192,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_SystemInformation" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_System" "Win32_System_Com" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.52.0" = rec {
         crateName = "windows-sys";
@@ -28054,7 +28699,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.60.2" = rec {
         crateName = "windows-sys";
@@ -28319,7 +28964,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_DataExchange" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -28581,7 +29226,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.42.2" = rec {
         crateName = "windows-targets";
@@ -29166,7 +29811,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             features = [ "Win32_Foundation" "Win32_System_Time" "Win32_System_Registry" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Diagnostics_Debug" ];
           }
         ];

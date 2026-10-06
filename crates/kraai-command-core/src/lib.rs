@@ -136,6 +136,10 @@ pub trait WebSearchClient: Send + Sync {
     ) -> Result<kraai_types::WebSearchResponse, String>;
 }
 
+pub trait McpClient: Send + Sync {
+    fn execute(&self, request: kraai_types::McpRequest) -> Result<serde_json::Value, String>;
+}
+
 pub trait StateEffectClient: Send + Sync {
     fn apply(
         &self,
@@ -151,6 +155,7 @@ pub trait ImageAttachmentClient: Send + Sync {
 
 #[derive(Clone)]
 pub struct CommandContext {
+    mcp: Arc<dyn McpClient>,
     web_search: Arc<dyn WebSearchClient>,
     state_effects: Arc<dyn StateEffectClient>,
     images: Arc<dyn ImageAttachmentClient>,
@@ -161,8 +166,10 @@ impl CommandContext {
         state_effects: Arc<dyn StateEffectClient>,
         web_search: Arc<dyn WebSearchClient>,
         images: Arc<dyn ImageAttachmentClient>,
+        mcp: Arc<dyn McpClient>,
     ) -> Self {
         Self {
+            mcp,
             state_effects,
             web_search,
             images,
@@ -171,6 +178,10 @@ impl CommandContext {
 
     pub fn images(&self) -> &dyn ImageAttachmentClient {
         self.images.as_ref()
+    }
+
+    pub fn mcp(&self) -> &dyn McpClient {
+        self.mcp.as_ref()
     }
 
     pub fn web_search(&self) -> &dyn WebSearchClient {

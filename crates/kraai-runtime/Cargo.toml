@@ -9,6 +9,7 @@ version = "0.1.0"
 [dependencies]
 kraai-agent.workspace = true
 kraai-command-catalog.workspace = true
+kraai-mcp.workspace = true
 kraai-nushell-runtime.workspace = true
 kraai-persistence.workspace = true
 kraai-provider-core.workspace = true

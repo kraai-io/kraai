@@ -12,6 +12,21 @@ use crate::{
 
 /// Internal commands sent to the runtime
 pub(crate) enum Command {
+    GetMcpAuthStatuses {
+        response: oneshot::Sender<RuntimeResult<Vec<crate::McpAuthStatus>>>,
+    },
+    StartMcpLogin {
+        server: String,
+        response: oneshot::Sender<RuntimeResult<crate::McpAuthStatus>>,
+    },
+    CancelMcpLogin {
+        server: String,
+        response: oneshot::Sender<RuntimeResult<crate::McpAuthStatus>>,
+    },
+    LogoutMcp {
+        server: String,
+        response: oneshot::Sender<RuntimeResult<crate::McpAuthStatus>>,
+    },
     ListModels {
         response: oneshot::Sender<RuntimeResult<HashMap<String, Vec<Model>>>>,
     },

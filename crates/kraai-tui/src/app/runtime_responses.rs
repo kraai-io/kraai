@@ -116,6 +116,51 @@ impl App {
                     self.set_error(format!("OpenAI auth failed: {err}"));
                 }
             },
+            RuntimeResponse::McpAuthStatuses(result) => match result {
+                Ok(statuses) => {
+                    self.state.mcp_error = None;
+                    for status in statuses {
+                        self.apply_mcp_auth_status(status);
+                    }
+                    self.state.mcp_loaded = true;
+                    if self
+                        .state
+                        .mcp_selected
+                        .as_ref()
+                        .is_none_or(|name| !self.state.mcp_auth.contains_key(name))
+                    {
+                        self.state.mcp_selected = self.state.mcp_auth.keys().next().cloned();
+                    }
+                }
+                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
+            },
+            RuntimeResponse::StartMcpLogin {
+                server,
+                request_id,
+                result,
+            } => match result {
+                Ok(status) => {
+                    let status = self.acknowledge_mcp_login(request_id, status);
+                    self.apply_mcp_auth_status(status);
+                }
+                Err(error) => {
+                    if self
+                        .state
+                        .mcp_browser_intent
+                        .get(&server)
+                        .is_some_and(|intent| intent.request_id == request_id)
+                    {
+                        self.state.mcp_browser_intent.remove(&server);
+                        self.state
+                            .mcp_feedback
+                            .insert(server.clone(), format!("MCP login failed: {error}"));
+                    }
+                }
+            },
+            RuntimeResponse::McpAuthStatus(result) => match result {
+                Ok(status) => self.apply_mcp_auth_status(status),
+                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
+            },
             RuntimeResponse::CreateSession {
                 creation_id,
                 result: Ok(session_id),

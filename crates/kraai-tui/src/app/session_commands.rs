@@ -151,6 +151,7 @@ impl App {
                 self.request(RuntimeRequest::GetSettings);
                 self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
             }
+            "mcp" => self.handle_mcp_command(parts.collect()),
             "sessions" => {
                 self.state.menu_search.clear();
                 self.state.sessions_menu_index = 0;

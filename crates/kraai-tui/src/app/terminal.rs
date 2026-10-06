@@ -171,6 +171,7 @@ impl App {
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
+            UiMode::Mcp => self.handle_mcp_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
             UiMode::Help => match key_event.code {
                 KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,

@@ -145,6 +145,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             String::from("kraai-open-files"),
             String::from("kraai-close-files"),
             String::from("kraai-web-search"),
+            String::from("kraai-mcp"),
             String::from("kraai-view-image"),
             String::from("kraai-edit-file"),
         ],
@@ -449,7 +450,7 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "coding")
             .unwrap();
-        assert_eq!(coding.commands.len(), 5);
+        assert_eq!(coding.commands.len(), 6);
         assert!(
             coding
                 .permissions

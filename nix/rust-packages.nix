@@ -58,6 +58,11 @@
       pkgs.buildRustCrate.override {
         cargo = rustToolchain;
         rustc = rustToolchain;
+        defaultCrateOverrides =
+          pkgs.defaultCrateOverrides
+          // {
+            rmcp = _: {CARGO_CRATE_NAME = "rmcp";};
+          };
       };
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {

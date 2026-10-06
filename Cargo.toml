@@ -1,5 +1,7 @@
 [workspace]
 members = [
+  "crates/kraai-mcp",
+  "crates/commands/kraai-command-mcp",
   "crates/kraai-agent",
   "crates/kraai-web",
   "crates/commands/kraai-command-web-search",
@@ -42,9 +44,11 @@ kraai-command-catalog = { path = "crates/kraai-command-catalog" }
 kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
 kraai-command-core = { path = "crates/kraai-command-core" }
 kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
+kraai-command-mcp = { path = "crates/commands/kraai-command-mcp" }
 kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
 kraai-command-view-image = { path = "crates/commands/kraai-command-view-image" }
 kraai-command-web-search = { path = "crates/commands/kraai-command-web-search" }
+kraai-mcp = { path = "crates/kraai-mcp" }
 kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }
 kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
@@ -56,6 +60,13 @@ kraai-script-protocol = { path = "crates/kraai-script-protocol" }
 kraai-types = { path = "crates/kraai-types" }
 kraai-web = { path = "crates/kraai-web" }
 kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }
+rmcp = { version = "3.5.0", default-features = false, features = [
+  "auth",
+  "client",
+  "transport-child-process",
+  "transport-streamable-http-client-reqwest",
+  "reqwest",
+] }
 tempfile = "3.27.0"
 
 arboard = { version = "3.6.1", default-features = false }
@@ -75,6 +86,7 @@ crossbeam-channel = "0.5.16"
 directories = "6.0.0"
 futures = "0.3.32"
 hmac = "0.13.0"
+http = "1.4.2"
 httpdate = "1.0.3"
 image = { version = "0.25.10", default-features = false, features = [
   "jpeg",
@@ -108,6 +120,7 @@ serde_json = "1.0.150"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.11.0"
 signal-hook = "0.4.4"
+sse-stream = "0.2.6"
 terminal_size = "0.4.4"
 thiserror = "2.0.18"
 tokio = { features = ["full"], version = "1.52.3" }

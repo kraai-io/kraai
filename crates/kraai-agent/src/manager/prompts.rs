@@ -44,6 +44,19 @@ impl AgentManager {
         let prefix = prefix_sections.join("\n\n");
         let mut sections = vec![prefix];
 
+        let mcp = if profile
+            .commands
+            .iter()
+            .any(|id| id == kraai_command_catalog::MCP.id)
+        {
+            self.mcp.prompt().await
+        } else {
+            kraai_mcp::McpPrompt::default()
+        };
+        if let Some(prompt) = mcp.text {
+            sections.push(prompt);
+        }
+
         if let Some(path) = &self.user_agents_path
             && let Some(prompt) = load_agents_md_prompt(path, "User").await?
         {
@@ -68,7 +81,7 @@ impl AgentManager {
             "Compiled system instructions:\n{}", prefix);
         Ok(TurnSystemPrompt {
             prefix,
-            context_notifications: skills.warnings,
+            context_notifications: skills.warnings.into_iter().chain(mcp.warnings).collect(),
         })
     }
 

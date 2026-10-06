@@ -6,6 +6,7 @@ fn assert_startup_batch(requests: &[RuntimeRequest]) {
     assert!(matches!(
         requests,
         [
+            RuntimeRequest::GetMcpAuthStatuses,
             RuntimeRequest::ListModels,
             RuntimeRequest::ListSessions,
             RuntimeRequest::ListUserInputHistory { .. },
@@ -32,13 +33,13 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
     assert_startup_batch(&harness.drain_requests());
     assert_eq!(harness.app.startup_sync, StartupSync::Synchronizing);
     harness.app.handle_runtime_event(Event::ConfigLoaded);
-    assert_eq!(harness.drain_requests().len(), 4);
+    assert_eq!(harness.drain_requests().len(), 5);
     harness
         .app
         .handle_runtime_response(RuntimeResponse::StartupSyncComplete);
     assert_eq!(harness.app.startup_sync, StartupSync::Complete);
     harness.app.handle_runtime_event(Event::ConfigLoaded);
-    assert_eq!(harness.drain_requests().len(), 4);
+    assert_eq!(harness.drain_requests().len(), 5);
 }
 
 #[test]

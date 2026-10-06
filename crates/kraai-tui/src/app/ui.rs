@@ -15,6 +15,7 @@ use super::{AppState, ScriptPhase, UiMode};
 
 mod command_popup;
 mod error;
+mod mcp;
 mod menus;
 mod providers;
 mod script_approval;
@@ -103,6 +104,7 @@ impl Widget for &AppState {
             UiMode::AgentMenu => render_agent_menu(self, area, buf),
             UiMode::ModelMenu => render_model_menu(self, area, buf),
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
+            UiMode::Mcp => mcp::render_mcp(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
             UiMode::Help => render_help_menu(self, area, buf),
             UiMode::Chat | UiMode::Executions => {}

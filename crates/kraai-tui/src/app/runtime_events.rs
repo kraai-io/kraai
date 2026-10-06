@@ -295,6 +295,9 @@ impl App {
                     self.state.status = String::from("OpenAI auth updated");
                 }
             }
+            Event::McpAuthUpdated { status } => {
+                self.apply_mcp_auth_status(status);
+            }
             Event::ScriptApprovalRequested { session_id, script } => {
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     self.request(RuntimeRequest::ListSessions);

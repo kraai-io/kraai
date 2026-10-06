@@ -143,6 +143,7 @@ struct StreamingMessageState {
 }
 
 pub struct AgentManager {
+    mcp: Arc<kraai_mcp::McpManager>,
     usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
@@ -160,6 +161,14 @@ pub struct AgentManager {
 }
 
 impl AgentManager {
+    pub fn mcp(&self) -> Arc<kraai_mcp::McpManager> {
+        self.mcp.clone()
+    }
+
+    pub fn set_mcp(&mut self, mcp: Arc<kraai_mcp::McpManager>) {
+        self.mcp = mcp;
+    }
+
     pub fn image_store(&self) -> kraai_persistence::FileImageStore {
         kraai_persistence::FileImageStore::new(&self.storage_root.join("data"))
     }

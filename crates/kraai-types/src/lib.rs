@@ -4,6 +4,8 @@ mod command;
 mod context_state;
 mod cost;
 mod effect;
+mod mcp;
+pub use mcp::McpRequest;
 mod error;
 pub mod image;
 mod permissions;

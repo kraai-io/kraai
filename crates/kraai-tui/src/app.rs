@@ -32,6 +32,7 @@ mod executions;
 mod feedback;
 mod images;
 mod lifecycle;
+mod mcp_auth;
 mod menu_search;
 mod palette;
 mod providers_flow;
@@ -70,13 +71,14 @@ use self::ui::{
 };
 use self::workspace_preferences::WorkspacePreferences;
 
-const SLASH_COMMANDS: [(&str, &str); 9] = [
+const SLASH_COMMANDS: [(&str, &str); 10] = [
     ("agent", "Open agent selector"),
     ("continue", "Reprompt the agent"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("new", "Start new chat"),
     ("providers", "Open providers"),
+    ("mcp", "MCP servers and sign-in"),
     ("quit", "Exit Kraai"),
     ("sessions", "Open sessions menu"),
     ("undo", "Restore last user message"),

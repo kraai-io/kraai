@@ -55,6 +55,7 @@ pub fn run_host_process() -> i32 {
     let context = kraai_command_core::CommandContext::new(
         host_client.clone(),
         host_client.clone(),
+        host_client.clone(),
         host_client,
     );
     let registry = match commands::command_registry(context) {

@@ -32,6 +32,7 @@ pub struct ScriptExecutionPlan {
     pub output_events: Option<UnboundedSender<OutputEvent>>,
     pub private_temp: PrivateTempConfig,
     pub web_search: Arc<dyn kraai_web::WebSearch>,
+    pub mcp: Arc<dyn kraai_mcp::McpHost>,
     pub state_effect_handler: Arc<dyn StateEffectHandler>,
     pub image_attachment_handler: Arc<dyn ImageAttachmentHandler>,
 }
@@ -60,6 +61,7 @@ impl ScriptExecutionPlan {
             output_events: None,
             private_temp: PrivateTempConfig::default(),
             web_search: Arc::new(kraai_web::ExaSearch::default()),
+            mcp: Arc::new(kraai_mcp::McpManager::default()),
             state_effect_handler: Arc::new(RejectStateEffects),
             image_attachment_handler: Arc::new(RejectImageAttachments),
         }
@@ -153,6 +155,7 @@ pub async fn execute(
             HostServices {
                 effects: plan.state_effect_handler,
                 web: plan.web_search,
+                mcp: plan.mcp,
                 images: plan.image_attachment_handler,
             },
             &host_request.active_commands,

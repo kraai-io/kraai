@@ -647,6 +647,9 @@ async fn skill_reads_return_text_without_context_effects() -> Result<(), Box<dyn
 #[path = "host_execution/web_search.rs"]
 mod web_search;
 
+#[path = "host_execution/mcp.rs"]
+mod mcp;
+
 #[path = "host_execution/images.rs"]
 mod images;
 

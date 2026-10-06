@@ -389,6 +389,26 @@ impl RuntimeHandle {
             .await
     }
 
+    pub async fn get_mcp_auth_statuses(&self) -> RuntimeResult<Vec<crate::McpAuthStatus>> {
+        self.request(|response| Command::GetMcpAuthStatuses { response })
+            .await
+    }
+
+    pub async fn start_mcp_login(&self, server: String) -> RuntimeResult<crate::McpAuthStatus> {
+        self.request(|response| Command::StartMcpLogin { server, response })
+            .await
+    }
+
+    pub async fn cancel_mcp_login(&self, server: String) -> RuntimeResult<crate::McpAuthStatus> {
+        self.request(|response| Command::CancelMcpLogin { server, response })
+            .await
+    }
+
+    pub async fn logout_mcp(&self, server: String) -> RuntimeResult<crate::McpAuthStatus> {
+        self.request(|response| Command::LogoutMcp { server, response })
+            .await
+    }
+
     pub async fn start_openai_codex_browser_login(&self) -> RuntimeResult<()> {
         self.request(|response| Command::StartOpenAiCodexBrowserLogin { response })
             .await

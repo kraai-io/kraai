@@ -38,6 +38,7 @@ impl AgentManager {
         let conversation_store =
             ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
+            mcp: Arc::default(),
             providers,
             default_workspace_dir,
             user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),

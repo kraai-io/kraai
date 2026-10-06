@@ -16,6 +16,7 @@ pub use api::{
     SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
+pub use kraai_mcp::{McpAuthState, McpAuthStatus};
 pub use kraai_provider_core::{
     DynamicValue as SettingsValue, FieldDefinition, FieldValueKind, ProviderDefinition,
 };

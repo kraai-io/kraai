@@ -634,6 +634,7 @@ mod session_load;
 mod snapshot_delivery;
 
 mod auth_response;
+mod mcp_auth;
 
 mod images;
 #[path = "tests/startup.rs"]
