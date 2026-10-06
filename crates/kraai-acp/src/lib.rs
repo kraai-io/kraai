@@ -5,6 +5,7 @@ mod config;
 mod content;
 mod error;
 mod history;
+mod mcp;
 mod prompt;
 mod session;
 mod transport;
@@ -59,13 +60,13 @@ impl Server {
         connection: &transport::Connection,
     ) -> Result<acp::LoadSessionResponse> {
         self.require_initialized()?;
-        session::require_no_mcp(&request.mcp_servers)?;
         if !request.cwd.is_absolute() {
             return Err(error::invalid("Session cwd must be absolute"));
         }
         let cwd = tokio::fs::canonicalize(&request.cwd)
             .await
             .map_err(|error| crate::error::invalid(error.to_string()))?;
+        let mcp = mcp::config(request.mcp_servers, &cwd)?;
         let id = request.session_id.to_string();
         let existing = self
             .runtime
@@ -122,6 +123,10 @@ impl Server {
                 .map_err(error::runtime)?;
         }
         let config = config::options(&self.runtime, &id).await?;
+        self.runtime
+            .set_session_mcp_servers(id.clone(), mcp)
+            .await
+            .map_err(error::runtime)?;
         history::replay(&self.runtime, &snapshot, connection).await?;
         commands::advertise(connection, request.session_id)?;
         session.ready.store(true, Ordering::Release);
@@ -165,6 +170,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                         .agent_capabilities(
                             acp::AgentCapabilities::new()
                                 .load_session(true)
+                                .mcp_capabilities(acp::McpCapabilities::new().http(true))
                                 .prompt_capabilities(acp::PromptCapabilities::new().image(true)),
                         ),
                 )

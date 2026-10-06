@@ -92,3 +92,50 @@ fn invalid_timeouts_and_urls_are_rejected() {
         assert!(McpManager::new(config).is_err());
     }
 }
+
+#[test]
+fn invalid_and_case_duplicate_http_headers_are_rejected_without_credentials() {
+    for headers in [
+        serde_json::json!({"bad header":"secret"}),
+        serde_json::json!({"X-Token":"secret\r\nInjected: value"}),
+        serde_json::json!({"X-Token":"secret\0"}),
+        serde_json::json!({"X-Token":"secret", "x-token":"other-secret"}),
+    ] {
+        let config: McpConfig = serde_json::from_value(serde_json::json!({"servers":{"remote":{"transport":{"type":"http","url":"https://example.test/mcp","headers":headers}}}})).unwrap();
+        let error = config.validate().unwrap_err();
+        assert!(!error.contains("secret"));
+    }
+}
+
+#[test]
+fn explicit_authorization_rejects_competing_credential_sources() {
+    for (setting, value) in [
+        ("bearer_token_env", serde_json::json!("TOKEN")),
+        ("oauth", serde_json::json!({})),
+    ] {
+        let mut transport = serde_json::json!({"type":"http","url":"https://example.test/mcp","headers":{"aUtHoRiZaTiOn":"Bearer secret"}});
+        transport[setting] = value;
+        let config: McpConfig = serde_json::from_value(
+            serde_json::json!({"servers":{"remote":{"transport":transport}}}),
+        )
+        .unwrap();
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("Authorization header conflicts")
+        );
+    }
+}
+
+#[test]
+fn session_aliases_cannot_shadow_enabled_or_disabled_configuration() {
+    for enabled in [true, false] {
+        let config: McpConfig = serde_json::from_value(serde_json::json!({"servers":{"configured":{"enabled":enabled,"transport":{"type":"stdio","command":"unused"}}}})).unwrap();
+        let manager = McpManager::new(config.clone()).unwrap();
+        assert!(manager.with_session_servers(config).is_err());
+        let attached: McpConfig = serde_json::from_value(serde_json::json!({"servers":{"temporary":{"transport":{"type":"stdio","command":"unused"}}}})).unwrap();
+        let overlay = manager.with_session_servers(attached.clone()).unwrap();
+        assert!(overlay.with_session_servers(attached).is_err());
+    }
+}

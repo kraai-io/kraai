@@ -178,19 +178,36 @@ pub(crate) async fn create(
     if !request.cwd.is_absolute() {
         return Err(error::invalid("Session cwd must be absolute"));
     }
-    require_no_mcp(&request.mcp_servers)?;
+    let cwd = tokio::fs::canonicalize(request.cwd)
+        .await
+        .map_err(|error| crate::error::invalid(error.to_string()))?;
+    let mcp = crate::mcp::config(request.mcp_servers, &cwd)?;
     let model = select_model(runtime, options, None).await?;
     let id = runtime
         .create_session_with(CreateSessionRequest {
-            workspace_dir: Some(request.cwd.to_string_lossy().into_owned()),
+            workspace_dir: Some(cwd.to_string_lossy().into_owned()),
             profile_id: options.profile.clone(),
         })
         .await
         .map_err(error::runtime)?;
-    runtime
-        .set_session_model(id.clone(), model.selection()?)
-        .await
-        .map_err(error::runtime)?;
+    let configured = async {
+        runtime
+            .set_session_model(id.clone(), model.selection()?)
+            .await
+            .map_err(error::runtime)?;
+        runtime
+            .set_session_mcp_servers(id.clone(), mcp)
+            .await
+            .map_err(error::runtime)
+    }
+    .await;
+    if let Err(error) = configured {
+        runtime
+            .delete_session(id.clone())
+            .await
+            .map_err(crate::error::runtime)?;
+        return Err(error);
+    }
     Ok((
         id,
         Arc::new(Session {
@@ -199,14 +216,4 @@ pub(crate) async fn create(
             cancellation: Default::default(),
         }),
     ))
-}
-
-pub(crate) fn require_no_mcp(servers: &[acp::McpServer]) -> Result<()> {
-    if servers.is_empty() {
-        Ok(())
-    } else {
-        Err(error::invalid(
-            "Attaching MCP servers through ACP is not implemented yet; use an empty mcpServers list",
-        ))
-    }
 }

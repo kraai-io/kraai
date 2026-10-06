@@ -13,6 +13,7 @@ blocking.workspace = true
 clap.workspace = true
 color-eyre.workspace = true
 futures.workspace = true
+kraai-mcp.workspace = true
 kraai-runtime.workspace = true
 kraai-types.workspace = true
 serde.workspace = true

@@ -23,6 +23,7 @@ use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
 mod ancestry;
 mod intercepted;
+mod mcp;
 mod model_context;
 mod prompts;
 mod sessions;
@@ -144,6 +145,7 @@ struct StreamingMessageState {
 
 pub struct AgentManager {
     mcp: Arc<kraai_mcp::McpManager>,
+    session_mcp: BTreeMap<String, Arc<kraai_mcp::McpManager>>,
     usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,

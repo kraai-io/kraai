@@ -43,6 +43,18 @@ pub struct ServerConfig {
     pub transport: TransportConfig,
 }
 
+impl ServerConfig {
+    pub fn new(transport: TransportConfig) -> Self {
+        Self {
+            enabled: enabled(),
+            description: String::new(),
+            startup_timeout_secs: startup_timeout(),
+            call_timeout_secs: call_timeout(),
+            transport,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum TransportConfig {
@@ -56,6 +68,8 @@ pub enum TransportConfig {
     },
     Http {
         url: String,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
         bearer_token_env: Option<String>,
         #[serde(default)]
         oauth: Option<OAuthConfig>,
@@ -120,9 +134,19 @@ impl McpConfig {
                 }
                 TransportConfig::Http {
                     url,
+                    headers,
                     bearer_token_env,
                     oauth,
                 } => {
+                    crate::headers::parse(headers)
+                        .map_err(|error| format!("MCP server {name}: {error}"))?;
+                    if crate::headers::has_authorization(headers)
+                        && (bearer_token_env.is_some() || oauth.is_some())
+                    {
+                        return Err(format!(
+                            "MCP server {name}: Authorization header conflicts with OAuth or bearer_token_env"
+                        ));
+                    }
                     let parsed = url::Url::parse(url)
                         .map_err(|error| format!("MCP server {name}: {error}"))?;
                     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {

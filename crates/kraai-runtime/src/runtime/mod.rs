@@ -30,3 +30,4 @@ mod tests;
 
 mod images;
 mod mcp_auth;
+mod mcp_sessions;

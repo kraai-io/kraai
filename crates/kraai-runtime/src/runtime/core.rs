@@ -165,8 +165,7 @@ impl RuntimeCore {
 
         self.stop_active_work().await;
 
-        let mcp = self.agent_manager.read().await.mcp();
-        mcp.shutdown().await;
+        self.shutdown_mcp().await;
 
         for task in background_tasks {
             task.abort();

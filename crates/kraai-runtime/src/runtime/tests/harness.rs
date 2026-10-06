@@ -429,6 +429,7 @@ path = \"inherit\"\n",
             while let Some(command) = runtime_for_task.next_command(&mut command_rx).await {
                 if let Command::Shutdown { response } = command {
                     runtime_for_task.stop_active_work().await;
+                    runtime_for_task.shutdown_mcp().await;
                     if let Some(response) = response {
                         let _ = response.send(Ok(()));
                     }

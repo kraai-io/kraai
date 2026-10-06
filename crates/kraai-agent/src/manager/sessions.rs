@@ -39,6 +39,7 @@ impl AgentManager {
             ConversationStore::new(message_store.clone(), session_store.clone());
         Self {
             mcp: Arc::default(),
+            session_mcp: BTreeMap::new(),
             providers,
             default_workspace_dir,
             user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),
@@ -295,6 +296,9 @@ impl AgentManager {
     pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
         self.abort_streaming_messages_for_session(session_id)
             .await?;
+        if let Some(mcp) = self.session_mcp.remove(session_id) {
+            mcp.shutdown().await;
+        }
         self.session_states.remove(session_id);
         self.session_store.delete(session_id).await?;
         self.pending_message_rollbacks.remove(session_id);

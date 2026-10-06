@@ -3223,6 +3223,7 @@ dependencies = [
  "color-eyre",
  "futures",
  "image",
+ "kraai-mcp",
  "kraai-runtime",
  "kraai-types",
  "serde",

@@ -129,6 +129,11 @@ pub(crate) enum Command {
         selection: kraai_types::ModelSelection,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
+    SetSessionMcpServers {
+        session_id: String,
+        config: kraai_mcp::McpConfig,
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
     GetPendingScript {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<Option<crate::PendingScriptInfo>>>,

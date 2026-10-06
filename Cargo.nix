@@ -10020,6 +10020,10 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-mcp";
+            packageId = "kraai-mcp";
+          }
+          {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
           }

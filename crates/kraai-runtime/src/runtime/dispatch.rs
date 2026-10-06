@@ -436,6 +436,16 @@ impl RuntimeCore {
                         .await,
                 );
             }
+            Command::SetSessionMcpServers {
+                session_id,
+                config,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.set_session_mcp_servers(&session_id, config).await,
+                );
+            }
             Command::GetPendingScript {
                 session_id,
                 response,

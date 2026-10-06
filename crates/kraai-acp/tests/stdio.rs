@@ -9,6 +9,8 @@ mod commands;
 mod images;
 #[path = "stdio/lifecycle.rs"]
 mod lifecycle;
+#[path = "stdio/mcp.rs"]
+mod mcp;
 #[path = "stdio/models.rs"]
 mod models;
 #[path = "stdio/profiles.rs"]
@@ -307,7 +309,7 @@ async fn cancellation_and_concurrent_prompt_do_not_block_dispatch() -> Result<()
 }
 
 #[tokio::test]
-async fn validates_initialization_workspace_and_deferred_mcp() -> Result<()> {
+async fn validates_initialization_workspace_and_mcp_transport() -> Result<()> {
     let mut harness = Harness::new(vec![]).await?;
     let values = harness
         .request(
@@ -322,7 +324,7 @@ async fn validates_initialization_workspace_and_deferred_mcp() -> Result<()> {
         (11, json!({"cwd":"relative","mcpServers":[]})),
         (
             12,
-            json!({"cwd":harness.root.path(),"mcpServers":[{"name":"deferred","command":"/unused","args":[],"env":[]}]}),
+            json!({"cwd":harness.root.path(),"mcpServers":[{"name":"unsupported","type":"sse","url":"http://127.0.0.1/","headers":[]}]}),
         ),
     ] {
         let values = harness.request(id, "session/new", params).await?;

@@ -19,7 +19,7 @@ pub(super) struct TurnSystemPrompt {
 impl AgentManager {
     pub(super) async fn build_turn_system_prompt(
         &self,
-        _session_id: &str,
+        session_id: &str,
         profile: &AgentProfile,
         workspace_dir: &Path,
     ) -> Result<TurnSystemPrompt> {
@@ -49,7 +49,7 @@ impl AgentManager {
             .iter()
             .any(|id| id == kraai_command_catalog::MCP.id)
         {
-            self.mcp.prompt().await
+            self.session_mcp(session_id).prompt().await
         } else {
             kraai_mcp::McpPrompt::default()
         };
@@ -77,7 +77,7 @@ impl AgentManager {
 
         let prefix = sections.join("\n\n");
         #[cfg(debug_assertions)]
-        tracing::info!(session_id = _session_id, profile_id = %profile.id,
+        tracing::info!(session_id, profile_id = %profile.id,
             "Compiled system instructions:\n{}", prefix);
         Ok(TurnSystemPrompt {
             prefix,

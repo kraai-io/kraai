@@ -177,6 +177,19 @@ impl RuntimeHandle {
         .await
     }
 
+    pub async fn set_session_mcp_servers(
+        &self,
+        session_id: String,
+        config: kraai_mcp::McpConfig,
+    ) -> RuntimeResult<()> {
+        self.request(|response| Command::SetSessionMcpServers {
+            session_id,
+            config,
+            response,
+        })
+        .await
+    }
+
     /// Save the editable settings document and reload providers.
     pub async fn save_settings(&self, settings: SettingsDocument) -> RuntimeResult<()> {
         self.request(|response| Command::SaveSettings { settings, response })

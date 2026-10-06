@@ -7,16 +7,18 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams, ServerResult,
-    Tool,
+    CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams, ProtocolVersion,
+    ServerResult, Tool,
 };
 use rmcp::service::{NotificationContext, PeerRequestOptions, RunningService};
+use rmcp::transport::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, Peer, RoleClient};
 use tokio::sync::Mutex;
 
 use crate::config::{ServerConfig, TransportConfig};
+
+mod http;
 
 pub(crate) struct Server {
     pub(crate) config: ServerConfig,
@@ -36,11 +38,18 @@ struct State {
 }
 
 #[derive(Clone)]
-struct Handler(Arc<AtomicU64>);
+struct Handler {
+    generation: Arc<AtomicU64>,
+    protocol: ProtocolVersion,
+}
 
 impl ClientHandler for Handler {
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        self.0.fetch_add(1, Ordering::AcqRel);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn get_info(&self) -> rmcp::model::ClientConfig {
+        rmcp::model::ClientConfig::default().with_protocol_version(self.protocol.clone())
     }
 }
 
@@ -56,15 +65,18 @@ impl Server {
             TransportConfig::Http {
                 url,
                 bearer_token_env: None,
+                headers,
                 oauth,
-            } => Some(Arc::new(crate::auth::Auth::new(
-                name,
-                url.clone(),
-                oauth.clone().unwrap_or_default(),
-                root,
-                server,
-                events,
-            ))),
+            } if !crate::headers::has_authorization(headers) => {
+                Some(Arc::new(crate::auth::Auth::new(
+                    name,
+                    url.clone(),
+                    oauth.clone().unwrap_or_default(),
+                    root,
+                    server,
+                    events,
+                )))
+            }
             _ => None,
         };
         Self {
@@ -114,7 +126,10 @@ impl Server {
     }
 
     async fn connect(&self) -> Result<RunningService<RoleClient, Handler>, String> {
-        let handler = Handler(self.generation.clone());
+        let handler = Handler {
+            generation: self.generation.clone(),
+            protocol: ProtocolVersion::LATEST,
+        };
         let lifecycle = ClientLifecycleMode::Auto {
             preferred_versions: vec![rmcp::model::ProtocolVersion::LATEST],
             legacy_version: None,
@@ -143,6 +158,7 @@ impl Server {
             TransportConfig::Http {
                 url,
                 bearer_token_env,
+                headers,
                 ..
             } => {
                 let mut config = StreamableHttpClientTransportConfig::with_uri(url.clone());
@@ -158,23 +174,16 @@ impl Server {
                     config = config.auth_header(token);
                 }
                 let client = reqwest::Client::builder()
+                    .default_headers(crate::headers::parse(headers)?)
                     .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .map_err(|error| error.to_string())?;
                 if let Some(auth) = &self.auth
                     && let Some(client) = auth.client(client.clone()).await?
                 {
-                    let transport = StreamableHttpClientTransport::with_client(client, config);
-                    return handler
-                        .serve_with_lifecycle(transport, lifecycle)
-                        .await
-                        .map_err(|error| error.to_string());
+                    return http::connect(client, config, handler, lifecycle).await;
                 }
-                let transport = StreamableHttpClientTransport::with_client(client, config);
-                handler
-                    .serve_with_lifecycle(transport, lifecycle)
-                    .await
-                    .map_err(|error| error.to_string())
+                http::connect(client, config, handler, lifecycle).await
             }
         }
     }

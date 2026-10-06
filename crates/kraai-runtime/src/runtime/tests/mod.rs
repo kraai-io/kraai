@@ -15,3 +15,4 @@ mod scripts;
 mod usage_cancellation;
 
 mod images;
+mod mcp_sessions;
