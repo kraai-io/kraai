@@ -28,8 +28,8 @@ pub(crate) async fn run(
     let mut events = runtime.subscribe();
     let model = turn.session.model.lock().await.clone();
     match commands::parse(&request.prompt)? {
-        Some(commands::Command::Agent(profile)) => {
-            commands::agent(runtime, &turn.session, &id, profile, &connection).await?;
+        Some(commands::Command::Undo) => {
+            commands::undo(runtime, &id, &connection).await?;
             return Ok(command_response());
         }
         Some(commands::Command::Continue) => {

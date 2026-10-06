@@ -137,11 +137,11 @@ fn assert_commands(messages: &[Value]) {
         })
         .and_then(|value| value.pointer("/params/update/availableCommands"))
         .and_then(Value::as_array);
-    for name in ["agent", "continue"] {
-        assert!(commands.is_some_and(|commands| {
-            commands
-                .iter()
-                .any(|command| command.get("name") == Some(&json!(name)))
-        }));
-    }
+    let mut names = commands
+        .into_iter()
+        .flatten()
+        .filter_map(|command| command.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["continue", "undo"]);
 }

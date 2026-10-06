@@ -6,8 +6,7 @@ use serde_json::{Value, json};
 use crate::support::{Harness, PROFILE_ID, Reply, prompt, text_prompt};
 
 #[tokio::test]
-async fn agent_and_continue_commands_control_the_session_without_becoming_model_messages()
--> Result<()> {
+async fn continue_uses_selected_model_and_rejects_changes_during_active_prompts() -> Result<()> {
     let mut harness = Harness::new(vec![Reply::Streaming, "Resumed".into()]).await?;
     harness.install_profile().await?;
     harness.initialize().await?;
@@ -25,15 +24,15 @@ async fn agent_and_continue_commands_control_the_session_without_becoming_model_
     let selected = harness
         .request(
             3,
-            "session/prompt",
-            text_prompt(&session, &format!("/agent {PROFILE_ID}")),
+            "session/set_config_option",
+            json!({"sessionId":session,"configId":"profile","value":PROFILE_ID}),
         )
         .await?;
     assert_eq!(
         selected
             .last()
-            .and_then(|value| value.pointer("/result/stopReason")),
-        Some(&json!("end_turn"))
+            .and_then(|value| value.pointer("/result/configOptions/1/currentValue")),
+        Some(&json!(PROFILE_ID))
     );
     assert!(selected.iter().any(|value| {
         value.pointer("/params/update/sessionUpdate") == Some(&json!("config_option_update"))
@@ -60,6 +59,14 @@ async fn agent_and_continue_commands_control_the_session_without_becoming_model_
             .last()
             .is_some_and(|value| value.get("error").is_some())
     );
+    let undo = harness
+        .request(8, "session/prompt", text_prompt(&session, "/undo"))
+        .await?;
+    assert!(
+        undo.last()
+            .is_some_and(|value| value.get("error").is_some())
+    );
+    assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}))
         .await?;
@@ -109,39 +116,34 @@ async fn agent_and_continue_commands_control_the_session_without_becoming_model_
             .get("messages")
             .map(ToString::to_string)
             .unwrap_or_default();
-        assert!(!messages.contains("/agent"));
         assert!(!messages.contains("/continue"));
+        assert!(!messages.contains("/undo"));
     }
     harness.stop().await
 }
 
 #[tokio::test]
-async fn agent_listing_and_rejected_commands_do_not_call_the_provider() -> Result<()> {
+async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<()> {
     let mut harness = Harness::new(vec![]).await?;
-    harness.install_profile().await?;
     harness.initialize().await?;
     let session = harness.session().await?;
 
-    let listed = harness
-        .request(2, "session/prompt", text_prompt(&session, "/agent"))
+    let empty = harness
+        .request(2, "session/prompt", text_prompt(&session, "/undo"))
         .await?;
     assert_eq!(
-        listed
+        empty
             .last()
             .and_then(|value| value.pointer("/result/stopReason")),
         Some(&json!("end_turn"))
     );
-    assert!(listed.iter().any(|value| {
+    assert!(empty.iter().any(|value| {
         value
             .pointer("/params/update/content/text")
             .and_then(Value::as_str)
-            .is_some_and(|text| text.contains(PROFILE_ID))
+            .is_some_and(|text| !text.is_empty())
     }));
-    for (id, command) in [
-        (3, "/agent missing-profile"),
-        (4, "/agent workspace-test extra"),
-        (5, "/continue extra"),
-    ] {
+    for (id, command) in [(3, "/undo extra"), (4, "/continue extra")] {
         let rejected = harness
             .request(id, "session/prompt", text_prompt(&session, command))
             .await?;

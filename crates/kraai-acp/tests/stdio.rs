@@ -12,6 +12,8 @@ mod profiles;
 #[path = "stdio/recovery.rs"]
 mod recovery;
 mod support;
+#[path = "stdio/undo.rs"]
+mod undo;
 
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};

@@ -90,23 +90,15 @@ pub(crate) async fn set(
             Ok(config)
         }
         "profile" => {
-            set_profile(runtime, session_id, value.0.as_ref()).await?;
+            runtime
+                .set_session_profile(session_id.to_owned(), value.0.to_string())
+                .await
+                .map_err(error::runtime)?;
             let selected = session.model.lock().await.clone();
             options(runtime, &selected, session_id).await
         }
         _ => Err(error::invalid("Unknown configuration option")),
     }
-}
-
-pub(crate) async fn set_profile(
-    runtime: &RuntimeHandle,
-    session_id: &str,
-    profile_id: &str,
-) -> Result<()> {
-    runtime
-        .set_session_profile(session_id.to_owned(), profile_id.to_owned())
-        .await
-        .map_err(error::runtime)
 }
 
 pub(crate) fn notify(
