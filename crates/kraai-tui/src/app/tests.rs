@@ -637,6 +637,7 @@ mod auth_response;
 mod mcp_auth;
 
 mod images;
+mod responsiveness;
 #[path = "tests/startup.rs"]
 mod startup;
 mod submission_recovery;

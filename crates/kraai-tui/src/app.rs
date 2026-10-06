@@ -25,6 +25,7 @@ mod chat_render;
 mod clipboard_worker;
 mod composer;
 mod cost;
+mod cursor;
 mod draft_images;
 mod duration;
 mod error;

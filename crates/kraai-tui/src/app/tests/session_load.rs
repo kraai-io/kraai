@@ -60,7 +60,7 @@ fn new_chat_ignores_late_load_success_and_failure() {
                 .is_ok()
         );
 
-        assert!(harness.app.process_events());
+        assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
 
         assert!(harness.app.state.current_session_id.is_none());
         assert_eq!(harness.app.state.mode, UiMode::Chat);

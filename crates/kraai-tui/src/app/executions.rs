@@ -102,8 +102,8 @@ impl App {
             KeyCode::Up => self.select_execution(false),
             KeyCode::Down => self.select_execution(true),
             KeyCode::Enter => self.toggle_execution(),
-            KeyCode::PageUp => self.scroll_chat_by(-10),
-            KeyCode::PageDown => self.scroll_chat_by(10),
+            KeyCode::PageUp => self.page_chat(false),
+            KeyCode::PageDown => self.page_chat(true),
             KeyCode::Home => self.scroll_chat_to_top(),
             KeyCode::End => self.scroll_chat_to_bottom(),
             _ => {}

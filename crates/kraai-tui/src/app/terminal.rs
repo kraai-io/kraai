@@ -2,7 +2,7 @@ use super::*;
 
 // Keep wheel movement responsive without adding inertia or delaying direction changes.
 const WHEEL_SCROLL_LINES: i16 = 3;
-const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(8);
+const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
 
 impl App {
     pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
@@ -265,10 +265,10 @@ impl App {
                 self.move_input_cursor_right();
             }
             KeyCode::PageUp => {
-                self.scroll_chat_by(-10);
+                self.page_chat(false);
             }
             KeyCode::PageDown => {
-                self.scroll_chat_by(10);
+                self.page_chat(true);
             }
             KeyCode::Home => {
                 self.scroll_chat_to_top();

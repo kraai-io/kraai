@@ -91,7 +91,7 @@ impl App {
             crate::terminal_features::disable()?;
             execute!(io::stdout(), LeaveAlternateScreen)?;
             run_editor(&editor, file.path(), || {
-                self.process_events();
+                let _ = self.process_events(|| Ok(false));
             })
         })();
         let restore_result = execute!(io::stdout(), EnterAlternateScreen)

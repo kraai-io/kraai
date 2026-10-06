@@ -1,5 +1,8 @@
 use super::*;
 
+const RUNTIME_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(2);
+const RUNTIME_EVENT_BATCH_ROUNDS: usize = 64;
+
 impl App {
     pub(super) fn update_chat_viewport(&mut self, height: u16) {
         self.state.chat_viewport_height = height;
@@ -32,6 +35,12 @@ impl App {
     pub(super) fn scroll_chat_to_top(&mut self) {
         self.state.auto_scroll = false;
         self.state.scroll = 0;
+    }
+
+    pub(super) fn page_chat(&mut self, down: bool) {
+        let lines = self.state.chat_viewport_height.saturating_sub(2).max(1);
+        let lines = i16::try_from(lines).unwrap_or(i16::MAX);
+        self.scroll_chat_by(if down { lines } else { -lines });
     }
 
     pub(super) fn scroll_chat_to_bottom(&mut self) {
@@ -97,13 +106,13 @@ impl App {
     pub fn run(&mut self, mut terminal: ratatui::DefaultTerminal) -> Result<()> {
         self.state.palette.request();
         let mut needs_redraw = true;
+        let mut cursor = super::cursor::CursorBlink::new(Instant::now());
         while !self.state.exit {
-            needs_redraw |= self.process_events();
-            if !needs_redraw && self.startup_sync != StartupSync::Complete {
-                needs_redraw |= self.wait_for_startup_activity();
-            }
-            let event_timeout = if needs_redraw || self.startup_sync != StartupSync::Complete {
+            needs_redraw |= self.process_events(|| event::poll(Duration::ZERO))?;
+            let event_timeout = if needs_redraw {
                 std::time::Duration::from_millis(0)
+            } else if self.startup_sync != StartupSync::Complete {
+                Duration::from_millis(8)
             } else if self.state.feedback.completion_until.is_some()
                 && self.state.palette.muted.is_some()
             {
@@ -113,7 +122,13 @@ impl App {
             } else {
                 std::time::Duration::from_millis(100)
             };
-            needs_redraw |= self.handle_events(event_timeout)?;
+            let event_timeout = if self.state.composer_cursor_enabled() {
+                event_timeout.min(cursor.timeout(Instant::now()))
+            } else {
+                event_timeout
+            };
+            let input_changed = self.handle_events(event_timeout)?;
+            needs_redraw |= input_changed;
             if self.state.editor_requested {
                 if let Err(error) = self.open_composer_editor(&mut terminal) {
                     if self.state.exit {
@@ -121,22 +136,15 @@ impl App {
                     }
                     self.set_error(format!("Editor error: {error}"));
                 }
+                cursor.update(Instant::now(), true);
                 needs_redraw = true;
             }
+            let cursor_changed = cursor.update(Instant::now(), input_changed);
+            needs_redraw |= cursor_changed && self.state.composer_cursor_enabled();
             needs_redraw |= self.advance_statusline_animation(Instant::now());
 
             if !needs_redraw {
                 continue;
-            }
-
-            if (self.state.error_open && self.state.last_error.is_some())
-                || self.state.mode == UiMode::Executions
-                || (self.state.mode == UiMode::Chat
-                    && self.state.script_phase == ScriptPhase::AwaitingApproval)
-            {
-                terminal.hide_cursor()?;
-            } else {
-                terminal.show_cursor()?;
             }
 
             terminal.draw(|frame| {
@@ -156,8 +164,8 @@ impl App {
                     let (cursor_x, cursor_y) =
                         TextInput::new(&self.state.input, self.state.input_cursor)
                             .get_cursor_position(input_area);
-                    if !(self.state.error_open && self.state.last_error.is_some())
-                        && self.state.script_phase != ScriptPhase::AwaitingApproval
+                    if self.state.composer_cursor_enabled()
+                        && cursor.visible
                         && input_area.width > 0
                         && input_area.height > 0
                     {
@@ -236,45 +244,44 @@ impl App {
         })
     }
 
-    fn wait_for_startup_activity(&mut self) -> bool {
-        crossbeam_channel::select! {
-            recv(self.event_rx) -> message => match message {
-                Ok(message) => self.handle_runtime_event_bridge_message(message),
-                Err(_) => self.handle_runtime_bridge_disconnect(),
-            },
-            recv(self.runtime_rx) -> response => match response {
-                Ok(response) => self.handle_runtime_response(response),
-                Err(_) => self.handle_runtime_bridge_disconnect(),
-            },
-            default(Duration::from_millis(8)) => return false,
-        }
-        true
-    }
-
-    pub(super) fn process_events(&mut self) -> bool {
+    pub(super) fn process_events(
+        &mut self,
+        mut input_pending: impl FnMut() -> std::io::Result<bool>,
+    ) -> Result<bool> {
         let mut changed = false;
-
-        while let Ok(message) = self.event_rx.try_recv() {
-            self.handle_runtime_event_bridge_message(message);
-            changed = true;
-        }
-
-        loop {
+        let started = Instant::now();
+        for _ in 0..RUNTIME_EVENT_BATCH_ROUNDS {
+            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+                break;
+            }
+            let mut received = false;
+            if let Ok(message) = self.event_rx.try_recv() {
+                self.handle_runtime_event_bridge_message(message);
+                changed = true;
+                received = true;
+            }
+            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+                break;
+            }
             match self.runtime_rx.try_recv() {
                 Ok(response) => {
                     self.handle_runtime_response(response);
                     changed = true;
+                    received = true;
                 }
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     self.handle_runtime_bridge_disconnect();
                     changed = true;
                     break;
                 }
             }
+            if !received {
+                break;
+            }
         }
 
-        changed
+        Ok(changed)
     }
 
     pub(super) fn handle_runtime_event_bridge_message(
