@@ -12,7 +12,10 @@
         filter = path: type:
           !(type == "directory" && builtins.elem (baseNameOf path) ["node_modules" "dist"]);
       };
-      npmDepsHash = "sha256-dAt87PXpj0WCOsO3+Bwl4IvaddsyitwE7JOdM9Tx5Dg=";
+      npmDeps = pkgs.importNpmLock {
+        npmRoot = ../packages/eval-viewer;
+      };
+      npmConfigHook = pkgs.importNpmLock.npmConfigHook;
       doCheck = true;
       checkPhase = ''
         runHook preCheck
