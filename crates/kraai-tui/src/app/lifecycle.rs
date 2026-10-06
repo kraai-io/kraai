@@ -103,7 +103,15 @@ impl App {
         }
     }
 
-    pub fn run(&mut self, mut terminal: ratatui::DefaultTerminal) -> Result<()> {
+    pub fn request_cursor_preferences(&mut self) {
+        self.state.cursor_preferences.request();
+    }
+
+    pub fn run(
+        &mut self,
+        mut terminal: ratatui::DefaultTerminal,
+        cursor_override: &crate::terminal_cursor::CursorOverride,
+    ) -> Result<()> {
         self.state.palette.request();
         let mut needs_redraw = true;
         let mut cursor = super::cursor::CursorBlink::new(Instant::now());
@@ -122,15 +130,22 @@ impl App {
             } else {
                 std::time::Duration::from_millis(100)
             };
-            let event_timeout = if self.state.composer_cursor_enabled() {
+            let event_timeout = if self.state.composer_cursor_enabled()
+                && self.state.cursor_preferences.custom_blink()
+            {
                 event_timeout.min(cursor.timeout(Instant::now()))
             } else {
                 event_timeout
             };
+            let prior_style = self.state.cursor_preferences.style;
+            let prior_muted = self.state.palette.muted;
             let input_changed = self.handle_events(event_timeout)?;
             needs_redraw |= input_changed;
+            needs_redraw |= prior_style != self.state.cursor_preferences.style;
+            needs_redraw |= prior_muted != self.state.palette.muted;
+            cursor_override.apply(self.state.cursor_preferences.style)?;
             if self.state.editor_requested {
-                if let Err(error) = self.open_composer_editor(&mut terminal) {
+                if let Err(error) = self.open_composer_editor(&mut terminal, cursor_override) {
                     if self.state.exit {
                         return Err(error);
                     }
@@ -140,7 +155,9 @@ impl App {
                 needs_redraw = true;
             }
             let cursor_changed = cursor.update(Instant::now(), input_changed);
-            needs_redraw |= cursor_changed && self.state.composer_cursor_enabled();
+            needs_redraw |= cursor_changed
+                && self.state.composer_cursor_enabled()
+                && self.state.cursor_preferences.custom_blink();
             needs_redraw |= self.advance_statusline_animation(Instant::now());
 
             if !needs_redraw {
@@ -165,7 +182,7 @@ impl App {
                         TextInput::new(&self.state.input, self.state.input_cursor)
                             .get_cursor_position(input_area);
                     if self.state.composer_cursor_enabled()
-                        && cursor.visible
+                        && (!self.state.cursor_preferences.custom_blink() || cursor.visible)
                         && input_area.width > 0
                         && input_area.height > 0
                     {

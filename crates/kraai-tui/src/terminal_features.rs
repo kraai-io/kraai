@@ -1,7 +1,6 @@
 use std::io::{Result, stdout};
 
 use ratatui::crossterm::{
-    cursor::SetCursorStyle,
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
 };
@@ -11,12 +10,7 @@ pub(crate) fn enable() -> Result<()> {
 }
 
 fn enable_with(writer: &mut impl std::io::Write) -> Result<()> {
-    execute!(
-        writer,
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        SetCursorStyle::SteadyBlock
-    )?;
+    execute!(writer, EnableMouseCapture, EnableBracketedPaste)?;
     #[cfg(unix)]
     execute!(
         writer,
@@ -41,24 +35,13 @@ fn disable_with(writer: &mut impl std::io::Write) -> Result<()> {
     let keyboard = Ok(());
     let mouse = execute!(writer, DisableMouseCapture);
     let paste = execute!(writer, DisableBracketedPaste);
-    let cursor = execute!(writer, SetCursorStyle::DefaultUserShape);
-    keyboard.and(mouse).and(paste).and(cursor)
+    keyboard.and(mouse).and(paste)
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::io::{Error, Write};
-
-    #[test]
-    fn terminal_cursor_is_steady_until_features_are_disabled() {
-        let mut bytes = Vec::new();
-        assert!(enable_with(&mut bytes).is_ok());
-        assert!(String::from_utf8_lossy(&bytes).contains("\u{1b}[2 q"));
-        bytes.clear();
-        assert!(disable_with(&mut bytes).is_ok());
-        assert!(String::from_utf8_lossy(&bytes).contains("\u{1b}[0 q"));
-    }
 
     #[test]
     fn cleanup_attempts_remaining_modes_after_a_write_or_flush_failure() {
@@ -92,7 +75,6 @@ mod tests {
             let output = String::from_utf8_lossy(&writer.bytes);
             assert!(output.contains("\u{1b}[?1000l"));
             assert!(output.contains("\u{1b}[?2004l"));
-            assert!(output.contains("\u{1b}[0 q"));
         }
     }
 }

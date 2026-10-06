@@ -30,9 +30,23 @@ impl App {
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        match self.state.cursor_preferences.filter(event) {
+            super::terminal_reply::FilteredEvent::Pass(event) => self.handle_palette_event(event),
+            super::terminal_reply::FilteredEvent::Consumed => false,
+            super::terminal_reply::FilteredEvent::Replay(events) => {
+                let mut changed = false;
+                for event in events {
+                    changed |= self.handle_palette_event(event);
+                }
+                changed
+            }
+        }
+    }
+
+    fn handle_palette_event(&mut self, event: CrosstermEvent) -> bool {
         match self.state.palette.filter(event) {
             super::palette::PaletteEvent::Pass(event) => self.handle_input_event(event),
-            super::palette::PaletteEvent::Consumed => true,
+            super::palette::PaletteEvent::Consumed => false,
             super::palette::PaletteEvent::Replay(events) => {
                 let mut changed = false;
                 for event in events {

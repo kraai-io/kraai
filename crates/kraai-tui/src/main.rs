@@ -11,25 +11,43 @@ mod app;
 #[path = "app/clipboard_image.rs"]
 mod clipboard_image;
 mod components;
+mod terminal_cursor;
 mod terminal_features;
+#[cfg(all(test, unix))]
+mod terminal_session_tests;
 
 struct TerminalSessionGuard {
     active: bool,
+    cursor: std::sync::Arc<terminal_cursor::CursorOverride>,
 }
 
 impl TerminalSessionGuard {
     fn new() -> Self {
-        Self { active: true }
+        Self {
+            active: true,
+            cursor: Default::default(),
+        }
+    }
+
+    fn install_panic_hook(&self) {
+        let cursor = self.cursor.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            ratatui::restore();
+            let _ = cursor.restore();
+            previous(info);
+        }));
     }
 
     fn restore(&mut self) -> std::io::Result<()> {
         if !self.active {
-            return Ok(());
+            return self.cursor.restore();
         }
         let feature_result = terminal_features::disable();
         ratatui::restore();
+        let cursor_result = self.cursor.restore();
         self.active = false;
-        feature_result
+        feature_result.and(cursor_result)
     }
 }
 
@@ -122,11 +140,14 @@ fn main() -> Result<()> {
         return run_result.and(metrics_result);
     }
 
+    ratatui::crossterm::terminal::enable_raw_mode()?;
+    app.request_cursor_preferences();
     let terminal = ratatui::init();
     let mut terminal_guard = TerminalSessionGuard::new();
+    terminal_guard.install_panic_hook();
     terminal_features::enable()?;
 
-    let result = app.run(terminal);
+    let result = app.run(terminal, &terminal_guard.cursor);
 
     let restore_result = terminal_guard.restore();
 
