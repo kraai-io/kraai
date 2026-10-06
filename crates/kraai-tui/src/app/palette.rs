@@ -1,18 +1,12 @@
-use super::{CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use super::CrosstermEvent;
+pub(super) use super::terminal_reply::FilteredEvent as PaletteEvent;
+use super::terminal_reply::TerminalReply;
 use ratatui::style::Color;
 
 #[derive(Default)]
 pub(super) struct TerminalPalette {
     pub(super) muted: Option<Color>,
-    pending: bool,
-    response: String,
-    held: Vec<CrosstermEvent>,
-}
-
-pub(super) enum PaletteEvent {
-    Pass(CrosstermEvent),
-    Consumed,
-    Replay(Vec<CrosstermEvent>),
+    reply: TerminalReply,
 }
 
 impl TerminalPalette {
@@ -23,77 +17,31 @@ impl TerminalPalette {
 
     #[cfg(any(unix, test))]
     fn request_with(&mut self, output: &mut impl std::io::Write) {
-        self.pending = output
-            .write_all(b"\x1b]4;8;?\x07")
-            .and_then(|()| output.flush())
-            .is_ok();
+        self.reply.request(b"\x1b]4;8;?\x07", output);
     }
 
     pub(super) fn filter(&mut self, event: CrosstermEvent) -> PaletteEvent {
-        if !self.pending {
-            return PaletteEvent::Pass(event);
-        }
-        let CrosstermEvent::Key(key) = &event else {
-            return PaletteEvent::Pass(event);
-        };
-        if self.held.is_empty() {
-            if key.code == KeyCode::Char(']') && key.modifiers == KeyModifiers::ALT {
-                self.held.push(event);
-                return PaletteEvent::Consumed;
-            }
-            return PaletteEvent::Pass(event);
-        }
-        let terminal = matches!(
-            key,
-            KeyEvent {
-                code: KeyCode::Char('g'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-        ) || matches!(
-            key,
-            KeyEvent {
-                code: KeyCode::Char('\\'),
-                modifiers: KeyModifiers::ALT,
-                ..
-            }
-        );
-        if terminal {
-            self.held.push(event);
-            if let Some(color) = parse_color(&self.response) {
-                self.muted = Some(color);
-                self.pending = false;
-                self.held.clear();
-                self.response.clear();
-                return PaletteEvent::Consumed;
-            }
-            return self.replay();
-        }
-        if let KeyCode::Char(ch) = key.code
-            && (key.modifiers.is_empty()
-                || key.modifiers == KeyModifiers::SHIFT && ch.is_ascii_uppercase())
-        {
-            self.response.push(ch);
-            self.held.push(event);
-            let prefix = "4;8;rgb:";
-            if self.response.len() <= prefix.len() && prefix.starts_with(&self.response)
-                || self.response.starts_with(prefix)
-                    && self.response.len() <= 22
-                    && self.response.get(prefix.len()..).is_some_and(|value| {
-                        value.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '/')
-                    })
-            {
-                return PaletteEvent::Consumed;
-            }
-        } else {
-            self.held.push(event);
-        }
-        self.replay()
-    }
-
-    fn replay(&mut self) -> PaletteEvent {
-        self.response.clear();
-        PaletteEvent::Replay(std::mem::take(&mut self.held))
+        self.reply.filter(
+            event,
+            ']',
+            |response| {
+                let prefix = "4;8;rgb:";
+                response.len() <= prefix.len() && prefix.starts_with(response)
+                    || response.starts_with(prefix)
+                        && response.len() <= 22
+                        && response.get(prefix.len()..).is_some_and(|value| {
+                            value.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '/')
+                        })
+            },
+            |response| {
+                if let Some(color) = parse_color(response) {
+                    self.muted = Some(color);
+                    true
+                } else {
+                    false
+                }
+            },
+        )
     }
 }
 
@@ -118,6 +66,7 @@ fn parse_color(response: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{KeyCode, KeyEvent, KeyModifiers};
 
     fn start() -> CrosstermEvent {
         CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT))
@@ -172,7 +121,7 @@ mod tests {
     #[test]
     fn unrelated_input_does_not_disable_reply_capture() {
         let mut palette = TerminalPalette {
-            pending: true,
+            reply: TerminalReply::pending(),
             ..Default::default()
         };
         assert!(matches!(
@@ -205,7 +154,7 @@ mod tests {
     #[test]
     fn unterminated_candidates_have_bounded_buffering() {
         let mut palette = TerminalPalette {
-            pending: true,
+            reply: TerminalReply::pending(),
             ..Default::default()
         };
         let events: Vec<_> = std::iter::once(start())
@@ -219,10 +168,10 @@ mod tests {
                 PaletteEvent::Replay(events) => replayed.extend(events),
                 PaletteEvent::Consumed => {}
             }
-            assert!(palette.held.len() <= 23);
+            assert!(palette.reply.held.len() <= 23);
         }
         assert_eq!(replayed, events);
-        assert!(palette.held.is_empty());
+        assert!(palette.reply.held.is_empty());
     }
 
     #[test]
@@ -232,7 +181,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::ALT),
         ] {
             let mut palette = TerminalPalette {
-                pending: true,
+                reply: TerminalReply::pending(),
                 ..Default::default()
             };
             let start = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT));
@@ -259,7 +208,7 @@ mod tests {
             ));
             assert_eq!(palette.muted, Some(Color::Rgb(88, 82, 115)));
             let mut palette = TerminalPalette {
-                pending: true,
+                reply: TerminalReply::pending(),
                 ..Default::default()
             };
             palette.filter(start.clone());

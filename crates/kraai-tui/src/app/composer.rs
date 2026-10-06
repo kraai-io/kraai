@@ -55,6 +55,7 @@ impl App {
     pub(super) fn open_composer_editor(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
+        cursor_override: &crate::terminal_cursor::CursorOverride,
     ) -> Result<()> {
         use ratatui::crossterm::{
             execute,
@@ -88,14 +89,16 @@ impl App {
         let _signal_guard = EditorSignalGuard::new()?;
         disable_raw_mode()?;
         let edit_result = (|| -> Result<()> {
+            cursor_override.restore()?;
             crate::terminal_features::disable()?;
             execute!(io::stdout(), LeaveAlternateScreen)?;
             run_editor(&editor, file.path(), || {
-                self.process_events();
+                let _ = self.process_events(|| Ok(false));
             })
         })();
         let restore_result = execute!(io::stdout(), EnterAlternateScreen)
-            .and_then(|()| crate::terminal_features::enable());
+            .and_then(|()| crate::terminal_features::enable())
+            .and_then(|()| cursor_override.apply(self.state.cursor_preferences.style));
         let raw_result = enable_raw_mode();
         if let Err(error) = restore_result
             .and(raw_result)

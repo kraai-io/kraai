@@ -2,7 +2,7 @@ use super::*;
 
 // Keep wheel movement responsive without adding inertia or delaying direction changes.
 const WHEEL_SCROLL_LINES: i16 = 3;
-const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(8);
+const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
 
 impl App {
     pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
@@ -30,9 +30,23 @@ impl App {
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
+        match self.state.cursor_preferences.filter(event) {
+            super::terminal_reply::FilteredEvent::Pass(event) => self.handle_palette_event(event),
+            super::terminal_reply::FilteredEvent::Consumed => false,
+            super::terminal_reply::FilteredEvent::Replay(events) => {
+                let mut changed = false;
+                for event in events {
+                    changed |= self.handle_palette_event(event);
+                }
+                changed
+            }
+        }
+    }
+
+    fn handle_palette_event(&mut self, event: CrosstermEvent) -> bool {
         match self.state.palette.filter(event) {
             super::palette::PaletteEvent::Pass(event) => self.handle_input_event(event),
-            super::palette::PaletteEvent::Consumed => true,
+            super::palette::PaletteEvent::Consumed => false,
             super::palette::PaletteEvent::Replay(events) => {
                 let mut changed = false;
                 for event in events {
@@ -265,10 +279,10 @@ impl App {
                 self.move_input_cursor_right();
             }
             KeyCode::PageUp => {
-                self.scroll_chat_by(-10);
+                self.page_chat(false);
             }
             KeyCode::PageDown => {
-                self.scroll_chat_by(10);
+                self.page_chat(true);
             }
             KeyCode::Home => {
                 self.scroll_chat_to_top();

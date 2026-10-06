@@ -70,7 +70,7 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
             );
         }
 
-        assert!(harness.app.process_events());
+        assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
         assert_eq!(
             harness.app.state.script_phase,
             ScriptPhase::AwaitingApproval

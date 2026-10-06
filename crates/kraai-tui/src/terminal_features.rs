@@ -6,10 +6,14 @@ use ratatui::crossterm::{
 };
 
 pub(crate) fn enable() -> Result<()> {
-    execute!(stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+    enable_with(&mut stdout())
+}
+
+fn enable_with(writer: &mut impl std::io::Write) -> Result<()> {
+    execute!(writer, EnableMouseCapture, EnableBracketedPaste)?;
     #[cfg(unix)]
     execute!(
-        stdout(),
+        writer,
         ratatui::crossterm::event::PushKeyboardEnhancementFlags(
             ratatui::crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         )

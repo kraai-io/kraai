@@ -48,7 +48,7 @@ fn delayed_auth_snapshot_cannot_restore_completed_login_state() {
             .is_ok()
     );
 
-    assert!(harness.app.process_events());
+    assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
 
     assert_eq!(
         harness.app.state.openai_codex_auth.state,
