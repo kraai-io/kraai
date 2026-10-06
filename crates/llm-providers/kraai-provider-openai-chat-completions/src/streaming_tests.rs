@@ -320,6 +320,10 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                 ],
             },
             kraai_types::ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call-1"),
                 output: "files".into(),
             },

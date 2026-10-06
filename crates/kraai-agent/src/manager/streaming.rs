@@ -23,9 +23,10 @@ impl AgentManager {
         profile_id: String,
         call_id: ToolCallId,
         content: kraai_types::MessageContent,
+        outcome: kraai_types::ScriptExecutionOutcome,
     ) -> Result<bool> {
         self.require_session(session_id).await?;
-        let outcome = self
+        let append = self
             .conversation_store
             .append_message_idempotent(
                 message_id,
@@ -34,6 +35,7 @@ impl AgentManager {
                     content: ConversationItem::ScriptResult {
                         call_id,
                         output: content,
+                        outcome,
                     },
                     status: MessageStatus::Complete,
                     agent_profile_id: Some(profile_id),
@@ -42,7 +44,7 @@ impl AgentManager {
                 },
             )
             .await?;
-        Ok(outcome.linked_now)
+        Ok(append.linked_now)
     }
 
     pub(super) async fn append_message(
@@ -340,6 +342,10 @@ impl AgentManager {
                                 content: ConversationItem::ScriptResult {
                                     call_id,
                                     output: cancelled_script_output.to_string().into(),
+                                    outcome: kraai_types::ScriptExecutionOutcome {
+                                        status: kraai_types::ScriptExecutionStatus::Cancelled,
+                                        exit_code: None,
+                                    },
                                 },
                                 status: MessageStatus::Complete,
                                 agent_profile_id: state.message.agent_profile_id.clone(),

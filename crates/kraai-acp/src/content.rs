@@ -76,15 +76,9 @@ pub(crate) async fn tool_result(
     runtime: &RuntimeHandle,
     call_id: String,
     output: &MessageContent,
+    outcome: kraai_types::ScriptExecutionOutcome,
 ) -> Result<acp::SessionUpdate> {
-    let rendered = output.text_only();
-    let header = rendered
-        .split_once('>')
-        .map(|(header, _)| header)
-        .unwrap_or_default();
-    let succeeded = header.starts_with("<tool_call_result status=\"completed\"")
-        && (!header.contains(" exit_code=") || header.contains(" exit_code=\"0\""));
-    let status = if succeeded {
+    let status = if outcome.succeeded() {
         acp::ToolCallStatus::Completed
     } else {
         acp::ToolCallStatus::Failed

@@ -22,6 +22,7 @@ pub enum Reply {
     Text(String),
     Script(String),
     Streaming,
+    Chunks(usize),
 }
 
 impl From<&str> for Reply {
@@ -66,6 +67,17 @@ impl Harness {
                     async move {
                         payloads.lock().await.push(payload);
                         let reply = replies.lock().await.pop_front();
+                        if let Some(Reply::Chunks(count)) = reply {
+                            let chunks = (0..count).map(|index| {
+                                let chunk = json!({"choices":[{"index":0,"delta":{"content":format!("chunk-{index} ")},"finish_reason":null}]});
+                                Ok::<_, std::io::Error>(Bytes::from(format!("data: {chunk}\n\n")))
+                            }).chain([Ok(Bytes::from_static(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))]);
+                            let paced = stream::iter(chunks).then(async |chunk| {
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                                chunk
+                            });
+                            return ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(paced));
+                        }
                         let (delta, finish_reason) = match reply {
                             Some(Reply::Text(text)) => (json!({"content":text}), Some("stop")),
                             Some(Reply::Script(input)) => (
@@ -73,6 +85,7 @@ impl Harness {
                                 Some("tool_calls"),
                             ),
                             Some(Reply::Streaming) => (json!({"content":"partial"}), None),
+                            Some(Reply::Chunks(_)) => unreachable!(),
                             None => (json!({"content":"Unexpected extra model request"}), Some("stop")),
                         };
                         let chunk =
@@ -129,14 +142,23 @@ supports_images = true
     }
 
     fn spawn(root: &std::path::Path) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_kraai-acp"))
-            .args([
-                "--provider",
-                "mock",
-                "--model",
-                "mock-model",
-                "--storage-root",
-            ])
+        Self::spawn_with_selection(root, Some("mock"), Some("mock-model"))
+    }
+
+    fn spawn_with_selection(
+        root: &std::path::Path,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-acp"));
+        if let Some(provider) = provider {
+            command.args(["--provider", provider]);
+        }
+        if let Some(model) = model {
+            command.args(["--model", model]);
+        }
+        let mut child = command
+            .arg("--storage-root")
             .arg(root.join("state"))
             .arg("--provider-config")
             .arg(root.join("providers.toml"))
@@ -236,8 +258,17 @@ supports_images = true
     }
 
     pub async fn restart(&mut self) -> Result<()> {
+        self.restart_with_selection(Some("mock"), Some("mock-model"))
+            .await
+    }
+
+    pub async fn restart_with_selection(
+        &mut self,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<()> {
         self.stop().await?;
-        let (child, input, output) = Self::spawn(self.root.path())?;
+        let (child, input, output) = Self::spawn_with_selection(self.root.path(), provider, model)?;
         self.child = child;
         self.input = Some(input);
         self.output = output;

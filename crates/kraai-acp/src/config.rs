@@ -1,18 +1,16 @@
 use std::collections::BTreeMap;
 
-use agent_client_protocol::{Client, ConnectionTo, Result, schema::v1 as acp};
+use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::RuntimeHandle;
 
-use crate::{
-    error,
-    session::{Model, Session},
-};
+use crate::{error, session::Model};
 
 pub(crate) async fn options(
     runtime: &RuntimeHandle,
-    selected: &Model,
     session_id: &str,
 ) -> Result<Vec<acp::SessionConfigOption>> {
+    let selected =
+        crate::session::selected_model(runtime, &acp::SessionId::new(session_id)).await?;
     let providers: BTreeMap<_, _> = runtime
         .list_models()
         .await
@@ -64,7 +62,6 @@ pub(crate) async fn options(
 
 pub(crate) async fn set(
     runtime: &RuntimeHandle,
-    session: &Session,
     session_id: &str,
     config_id: &str,
     value: acp::SessionConfigOptionValue,
@@ -85,24 +82,25 @@ pub(crate) async fn set(
                 })
                 .find(|model| model.id() == value.0.as_ref())
                 .ok_or_else(|| error::invalid("Unknown model"))?;
-            let config = options(runtime, &selected, session_id).await?;
-            *session.model.lock().await = selected;
-            Ok(config)
+            runtime
+                .set_session_model(session_id.to_owned(), selected.selection()?)
+                .await
+                .map_err(error::runtime)?;
+            options(runtime, session_id).await
         }
         "profile" => {
             runtime
                 .set_session_profile(session_id.to_owned(), value.0.to_string())
                 .await
                 .map_err(error::runtime)?;
-            let selected = session.model.lock().await.clone();
-            options(runtime, &selected, session_id).await
+            options(runtime, session_id).await
         }
         _ => Err(error::invalid("Unknown configuration option")),
     }
 }
 
 pub(crate) fn notify(
-    connection: &ConnectionTo<Client>,
+    connection: &crate::transport::Connection,
     id: acp::SessionId,
     config: Vec<acp::SessionConfigOption>,
 ) -> Result<()> {

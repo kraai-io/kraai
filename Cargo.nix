@@ -10003,6 +10003,10 @@ rec {
             packageId = "base64 0.23.1";
           }
           {
+            name = "blocking";
+            packageId = "blocking";
+          }
+          {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
@@ -10010,6 +10014,10 @@ rec {
           {
             name = "color-eyre";
             packageId = "color-eyre";
+          }
+          {
+            name = "futures";
+            packageId = "futures";
           }
           {
             name = "kraai-runtime";
@@ -10027,6 +10035,7 @@ rec {
           {
             name = "serde_json";
             packageId = "serde_json";
+            features = [ "raw_value" ];
           }
           {
             name = "tokio";
@@ -10053,10 +10062,6 @@ rec {
             packageId = "axum";
             usesDefaultFeatures = false;
             features = [ "http1" "json" "tokio" ];
-          }
-          {
-            name = "futures";
-            packageId = "futures";
           }
           {
             name = "image";

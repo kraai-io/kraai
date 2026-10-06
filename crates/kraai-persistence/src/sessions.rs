@@ -24,6 +24,8 @@ pub struct SessionMeta {
     pub title: Option<String>,
     #[serde(default)]
     pub selected_profile_id: Option<String>,
+    #[serde(default)]
+    pub selected_model: Option<kraai_types::ModelSelection>,
 }
 
 /// Trait for storing and retrieving sessions

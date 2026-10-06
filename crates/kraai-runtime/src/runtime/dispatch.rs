@@ -409,6 +409,33 @@ impl RuntimeCore {
                     });
                 respond(response, usage);
             }
+            Command::GetSessionModel {
+                session_id,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.agent_manager
+                        .read()
+                        .await
+                        .get_session_model(&session_id)
+                        .await,
+                );
+            }
+            Command::SetSessionModel {
+                session_id,
+                selection,
+                response,
+            } => {
+                respond(
+                    response,
+                    self.agent_manager
+                        .write()
+                        .await
+                        .set_session_model(&session_id, selection)
+                        .await,
+                );
+            }
             Command::GetPendingScript {
                 session_id,
                 response,

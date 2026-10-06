@@ -136,6 +136,10 @@ async fn idempotent_append_links_orphan_once_and_recognizes_history() {
                     id: result_id.clone(),
                     parent_id: Some(root.message.id),
                     content: ConversationItem::ScriptResult {
+                        outcome: kraai_types::ScriptExecutionOutcome {
+                            status: kraai_types::ScriptExecutionStatus::Completed,
+                            exit_code: Some(0),
+                        },
                         call_id: ToolCallId::new("test-call"),
                         output: String::from("result").into(),
                     },
@@ -148,6 +152,10 @@ async fn idempotent_append_links_orphan_once_and_recognizes_history() {
             let request = || AppendMessageRequest {
                 session_id: String::from("session"),
                 content: ConversationItem::ScriptResult {
+                    outcome: kraai_types::ScriptExecutionOutcome {
+                        status: kraai_types::ScriptExecutionStatus::Completed,
+                        exit_code: Some(0),
+                    },
                     call_id: ToolCallId::new("test-call"),
                     output: String::from("result").into(),
                 },

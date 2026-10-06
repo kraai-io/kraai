@@ -310,10 +310,8 @@ impl RuntimeCore {
         session_id: &str,
         completed: CompletedScriptExecution,
     ) -> Result<()> {
-        let status = completed
-            .record
-            .status
-            .ok_or_else(|| eyre!("Completed execution has no terminal status"))?;
+        let outcome = completed.record.outcome()?;
+        let status = outcome.status;
         let execution_id = completed.record.id.to_string();
         let result = completed.render_result()?;
         self.agent_manager
@@ -325,6 +323,7 @@ impl RuntimeCore {
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
                 result.clone(),
+                outcome,
             )
             .await
             .with_context(|| {
@@ -337,7 +336,7 @@ impl RuntimeCore {
                 execution_id,
                 call_id: completed.record.call_id.to_string(),
                 output: result,
-                status: status.as_str().to_string(),
+                outcome,
             },
         );
         if status == ScriptExecutionStatus::HostUnavailable {

@@ -143,6 +143,7 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
             completed.record.profile.id.clone(),
             completed.record.call_id.clone(),
             completed.render_result()?,
+            completed.record.outcome()?,
         )
         .await?;
     let streams = harness.runtime.active_streams.lock().await;
@@ -205,6 +206,7 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
             completed.record.profile.id.clone(),
             completed.record.call_id.clone(),
             completed.render_result()?,
+            completed.record.outcome()?,
         )
         .await?;
     let preparation = harness.runtime.session_preparations.begin(&session).await;

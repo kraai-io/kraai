@@ -1,17 +1,21 @@
 use std::collections::HashMap;
 
-use agent_client_protocol::{Client, ConnectionTo, Result, schema::v1 as acp};
+use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+use crate::transport::Connection;
 use crate::{commands, content, error, session::ActiveTurn};
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn run(
     runtime: &RuntimeHandle,
     turn: ActiveTurn,
     request: acp::PromptRequest,
-    connection: ConnectionTo<Client>,
+    connection: Connection,
 ) -> Result<acp::PromptResponse> {
     let cancelled = &turn.token;
     if cancelled.is_cancelled() {
@@ -25,8 +29,8 @@ pub(crate) async fn run(
         })
     };
     let id = request.session_id;
-    let mut events = runtime.subscribe();
-    let model = turn.session.model.lock().await.clone();
+    let mut events = runtime.subscribe_session(id.0.as_ref());
+    let model = crate::session::selected_model(runtime, &id).await?;
     match commands::parse(&request.prompt)? {
         Some(commands::Command::Undo) => {
             commands::undo(runtime, &id, &connection).await?;
@@ -53,15 +57,32 @@ pub(crate) async fn run(
                 .map_err(error::runtime)?;
         }
     }
-    let mut output = Output::new(id.clone(), connection);
-    let result = drive(runtime, &mut events, &mut output, cancelled).await;
+    finish_prompt(runtime, &mut events, Output::new(id, connection), cancelled).await
+}
+
+async fn finish_prompt(
+    runtime: &RuntimeHandle,
+    events: &mut broadcast::Receiver<kraai_runtime::RuntimeEvent>,
+    mut output: Output,
+    cancelled: &CancellationToken,
+) -> Result<acp::PromptResponse> {
+    let result = drive(runtime, events, &mut output, cancelled).await;
     if cancelled.is_cancelled() || result.is_err() {
         runtime
-            .cancel_turn(id.to_string())
+            .cancel_turn(output.id.to_string())
             .await
             .map_err(error::runtime)?;
-        while let Ok(event) = events.try_recv() {
-            if event.event.session_id() == Some(id.0.as_ref()) {
+        loop {
+            let event = match events.try_recv() {
+                Ok(event) => event,
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(error) => {
+                    return Err(crate::error::internal(format!(
+                        "Runtime event stream interrupted: {error}"
+                    )));
+                }
+            };
+            if event.event.session_id() == Some(output.id.0.as_ref()) {
                 output.event(runtime, event.event).await?;
             }
         }
@@ -114,12 +135,12 @@ async fn drive(
 
 struct Output {
     id: acp::SessionId,
-    connection: ConnectionTo<Client>,
+    connection: Connection,
     executions: HashMap<String, String>,
 }
 
 impl Output {
-    fn new(id: acp::SessionId, connection: ConnectionTo<Client>) -> Self {
+    fn new(id: acp::SessionId, connection: Connection) -> Self {
         Self {
             id,
             connection,
@@ -173,11 +194,12 @@ impl Output {
             Event::ScriptResultReady {
                 call_id,
                 output,
+                outcome,
                 execution_id,
                 ..
             } => {
                 self.executions.remove(&execution_id);
-                self.update(content::tool_result(runtime, call_id, &output).await?)?;
+                self.update(content::tool_result(runtime, call_id, &output, outcome).await?)?;
             }
             _ => {}
         }

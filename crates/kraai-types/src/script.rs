@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Stable terminal outcome for a Nushell script execution.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ScriptExecutionStatus {
@@ -13,6 +15,20 @@ pub enum ScriptExecutionStatus {
     FailedToStart,
     HostUnavailable,
     RuntimeError,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptExecutionOutcome {
+    pub status: ScriptExecutionStatus,
+    pub exit_code: Option<i32>,
+}
+
+impl ScriptExecutionOutcome {
+    pub fn succeeded(self) -> bool {
+        self.status == ScriptExecutionStatus::Completed && self.exit_code == Some(0)
+    }
 }
 
 impl ScriptExecutionStatus {

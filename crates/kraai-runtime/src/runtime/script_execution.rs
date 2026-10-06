@@ -50,15 +50,10 @@ pub(crate) struct PendingScriptApproval {
 
 impl CompletedScriptExecution {
     pub(crate) fn render_result(&self) -> Result<kraai_types::MessageContent> {
-        let status = self.record.status.ok_or_else(|| {
-            eyre!(
-                "Execution {} finished without a terminal status",
-                self.record.id
-            )
-        })?;
+        let outcome = self.record.outcome()?;
         let text = render_tool_call_result(ToolCallResultView {
-            status,
-            exit_code: self.record.exit_code,
+            status: outcome.status,
+            exit_code: outcome.exit_code,
             elapsed_millis: self.record.elapsed_millis(),
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,

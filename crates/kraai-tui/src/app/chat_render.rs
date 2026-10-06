@@ -128,7 +128,10 @@ impl AppState {
                         width,
                     )),
                 }
-            } else if let ConversationItem::ScriptResult { call_id, output } = &msg.content {
+            } else if let ConversationItem::ScriptResult {
+                call_id, output, ..
+            } = &msg.content
+            {
                 fingerprint = message_fingerprint(msg);
                 let output = output.display_text();
                 let expanded = self

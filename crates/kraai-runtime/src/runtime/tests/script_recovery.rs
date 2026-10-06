@@ -37,11 +37,11 @@ async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> 
     );
     let snapshot = harness.handle.get_session_snapshot(session_id).await?;
     assert!(!snapshot.session.is_running);
-    assert!(
-        snapshot
-            .history
-            .contains_key(&completed.record.result_message_id)
-    );
+    let expected = completed.record.outcome()?;
+    assert!(matches!(
+        snapshot.history.get(&completed.record.result_message_id).map(|message| &message.content),
+        Some(ConversationItem::ScriptResult { outcome, .. }) if *outcome == expected
+    ));
     harness.shutdown().await;
     Ok(())
 }
@@ -133,6 +133,7 @@ pub(super) async fn completed_script_with_image(
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
                 completed.render_result()?,
+                completed.record.outcome()?,
             )
             .await?;
         manager.clear_active_turn(&session_id);

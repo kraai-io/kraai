@@ -7,27 +7,30 @@ mod error;
 mod history;
 mod prompt;
 mod session;
+mod transport;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
 use agent_client_protocol::{
-    Agent, ConnectTo, Result,
+    Agent, Result,
     schema::{ProtocolVersion, v1 as acp},
 };
 use kraai_runtime::RuntimeHandle;
 use tokio::sync::Mutex;
 
 pub use session::Options;
+pub use transport::Stdio;
 
 struct Server {
+    budget: transport::Budget,
     runtime: RuntimeHandle,
     options: Options,
     initialized: AtomicBool,
-    sessions: Mutex<HashMap<String, Arc<session::Session>>>,
+    sessions: Mutex<BTreeMap<String, Arc<session::Session>>>,
 }
 
 impl Server {
@@ -53,7 +56,7 @@ impl Server {
     async fn load(
         &self,
         request: acp::LoadSessionRequest,
-        connection: &agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
+        connection: &transport::Connection,
     ) -> Result<acp::LoadSessionResponse> {
         self.require_initialized()?;
         session::require_no_mcp(&request.mcp_servers)?;
@@ -77,7 +80,6 @@ impl Server {
                 "cwd does not match the stored session workspace",
             ));
         }
-        let model = session::select_model(&self.runtime, &self.options).await?;
         let session = self
             .sessions
             .lock()
@@ -86,7 +88,6 @@ impl Server {
             .or_insert_with(|| {
                 Arc::new(session::Session {
                     ready: AtomicBool::new(false),
-                    model: Mutex::new(model),
                     turn: Arc::default(),
                     cancellation: Default::default(),
                 })
@@ -108,8 +109,19 @@ impl Server {
         if snapshot.session.is_running {
             return Err(error::invalid("Session is still running"));
         }
-        let model = session.model.lock().await.clone();
-        let config = config::options(&self.runtime, &model, &id).await?;
+        if !session.ready.load(Ordering::Acquire) {
+            let saved = self
+                .runtime
+                .get_session_model(id.clone())
+                .await
+                .map_err(error::runtime)?;
+            let model = session::select_model(&self.runtime, &self.options, saved).await?;
+            self.runtime
+                .set_session_model(id.clone(), model.selection()?)
+                .await
+                .map_err(error::runtime)?;
+        }
+        let config = config::options(&self.runtime, &id).await?;
         history::replay(&self.runtime, &snapshot, connection).await?;
         commands::advertise(connection, request.session_id)?;
         session.ready.store(true, Ordering::Release);
@@ -117,26 +129,30 @@ impl Server {
     }
 }
 
-pub async fn serve(
-    runtime: RuntimeHandle,
-    options: Options,
-    transport: impl ConnectTo<Agent>,
-) -> Result<()> {
+pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -> Result<()> {
     let server = Arc::new(Server {
+        budget: transport.budget.clone(),
         runtime,
         options,
         initialized: AtomicBool::new(false),
-        sessions: Mutex::new(HashMap::new()),
+        sessions: Mutex::new(BTreeMap::new()),
     });
     let initialize = server.clone();
     let create = server.clone();
     let prompt = server.clone();
     let load = server.clone();
     let configure = server.clone();
+    let close = server.clone();
     let cancel = server;
     Agent
         .builder()
         .name("kraai")
+        .on_close(async move |_cx| {
+            for session in close.sessions.lock().await.values() {
+                session.cancel();
+            }
+            close.runtime.shutdown().await.map_err(error::runtime)
+        })
         .on_receive_request(
             async move |_: acp::InitializeRequest, responder, _cx| {
                 if initialize.initialized.swap(true, Ordering::AcqRel) {
@@ -158,14 +174,13 @@ pub async fn serve(
         .on_receive_request(
             async move |request: acp::NewSessionRequest, responder, cx| {
                 let server = create.clone();
-                let connection = cx.clone();
+                let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
                     let result = async {
                         server.require_initialized()?;
                         let (id, session) =
                             session::create(&server.runtime, &server.options, request).await?;
-                        let model = session.model.lock().await.clone();
-                        let config = config::options(&server.runtime, &model, &id).await?;
+                        let config = config::options(&server.runtime, &id).await?;
                         commands::advertise(&connection, acp::SessionId::new(id.clone()))?;
                         server.sessions.lock().await.insert(id.clone(), session);
                         Ok(acp::NewSessionResponse::new(id).config_options(config))
@@ -179,7 +194,7 @@ pub async fn serve(
         .on_receive_request(
             async move |request: acp::LoadSessionRequest, responder, cx| {
                 let server = load.clone();
-                let connection = cx.clone();
+                let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
                     responder.respond_with_result(server.load(request, &connection).await)
                 })
@@ -189,7 +204,7 @@ pub async fn serve(
         .on_receive_request(
             async move |request: acp::SetSessionConfigOptionRequest, responder, cx| {
                 let server = configure.clone();
-                let connection = cx.clone();
+                let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
                     let result = async {
                         let session = server.session(&request.session_id).await?;
@@ -198,7 +213,6 @@ pub async fn serve(
                         })?;
                         let config = config::set(
                             &server.runtime,
-                            &session,
                             request.session_id.0.as_ref(),
                             request.config_id.0.as_ref(),
                             request.value,
@@ -224,7 +238,7 @@ pub async fn serve(
                     Ok(turn) => turn,
                     Err(error) => return responder.respond_with_error(error),
                 };
-                let connection = cx.clone();
+                let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
                     let result = prompt::run(&server.runtime, turn, request, connection).await;
                     responder.respond_with_result(result)

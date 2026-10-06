@@ -120,6 +120,15 @@ pub(crate) enum Command {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<Option<SessionContextUsage>>>,
     },
+    GetSessionModel {
+        session_id: String,
+        response: oneshot::Sender<RuntimeResult<Option<kraai_types::ModelSelection>>>,
+    },
+    SetSessionModel {
+        session_id: String,
+        selection: kraai_types::ModelSelection,
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
     GetPendingScript {
         session_id: String,
         response: oneshot::Sender<RuntimeResult<Option<crate::PendingScriptInfo>>>,

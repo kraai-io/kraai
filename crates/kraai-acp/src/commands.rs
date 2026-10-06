@@ -1,4 +1,4 @@
-use agent_client_protocol::{Client, ConnectionTo, Result, schema::v1 as acp};
+use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::RuntimeHandle;
 
 use crate::{content, error};
@@ -24,7 +24,10 @@ pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
     Ok(Some(command))
 }
 
-pub(crate) fn advertise(connection: &ConnectionTo<Client>, id: acp::SessionId) -> Result<()> {
+pub(crate) fn advertise(
+    connection: &crate::transport::Connection,
+    id: acp::SessionId,
+) -> Result<()> {
     connection.send_notification(acp::SessionNotification::new(
         id,
         acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
@@ -43,7 +46,7 @@ pub(crate) fn advertise(connection: &ConnectionTo<Client>, id: acp::SessionId) -
 pub(crate) async fn undo(
     runtime: &RuntimeHandle,
     id: &acp::SessionId,
-    connection: &ConnectionTo<Client>,
+    connection: &crate::transport::Connection,
 ) -> Result<()> {
     let restored = runtime
         .undo_last_user_message(id.to_string())

@@ -91,6 +91,7 @@ impl AgentManager {
             updated_at: now,
             title: None,
             selected_profile_id: Some(selected_profile_id.clone()),
+            selected_model: None,
         };
 
         self.session_store.save(&session).await?;
@@ -359,6 +360,36 @@ impl AgentManager {
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
         Ok(())
+    }
+
+    pub async fn get_session_model(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<kraai_types::ModelSelection>> {
+        Ok(self.require_session(session_id).await?.selected_model)
+    }
+
+    pub async fn set_session_model(
+        &mut self,
+        session_id: &str,
+        selection: kraai_types::ModelSelection,
+    ) -> Result<()> {
+        if self.is_turn_active(session_id) {
+            return Err(eyre!(kraai_types::DomainError::conflict(
+                "Cannot change model while the current turn is active"
+            )));
+        }
+        let mut session = self.require_session(session_id).await?;
+        let provider = self
+            .providers
+            .get_provider(&selection.provider_id)
+            .ok_or_else(|| eyre!(kraai_types::DomainError::not_found("Unknown provider")))?;
+        if provider.get_model(&selection.model_id).await.is_none() {
+            return Err(eyre!(kraai_types::DomainError::not_found("Unknown model")));
+        }
+        session.selected_model = Some(selection);
+        session.updated_at = current_unix_timestamp();
+        self.session_store.save(&session).await
     }
 
     pub async fn get_workspace_dir_state(

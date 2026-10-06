@@ -65,6 +65,7 @@ fn session(id: &str, tip_id: Option<&MessageId>, updated_at: u64) -> SessionMeta
         updated_at,
         title: Some(format!("session-{id}")),
         selected_profile_id: None,
+        selected_model: None,
     }
 }
 

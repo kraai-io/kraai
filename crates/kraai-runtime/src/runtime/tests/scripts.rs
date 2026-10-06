@@ -503,7 +503,7 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
         .events
         .wait_for("invalid script result", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::ScriptResultReady { session_id: event_session, status, .. } if event_session == &session_id && status == "invalid-script")
+                matches!(event, Event::ScriptResultReady { session_id: event_session, outcome, .. } if event_session == &session_id && outcome.status == ScriptExecutionStatus::InvalidScript)
             })
         })
         .await;

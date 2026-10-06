@@ -50,7 +50,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         let options = kraai_acp::Options { provider: cli.provider, model: cli.model, profile: cli.agent_profile };
         tokio::select! {
-            result = kraai_acp::serve(runtime.clone(), options, agent_client_protocol::Stdio::new()) => result.map_err(|error| eyre!(error)),
+            result = kraai_acp::serve(runtime.clone(), options, kraai_acp::Stdio::new()) => result.map_err(|error| eyre!(error)),
             result = tokio::signal::ctrl_c() => result.map_err(Into::into),
         }
     }.await;

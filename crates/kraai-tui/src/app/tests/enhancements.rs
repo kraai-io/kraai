@@ -219,6 +219,10 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         id: MessageId::new("result"),
         parent_id: Some(call.id.clone()),
         content: ConversationItem::ScriptResult {
+            outcome: kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
             call_id: ToolCallId::new("tool"),
             output: String::from(
                 "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"125\">\n<stdout>secret-output</stdout>\n</tool_call_result>",
@@ -269,6 +273,10 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new(id),
                 output: String::from(
                     "<tool_call_result status=\"completed\" exit_code=\"0\"></tool_call_result>",
@@ -466,6 +474,10 @@ fn execution_view_navigates_from_latest_and_preserves_draft() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new(id),
                 output: String::from(
                     "<tool_call_result status=\"failed\">output-detail</tool_call_result>",

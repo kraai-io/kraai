@@ -132,7 +132,9 @@ pub fn normalize_conversation(
                     }
                 }
             }
-            ConversationItem::ScriptResult { call_id, output } => {
+            ConversationItem::ScriptResult {
+                call_id, output, ..
+            } => {
                 input.push(ResponsesRequestItem::CustomToolCallOutput(
                     ResponsesCustomToolCallOutput {
                         kind: "custom_tool_call_output",
@@ -307,6 +309,10 @@ mod tests {
                     ],
                 },
                 ConversationItem::ScriptResult {
+                    outcome: kraai_types::ScriptExecutionOutcome {
+                        status: kraai_types::ScriptExecutionStatus::Completed,
+                        exit_code: Some(0),
+                    },
                     call_id: ToolCallId::new("call-1"),
                     output: "result".to_string().into(),
                 },
@@ -400,6 +406,10 @@ mod image_tests {
                 content: content.clone(),
             },
             ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call"),
                 output: content,
             },

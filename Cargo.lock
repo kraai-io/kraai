@@ -3218,6 +3218,7 @@ dependencies = [
  "agent-client-protocol",
  "axum",
  "base64 0.23.1",
+ "blocking",
  "clap",
  "color-eyre",
  "futures",

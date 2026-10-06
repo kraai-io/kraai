@@ -7,6 +7,10 @@
 mod commands;
 #[path = "stdio/images.rs"]
 mod images;
+#[path = "stdio/lifecycle.rs"]
+mod lifecycle;
+#[path = "stdio/models.rs"]
+mod models;
 #[path = "stdio/profiles.rs"]
 mod profiles;
 #[path = "stdio/recovery.rs"]
@@ -14,6 +18,8 @@ mod recovery;
 mod support;
 #[path = "stdio/undo.rs"]
 mod undo;
+#[path = "stdio/workspace.rs"]
+mod workspace;
 
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
@@ -240,7 +246,6 @@ async fn cancelling_approval_stops_without_continuation_and_accepts_next_prompt(
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}))
         .await?;
-    harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"cancelled"}}})).await?;
     let values = harness
         .until(|value| value.get("id") == Some(&json!(2)))
         .await?;
@@ -250,6 +255,7 @@ async fn cancelling_approval_stops_without_continuation_and_accepts_next_prompt(
             .and_then(|value| value.pointer("/result/stopReason")),
         Some(&json!("cancelled"))
     );
+    harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await?;
     let values = harness
         .request(3, "session/prompt", prompt(&session))
         .await?;

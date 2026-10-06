@@ -30,7 +30,6 @@ impl Model {
 
 pub(crate) struct Session {
     pub(crate) ready: AtomicBool,
-    pub(crate) model: Mutex<Model>,
     pub(crate) turn: Arc<Mutex<()>>,
     pub(crate) cancellation: std::sync::Mutex<Option<CancellationToken>>,
 }
@@ -81,13 +80,69 @@ impl Drop for ActiveTurn {
     }
 }
 
-pub(crate) async fn select_model(runtime: &RuntimeHandle, options: &Options) -> Result<Model> {
+pub(crate) async fn selected_model(runtime: &RuntimeHandle, id: &acp::SessionId) -> Result<Model> {
+    let selected = runtime
+        .get_session_model(id.to_string())
+        .await
+        .map_err(error::runtime)?
+        .ok_or_else(|| error::internal("Session has no selected model"))?;
+    Ok(Model {
+        provider: selected.provider_id.to_string(),
+        model: selected.model_id.to_string(),
+    })
+}
+
+impl Model {
+    pub(crate) fn selection(&self) -> Result<kraai_types::ModelSelection> {
+        Ok(kraai_types::ModelSelection {
+            provider_id: kraai_types::ProviderId::try_new(self.provider.clone())
+                .map_err(error::invalid)?,
+            model_id: kraai_types::ModelId::try_new(self.model.clone()).map_err(error::invalid)?,
+        })
+    }
+}
+
+pub(crate) async fn select_model(
+    runtime: &RuntimeHandle,
+    options: &Options,
+    saved: Option<kraai_types::ModelSelection>,
+) -> Result<Model> {
     let providers: BTreeMap<_, _> = runtime
         .list_models()
         .await
         .map_err(error::runtime)?
         .into_iter()
         .collect();
+    if let Some(saved) = saved {
+        let matches_overrides = options
+            .provider
+            .as_ref()
+            .is_none_or(|id| id == saved.provider_id.as_str())
+            && options
+                .model
+                .as_ref()
+                .is_none_or(|id| id == saved.model_id.as_str());
+        if matches_overrides {
+            if providers
+                .get(saved.provider_id.as_str())
+                .is_some_and(|models| {
+                    models
+                        .iter()
+                        .any(|model| model.id == saved.model_id.as_str())
+                })
+            {
+                return Ok(Model {
+                    provider: saved.provider_id.to_string(),
+                    model: saved.model_id.to_string(),
+                });
+            }
+            if options.provider.is_none() && options.model.is_none() {
+                return Err(error::invalid(
+                    "Saved model is no longer configured. Select an explicit --provider and --model to load this session.",
+                ));
+            }
+        }
+    }
     for (provider, mut models) in providers {
         if options
             .provider
@@ -124,7 +179,7 @@ pub(crate) async fn create(
         return Err(error::invalid("Session cwd must be absolute"));
     }
     require_no_mcp(&request.mcp_servers)?;
-    let model = select_model(runtime, options).await?;
+    let model = select_model(runtime, options, None).await?;
     let id = runtime
         .create_session_with(CreateSessionRequest {
             workspace_dir: Some(request.cwd.to_string_lossy().into_owned()),
@@ -132,11 +187,14 @@ pub(crate) async fn create(
         })
         .await
         .map_err(error::runtime)?;
+    runtime
+        .set_session_model(id.clone(), model.selection()?)
+        .await
+        .map_err(error::runtime)?;
     Ok((
         id,
         Arc::new(Session {
             ready: AtomicBool::new(true),
-            model: Mutex::new(model),
             turn: Arc::default(),
             cancellation: Default::default(),
         }),

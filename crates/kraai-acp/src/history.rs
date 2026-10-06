@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use agent_client_protocol::{Client, ConnectionTo, Result, schema::v1 as acp};
+use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{RuntimeHandle, SessionSnapshot};
 use kraai_types::{AssistantItem, ConversationItem};
 
@@ -9,7 +9,7 @@ use crate::{content, error};
 pub(crate) async fn replay(
     runtime: &RuntimeHandle,
     snapshot: &SessionSnapshot,
-    connection: &ConnectionTo<Client>,
+    connection: &crate::transport::Connection,
 ) -> Result<()> {
     let mut tip = snapshot
         .session
@@ -53,8 +53,12 @@ async fn updates(
             .map(|block| acp::SessionUpdate::UserMessageChunk(chunk(block)))
             .collect(),
         ConversationItem::Assistant { items } => assistant_updates(&message.id, items),
-        ConversationItem::ScriptResult { call_id, output } => {
-            vec![content::tool_result(runtime, call_id.to_string(), output).await?]
+        ConversationItem::ScriptResult {
+            call_id,
+            output,
+            outcome,
+        } => {
+            vec![content::tool_result(runtime, call_id.to_string(), output, *outcome).await?]
         }
         _ => Vec::new(),
     })
@@ -98,6 +102,117 @@ fn assistant_updates(
 mod tests {
     use super::*;
     use kraai_types::{AssistantPhase, MessageId, ProviderId};
+
+    #[tokio::test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "assertions validate terminal tool updates"
+    )]
+    async fn live_and_replayed_results_use_durable_outcomes() -> color_eyre::Result<()> {
+        use kraai_types::{
+            Message, MessageStatus, ScriptExecutionOutcome, ScriptExecutionStatus, ToolCallId,
+        };
+
+        let root = tempfile::tempdir()?;
+        let runtime = kraai_runtime::RuntimeBuilder::new()
+            .storage_root(root.path().to_path_buf())
+            .mcp_config_path(root.path().join("mcp.toml"))
+            .build_on(&tokio::runtime::Handle::current());
+        assert_eq!(
+            runtime.wait_for_startup().await?,
+            kraai_runtime::RuntimeStartupState::Ready
+        );
+        let outcomes = [
+            (
+                ScriptExecutionStatus::Completed,
+                Some(0),
+                acp::ToolCallStatus::Completed,
+            ),
+            (
+                ScriptExecutionStatus::Completed,
+                Some(7),
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::Completed,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::Denied,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::InvalidScript,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::TimedOut,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::Cancelled,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::SandboxUnavailable,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::FailedToStart,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::HostUnavailable,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+            (
+                ScriptExecutionStatus::RuntimeError,
+                None,
+                acp::ToolCallStatus::Failed,
+            ),
+        ];
+        for (status, exit_code, expected) in outcomes {
+            for rendered in [
+                "<tool_call_result status=\"completed\" exit_code=\"0\">misleading output</tool_call_result>",
+                "<tool_call_result status=\"runtime-error\">misleading output</tool_call_result>",
+                "truncated or reformatted output",
+            ] {
+                let outcome = ScriptExecutionOutcome { status, exit_code };
+                let output = rendered.into();
+                let live =
+                    content::tool_result(&runtime, String::from("call"), &output, outcome).await?;
+                let message = Message {
+                    id: MessageId::new("result"),
+                    parent_id: None,
+                    content: ConversationItem::ScriptResult {
+                        call_id: ToolCallId::new("call"),
+                        output,
+                        outcome,
+                    },
+                    status: MessageStatus::Complete,
+                    agent_profile_id: None,
+                    generation: None,
+                };
+                let restored: Message = serde_json::from_slice(&serde_json::to_vec(&message)?)?;
+                let replayed = updates(&runtime, &restored).await?;
+                assert_eq!(replayed, vec![live.clone()], "{outcome:?}");
+                let acp::SessionUpdate::ToolCallUpdate(update) = live else {
+                    return Err(color_eyre::eyre::eyre!("missing tool result update"));
+                };
+                assert_eq!(update.fields.status, Some(expected), "{outcome:?}");
+            }
+        }
+        runtime.shutdown().await?;
+        Ok(())
+    }
 
     #[test]
     fn replay_preserves_spacing_between_assistant_text_items() {

@@ -322,14 +322,15 @@ impl App {
             Event::ScriptResultReady {
                 session_id,
                 execution_id: _,
-                status,
+                outcome,
                 ..
             } => {
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Idle;
                     self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status = format!("Script {status}; waiting for assistant");
+                    self.state.status =
+                        format!("Script {}; waiting for assistant", outcome.status.as_str());
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }

@@ -140,6 +140,10 @@ fn fixture(
         message(
             "result",
             ConversationItem::ScriptResult {
+                outcome: kraai_types::ScriptExecutionOutcome {
+                    status: kraai_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(0),
+                },
                 call_id: ToolCallId::new("call"),
                 output: "firmware output ".repeat(20_000).into(),
             },

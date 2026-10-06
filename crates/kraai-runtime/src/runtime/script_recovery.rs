@@ -83,6 +83,7 @@ impl RuntimeCore {
                     completed.record.profile.id.clone(),
                     completed.record.call_id.clone(),
                     result,
+                    completed.record.outcome()?,
                 )
                 .await?;
 

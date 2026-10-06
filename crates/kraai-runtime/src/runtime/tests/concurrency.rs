@@ -310,7 +310,9 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .messages
         .iter()
         .filter_map(|item| {
-            if let kraai_types::ConversationItem::ScriptResult { call_id, output } = item
+            if let kraai_types::ConversationItem::ScriptResult {
+                call_id, output, ..
+            } = item
                 && call_id.as_str() == "handoff-call"
             {
                 Some(output)
@@ -887,6 +889,10 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
             "test-profile".into(),
             kraai_types::ToolCallId::new("test-call"),
             "old history".into(),
+            kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
         )
         .await?;
     store.pause.store(true, Ordering::SeqCst);
@@ -921,6 +927,10 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
             .expect("captured history")
             .content,
         kraai_types::ConversationItem::ScriptResult {
+            outcome: kraai_types::ScriptExecutionOutcome {
+                status: kraai_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
             call_id: kraai_types::ToolCallId::new("test-call"),
             output: "old history".into()
         }

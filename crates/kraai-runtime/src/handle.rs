@@ -71,6 +71,10 @@ impl RuntimeHandle {
         self.event_tx.subscribe()
     }
 
+    pub fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+        self.event_tx.subscribe_session(session_id)
+    }
+
     pub fn startup_status(&self) -> RuntimeStartupState {
         self.startup_rx.borrow().clone()
     }
@@ -144,6 +148,30 @@ impl RuntimeHandle {
         self.request(|response| Command::SetSessionProfile {
             session_id,
             profile_id,
+            response,
+        })
+        .await
+    }
+
+    pub async fn get_session_model(
+        &self,
+        session_id: String,
+    ) -> RuntimeResult<Option<kraai_types::ModelSelection>> {
+        self.request(|response| Command::GetSessionModel {
+            session_id,
+            response,
+        })
+        .await
+    }
+
+    pub async fn set_session_model(
+        &self,
+        session_id: String,
+        selection: kraai_types::ModelSelection,
+    ) -> RuntimeResult<()> {
+        self.request(|response| Command::SetSessionModel {
+            session_id,
+            selection,
             response,
         })
         .await
