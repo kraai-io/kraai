@@ -25149,13 +25149,22 @@ rec {
         crateName = "ts-rs-macros";
         version = "12.0.1";
         edition = "2021";
-        sha256 = "1ajjnsl39fz492mrqpjkkrrh8s5shl5ghjv7kvpqhydwa7m0xn9q";
+        workspace_member = null;
+        src = pkgs.fetchgit {
+          url = "https://github.com/Aleph-Alpha/ts-rs";
+          rev = "a6bbbd183aae4142c273e3ff2042d30a3b1a808f";
+          sha256 = "0zhwi4457nv5wyb9rzlway280sh6cwb6244ycfs630dk9hh8sdcy";
+        };
         procMacro = true;
         libName = "ts_rs_macros";
         authors = [
           "Moritz Bischof <moritz.bischof1@gmail.com>"
         ];
         dependencies = [
+          {
+            name = "indexmap";
+            packageId = "indexmap 2.14.0";
+          }
           {
             name = "proc-macro2";
             packageId = "proc-macro2";

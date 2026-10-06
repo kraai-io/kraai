@@ -107,6 +107,9 @@
           ++ buildInputs;
         cargoDeps = pkgs.rustPlatform.importCargoLock {
           lockFile = ../Cargo.lock;
+          outputHashes = {
+            "ts-rs-macros-12.0.1" = "0zhwi4457nv5wyb9rzlway280sh6cwb6244ycfs630dk9hh8sdcy";
+          };
         };
         buildPhase = let
           exportEnv = lib.concatLines (
