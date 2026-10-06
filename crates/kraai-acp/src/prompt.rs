@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use agent_client_protocol::{Client, ConnectionTo, Result, schema::v1 as acp};
-use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
+use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{content, error, session::ActiveTurn};
+use crate::{commands, content, error, session::ActiveTurn};
 
 pub(crate) async fn run(
     runtime: &RuntimeHandle,
@@ -14,17 +14,45 @@ pub(crate) async fn run(
     connection: ConnectionTo<Client>,
 ) -> Result<acp::PromptResponse> {
     let cancelled = &turn.token;
-    let message = content::prompt(runtime, request.prompt).await?;
     if cancelled.is_cancelled() {
         return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
     }
+    let command_response = || {
+        acp::PromptResponse::new(if cancelled.is_cancelled() {
+            acp::StopReason::Cancelled
+        } else {
+            acp::StopReason::EndTurn
+        })
+    };
     let id = request.session_id;
     let mut events = runtime.subscribe();
     let model = turn.session.model.lock().await.clone();
-    runtime
-        .send_content(id.to_string(), message, model.model, model.provider)
-        .await
-        .map_err(error::runtime)?;
+    match commands::parse(&request.prompt)? {
+        Some(commands::Command::Agent(profile)) => {
+            commands::agent(runtime, &turn.session, &id, profile, &connection).await?;
+            return Ok(command_response());
+        }
+        Some(commands::Command::Continue) => {
+            if runtime
+                .continue_turn(id.to_string(), model.model, model.provider)
+                .await
+                .map_err(error::runtime)?
+                == ContinueSessionOutcome::NothingToContinue
+            {
+                return Ok(command_response());
+            }
+        }
+        None => {
+            let message = content::prompt(runtime, request.prompt).await?;
+            if cancelled.is_cancelled() {
+                return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+            }
+            runtime
+                .send_content(id.to_string(), message, model.model, model.provider)
+                .await
+                .map_err(error::runtime)?;
+        }
+    }
     let mut output = Output::new(id.clone(), connection);
     let result = drive(runtime, &mut events, &mut output, cancelled).await;
     if cancelled.is_cancelled() || result.is_err() {

@@ -382,6 +382,27 @@ impl RuntimeHandle {
         model_id: String,
         provider_id: String,
     ) -> RuntimeResult<ContinueSessionOutcome> {
+        self.request_continuation(session_id, model_id, provider_id, false)
+            .await
+    }
+
+    pub async fn continue_turn(
+        &self,
+        session_id: String,
+        model_id: String,
+        provider_id: String,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
+        self.request_continuation(session_id, model_id, provider_id, true)
+            .await
+    }
+
+    async fn request_continuation(
+        &self,
+        session_id: String,
+        model_id: String,
+        provider_id: String,
+        wait_for_preparation: bool,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
         })?;
@@ -392,6 +413,7 @@ impl RuntimeHandle {
             session_id,
             model_id,
             provider_id,
+            wait_for_preparation,
             response,
         })
         .await

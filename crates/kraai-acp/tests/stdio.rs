@@ -3,8 +3,12 @@
     reason = "protocol integration tests assert after fallible I/O"
 )]
 
+#[path = "stdio/commands.rs"]
+mod commands;
 #[path = "stdio/images.rs"]
 mod images;
+#[path = "stdio/profiles.rs"]
+mod profiles;
 #[path = "stdio/recovery.rs"]
 mod recovery;
 mod support;

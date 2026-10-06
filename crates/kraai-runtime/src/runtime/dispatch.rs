@@ -86,6 +86,10 @@ impl RuntimeCore {
             Command::GetSessionSnapshot { .. }
                 | Command::CancelStream { .. }
                 | Command::CancelTurn { .. }
+                | Command::ContinueSession {
+                    wait_for_preparation: true,
+                    ..
+                }
         ) {
             None
         } else {
@@ -446,12 +450,24 @@ impl RuntimeCore {
                 session_id,
                 model_id,
                 provider_id,
+                wait_for_preparation,
                 response,
             } => {
-                let result = self
-                    .start_continuation(session_id, model_id, provider_id)
-                    .await;
-                let _ = response.send(result);
+                if wait_for_preparation {
+                    let runtime = self.clone();
+                    tokio::spawn(async move {
+                        let _state_guard = runtime.session_state_barrier.read().await;
+                        let result = runtime
+                            .start_continuation_when_ready(session_id, model_id, provider_id)
+                            .await;
+                        let _ = response.send(result);
+                    });
+                } else {
+                    let result = self
+                        .start_continuation(session_id, model_id, provider_id)
+                        .await;
+                    let _ = response.send(result);
+                }
             }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 let _ = response.send(Ok(self.openai_codex_auth.get_status().await));

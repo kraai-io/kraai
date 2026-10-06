@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod commands;
+mod config;
 mod content;
 mod error;
 mod history;
@@ -100,15 +102,16 @@ impl Server {
             .map_err(error::runtime)?;
         let snapshot = self
             .runtime
-            .get_session_snapshot(id)
+            .get_session_snapshot(id.clone())
             .await
             .map_err(error::runtime)?;
         if snapshot.session.is_running {
             return Err(error::invalid("Session is still running"));
         }
         let model = session.model.lock().await.clone();
-        let config = session::config_options(&self.runtime, &model).await?;
+        let config = config::options(&self.runtime, &model, &id).await?;
         history::replay(&self.runtime, &snapshot, connection).await?;
+        commands::advertise(connection, request.session_id)?;
         session.ready.store(true, Ordering::Release);
         Ok(acp::LoadSessionResponse::new().config_options(config))
     }
@@ -155,13 +158,15 @@ pub async fn serve(
         .on_receive_request(
             async move |request: acp::NewSessionRequest, responder, cx| {
                 let server = create.clone();
+                let connection = cx.clone();
                 cx.spawn(async move {
                     let result = async {
                         server.require_initialized()?;
                         let (id, session) =
                             session::create(&server.runtime, &server.options, request).await?;
                         let model = session.model.lock().await.clone();
-                        let config = session::config_options(&server.runtime, &model).await?;
+                        let config = config::options(&server.runtime, &model, &id).await?;
+                        commands::advertise(&connection, acp::SessionId::new(id.clone()))?;
                         server.sessions.lock().await.insert(id.clone(), session);
                         Ok(acp::NewSessionResponse::new(id).config_options(config))
                     }
@@ -188,17 +193,18 @@ pub async fn serve(
                 cx.spawn(async move {
                     let result = async {
                         let session = server.session(&request.session_id).await?;
-                        if request.config_id.0.as_ref() != "model" {
-                            return Err(error::invalid("Unknown configuration option"));
-                        }
-                        let config =
-                            session::set_model(&server.runtime, &session, request.value).await?;
-                        connection.send_notification(acp::SessionNotification::new(
-                            request.session_id,
-                            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(
-                                config.clone(),
-                            )),
-                        ))?;
+                        let _turn = session.turn.try_lock().map_err(|_busy| {
+                            error::invalid("Cannot change settings during a prompt")
+                        })?;
+                        let config = config::set(
+                            &server.runtime,
+                            &session,
+                            request.session_id.0.as_ref(),
+                            request.config_id.0.as_ref(),
+                            request.value,
+                        )
+                        .await?;
+                        config::notify(&connection, request.session_id, config.clone())?;
                         Ok(acp::SetSessionConfigOptionResponse::new(config))
                     }
                     .await;

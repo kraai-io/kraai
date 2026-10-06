@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
+use futures::poll;
 use futures::stream::{self, BoxStream};
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
@@ -48,15 +49,20 @@ impl Provider for RecordingProvider {
 
 #[tokio::test]
 async fn explicit_continuation_uses_selected_model_without_appending_user_message() -> Result<()> {
-    assert_selected_model(false).await
+    assert_selected_model(false, false).await
 }
 
 #[tokio::test]
 async fn explicit_continuation_uses_selected_model_when_consuming_queued_messages() -> Result<()> {
-    assert_selected_model(true).await
+    assert_selected_model(true, false).await
 }
 
-async fn assert_selected_model(queued: bool) -> Result<()> {
+#[tokio::test]
+async fn continue_turn_waits_for_preparation_without_blocking_commands() -> Result<()> {
+    assert_selected_model(false, true).await
+}
+
+async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Result<()> {
     let (requests, mut received) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
     for id in ["old-provider", "selected-provider"] {
@@ -108,7 +114,41 @@ async fn assert_selected_model(queued: bool) -> Result<()> {
             )
             .await;
     }
-    assert_eq!(
+    let outcome = if wait_for_preparation {
+        let preparation = harness
+            .runtime
+            .session_preparations
+            .begin(&session_id)
+            .await;
+        let continuation = harness.handle.continue_turn(
+            session_id.clone(),
+            "selected-model".into(),
+            "selected-provider".into(),
+        );
+        tokio::pin!(continuation);
+        assert!(poll!(&mut continuation).is_pending());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while harness.runtime.session_state_barrier.try_write().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                harness.handle.continue_session(
+                    session_id.clone(),
+                    "old-model".into(),
+                    "old-provider".into(),
+                )
+            )
+            .await??,
+            ContinueSessionOutcome::NothingToContinue
+        );
+        assert!(received.try_recv().is_err());
+        drop(preparation);
+        tokio::time::timeout(Duration::from_secs(1), continuation).await??
+    } else {
         harness
             .handle
             .continue_session(
@@ -116,9 +156,9 @@ async fn assert_selected_model(queued: bool) -> Result<()> {
                 "selected-model".into(),
                 "selected-provider".into(),
             )
-            .await?,
-        ContinueSessionOutcome::Started
-    );
+            .await?
+    };
+    assert_eq!(outcome, ContinueSessionOutcome::Started);
     let (model, request) = tokio::time::timeout(Duration::from_secs(1), received.recv())
         .await?
         .expect("provider request");

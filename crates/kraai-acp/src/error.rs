@@ -3,7 +3,10 @@ use kraai_runtime::{RuntimeError, RuntimeErrorKind};
 
 pub(crate) fn runtime(error: RuntimeError) -> Error {
     match error.kind {
-        RuntimeErrorKind::InvalidArgument | RuntimeErrorKind::Validation => invalid(error.message),
+        RuntimeErrorKind::InvalidArgument
+        | RuntimeErrorKind::Validation
+        | RuntimeErrorKind::NotFound
+        | RuntimeErrorKind::Conflict => invalid(error.message),
         _ => Error::internal_error().data(error.message),
     }
 }

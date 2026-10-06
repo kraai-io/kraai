@@ -36,6 +36,7 @@ pub struct Harness {
     pub input: Option<ChildStdin>,
     pub output: BufReader<ChildStdout>,
     pub model_requests: Arc<AtomicUsize>,
+    pub provider_payloads: Arc<Mutex<Vec<Value>>>,
     _server: AbortOnDropHandle<()>,
 }
 
@@ -47,17 +48,23 @@ impl Harness {
         let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
         let model_requests = Arc::new(AtomicUsize::new(0));
         let received_requests = model_requests.clone();
+        let provider_payloads = Arc::new(Mutex::new(Vec::new()));
+        let received_payloads = provider_payloads.clone();
         let router = Router::new()
             .route(
                 "/v1/models",
-                get(async || axum::Json(json!({"data":[{"id":"mock-model"}]}))),
+                get(async || {
+                    axum::Json(json!({"data":[{"id":"mock-model"},{"id":"mock-alternate"}]}))
+                }),
             )
             .route(
                 "/v1/chat/completions",
-                post(move || {
+                post(move |axum::Json(payload): axum::Json<Value>| {
                     let replies = replies.clone();
+                    let payloads = received_payloads.clone();
                     let index = received_requests.fetch_add(1, Ordering::SeqCst);
                     async move {
+                        payloads.lock().await.push(payload);
                         let reply = replies.lock().await.pop_front();
                         let (delta, finish_reason) = match reply {
                             Some(Reply::Text(text)) => (json!({"content":text}), Some("stop")),
@@ -100,6 +107,11 @@ only_listed_models = true
 id = "mock-model"
 provider_id = "mock"
 supports_images = true
+
+[[model]]
+id = "mock-alternate"
+provider_id = "mock"
+supports_images = true
 "#
             ),
         )
@@ -111,6 +123,7 @@ supports_images = true
             input: Some(input),
             output,
             model_requests,
+            provider_payloads,
             _server: server,
         })
     }
@@ -230,8 +243,39 @@ supports_images = true
         self.output = output;
         Ok(())
     }
+
+    pub async fn install_profile(&self) -> Result<()> {
+        let directory = self.root.path().join(".kraai");
+        tokio::fs::create_dir_all(&directory).await?;
+        tokio::fs::write(
+            directory.join("agents.toml"),
+            format!(
+                r#"[[profiles]]
+id = "{PROFILE_ID}"
+display_name = "Workspace Test"
+description = "ACP integration test profile"
+system_prompt = "{PROFILE_PROMPT}"
+commands = []
+capabilities = ["workspace-read"]
+escalation_policy = "prompt"
+environment = "minimal"
+nushell_startup = "clean"
+path = "inherit"
+"#
+            ),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
+pub const PROFILE_ID: &str = "workspace-test";
+pub const PROFILE_PROMPT: &str = "ACP workspace profile instruction marker";
+
 pub fn prompt(session: &str) -> Value {
-    json!({"sessionId":session,"prompt":[{"type":"text","text":"Run the task"}]})
+    text_prompt(session, "Run the task")
+}
+
+pub fn text_prompt(session: &str, text: &str) -> Value {
+    json!({"sessionId":session,"prompt":[{"type":"text","text":text}]})
 }

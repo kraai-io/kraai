@@ -43,6 +43,20 @@ impl RuntimeCore {
             .await
     }
 
+    pub(crate) async fn start_continuation_when_ready(
+        &self,
+        session_id: String,
+        model_id: ModelId,
+        provider_id: ProviderId,
+    ) -> RuntimeResult<ContinueSessionOutcome> {
+        if self.is_stopping() {
+            return Ok(ContinueSessionOutcome::NothingToContinue);
+        }
+        let preparation = self.session_preparations.begin(&session_id).await;
+        self.continue_prepared_session(session_id, preparation, Some((model_id, provider_id)))
+            .await
+    }
+
     async fn continue_prepared_session(
         &self,
         session_id: String,
