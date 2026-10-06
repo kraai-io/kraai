@@ -17,6 +17,8 @@ mod models;
 mod profiles;
 #[path = "stdio/recovery.rs"]
 mod recovery;
+#[path = "stdio/replay.rs"]
+mod replay;
 mod support;
 #[path = "stdio/undo.rs"]
 mod undo;

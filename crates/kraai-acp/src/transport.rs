@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use agent_client_protocol::{Client, ConnectTo, ConnectionTo, Lines, Role, schema::v1 as acp};
 use futures::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, io::BufReader};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 const OUTPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -17,6 +18,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub(crate) struct Budget {
     bytes: Arc<AtomicUsize>,
+    released: Arc<Notify>,
     failed: CancellationToken,
     limit: usize,
 }
@@ -25,30 +27,52 @@ impl Budget {
     fn new(limit: usize) -> Self {
         Self {
             bytes: Arc::default(),
+            released: Arc::default(),
             failed: CancellationToken::new(),
             limit,
         }
     }
 
     fn reserve(&self, bytes: usize) -> agent_client_protocol::Result<()> {
-        if self.failed.is_cancelled()
-            || self
-                .bytes
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                    current
-                        .checked_add(bytes)
-                        .filter(|total| *total <= self.limit)
-                })
-                .is_err()
-        {
+        if self.failed.is_cancelled() || !self.try_reserve(bytes) {
             self.failed.cancel();
             return Err(crate::error::internal("ACP output capacity exceeded"));
         }
         Ok(())
     }
 
+    fn try_reserve(&self, bytes: usize) -> bool {
+        self.bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|total| *total <= self.limit)
+            })
+            .is_ok()
+    }
+
+    async fn reserve_wait(&self, bytes: usize) -> agent_client_protocol::Result<()> {
+        if bytes > self.limit {
+            return self.reserve(bytes);
+        }
+        loop {
+            let released = self.released.notified();
+            if self.failed.is_cancelled() {
+                return Err(crate::error::internal("ACP output capacity exceeded"));
+            }
+            if self.try_reserve(bytes) {
+                return Ok(());
+            }
+            tokio::select! {
+                () = self.failed.cancelled() => {},
+                () = released => {},
+            }
+        }
+    }
+
     fn release(&self, bytes: usize) {
         self.bytes.fetch_sub(bytes, Ordering::AcqRel);
+        self.released.notify_waiters();
     }
 }
 
@@ -66,10 +90,25 @@ impl Connection {
         &self,
         notification: acp::SessionNotification,
     ) -> agent_client_protocol::Result<()> {
-        let bytes = serialized_size(&notification)
-            .map_err(|error| crate::error::internal(error.to_string()))?
-            + ENVELOPE_BYTES;
+        let bytes = notification_size(&notification)?;
         self.budget.reserve(bytes)?;
+        self.send_reserved(notification, bytes)
+    }
+
+    pub(crate) async fn send_notification_wait(
+        &self,
+        notification: acp::SessionNotification,
+    ) -> agent_client_protocol::Result<()> {
+        let bytes = notification_size(&notification)?;
+        self.budget.reserve_wait(bytes).await?;
+        self.send_reserved(notification, bytes)
+    }
+
+    fn send_reserved(
+        &self,
+        notification: acp::SessionNotification,
+        bytes: usize,
+    ) -> agent_client_protocol::Result<()> {
         if let Err(error) = self.inner.send_notification(notification) {
             self.budget.release(bytes);
             return Err(error);
@@ -125,6 +164,14 @@ fn serialized_size(value: &impl serde::Serialize) -> serde_json::Result<usize> {
     Ok(size.0)
 }
 
+fn notification_size(
+    notification: &acp::SessionNotification,
+) -> agent_client_protocol::Result<usize> {
+    serialized_size(notification)
+        .map(|bytes| bytes + ENVELOPE_BYTES)
+        .map_err(|error| crate::error::internal(error.to_string()))
+}
+
 #[derive(serde::Deserialize)]
 struct WireFrame<'a> {
     method: Option<&'a str>,
@@ -174,6 +221,7 @@ impl<R: Role> ConnectTo<R> for Stdio {
         self,
         client: impl ConnectTo<R::Counterpart>,
     ) -> agent_client_protocol::Result<()> {
+        let _closed = self.budget.failed.clone().drop_guard();
         let stdin = blocking::Unblock::new(std::io::stdin());
         let stdout = blocking::Unblock::with_capacity(64 * 1024, std::io::stdout());
         let sink = futures::sink::unfold(

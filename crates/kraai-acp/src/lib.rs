@@ -128,7 +128,7 @@ impl Server {
             .await
             .map_err(error::runtime)?;
         history::replay(&self.runtime, &snapshot, connection).await?;
-        commands::advertise(connection, request.session_id)?;
+        commands::advertise(connection, request.session_id).await?;
         session.ready.store(true, Ordering::Release);
         Ok(acp::LoadSessionResponse::new().config_options(config))
     }
@@ -187,7 +187,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                         let (id, session) =
                             session::create(&server.runtime, &server.options, request).await?;
                         let config = config::options(&server.runtime, &id).await?;
-                        commands::advertise(&connection, acp::SessionId::new(id.clone()))?;
+                        commands::advertise(&connection, acp::SessionId::new(id.clone())).await?;
                         server.sessions.lock().await.insert(id.clone(), session);
                         Ok(acp::NewSessionResponse::new(id).config_options(config))
                     }

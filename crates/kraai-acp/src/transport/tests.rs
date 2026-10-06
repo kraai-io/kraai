@@ -43,6 +43,61 @@ fn admission_never_exceeds_capacity_and_overload_stays_failed() {
 #[tokio::test]
 #[expect(
     clippy::panic_in_result_fn,
+    reason = "assertions validate output capacity waits"
+)]
+async fn capacity_waits_for_enough_space_and_cancellation_does_not_reserve()
+-> color_eyre::Result<()> {
+    let budget = Budget::new(1024);
+    budget.reserve(1024)?;
+    let mut waiting = Box::pin(budget.reserve_wait(512));
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    budget.release(256);
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    assert!(!budget.failed.is_cancelled());
+    budget.release(256);
+    tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+    assert_eq!(budget.bytes.load(Ordering::Acquire), 1024);
+    let mut cancelled = Box::pin(budget.reserve_wait(1));
+    assert!(futures::poll!(cancelled.as_mut()).is_pending());
+    drop(cancelled);
+    budget.release(1024);
+    budget.reserve_wait(1024).await?;
+    assert_eq!(budget.bytes.load(Ordering::Acquire), 1024);
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions validate output capacity failures"
+)]
+async fn closed_transport_and_oversized_frames_do_not_leave_capacity_waits_hanging()
+-> color_eyre::Result<()> {
+    let budget = Budget::new(1024);
+    budget.reserve(1024)?;
+    let mut waiting = Box::pin(budget.reserve_wait(1));
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    budget.failed.cancel();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await?
+            .is_err()
+    );
+    assert_eq!(budget.bytes.load(Ordering::Acquire), 1024);
+    let budget = Budget::new(1024);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), budget.reserve_wait(1025))
+            .await?
+            .is_err()
+    );
+    assert_eq!(budget.bytes.load(Ordering::Acquire), 0);
+    assert!(budget.failed.is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    clippy::panic_in_result_fn,
     reason = "assertions validate byte accounting after fallible I/O"
 )]
 async fn large_image_reservation_is_released_only_after_physical_flush() -> color_eyre::Result<()> {
@@ -55,12 +110,16 @@ async fn large_image_reservation_is_released_only_after_physical_flush() -> colo
     );
     let reservation = serialized_size(&params)? + ENVELOPE_BYTES;
     budget.reserve(reservation)?;
+    let mut waiting = Box::pin(budget.reserve_wait(OUTPUT_BYTES));
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
     let line = json!({"jsonrpc":"2.0","method":"session/update","params":params}).to_string();
     assert_eq!(budget.bytes.load(Ordering::Acquire), reservation);
     let mut written = futures::io::Cursor::new(Vec::new());
     write_frame(&mut written, &line, &budget, Duration::from_secs(5)).await?;
     assert_eq!(budget.bytes.load(Ordering::Acquire), 0);
     assert_eq!(written.into_inner(), format!("{line}\n").into_bytes());
+    tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+    assert_eq!(budget.bytes.load(Ordering::Acquire), OUTPUT_BYTES);
     Ok(())
 }
 

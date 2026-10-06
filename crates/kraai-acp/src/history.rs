@@ -33,7 +33,8 @@ pub(crate) async fn replay(
     for message in messages.into_iter().rev() {
         for update in updates(runtime, message).await? {
             connection
-                .send_notification(acp::SessionNotification::new(session_id.clone(), update))?;
+                .send_notification_wait(acp::SessionNotification::new(session_id.clone(), update))
+                .await?;
         }
     }
     Ok(())

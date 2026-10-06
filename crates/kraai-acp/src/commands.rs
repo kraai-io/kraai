@@ -24,23 +24,25 @@ pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
     Ok(Some(command))
 }
 
-pub(crate) fn advertise(
+pub(crate) async fn advertise(
     connection: &crate::transport::Connection,
     id: acp::SessionId,
 ) -> Result<()> {
-    connection.send_notification(acp::SessionNotification::new(
-        id,
-        acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
-            acp::AvailableCommand::new(
-                "continue",
-                "Resume the conversation using the selected model",
-            ),
-            acp::AvailableCommand::new(
-                "undo",
-                "Remove the last user turn from conversation context; keep file changes",
-            ),
-        ])),
-    ))
+    connection
+        .send_notification_wait(acp::SessionNotification::new(
+            id,
+            acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
+                acp::AvailableCommand::new(
+                    "continue",
+                    "Resume the conversation using the selected model",
+                ),
+                acp::AvailableCommand::new(
+                    "undo",
+                    "Remove the last user turn from conversation context; keep file changes",
+                ),
+            ])),
+        ))
+        .await
 }
 
 pub(crate) async fn undo(
