@@ -1,11 +1,11 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use color_eyre::Result;
+use color_eyre::eyre::{Context, Result};
 use kraai_persistence::RequestUsageStore;
 use kraai_provider_core::{ProviderManager, ProviderRetryEvent, ProviderRetryObserver};
 use kraai_types::{MessageId, ModelId, ProviderId, RequestUsage, TokenUsage};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 pub struct AuxiliaryUsageRecorder {
     pub store: Arc<dyn RequestUsageStore>,
@@ -16,7 +16,7 @@ pub struct AuxiliaryUsageRecorder {
 
 pub struct AuxiliaryRequestUsage {
     recorder: AuxiliaryUsageRecorder,
-    request: Mutex<RequestUsage>,
+    request: Arc<Mutex<RequestUsage>>,
 }
 
 impl AuxiliaryUsageRecorder {
@@ -44,9 +44,12 @@ impl AuxiliaryUsageRecorder {
         };
         let observer = Arc::new(AuxiliaryRequestUsage {
             recorder: self,
-            request: Mutex::new(request.clone()),
+            request: Arc::new(Mutex::new(request)),
         });
-        observer.persist(&request).await?;
+        {
+            let request = observer.request.clone().lock_owned().await;
+            observer.persist(request).await
+        }?;
         Ok(observer)
     }
 }
@@ -57,26 +60,30 @@ impl AuxiliaryRequestUsage {
     }
 
     pub async fn save_usage(&self, usage: TokenUsage) -> Result<()> {
-        let mut request = self.request.lock().await;
+        let mut request = self.request.clone().lock_owned().await;
         request.usage = Some(usage);
-        self.persist(&request).await?;
-        drop(request);
-        Ok(())
+        self.persist(request).await
     }
 
-    async fn persist(&self, request: &RequestUsage) -> Result<()> {
-        let _guard = match &self.recorder.barrier {
-            Some(barrier) => Some(barrier.read().await),
+    async fn persist(&self, request: OwnedMutexGuard<RequestUsage>) -> Result<()> {
+        let guard = match &self.recorder.barrier {
+            Some(barrier) => Some(barrier.clone().read_owned().await),
             None => None,
         };
-        self.recorder
-            .store
-            .save(&self.recorder.session_id, request)
-            .await?;
-        if let Some(observer) = &self.recorder.on_usage {
-            observer(request.clone());
-        }
-        Ok(())
+        let store = self.recorder.store.clone();
+        let session_id = self.recorder.session_id.clone();
+        let observer = self.recorder.on_usage.clone();
+        tokio::spawn(async move {
+            store.save(&session_id, &request).await?;
+            if let Some(observer) = observer {
+                observer(request.clone());
+            }
+            drop(request);
+            drop(guard);
+            Ok(())
+        })
+        .await
+        .context("Auxiliary request usage commit task failed")?
     }
 }
 
@@ -89,12 +96,15 @@ impl ProviderRetryObserver for AuxiliaryRequestUsage {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             if attempts > 0 {
-                let mut request = self.request.lock().await;
+                let mut request = self.request.clone().lock_owned().await;
                 request.unpriced_attempts = attempts;
-                self.persist(&request).await?;
-                drop(request);
+                self.persist(request).await
+            } else {
+                Ok(())
             }
-            Ok(())
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

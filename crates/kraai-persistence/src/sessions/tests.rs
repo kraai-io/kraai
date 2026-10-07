@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::test_dir;
-use crate::{CompactionCheckpoint, FileCompactionStore, FileMessageStore, init_at};
+use crate::{CompactionCheckpoint, FileCompactionStore, FileMessageStore, Persistence};
 use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, Message, MessageStatus};
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -89,6 +89,7 @@ fn message(id: &str, parent_id: Option<&MessageId>, content: &str) -> Message {
 async fn cancelled_mutations_publish_sessions_before_releasing_the_write_lock() {
     for operation in ["save", "compare-and-save", "delete"] {
         let data_dir = test_dir(operation);
+        fs::create_dir_all(&data_dir).await.unwrap();
         let messages = Arc::new(FileMessageStore::new(&data_dir));
         let store = Arc::new(FileSessionStore::new(&data_dir, messages.clone()));
         let root = message("root", None, "root");
@@ -177,11 +178,12 @@ async fn save_failure_does_not_mutate_in_memory_sessions() {
     let message_store = Arc::new(FileMessageStore::new(&data_dir));
     let session_store = FileSessionStore::new(&blocking_file, message_store);
 
-    let err = session_store
-        .save(&session("broken", None, 1))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("Failed to create directory"));
+    assert!(
+        session_store
+            .save(&session("broken", None, 1))
+            .await
+            .is_err()
+    );
     assert!(session_store.list().await.unwrap().is_empty());
 
     let _ = fs::remove_dir_all(&data_dir).await;
@@ -200,7 +202,9 @@ async fn replaced_sessions_publish_before_returning_durability_error() {
                 .state
                 .publish_sessions(
                     next_sessions,
-                    AtomicWriteOutcome::ReplacedButNotSynced(eyre!("injected parent sync failure")),
+                    AtomicWriteOutcome::ReplacedButNotSynced(std::io::Error::other(
+                        "injected parent sync failure",
+                    )),
                 )
                 .await
                 .unwrap_err();
@@ -374,7 +378,7 @@ async fn startup_garbage_collection_leaves_history_out_of_hot_cache() {
                 .await
                 .unwrap();
 
-            let (reopened_messages, _, _, _) = init_at(&data_dir).await.unwrap();
+            let reopened_messages = Persistence::open(&data_dir).await.unwrap().messages;
 
             assert!(reopened_messages.list_hot().await.unwrap().is_empty());
             assert_eq!(

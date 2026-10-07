@@ -11,7 +11,6 @@ use kraai_types::{MessageId, ModelId, ProviderId};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 use super::script_execution::PendingScriptApproval;
 use crate::api::Event;
@@ -34,7 +33,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
-    pub(crate) stream_tasks: TaskTracker,
+    pub(crate) stream_tasks: Arc<super::stream_tasks::StreamTasks>,
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
     pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
     pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
@@ -211,6 +210,8 @@ impl RuntimeCore {
         for task in active_script_tasks {
             let _ = task.join_handle.await;
         }
+        self.stream_tasks.wait().await;
+        drop(self.session_state_barrier.write().await);
     }
 
     pub(crate) fn is_stopping(&self) -> bool {

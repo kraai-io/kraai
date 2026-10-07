@@ -13,7 +13,7 @@ use ulid::Ulid;
 
 use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
-use crate::{atomic_write, sync_parent_directory};
+use kraai_io::fs::{atomic_replace_async, sync_directory_async};
 
 const RECORD_FILE: &str = "record.json";
 const SOURCE_FILE: &str = "source.nu";
@@ -129,6 +129,7 @@ pub trait ScriptExecutionStore: Send + Sync {
 }
 
 pub struct FileScriptExecutionStore {
+    storage_root: PathBuf,
     executions_dir: PathBuf,
     execution_locks: KeyedLocks<ScriptExecutionId>,
 }
@@ -136,6 +137,7 @@ pub struct FileScriptExecutionStore {
 impl FileScriptExecutionStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
+            storage_root: data_dir.to_path_buf(),
             executions_dir: data_dir.join("executions"),
             execution_locks: KeyedLocks::default(),
         }
@@ -162,7 +164,10 @@ impl FileScriptExecutionStore {
     async fn persist_record(execution_dir: &Path, record: &ScriptExecutionRecord) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(record)
             .context("Failed to serialize script execution record")?;
-        atomic_write(&execution_dir.join(RECORD_FILE), &bytes).await
+        atomic_replace_async(&execution_dir.join(RECORD_FILE), &bytes)
+            .await?
+            .into_result()
+            .map_err(color_eyre::Report::from)
     }
 
     async fn transition(
@@ -197,22 +202,34 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
     async fn create(&self, execution: NewScriptExecution) -> Result<ScriptExecutionRecord> {
         let guard = self.execution_locks.lock(&execution.id).await;
         let executions_dir = self.executions_dir.clone();
+        let storage_root = self.storage_root.clone();
         let execution_dir = self.execution_dir(&execution.id);
         complete_commit(
             guard,
             async move {
-                fs::create_dir_all(&executions_dir).await.with_context(|| {
-                    format!("Failed to create script executions directory: {executions_dir:?}")
-                })?;
+                kraai_io::fs::create_dir_all_in_async(&storage_root, &executions_dir)
+                    .await
+                    .with_context(|| {
+                        format!("Failed to create script executions directory: {executions_dir:?}")
+                    })?;
                 let execution_dir = execution_dir?;
                 fs::create_dir(&execution_dir).await.with_context(|| {
                     format!("Failed to create unique script execution directory: {execution_dir:?}")
                 })?;
-                sync_parent_directory(&executions_dir).await?;
+                sync_directory_async(&executions_dir).await?;
 
-                atomic_write(&execution_dir.join(SOURCE_FILE), &execution.source).await?;
-                atomic_write(&execution_dir.join(STDOUT_FILE), &[]).await?;
-                atomic_write(&execution_dir.join(STDERR_FILE), &[]).await?;
+                atomic_replace_async(&execution_dir.join(SOURCE_FILE), &execution.source)
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)?;
+                atomic_replace_async(&execution_dir.join(STDOUT_FILE), &[])
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)?;
+                atomic_replace_async(&execution_dir.join(STDERR_FILE), &[])
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)?;
                 let timestamp = now_millis();
                 let record = ScriptExecutionRecord {
                     id: execution.id,
@@ -440,8 +457,14 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         complete_commit(
             guard,
             async move {
-                atomic_write(&execution_dir.join(STDOUT_FILE), &completion.stdout).await?;
-                atomic_write(&execution_dir.join(STDERR_FILE), &completion.stderr).await?;
+                atomic_replace_async(&execution_dir.join(STDOUT_FILE), &completion.stdout)
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)?;
+                atomic_replace_async(&execution_dir.join(STDERR_FILE), &completion.stderr)
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)?;
 
                 record.phase = ScriptExecutionPhase::Finished;
                 record.status = Some(completion.status);

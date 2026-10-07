@@ -7,10 +7,9 @@ use kraai_types::{Message, MessageId};
 use tokio::fs;
 use tokio::sync::RwLock;
 
-use crate::FileCompactionStore;
-use crate::atomic_file::atomic_write_with_outcome;
 use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
+use kraai_io::fs::{atomic_replace_async, read_optional_text_async, remove_file_durable_async};
 
 /// Trait for storing and retrieving messages
 #[async_trait::async_trait]
@@ -43,22 +42,22 @@ pub trait MessageStore: Send + Sync {
 
 /// File-based message store with hot cache and cold storage
 pub struct FileMessageStore {
+    storage_root: PathBuf,
     /// Hot cache for frequently accessed messages
     hot: Arc<RwLock<HashMap<MessageId, Message>>>,
     message_locks: KeyedLocks<MessageId>,
     /// Base directory for cold storage
     cold_dir: PathBuf,
-    compactions: FileCompactionStore,
 }
 
 impl FileMessageStore {
     pub fn new(data_dir: &Path) -> Self {
         let cold_dir = data_dir.join("messages");
         Self {
+            storage_root: data_dir.to_path_buf(),
             hot: Arc::new(RwLock::new(HashMap::new())),
             message_locks: KeyedLocks::default(),
             cold_dir,
-            compactions: FileCompactionStore::new(data_dir),
         }
     }
 
@@ -80,13 +79,12 @@ impl FileMessageStore {
 
     async fn read_cold_message(&self, id: &MessageId) -> Result<Option<Message>> {
         let path = self.message_path(id)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let content = fs::read_to_string(&path)
+        let Some(content) = read_optional_text_async(&path)
             .await
-            .with_context(|| format!("Failed to read message file: {:?}", path))?;
+            .with_context(|| format!("Failed to read message file: {:?}", path))?
+        else {
+            return Ok(None);
+        };
 
         let message = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse message file: {:?}", path))?;
@@ -95,7 +93,7 @@ impl FileMessageStore {
 
     /// Ensure the messages directory exists
     async fn ensure_dir(&self) -> Result<()> {
-        fs::create_dir_all(&self.cold_dir)
+        kraai_io::fs::create_dir_all_in_async(&self.storage_root, &self.cold_dir)
             .await
             .with_context(|| format!("Failed to create messages directory: {:?}", self.cold_dir))?;
         Ok(())
@@ -160,7 +158,7 @@ impl MessageStore for FileMessageStore {
             guard,
             async move {
                 async {
-                    let outcome = atomic_write_with_outcome(&path, content.as_bytes()).await?;
+                    let outcome = atomic_replace_async(&path, content.as_bytes()).await?;
                     let previous = hot.write().await.insert(message.id.clone(), message);
                     drop(previous);
                     outcome.into_result()
@@ -184,18 +182,14 @@ impl MessageStore for FileMessageStore {
         let path = self.message_path(id)?;
         let id = id.clone();
         let hot = Arc::clone(&self.hot);
-        let compactions = self.compactions.clone();
         complete_commit(
             guard,
             async move {
-                compactions.delete(&id).await?;
                 let removed = hot.write().await.remove(&id);
                 drop(removed);
-                if path.exists() {
-                    fs::remove_file(&path)
-                        .await
-                        .with_context(|| format!("Failed to delete message file: {:?}", path))?;
-                }
+                remove_file_durable_async(&path)
+                    .await
+                    .with_context(|| format!("Failed to delete message file: {:?}", path))?;
                 Ok(())
             },
             "Message commit task failed",
@@ -205,7 +199,7 @@ impl MessageStore for FileMessageStore {
 
     async fn exists(&self, id: &MessageId) -> Result<bool> {
         let path = self.message_path(id)?;
-        Ok(path.exists())
+        Ok(tokio::fs::try_exists(path).await?)
     }
 
     async fn list_hot(&self) -> Result<HashSet<MessageId>> {
@@ -216,13 +210,15 @@ impl MessageStore for FileMessageStore {
     async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
         let mut ids = HashSet::new();
 
-        if !self.cold_dir.exists() {
-            return Ok(ids);
-        }
-
-        let mut entries = fs::read_dir(&self.cold_dir)
-            .await
-            .with_context(|| format!("Failed to read messages directory: {:?}", self.cold_dir))?;
+        let mut entries = match fs::read_dir(&self.cold_dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to read messages directory: {:?}", self.cold_dir)
+                });
+            }
+        };
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
@@ -248,11 +244,13 @@ impl MessageStore for FileMessageStore {
 )]
 mod tests {
     use super::*;
+    use crate::SessionStore;
     use kraai_types::{ConversationItem, MessageStatus};
 
     #[tokio::test]
     async fn cancelled_delete_finishes_after_removing_the_compaction_checkpoint() {
         let directory = crate::test_support::test_dir("message-delete-compaction-cancelled");
+        fs::create_dir(&directory).await.unwrap();
         let store = Arc::new(FileMessageStore::new(&directory));
         let message = Message {
             id: MessageId::new("message"),
@@ -265,8 +263,9 @@ mod tests {
             generation: None,
         };
         store.save(&message).await.unwrap();
-        store
-            .compactions
+        let sessions = Arc::new(crate::FileSessionStore::new(&directory, store.clone()));
+        let compactions = sessions.compactions();
+        compactions
             .save(&crate::CompactionCheckpoint {
                 covered_through: message.id.clone(),
                 superseded_usage: vec![message.id.clone()],
@@ -285,11 +284,12 @@ mod tests {
         let cached = store.hot.read().await;
         let caller = tokio::spawn({
             let store = Arc::clone(&store);
+            let sessions = Arc::clone(&sessions);
             let id = message.id.clone();
-            async move { store.delete(&id).await }
+            async move { sessions.delete_message_if_unreferenced(&id, store).await }
         });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while store.compactions.get(&message.id).await.unwrap().is_some() {
+            while compactions.get(&message.id).await.unwrap().is_some() {
                 tokio::task::yield_now().await;
             }
         })
@@ -299,15 +299,15 @@ mod tests {
         assert!(caller.await.unwrap_err().is_cancelled());
         drop(cached);
 
-        let guard = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            store.message_locks.lock(&message.id),
+            sessions.delete_message_if_unreferenced(&message.id, store.clone()),
         )
         .await
+        .unwrap()
         .unwrap();
         assert!(!store.exists(&message.id).await.unwrap());
         assert!(!store.hot.read().await.contains_key(&message.id));
-        drop(guard);
         assert!(store.get(&message.id).await.unwrap().is_none());
         fs::remove_dir_all(directory).await.unwrap();
     }
@@ -318,6 +318,7 @@ mod tests {
             "kraai-message-cancelled-{}",
             ulid::Ulid::generate()
         ));
+        fs::create_dir(&directory).await.unwrap();
         let store = Arc::new(FileMessageStore::new(&directory));
         let mut message = Message {
             id: MessageId::new("message"),
@@ -368,6 +369,7 @@ mod tests {
     async fn ancestry_reads_validate_complete_messages_without_populating_hot_cache() {
         let directory =
             std::env::temp_dir().join(format!("kraai-message-ancestry-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await.unwrap();
         let store = FileMessageStore::new(&directory);
         let message = Message {
             id: MessageId::new("message"),
@@ -416,6 +418,7 @@ mod tests {
     async fn cold_reads_and_deletes_do_not_leave_cached_messages() {
         let directory =
             std::env::temp_dir().join(format!("kraai-message-races-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await.unwrap();
         let store = FileMessageStore::new(&directory);
         let message = Message {
             id: MessageId::new("message"),

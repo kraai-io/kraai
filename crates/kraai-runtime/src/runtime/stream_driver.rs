@@ -41,6 +41,23 @@ pub(super) struct CompletedStreamOutput {
     pub(super) protocol_error: Option<ProtocolError>,
 }
 
+pub(super) fn auxiliary_usage_observer(
+    event_tx: RuntimeEventSender,
+    session_id: String,
+    task: super::stream_tasks::SessionTaskToken,
+) -> Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> {
+    Arc::new(move |request| {
+        let _task = &task;
+        emit_event(
+            &event_tx,
+            Event::RequestUsageUpdated {
+                session_id: session_id.clone(),
+                request: Box::new(request),
+            },
+        );
+    })
+}
+
 impl RuntimeCore {
     pub(super) async fn drive_stream(
         session_id: String,
@@ -49,6 +66,7 @@ impl RuntimeCore {
         agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
         event_tx: RuntimeEventSender,
         session_state_barrier: Arc<tokio::sync::RwLock<()>>,
+        auxiliary_usage_task: super::stream_tasks::SessionTaskToken,
     ) -> StreamDriveResult {
         let PendingStreamRequest {
             message_id,
@@ -58,18 +76,8 @@ impl RuntimeCore {
             context_notifications: _,
             context_compaction,
         } = request;
-        let usage_event_tx = event_tx.clone();
-        let usage_session_id = session_id.clone();
-        let on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> =
-            Arc::new(move |request| {
-                emit_event(
-                    &usage_event_tx,
-                    Event::RequestUsageUpdated {
-                        session_id: usage_session_id.clone(),
-                        request: Box::new(request),
-                    },
-                );
-            });
+        let on_auxiliary_usage =
+            auxiliary_usage_observer(event_tx.clone(), session_id.clone(), auxiliary_usage_task);
         if let Some(compaction) = context_compaction {
             let compaction = compaction
                 .observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone())

@@ -134,7 +134,13 @@ impl ContextCompaction {
             prompt_version: 1,
             usage: requests.last().and_then(|request| request.usage.clone()),
         };
-        self.store.save(&checkpoint).await?;
+        if let Some(barrier) = &self.usage_barrier {
+            self.store
+                .save_with_barrier(&checkpoint, barrier.clone())
+                .await?;
+        } else {
+            self.store.save(&checkpoint).await?;
+        }
         let mut request = assemble(
             &self.prefix,
             &self.snapshots,

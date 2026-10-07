@@ -6,7 +6,6 @@ mod store;
 mod tests;
 
 use base64::Engine;
-use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -55,7 +54,8 @@ struct Control {
 pub(crate) struct Auth {
     url: String,
     config: OAuthConfig,
-    path: Option<PathBuf>,
+    root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
+    filename: String,
     server: Weak<Server>,
     control: Mutex<Control>,
     status: Mutex<McpAuthStatus>,
@@ -69,7 +69,7 @@ impl Auth {
         name: String,
         url: String,
         config: OAuthConfig,
-        root: Option<&std::path::Path>,
+        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
         server: Weak<Server>,
         events: broadcast::Sender<McpAuthStatus>,
     ) -> Self {
@@ -81,11 +81,11 @@ impl Auth {
         hash.update([0]);
         hash.update(serde_json::to_vec(&config).unwrap_or_default());
         let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash.finalize());
-        let path = root.map(|root| root.join(format!("{key}.json")));
         Self {
             url,
             config,
-            path,
+            root,
+            filename: format!("{key}.json"),
             server,
             control: Mutex::default(),
             status: Mutex::new(McpAuthStatus {
@@ -101,12 +101,12 @@ impl Auth {
     }
 
     fn store(&self) -> Result<FileStore, String> {
-        FileStore::current(
-            self.path
-                .clone()
-                .ok_or("MCP OAuth credential storage is not configured")?,
-        )
-        .map_err(|error| error.to_string())
+        let root = self
+            .root
+            .as_ref()
+            .ok_or("MCP OAuth credential storage is not configured")?;
+        FileStore::current(root.path().join(&self.filename), root.clone())
+            .map_err(|error| error.to_string())
     }
 
     async fn publish(&self, state: McpAuthState, error: Option<String>) -> McpAuthStatus {
@@ -122,7 +122,7 @@ impl Auth {
 
     pub(crate) async fn status(&self) -> McpAuthStatus {
         let mut status = self.status.lock().await;
-        if status.sequence == 0 && self.path.is_some() {
+        if status.sequence == 0 && self.root.is_some() {
             match self.store() {
                 Ok(store) => match store.load().await {
                     Ok(Some(credentials)) if credentials.token_response.is_some() => {
@@ -145,7 +145,7 @@ impl Auth {
     }
 
     pub(crate) async fn start(self: &Arc<Self>) -> Result<McpAuthStatus, String> {
-        if self.path.is_none() {
+        if self.root.is_none() {
             return Err(String::from(
                 "MCP OAuth credential storage is not configured",
             ));
@@ -251,7 +251,7 @@ impl Auth {
         self: &Arc<Self>,
         client: reqwest::Client,
     ) -> Result<Option<OAuthClient>, String> {
-        if self.path.is_none() {
+        if self.root.is_none() {
             return Ok(None);
         }
         let store = self.store()?;

@@ -84,7 +84,9 @@ impl ModelCatalog {
     async fn load(&self) {
         let Some(path) = cache_path() else { return };
         if let Ok(Some(snapshot)) = tokio::task::spawn_blocking(move || {
-            let file = std::fs::File::open(path).ok()?;
+            let file =
+                kraai_io::fs::open_regular_file(&path, kraai_io::fs::FinalSymlinkPolicy::Follow)
+                    .ok()?;
             if file.metadata().ok()?.len() > MAX_BYTES as u64 {
                 return None;
             }
@@ -116,20 +118,21 @@ impl ModelCatalog {
     }
 
     async fn fetch(&self) -> color_eyre::Result<()> {
-        let client = crate::build_finite_http_client()?;
-        let mut response = client
+        let client = kraai_io::http::build_finite_http_client()?;
+        let response = client
             .get("https://models.dev/api.json")
             .header(reqwest::header::USER_AGENT, "kraai/0.1")
             .send()
             .await?
             .error_for_status()?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > MAX_BYTES {
-                return Err(color_eyre::eyre::eyre!("Model catalog exceeds size limit"));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = kraai_io::http::read_response_body(response, MAX_BYTES)
+            .await
+            .map_err(|error| match error {
+                kraai_io::http::BodyReadError::TooLarge { .. } => {
+                    color_eyre::eyre::eyre!("Model catalog exceeds size limit")
+                }
+                kraai_io::http::BodyReadError::Transport(error) => error.into(),
+            })?;
         let (snapshot, bytes) = tokio::task::spawn_blocking(move || {
             let providers: BTreeMap<String, CatalogProvider> = serde_json::from_slice(&bytes)?;
             if providers.is_empty() {
@@ -147,13 +150,10 @@ impl ModelCatalog {
         self.replace_snapshot(snapshot).await;
         if let Some(path) = cache_path() {
             tokio::task::spawn_blocking(move || -> color_eyre::Result<()> {
-                use std::io::Write;
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                if let Some(directory) = path.parent() {
+                    kraai_io::fs::create_dir_all(directory)?;
                 }
-                let mut file = atomic_write_file::AtomicWriteFile::open(path)?;
-                file.write_all(&bytes)?;
-                file.commit()?;
+                kraai_io::fs::atomic_replace(&path, &bytes)?.into_result()?;
                 Ok(())
             })
             .await??;
@@ -225,14 +225,7 @@ impl ModelCatalog {
 }
 
 fn read_cached_snapshot(reader: impl Read) -> Option<Snapshot> {
-    let mut bytes = Vec::new();
-    reader
-        .take(MAX_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > MAX_BYTES {
-        return None;
-    }
+    let bytes = kraai_io::read::read_bounded(reader, MAX_BYTES as u64).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 

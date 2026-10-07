@@ -266,21 +266,27 @@ impl RuntimeBuilder {
             Some(path) => path,
             None => agent_state_root()?,
         };
+        kraai_io::fs::create_dir_all_async(&storage_root)
+            .await
+            .wrap_err("Failed to initialize storage root")?;
         if host_options.initialize_tracing {
             Self::init_tracing(&storage_root)?;
         }
         let data_dir = storage_root.join("data");
         let auth_options = OpenAiCodexAuthControllerOptions::new(
+            storage_root.clone(),
             storage_root.join("provider-state/openai-codex/auth.json"),
         );
         let (persistence, auth) = tokio::join!(
-            kraai_persistence::init_at(&data_dir),
+            kraai_persistence::Persistence::open(&data_dir),
             tokio::task::spawn_blocking(move || {
                 OpenAiCodexAuthController::new_with_options(auth_options)
             }),
         );
-        let (message_store, session_store, execution_store, context_state_store) =
-            persistence.wrap_err("Failed to initialize persistence layer")?;
+        let persistence = persistence.wrap_err("Failed to initialize persistence layer")?;
+        let execution_store = persistence.executions().clone();
+        let context_state_store = persistence.context().clone();
+        let image_store = persistence.images().clone();
 
         let providers = ProviderManager::new();
         let default_workspace_dir = std::env::current_dir()
@@ -299,12 +305,7 @@ impl RuntimeBuilder {
         let agent_manager = Arc::new(RwLock::new(AgentManager::new(
             providers,
             default_workspace_dir,
-            message_store,
-            session_store,
-            context_state_store.clone(),
-            Arc::new(kraai_persistence::FileRequestUsageStore::new(
-                &storage_root.join("data"),
-            )),
+            persistence,
             storage_root.clone(),
         )));
 
@@ -315,13 +316,16 @@ impl RuntimeBuilder {
         let mcp_config = kraai_mcp::McpConfig::load(&mcp_config_path)
             .await
             .map_err(|error| eyre!(error))?;
-        let mcp =
-            kraai_mcp::McpManager::with_auth_storage(mcp_config, storage_root.join("mcp-auth"))
-                .map_err(|error| eyre!(error))?;
+        let mcp = kraai_mcp::McpManager::with_auth_storage(
+            mcp_config,
+            storage_root.clone(),
+            storage_root.join("mcp-auth"),
+        )
+        .map_err(|error| eyre!(error))?;
         agent_manager.write().await.set_mcp(Arc::new(mcp));
 
         let runtime = RuntimeCore {
-            image_store: Arc::new(kraai_persistence::FileImageStore::new(&data_dir)),
+            image_store,
             queue_drains: Arc::default(),
             session_preparations: Arc::default(),
             event_tx,

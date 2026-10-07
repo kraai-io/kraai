@@ -1,3 +1,4 @@
+mod file_access;
 mod scanning;
 mod trajectory;
 

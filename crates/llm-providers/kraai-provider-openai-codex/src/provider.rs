@@ -1,3 +1,4 @@
+use kraai_io::http::{finite_request, streaming_http_client_builder};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,8 +9,7 @@ use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue,
     FieldDefinition, FieldValueKind, Model, ModelConfig, Provider, ProviderDefinition,
     ProviderPricingPolicy, ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
-    ValidationError, finite_request, send_with_retry as send_http_with_retry, stream_sse_data,
-    streaming_http_client_builder,
+    ValidationError, send_with_retry as send_http_with_retry, stream_sse_data,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::header::{ACCEPT, HeaderValue};
@@ -450,7 +450,8 @@ impl OpenAiCodexProvider {
                 self.authenticated_get(url.as_str(), auth)
             })
             .await?;
-        let response = response.json::<ListModelsResponse>().await?;
+        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
+        let response: ListModelsResponse = serde_json::from_slice(&bytes)?;
         DiscoveredModels::new(response.models)
     }
 
@@ -636,10 +637,7 @@ fn apply_responses_session_headers(
 async fn log_retryable_auth_failure(operation: &str, response: Response) {
     let url = response.url().to_string();
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|error| format!("<failed to read body: {error}>"));
+    let body = kraai_provider_core::read_error_body(response).await;
     warn!(
         operation,
         %status,
@@ -671,10 +669,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
 
     let url = response.url().to_string();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|error| format!("<failed to read body: {error}>"));
+    let body = kraai_provider_core::read_error_body(response).await;
     error!(
         operation,
         %status,
@@ -730,6 +725,7 @@ mod tests {
 
     fn auth_controller() -> Option<OpenAiCodexAuthController> {
         match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+            std::env::temp_dir(),
             std::env::temp_dir()
                 .join(format!("provider-openai-codex-{}", Ulid::generate()))
                 .join("auth.json"),

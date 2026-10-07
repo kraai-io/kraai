@@ -355,10 +355,14 @@ async fn run_server(
         credentials: config.credentials,
         allowed_paths: config.allowed_paths,
         token,
-        client: Client::builder()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .build()?,
+        client: kraai_io::http::client_builder(
+            kraai_io::http::HttpTimeouts {
+                connect: Some(Duration::from_secs(10)),
+                ..Default::default()
+            },
+            Policy::none(),
+        )
+        .build()?,
         log,
         max_requests: config.max_requests,
         request_count: AtomicU64::new(0),

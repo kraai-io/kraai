@@ -68,16 +68,8 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         .await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let (messages, sessions, _, context_state) = kraai_persistence::init_at(&data_dir).await?;
-    let reopened = AgentManager::new(
-        providers,
-        data_dir.clone(),
-        messages,
-        sessions,
-        context_state,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
-        data_dir.clone(),
-    );
+    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
+    let reopened = AgentManager::new(providers, data_dir.clone(), persistence, data_dir.clone());
     for prefix in ["current instructions", "new instructions"] {
         let (request, pending, _) = reopened
             .build_model_context(

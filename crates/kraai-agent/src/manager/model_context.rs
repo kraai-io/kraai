@@ -1,6 +1,5 @@
 use super::*;
 use crate::compaction::{ContextCompaction, assemble};
-use kraai_persistence::FileCompactionStore;
 
 impl AgentManager {
     pub(super) async fn get_model_history(
@@ -8,7 +7,7 @@ impl AgentManager {
         from: &MessageId,
         identity: (&ProviderId, &ModelId),
     ) -> Result<Vec<Message>> {
-        let store = FileCompactionStore::new(&self.storage_root);
+        let store = self.persistence.compactions().clone();
         let mut cursor = Some(from.clone());
         let mut visited = HashSet::new();
         let mut history = Vec::new();
@@ -52,7 +51,7 @@ impl AgentManager {
         max_context: Option<usize>,
         identity: (&ProviderId, &ModelId),
     ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
-        let store = FileCompactionStore::new(&self.storage_root);
+        let store = self.persistence.compactions().clone();
         let mut previous = None;
         let mut start = 0;
         for (index, message) in history.iter().enumerate().rev() {

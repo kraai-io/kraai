@@ -182,8 +182,7 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
         .create(true)
         .append(true)
         .open(job_dir.with_extension("prepare.lock"))?;
-    preparation_lock
-        .try_lock()
+    let _preparation_lock = kraai_io::lock::FileLock::try_acquire(preparation_lock)
         .wrap_err("benchmark is already running")?;
     let saved_spec = job_dir.join("kraai-eval-spec.json");
     let proxy_host = if args.oracle {

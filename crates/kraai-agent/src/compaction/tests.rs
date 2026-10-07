@@ -103,6 +103,10 @@ fn snapshots(text: &str) -> Vec<FileContextSnapshot> {
     }]
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "compaction fixtures require an initialized data directory"
+)]
 fn fixture(
     native: bool,
     mut events: Vec<ProviderStreamEvent>,
@@ -114,6 +118,7 @@ fn fixture(
     std::path::PathBuf,
 ) {
     let root = std::env::temp_dir().join(format!("compaction-agent-{}", ulid::Ulid::generate()));
+    std::fs::create_dir_all(&root).expect("create compaction data directory");
     let history = vec![
         message(
             "user",

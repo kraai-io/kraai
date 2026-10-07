@@ -51,13 +51,24 @@ impl McpManager {
         Self::build(config, None, tokio::sync::broadcast::channel(64).0)
     }
 
-    pub fn with_auth_storage(config: McpConfig, root: std::path::PathBuf) -> Result<Self, String> {
-        Self::build(config, Some(root), tokio::sync::broadcast::channel(64).0)
+    pub fn with_auth_storage(
+        config: McpConfig,
+        storage_root: std::path::PathBuf,
+        root: std::path::PathBuf,
+    ) -> Result<Self, String> {
+        Self::build(
+            config,
+            Some(Arc::new(kraai_io::fs::DirectoryBootstrap::new(
+                storage_root,
+                root,
+            ))),
+            tokio::sync::broadcast::channel(64).0,
+        )
     }
 
     fn build(
         config: McpConfig,
-        root: Option<std::path::PathBuf>,
+        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
         auth_events: tokio::sync::broadcast::Sender<McpAuthStatus>,
     ) -> Result<Self, String> {
         config.validate()?;
@@ -71,7 +82,7 @@ impl McpManager {
                     Server::new(
                         config,
                         name.clone(),
-                        root.as_deref(),
+                        root.clone(),
                         weak.clone(),
                         auth_events.clone(),
                     )

@@ -57,7 +57,7 @@ impl Server {
     pub(crate) fn new(
         config: ServerConfig,
         name: String,
-        root: Option<&std::path::Path>,
+        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
         server: std::sync::Weak<Self>,
         events: tokio::sync::broadcast::Sender<crate::McpAuthStatus>,
     ) -> Self {
@@ -173,11 +173,13 @@ impl Server {
                     }
                     config = config.auth_header(token);
                 }
-                let client = reqwest::Client::builder()
-                    .default_headers(crate::headers::parse(headers)?)
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| error.to_string())?;
+                let client = kraai_io::http::client_builder(
+                    kraai_io::http::HttpTimeouts::default(),
+                    reqwest::redirect::Policy::none(),
+                )
+                .default_headers(crate::headers::parse(headers)?)
+                .build()
+                .map_err(|error| error.to_string())?;
                 if let Some(auth) = &self.auth
                     && let Some(client) = auth.client(client.clone()).await?
                 {

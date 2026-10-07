@@ -66,12 +66,13 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
         (request, agent.cloned_provider_manager())
     };
     let result = super::super::core::RuntimeCore::drive_stream(
-        session_id,
+        session_id.clone(),
         request,
         providers,
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session_id),
     )
     .await;
     let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
@@ -276,6 +277,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session_id),
     ));
     harness.events.wait_for("compaction preparation", |events| {
         events.iter().any(|event| matches!(event, Event::ContextStateChanged { session_id: id, .. } if id == &session_id))

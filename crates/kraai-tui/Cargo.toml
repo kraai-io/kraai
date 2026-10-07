@@ -20,6 +20,7 @@ clap = { workspace = true }
 color-eyre = { workspace = true }
 crossbeam-channel = { workspace = true }
 image.workspace = true
+kraai-io = { workspace = true, features = ["async"] }
 kraai-persistence = { workspace = true }
 kraai-runtime = { workspace = true }
 kraai-sandbox = { workspace = true }

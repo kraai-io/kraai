@@ -390,16 +390,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "atomic-write-file"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae67d5c03ee972c101a1d8db3ddbf8a9c819ad1ea9d6fd9cd385605547b60edb"
-dependencies = [
- "nix 0.31.3",
- "rand 0.10.3",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3244,6 +3234,7 @@ dependencies = [
  "directories",
  "futures",
  "kraai-command-catalog",
+ "kraai-io",
  "kraai-mcp",
  "kraai-persistence",
  "kraai-provider-core",
@@ -3329,11 +3320,11 @@ version = "0.1.0"
 dependencies = [
  "kraai-command-catalog",
  "kraai-command-core",
+ "kraai-io",
  "kraai-types",
  "nix 0.31.3",
  "nu-engine",
  "nu-protocol",
- "rustix 1.1.5",
  "tempfile",
 ]
 
@@ -3359,6 +3350,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "futures",
+ "kraai-io",
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
@@ -3378,6 +3370,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-io"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "nix 0.31.3",
+ "reqwest 0.13.5",
+ "rustix 1.1.5",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "ulid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "kraai-mcp"
 version = "0.1.0"
 dependencies = [
@@ -3387,6 +3394,7 @@ dependencies = [
  "color-eyre",
  "futures",
  "http",
+ "kraai-io",
  "kraai-types",
  "reqwest 0.13.5",
  "rmcp",
@@ -3418,6 +3426,7 @@ dependencies = [
  "kraai-command-open-files",
  "kraai-command-view-image",
  "kraai-command-web-search",
+ "kraai-io",
  "kraai-mcp",
  "kraai-sandbox",
  "kraai-types",
@@ -3448,12 +3457,11 @@ name = "kraai-persistence"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "atomic-write-file",
  "color-eyre",
  "directories",
  "image",
+ "kraai-io",
  "kraai-types",
- "libc",
  "nix 0.31.3",
  "serde",
  "serde_json",
@@ -3469,12 +3477,12 @@ name = "kraai-provider-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "atomic-write-file",
  "base64 0.23.1",
  "color-eyre",
  "directories",
  "futures",
  "httpdate",
+ "kraai-io",
  "kraai-types",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3494,6 +3502,7 @@ dependencies = [
  "async-trait",
  "color-eyre",
  "futures",
+ "kraai-io",
  "kraai-provider-core",
  "kraai-types",
  "reqwest 0.13.5",
@@ -3510,6 +3519,7 @@ dependencies = [
  "base64 0.23.1",
  "color-eyre",
  "futures",
+ "kraai-io",
  "kraai-provider-core",
  "kraai-types",
  "rand 0.10.3",
@@ -3536,6 +3546,7 @@ dependencies = [
  "image",
  "kraai-agent",
  "kraai-command-catalog",
+ "kraai-io",
  "kraai-mcp",
  "kraai-nushell-runtime",
  "kraai-persistence",
@@ -3605,6 +3616,7 @@ dependencies = [
  "color-eyre",
  "crossbeam-channel",
  "image",
+ "kraai-io",
  "kraai-persistence",
  "kraai-runtime",
  "kraai-sandbox",
@@ -3637,6 +3649,7 @@ name = "kraai-web"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kraai-io",
  "kraai-types",
  "reqwest 0.13.5",
  "serde_json",
@@ -3647,8 +3660,8 @@ dependencies = [
 name = "kraai-workspace-fs"
 version = "0.1.0"
 dependencies = [
+ "kraai-io",
  "nix 0.31.3",
- "rustix 1.1.5",
  "thiserror 2.0.21",
  "ulid",
  "windows-sys 0.61.2",

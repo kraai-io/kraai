@@ -28,13 +28,17 @@ impl WebSearch for ExaSearch {
         let client = self
             .client
             .get_or_init(|| {
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .connect_timeout(Duration::from_secs(10))
-                    .timeout(DEADLINE)
-                    .user_agent("kraai/0.1")
-                    .build()
-                    .map_err(|error| format!("web search client: {error}"))
+                kraai_io::http::client_builder(
+                    kraai_io::http::HttpTimeouts {
+                        connect: Some(Duration::from_secs(10)),
+                        read: None,
+                        request: Some(DEADLINE),
+                    },
+                    reqwest::redirect::Policy::none(),
+                )
+                .user_agent("kraai/0.1")
+                .build()
+                .map_err(|error| format!("web search client: {error}"))
             })
             .as_ref()
             .map_err(Clone::clone)?;
@@ -49,7 +53,7 @@ async fn search(
     endpoint: &str,
     request: &WebSearchRequest,
 ) -> Result<WebSearchResponse, String> {
-    let mut response = client
+    let response = client
         .post(endpoint)
         .header("Accept", "application/json, text/event-stream")
         .json(&serde_json::json!({
@@ -71,19 +75,14 @@ async fn search(
         200..=299 => {}
         status => return Err(format!("web search HTTP error: {status}")),
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_BYTES as u64)
-    {
-        return Err(String::from("web search response exceeds 1 MiB"));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        if chunk.len() > MAX_BYTES.saturating_sub(bytes.len()) {
-            return Err(String::from("web search response exceeds 1 MiB"));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+    let bytes = kraai_io::http::read_response_body(response, MAX_BYTES)
+        .await
+        .map_err(|error| match error {
+            kraai_io::http::BodyReadError::TooLarge { .. } => {
+                String::from("web search response exceeds 1 MiB")
+            }
+            kraai_io::http::BodyReadError::Transport(error) => transport_error(error),
+        })?;
     let body = std::str::from_utf8(&bytes)
         .map_err(|_error| String::from("web search response is not UTF-8"))?;
     response::decode(body, request.max_chars)

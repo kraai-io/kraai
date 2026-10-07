@@ -37,15 +37,14 @@ pub(super) fn load_startup_files(
         engine_state.config_dirs.env_file.to_path_buf(),
         engine_state.config_dirs.config_file.to_path_buf(),
     ] {
-        let contents = match std::fs::read(&path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(HostError::Initialization(format!(
-                    "unable to read startup file '{}': {error}",
-                    path.display()
-                )));
-            }
+        let Some(contents) = kraai_io::fs::read_optional(&path).map_err(|error| {
+            HostError::Initialization(format!(
+                "unable to read startup file '{}': {error}",
+                path.display()
+            ))
+        })?
+        else {
+            continue;
         };
         let previous_file = engine_state.file.replace(path.clone());
         let result = evaluate_startup(engine_state, stack, &contents, &path.to_string_lossy());

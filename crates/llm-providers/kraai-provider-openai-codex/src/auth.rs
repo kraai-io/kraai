@@ -6,12 +6,15 @@ mod token;
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use kraai_provider_core::build_finite_http_client;
+use kraai_io::fs::DirectoryBootstrap;
+use kraai_io::http::build_finite_http_client;
+use kraai_io::lock::FileLock;
 use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, oneshot};
 use tokio_util::task::AbortOnDropHandle;
 
 pub use status::{
@@ -31,22 +34,33 @@ const TOKEN_REFRESH_INTERVAL_SECS: u64 = 8 * 24 * 60 * 60;
 const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const SIGN_IN_REQUIRED_MESSAGE: &str = "OpenAI sign-in required. Use /providers.";
 
+async fn read_auth_response<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> io::Result<T> {
+    let bytes = kraai_io::http::read_response_body(response, 1024 * 1024)
+        .await
+        .map_err(io::Error::other)?;
+    serde_json::from_slice(&bytes).map_err(io::Error::other)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenAiCodexAuthControllerOptions {
     pub issuer: String,
     pub client_id: String,
     pub default_callback_port: u16,
     pub fallback_callback_ports: Vec<u16>,
+    pub storage_root: PathBuf,
     pub auth_path: PathBuf,
 }
 
 impl OpenAiCodexAuthControllerOptions {
-    pub fn new(auth_path: PathBuf) -> Self {
+    pub fn new(storage_root: PathBuf, auth_path: PathBuf) -> Self {
         Self {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
             fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
+            storage_root,
             auth_path,
         }
     }
@@ -82,7 +96,8 @@ impl OpenAiCodexRequestAuth {
 
 struct Inner {
     client: Client,
-    state: Mutex<ControllerState>,
+    auth_directory: Arc<DirectoryBootstrap>,
+    state: Arc<Mutex<ControllerState>>,
     login_gate: Mutex<()>,
     refresh_gate: Mutex<()>,
     updates: broadcast::Sender<OpenAiCodexAuthStatus>,
@@ -95,6 +110,7 @@ struct AuthConfig {
     client_id: String,
     default_callback_port: u16,
     fallback_callback_ports: Vec<u16>,
+    storage_root: PathBuf,
     auth_path: PathBuf,
     refresh_timeout: Duration,
 }
@@ -106,6 +122,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
             client_id: value.client_id,
             default_callback_port: value.default_callback_port,
             fallback_callback_ports: value.fallback_callback_ports,
+            storage_root: value.storage_root,
             auth_path: value.auth_path,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         }
@@ -117,6 +134,34 @@ struct ControllerState {
     auth: Option<StoredAuth>,
     pending: Option<PendingLogin>,
     error: Option<String>,
+}
+
+impl ControllerState {
+    fn publish_auth(
+        &mut self,
+        auth: StoredAuth,
+        outcome: kraai_io::fs::AtomicWriteOutcome,
+    ) -> io::Result<()> {
+        self.auth = Some(auth);
+        let result = outcome.into_result();
+        self.error = result.as_ref().err().map(ToString::to_string);
+        result
+    }
+}
+
+async fn commit_auth<T: Send + 'static>(
+    mut state: OwnedMutexGuard<ControllerState>,
+    file_lock: Arc<FileLock>,
+    commit: impl FnOnce(&mut ControllerState) -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    tokio::task::spawn_blocking(move || {
+        let result = commit(&mut state);
+        drop(state);
+        drop(file_lock);
+        result
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 struct PendingLogin {
@@ -156,12 +201,20 @@ impl OpenAiCodexAuthController {
         Ok(Self {
             inner: std::sync::Arc::new(Inner {
                 client,
-                state: Mutex::new(ControllerState {
+                auth_directory: Arc::new(DirectoryBootstrap::new(
+                    config.storage_root.clone(),
+                    config
+                        .auth_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .to_path_buf(),
+                )),
+                state: Arc::new(Mutex::new(ControllerState {
                     status_sequence: 0,
                     auth,
                     pending: None,
                     error,
-                }),
+                })),
                 login_gate: Mutex::new(()),
                 refresh_gate: Mutex::new(()),
                 updates,
@@ -172,6 +225,14 @@ impl OpenAiCodexAuthController {
 
     pub fn subscribe(&self) -> broadcast::Receiver<OpenAiCodexAuthStatus> {
         self.inner.updates.subscribe()
+    }
+
+    async fn acquire_file_lock(&self) -> io::Result<Arc<FileLock>> {
+        acquire_auth_file_lock(
+            self.inner.config.auth_path.clone(),
+            self.inner.auth_directory.clone(),
+        )
+        .await
     }
 
     pub async fn get_status(&self) -> OpenAiCodexAuthStatus {
@@ -266,14 +327,18 @@ impl OpenAiCodexAuthController {
     pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
-        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = self.acquire_file_lock().await?;
         {
-            let mut guard = self.inner.state.lock().await;
-            guard.auth = None;
-            guard.pending = None;
-            guard.error = None;
-        }
-        delete_auth_file(&self.inner.config.auth_path)?;
+            let state = self.inner.state.clone().lock_owned().await;
+            let path = self.inner.config.auth_path.clone();
+            commit_auth(state, file_lock, move |state| {
+                state.auth = None;
+                state.pending = None;
+                state.error = None;
+                delete_auth_file(&path)
+            })
+            .await
+        }?;
         self.emit_status().await
     }
 
@@ -305,7 +370,7 @@ impl OpenAiCodexAuthController {
         expected_auth: &OpenAiCodexRequestAuth,
     ) -> io::Result<OpenAiCodexRequestAuth> {
         let _refresh_guard = self.inner.refresh_gate.lock().await;
-        let file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = self.acquire_file_lock().await?;
 
         let disk_auth = load_auth_file(&self.inner.config.auth_path)?;
         let (old_auth, state_changed) = {
@@ -335,7 +400,9 @@ impl OpenAiCodexAuthController {
         let controller = self.clone();
         let expected_auth = expected_auth.clone();
         tokio::spawn(async move {
-            let result = controller.refresh_tokens(old_auth, &expected_auth).await;
+            let result = controller
+                .refresh_tokens(old_auth, &expected_auth, &file_lock)
+                .await;
             drop(file_lock);
             result
         })
@@ -347,6 +414,7 @@ impl OpenAiCodexAuthController {
         &self,
         old_auth: StoredAuth,
         expected_auth: &OpenAiCodexRequestAuth,
+        file_lock: &Arc<FileLock>,
     ) -> io::Result<OpenAiCodexRequestAuth> {
         let refresh_response = self
             .inner
@@ -365,11 +433,12 @@ impl OpenAiCodexAuthController {
 
         let status = refresh_response.status();
         if !status.is_success() {
-            let body = refresh_response.text().await.unwrap_or_default();
+            let body = kraai_provider_core::read_error_body(refresh_response).await;
             if status == StatusCode::UNAUTHORIZED {
-                self.clear_auth_with_error_locked(String::from(
-                    "OpenAI sign-in expired. Use /providers.",
-                ))
+                self.clear_auth_with_error_locked(
+                    String::from("OpenAI sign-in expired. Use /providers."),
+                    file_lock.clone(),
+                )
                 .await?;
                 return Err(io::Error::other(format!(
                     "OpenAI token refresh failed: {body}"
@@ -380,10 +449,7 @@ impl OpenAiCodexAuthController {
             )));
         }
 
-        let refresh = refresh_response
-            .json::<RefreshResponse>()
-            .await
-            .map_err(io::Error::other)?;
+        let refresh: RefreshResponse = read_auth_response(refresh_response).await?;
 
         let id_token = refresh.id_token.unwrap_or(old_auth.tokens.id_token);
         let access_token = refresh.access_token.unwrap_or(old_auth.tokens.access_token);
@@ -399,9 +465,10 @@ impl OpenAiCodexAuthController {
             .ok_or_else(|| io::Error::other("Missing ChatGPT account id in refreshed auth"))?;
 
         if expected_auth.account_id != account_id {
-            self.clear_auth_with_error_locked(String::from(
-                "OpenAI account changed. Use /providers.",
-            ))
+            self.clear_auth_with_error_locked(
+                String::from("OpenAI account changed. Use /providers."),
+                file_lock.clone(),
+            )
             .await?;
             return Err(io::Error::other(
                 "OpenAI account changed during token refresh",
@@ -421,28 +488,41 @@ impl OpenAiCodexAuthController {
         };
         let request_auth = request_auth(&stored);
 
-        self.persist_auth_locked(stored).await?;
+        self.persist_auth_locked(stored, file_lock.clone()).await?;
         let _ = self.emit_status().await;
 
         Ok(request_auth)
     }
 
-    async fn persist_auth_locked(&self, auth: StoredAuth) -> io::Result<()> {
-        let mut guard = self.inner.state.lock().await;
-        persist_auth_file(&self.inner.config.auth_path, &auth)?;
-        guard.auth = Some(auth);
-        guard.error = None;
-        drop(guard);
-        Ok(())
+    async fn persist_auth_locked(
+        &self,
+        auth: StoredAuth,
+        file_lock: Arc<FileLock>,
+    ) -> io::Result<()> {
+        let state = self.inner.state.clone().lock_owned().await;
+        let path = self.inner.config.auth_path.clone();
+        commit_auth(state, file_lock, move |state| {
+            let outcome = persist_auth_file(&path, &auth)?;
+            state.publish_auth(auth, outcome)
+        })
+        .await
     }
 
-    async fn clear_auth_with_error_locked(&self, error: String) -> io::Result<()> {
+    async fn clear_auth_with_error_locked(
+        &self,
+        error: String,
+        file_lock: Arc<FileLock>,
+    ) -> io::Result<()> {
         {
-            let mut guard = self.inner.state.lock().await;
-            guard.auth = None;
-            guard.error = Some(error);
-        }
-        delete_auth_file(&self.inner.config.auth_path)?;
+            let state = self.inner.state.clone().lock_owned().await;
+            let path = self.inner.config.auth_path.clone();
+            commit_auth(state, file_lock, move |state| {
+                state.auth = None;
+                state.error = Some(error);
+                delete_auth_file(&path)
+            })
+            .await
+        }?;
         let _ = self.emit_status().await;
         Ok(())
     }
@@ -488,15 +568,15 @@ impl OpenAiCodexAuthController {
             return;
         }
 
-        let (result, file_lock) = match result {
-            Ok(auth) => match acquire_auth_file_lock(self.inner.config.auth_path.clone()).await {
-                Ok(file_lock) => (Ok(auth), Some(file_lock)),
-                Err(error) => (Err(error.to_string()), None),
+        let result = match result {
+            Ok(auth) => match self.acquire_file_lock().await {
+                Ok(file_lock) => Ok((auth, file_lock)),
+                Err(error) => Err(error.to_string()),
             },
-            Err(error) => (Err(error.to_string()), None),
+            Err(error) => Err(error.to_string()),
         };
 
-        let mut guard = self.inner.state.lock().await;
+        let mut guard = self.inner.state.clone().lock_owned().await;
         if guard
             .pending
             .as_ref()
@@ -507,20 +587,25 @@ impl OpenAiCodexAuthController {
         if let Some(pending) = guard.pending.take() {
             drop(pending.task.detach());
         }
-        let result = result.and_then(|auth| {
-            persist_auth_file(&self.inner.config.auth_path, &auth)
-                .map(|()| auth)
-                .map_err(|error| error.to_string())
-        });
         match result {
-            Ok(auth) => {
-                guard.auth = Some(auth);
-                guard.error = None;
+            Ok((auth, file_lock)) => {
+                let path = self.inner.config.auth_path.clone();
+                let _ = commit_auth(guard, file_lock, move |state| {
+                    match persist_auth_file(&path, &auth) {
+                        Ok(outcome) => {
+                            let _ = state.publish_auth(auth, outcome);
+                        }
+                        Err(error) => state.error = Some(error.to_string()),
+                    }
+                    Ok(())
+                })
+                .await;
             }
-            Err(error) => guard.error = Some(error),
+            Err(error) => {
+                guard.error = Some(error);
+                drop(guard);
+            }
         }
-        drop(guard);
-        drop(file_lock);
         let _ = self.emit_status().await;
     }
 
@@ -528,8 +613,8 @@ impl OpenAiCodexAuthController {
     async fn replace_auth_for_test(&self, auth: StoredAuth) -> io::Result<()> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
-        let _file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
-        self.persist_auth_locked(auth).await
+        let file_lock = self.acquire_file_lock().await?;
+        self.persist_auth_locked(auth, file_lock).await
     }
 
     async fn snapshot_status(&self) -> OpenAiCodexAuthStatus {

@@ -33,7 +33,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: cargo check --locked --workspace --all-targets
-      - run: cargo test --locked -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --no-fail-fast
+      - run: cargo test --locked -p kraai-io -p kraai-sandbox -p kraai-nushell-runtime -p kraai-workspace-fs --all-targets --all-features --no-fail-fast
       - run: cargo test --locked -p kraai-eval --lib executable_lookup_tests
       - run: cargo test --locked -p kraai-tui app::composer::tests::editor_command
       - run: npm ci --prefix packages/runtime

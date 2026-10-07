@@ -726,7 +726,7 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
         }))?,
     )?;
     let controller = OpenAiCodexAuthController::new_with_options(
-        OpenAiCodexAuthControllerOptions::new(auth_path),
+        OpenAiCodexAuthControllerOptions::new(root.clone(), auth_path),
     )?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {

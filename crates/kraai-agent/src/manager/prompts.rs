@@ -99,10 +99,11 @@ impl AgentManager {
 }
 
 async fn load_agents_md_prompt(path: &Path, scope: &str) -> Result<Option<String>> {
-    let contents = match tokio::fs::read_to_string(path).await {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(eyre!("Failed reading {}: {error}", path.display())),
+    let Some(contents) = kraai_io::fs::read_optional_text_async(path)
+        .await
+        .map_err(|error| eyre!("Failed reading {}: {error}", path.display()))?
+    else {
+        return Ok(None);
     };
     if contents.trim().is_empty() {
         return Ok(None);

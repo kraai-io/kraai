@@ -55,6 +55,7 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
         id: ProviderId::new("test-codex"),
         auth: Arc::new(OpenAiCodexAuthController::new_with_options(
             OpenAiCodexAuthControllerOptions::new(
+                std::env::temp_dir(),
                 std::env::temp_dir()
                     .join(format!("codex-discovery-{}", ulid::Ulid::generate()))
                     .join("auth.json"),

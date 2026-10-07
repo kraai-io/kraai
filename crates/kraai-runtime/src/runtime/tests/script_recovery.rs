@@ -144,7 +144,11 @@ pub(super) async fn completed_script_with_image(
 pub(super) async fn reopen_agent(
     harness: &RuntimeTestHarness,
 ) -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
-    let (messages, sessions, _, context) = kraai_persistence::init_at(&harness.data_dir).await?;
+    let messages = Arc::new(FileMessageStore::new(&harness.data_dir));
+    let persistence =
+        kraai_persistence::Persistence::open_with_messages(&harness.data_dir, messages.clone())
+            .await?;
+    let sessions = persistence.sessions().clone();
     let providers = harness
         .runtime
         .agent_manager
@@ -154,12 +158,7 @@ pub(super) async fn reopen_agent(
     *harness.runtime.agent_manager.write().await = AgentManager::new(
         providers,
         harness.data_dir.join("workspace"),
-        messages.clone(),
-        sessions.clone(),
-        context,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(
-            &harness.data_dir,
-        )),
+        persistence,
         harness.data_dir.clone(),
     );
     Ok((messages, sessions))

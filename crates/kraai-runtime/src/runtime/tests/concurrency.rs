@@ -80,6 +80,7 @@ impl kraai_provider_core::Provider for HandoffProvider {
 async fn continuation_cannot_overtake_script_approval_during_stream_completion() -> Result<()> {
     let data_dir =
         std::env::temp_dir().join(format!("kraai-script-handoff-{}", ulid::Ulid::generate()));
+    tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
         inner: FileMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
@@ -211,6 +212,7 @@ async fn cancelled_script_result_retry_links_an_already_saved_result_once() -> R
 async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()> {
     let data_dir =
         std::env::temp_dir().join(format!("kraai-cancelled-script-{}", ulid::Ulid::generate()));
+    tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
         inner: FileMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
@@ -641,10 +643,10 @@ async fn cancellation_finishes_with_a_queued_snapshot_and_stays_active_until_fin
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let cancellation = CancellationToken::new();
-    let completion = CancellationToken::new();
     let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
     let runtime = harness.runtime.clone();
     let task_session = session_id.clone();
+    let completion = CancellationToken::new();
     let completion_guard = completion.clone().drop_guard();
     let join_handle = tokio::spawn(async move {
         let _completion_guard = completion_guard;
@@ -702,6 +704,48 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
     assert_shutdown_waits_for_synchronous_stream(true).await
 }
 
+#[tokio::test]
+async fn shutdown_drains_commits_started_after_its_initial_barrier() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let stream = harness
+        .runtime
+        .stream_tasks
+        .spawn(&session_id, std::future::pending::<()>());
+    harness.runtime.active_streams.lock().await.insert(
+        session_id,
+        ActiveStream {
+            message_id: MessageId::new("pending-stream"),
+            abort_handle: stream.abort_handle(),
+        },
+    );
+    let manager = harness.runtime.agent_manager.write().await;
+    let runtime = harness.runtime.clone();
+    let shutdown = runtime.stop_active_work();
+    tokio::pin!(shutdown);
+    assert!(poll!(&mut shutdown).is_pending());
+    assert!(runtime.is_stopping());
+    let guard = runtime.session_state_barrier.clone().read_owned().await;
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let commit = tokio::spawn(async move {
+        let _guard = guard;
+        release_rx.await.expect("release detached commit");
+    });
+    drop(manager);
+    assert!(poll!(&mut shutdown).is_pending());
+    assert!(stream.await.is_err_and(|error| error.is_cancelled()));
+    assert!(poll!(&mut shutdown).is_pending());
+    release_tx
+        .send(())
+        .map_err(|()| color_eyre::eyre::eyre!("Detached commit stopped before release"))?;
+    tokio::time::timeout(Duration::from_secs(5), &mut shutdown).await?;
+    commit.await?;
+    harness.shutdown().await;
+    Ok(())
+}
+
 async fn assert_shutdown_waits_for_synchronous_stream(cancel_before_shutdown: bool) -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
         .await
@@ -712,7 +756,7 @@ async fn assert_shutdown_waits_for_synchronous_stream(cancel_before_shutdown: bo
     let task_entered = entered.clone();
     let task_runtime = harness.runtime.clone();
     let task_session = session_id.clone();
-    let task = harness.runtime.stream_tasks.spawn(async move {
+    let task = harness.runtime.stream_tasks.spawn(&session_id, async move {
         let mut stream = futures::stream::poll_fn(move |_| {
             task_entered.cancel();
             let _released = release_rx.recv_timeout(Duration::from_secs(5));
@@ -762,10 +806,10 @@ async fn shutdown_waits_for_script_finalization_after_task_removal() -> Result<(
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let (removed_tx, removed_rx) = tokio::sync::oneshot::channel();
     let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
-    let completion = CancellationToken::new();
-    let completion_guard = completion.clone().drop_guard();
     let runtime = harness.runtime.clone();
     let task_session = session_id.clone();
+    let completion = CancellationToken::new();
+    let completion_guard = completion.clone().drop_guard();
     let join_handle = tokio::spawn(async move {
         let _completion_guard = completion_guard;
         start_rx.await.expect("start finalization");
@@ -861,6 +905,7 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
 async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Result<()> {
     let data_dir =
         std::env::temp_dir().join(format!("kraai-slow-history-{}", ulid::Ulid::generate()));
+    tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
         inner: FileMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),

@@ -4,19 +4,14 @@ mod atomic_write;
 mod edits;
 mod error;
 
-#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
-mod scoped_unix;
-
 pub use edits::{ExactTextEdit, apply_exact_edits};
-pub use error::{ScopedReadError, WorkspaceFsError};
+pub use error::WorkspaceFsError;
+
+use kraai_io::fs::read_regular_text_file;
 
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use atomic_write::{WriteMode, atomic_write};
@@ -96,105 +91,6 @@ fn read_validated_text_file(
     Ok((canonical, contents))
 }
 
-pub fn read_regular_text_file(path: &Path) -> std::io::Result<String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-
-        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
-    }
-    let mut file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "path is not a regular file",
-        ));
-    }
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    Ok(contents)
-}
-
-/// Read a path while guaranteeing that resolution remains beneath `root`.
-///
-/// This is intended for host-side refreshes of paths that were authorized in a
-/// sandbox. Linux `openat2` performs resolution and opening atomically, so a
-/// concurrent symlink replacement cannot escape the approved root.
-pub fn read_scoped_text_file(root: &Path, path: &Path) -> Result<String, ScopedReadError> {
-    let mut file = open_scoped_file(root, path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .map_err(|source| ScopedReadError::ReadText {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    Ok(contents)
-}
-
-#[cfg(target_os = "linux")]
-pub fn open_scoped_file(root: &Path, path: &Path) -> Result<File, ScopedReadError> {
-    use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
-
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_error| ScopedReadError::OutsideRoot(path.to_path_buf()))?;
-    if relative.as_os_str().is_empty() {
-        return Err(ScopedReadError::NotFile(path.to_path_buf()));
-    }
-    let root_directory = open(
-        root,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY,
-        Mode::empty(),
-    )
-    .map_err(|error| ScopedReadError::OpenRoot {
-        path: root.to_path_buf(),
-        source: std::io::Error::from_raw_os_error(error.raw_os_error()),
-    })?;
-    let descriptor = openat2(
-        &root_directory,
-        relative,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-        Mode::empty(),
-        ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
-    )
-    .map_err(|error| match error {
-        rustix::io::Errno::NOENT => ScopedReadError::NotFound(path.to_path_buf()),
-        rustix::io::Errno::XDEV | rustix::io::Errno::LOOP => {
-            ScopedReadError::OutsideRoot(path.to_path_buf())
-        }
-        _ => ScopedReadError::Open {
-            path: path.to_path_buf(),
-            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
-        },
-    })?;
-    validate_scoped_file(File::from(descriptor), path)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn validate_scoped_file(file: File, path: &Path) -> Result<File, ScopedReadError> {
-    let metadata = file.metadata().map_err(|source| ScopedReadError::Inspect {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !metadata.is_file() {
-        return Err(ScopedReadError::NotFile(path.to_path_buf()));
-    }
-    Ok(file)
-}
-
-#[cfg(windows)]
-pub use windows::open_scoped_file;
-
-#[cfg(target_os = "macos")]
-pub use scoped_unix::open_scoped_file;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub fn open_scoped_file(_root: &Path, path: &Path) -> Result<File, ScopedReadError> {
-    Err(ScopedReadError::UnsupportedPlatform(path.to_path_buf()))
-}
-
 pub fn create_text_file(
     cwd: &Path,
     requested: &Path,
@@ -251,6 +147,13 @@ pub fn edit_text_file(
 )]
 mod tests {
     use std::fs;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use std::fs::{File, OpenOptions};
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use kraai_io::fs::open_scoped_file;
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    use kraai_io::fs::{ScopedReadError, read_scoped_text_file};
 
     use ulid::Ulid;
 

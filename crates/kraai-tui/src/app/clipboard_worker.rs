@@ -6,9 +6,10 @@ use std::sync::{
 use std::time::Duration;
 
 use crossbeam_channel::{Sender, bounded};
+use kraai_io::read::{ReadLimitError, read_bounded_async};
 use kraai_runtime::{RuntimeError, RuntimeHandle, RuntimeResult};
 use kraai_types::{ImageAttachment, image::MAX_IMAGE_BYTES};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::AsyncRead;
 
 use super::RuntimeResponse;
 
@@ -146,17 +147,14 @@ async fn read_helper(
 }
 
 async fn read_bounded(reader: impl AsyncRead + Unpin, limit: usize) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() > limit {
-        return Err(std::io::Error::other(
-            "Clipboard helper output exceeds the size limit",
-        ));
-    }
-    Ok(bytes)
+    read_bounded_async(reader, limit as u64)
+        .await
+        .map_err(|error| match error {
+            ReadLimitError::Io(error) => error,
+            ReadLimitError::Exceeded { .. } => {
+                std::io::Error::other("Clipboard helper output exceeds the size limit")
+            }
+        })
 }
 
 #[cfg(test)]

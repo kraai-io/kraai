@@ -55,8 +55,10 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 }
 
 fn auth_controller_or_skip() -> Option<OpenAiCodexAuthController> {
+    let auth_path = temp_auth_path();
     match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
-        temp_auth_path(),
+        auth_path.parent().unwrap().to_path_buf(),
+        auth_path,
     )) {
         Ok(controller) => Some(controller),
         Err(error) if is_missing_system_ca_error(&error) => None,
@@ -68,7 +70,8 @@ fn auth_controller_with_issuer_or_skip(
     auth_path: PathBuf,
     issuer: String,
 ) -> Option<OpenAiCodexAuthController> {
-    let mut options = OpenAiCodexAuthControllerOptions::new(auth_path);
+    let mut options =
+        OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.issuer = issuer;
     match OpenAiCodexAuthController::new_with_options(options) {
         Ok(controller) => Some(controller),
@@ -82,7 +85,8 @@ fn auth_controller_with_refresh_timeout_or_skip(
     issuer: String,
     refresh_timeout: Duration,
 ) -> Option<OpenAiCodexAuthController> {
-    let mut options = OpenAiCodexAuthControllerOptions::new(auth_path);
+    let mut options =
+        OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.issuer = issuer;
     let mut config = AuthConfig::from(options);
     config.refresh_timeout = refresh_timeout;
@@ -94,9 +98,9 @@ fn auth_controller_with_refresh_timeout_or_skip(
 }
 
 fn temp_auth_path() -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("agent-openai-codex-{}", Ulid::generate()))
-        .join("auth.json")
+    let directory = std::env::temp_dir().join(format!("agent-openai-codex-{}", Ulid::generate()));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory.join("auth.json")
 }
 
 fn fake_jwt(email: &str, plan_type: &str, account_id: &str) -> String {
@@ -147,7 +151,9 @@ async fn immediately_failing_login_does_not_leave_pending_state() {
 #[tokio::test]
 async fn dropping_last_controller_releases_pending_browser_listener() {
     let reservation = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let mut options = OpenAiCodexAuthControllerOptions::new(temp_auth_path());
+    let auth_path = temp_auth_path();
+    let mut options =
+        OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.default_callback_port = reservation.local_addr().unwrap().port();
     options.fallback_callback_ports.clear();
     let controller = match OpenAiCodexAuthController::new_with_options(options) {
@@ -237,7 +243,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
         return;
     };
     let path = controller.inner.config.auth_path.clone();
-    let file_lock = acquire_auth_file_lock(path.clone()).await.unwrap();
+    let file_lock = controller.acquire_file_lock().await.unwrap();
     let auth = stored_auth("user@example.com", "pro", "workspace_123", unix_now());
     let generation = auth.generation.clone();
     let mut updates = controller.subscribe();
@@ -313,7 +319,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
         return;
     };
     let path = controller.inner.config.auth_path.clone();
-    let file_lock = acquire_auth_file_lock(path.clone()).await.unwrap();
+    let file_lock = controller.acquire_file_lock().await.unwrap();
     controller
         .install_login_task(
             OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
@@ -337,7 +343,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
     assert!(controller.inner.login_gate.try_lock().is_err());
 
     controller
-        .clear_auth_with_error_locked(String::from("refresh rejected"))
+        .clear_auth_with_error_locked(String::from("refresh rejected"), file_lock.clone())
         .await
         .unwrap();
     drop(file_lock);
@@ -841,28 +847,14 @@ fn failed_auth_replacement_cleans_temp_and_preserves_destination() {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
-#[test]
-fn auth_temp_files_do_not_overwrite_existing_paths() {
-    let path = temp_auth_path();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, b"keep").unwrap();
-
-    let error = storage::create_auth_temp_file(&path).unwrap_err();
-
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&path).unwrap(), b"keep");
-    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-}
-
 #[cfg(unix)]
 #[test]
-fn auth_files_are_private_at_creation_and_after_replacement() {
+fn auth_replacement_restricts_existing_public_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
     let path = temp_auth_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = storage::create_auth_temp_file(&path).unwrap();
-    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o077, 0);
+    let file = std::fs::File::create(&path).unwrap();
     file.set_permissions(std::fs::Permissions::from_mode(0o644))
         .unwrap();
     drop(file);

@@ -189,10 +189,13 @@ impl RuntimeCore {
                 || self.session_preparations.is_active(&session_id)
         };
         let mut agent = self.agent_manager.write().await;
-        if agent.is_turn_active(&session_id)
-            || has_pending_messages
-            || self.session_preparations.is_active(&session_id)
-        {
+        let preparation = if agent.is_turn_active(&session_id) || has_pending_messages {
+            None
+        } else {
+            self.session_preparations
+                .try_begin_with_drain(&session_id, Some(&self.queue_drains))
+        };
+        let Some(preparation) = preparation else {
             drop(agent);
             let position = self
                 .enqueue_message(
@@ -206,7 +209,7 @@ impl RuntimeCore {
                 .await;
             self.schedule_queue_drain(&session_id);
             return Ok(SubmitMessageOutcome::Queued { position });
-        }
+        };
 
         let stream_request = {
             let result = agent
@@ -224,6 +227,7 @@ impl RuntimeCore {
 
         self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
             .await;
+        drop(preparation);
         Ok(SubmitMessageOutcome::Started { message_id })
     }
 

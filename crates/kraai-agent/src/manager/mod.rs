@@ -151,6 +151,7 @@ pub struct AgentManager {
     default_workspace_dir: PathBuf,
     storage_root: PathBuf,
     user_agents_path: Option<PathBuf>,
+    persistence: kraai_persistence::Persistence,
     conversation_store: ConversationStore,
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
@@ -172,6 +173,6 @@ impl AgentManager {
     }
 
     pub fn image_store(&self) -> kraai_persistence::FileImageStore {
-        kraai_persistence::FileImageStore::new(&self.storage_root.join("data"))
+        self.persistence.images().as_ref().clone()
     }
 }

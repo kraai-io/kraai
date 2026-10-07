@@ -88,14 +88,11 @@ async fn restart_after_cancellation_failure(
     let providers = manager.cloned_provider_manager();
     drop(manager);
 
-    let (messages, sessions, _, context) = kraai_persistence::init_at(&data_dir).await?;
+    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
     let mut reopened = AgentManager::new(
         providers,
         "/tmp/default-workspace".into(),
-        messages.clone(),
-        sessions,
-        context,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
+        persistence,
         data_dir.clone(),
     );
     assert!(reopened.prepare_session(&session_id).await?);

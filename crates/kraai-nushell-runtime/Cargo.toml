@@ -17,6 +17,7 @@ kraai-command-mcp.workspace = true
 kraai-command-open-files = { workspace = true }
 kraai-command-view-image.workspace = true
 kraai-command-web-search.workspace = true
+kraai-io.workspace = true
 kraai-mcp.workspace = true
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }

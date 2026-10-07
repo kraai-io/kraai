@@ -183,15 +183,15 @@ fn load_layer(
     available_commands: &HashSet<String>,
     inherited_profiles: &[AgentProfile],
 ) -> Result<Vec<AgentProfile>, AgentProfileWarning> {
-    if !path.exists() {
+    let Some(contents) =
+        kraai_io::fs::read_optional_text(path).map_err(|error| AgentProfileWarning {
+            source,
+            path: Some(path.display().to_string()),
+            message: format!("Failed reading profile file: {error}"),
+        })?
+    else {
         return Ok(Vec::new());
-    }
-
-    let contents = std::fs::read_to_string(path).map_err(|error| AgentProfileWarning {
-        source,
-        path: Some(path.display().to_string()),
-        message: format!("Failed reading profile file: {error}"),
-    })?;
+    };
     let parsed: ProfilesFile = toml::from_str(&contents).map_err(|error| AgentProfileWarning {
         source,
         path: Some(path.display().to_string()),
