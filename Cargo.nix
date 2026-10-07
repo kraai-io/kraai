@@ -153,6 +153,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-io" = rec {
+      packageId = "kraai-io";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-io";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-mcp" = rec {
       packageId = "kraai-mcp";
       build = internal.buildRustCrateWithFeatures {
@@ -1477,31 +1487,6 @@ rec {
         features = {
           "portable-atomic" = [ "dep:portable-atomic" ];
         };
-      };
-      "atomic-write-file" = rec {
-        crateName = "atomic-write-file";
-        version = "0.3.1";
-        edition = "2024";
-        sha256 = "1nqfnr3maq45sffgvmm93snikj59z3dkvnyql40w2wp97v0darxf";
-        libName = "atomic_write_file";
-        authors = [
-          "Andrea Corbellini <corbellini.andrea@gmail.com>"
-        ];
-        dependencies = [
-          {
-            name = "nix";
-            packageId = "nix 0.31.3";
-            target = { target, features }: (target."unix" or false);
-            features = [ "fs" "user" ];
-          }
-          {
-            name = "rand";
-            packageId = "rand 0.10.3";
-          }
-        ];
-        features = {
-        };
-        resolvedDefaultFeatures = [ "default" ];
       };
       "autocfg" = rec {
         crateName = "autocfg";
@@ -10104,6 +10089,11 @@ rec {
             packageId = "kraai-command-catalog";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "async" ];
+          }
+          {
             name = "kraai-mcp";
             packageId = "kraai-mcp";
           }
@@ -10359,6 +10349,10 @@ rec {
             packageId = "kraai-command-core";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -10369,12 +10363,6 @@ rec {
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
-          }
-          {
-            name = "rustix";
-            packageId = "rustix 1.1.5";
-            target = { target, features }: (target."unix" or false);
-            features = [ "fs" "net" "pipe" ];
           }
         ];
         devDependencies = [
@@ -10468,6 +10456,11 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
+          }
+          {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
           }
@@ -10537,6 +10530,74 @@ rec {
         ];
 
       };
+      "kraai-io" = rec {
+        crateName = "kraai-io";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-io; };
+        libName = "kraai_io";
+        dependencies = [
+          {
+            name = "http";
+            packageId = "http";
+            optional = true;
+          }
+          {
+            name = "reqwest";
+            packageId = "reqwest 0.13.5";
+            optional = true;
+            features = [ "json" "stream" ];
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "net" "pipe" ];
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "full" ];
+          }
+          {
+            name = "ulid";
+            packageId = "ulid";
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_IO" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            target = { target, features }: (target."unix" or false);
+            features = [ "process" "signal" "fs" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+        ];
+        features = {
+          "async" = [ "dep:tokio" ];
+          "http" = [ "async" "dep:http" "dep:reqwest" ];
+        };
+        resolvedDefaultFeatures = [ "async" "default" "http" ];
+      };
       "kraai-mcp" = rec {
         crateName = "kraai-mcp";
         version = "0.1.0";
@@ -10563,6 +10624,11 @@ rec {
           {
             name = "http";
             packageId = "http";
+          }
+          {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
           }
           {
             name = "kraai-types";
@@ -10595,10 +10661,6 @@ rec {
           {
             name = "sse-stream";
             packageId = "sse-stream";
-          }
-          {
-            name = "tempfile";
-            packageId = "tempfile";
           }
           {
             name = "tokio";
@@ -10634,6 +10696,10 @@ rec {
             packageId = "axum";
             usesDefaultFeatures = false;
             features = [ "http1" "json" "tokio" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 
@@ -10691,6 +10757,10 @@ rec {
           {
             name = "kraai-command-web-search";
             packageId = "kraai-command-web-search";
+          }
+          {
+            name = "kraai-io";
+            packageId = "kraai-io";
           }
           {
             name = "kraai-mcp";
@@ -10818,10 +10888,6 @@ rec {
             packageId = "async-trait";
           }
           {
-            name = "atomic-write-file";
-            packageId = "atomic-write-file";
-          }
-          {
             name = "color-eyre";
             packageId = "color-eyre";
           }
@@ -10836,13 +10902,13 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "async" ];
           }
           {
-            name = "libc";
-            packageId = "libc";
-            target = { target, features }: (target."unix" or false);
+            name = "kraai-types";
+            packageId = "kraai-types";
           }
           {
             name = "serde";
@@ -10897,10 +10963,6 @@ rec {
             packageId = "async-trait";
           }
           {
-            name = "atomic-write-file";
-            packageId = "atomic-write-file";
-          }
-          {
             name = "base64";
             packageId = "base64 0.23.1";
           }
@@ -10919,6 +10981,11 @@ rec {
           {
             name = "httpdate";
             packageId = "httpdate";
+          }
+          {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
           }
           {
             name = "kraai-types";
@@ -10992,6 +11059,11 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
+          }
+          {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
           }
@@ -11043,6 +11115,11 @@ rec {
           {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
           }
           {
             name = "kraai-provider-core";
@@ -11140,6 +11217,11 @@ rec {
           {
             name = "kraai-command-catalog";
             packageId = "kraai-command-catalog";
+          }
+          {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "async" ];
           }
           {
             name = "kraai-mcp";
@@ -11415,6 +11497,11 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "async" ];
+          }
+          {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
           }
@@ -11526,6 +11613,11 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            features = [ "http" ];
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -11554,24 +11646,18 @@ rec {
         libName = "kraai_workspace_fs";
         dependencies = [
           {
-            name = "rustix";
-            packageId = "rustix 1.1.5";
-            target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null));
-            features = [ "fs" "net" "pipe" ];
+            name = "kraai-io";
+            packageId = "kraai-io";
           }
           {
             name = "thiserror";
             packageId = "thiserror 2.0.21";
           }
           {
-            name = "ulid";
-            packageId = "ulid";
-          }
-          {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
-            features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_IO" ];
+            features = [ "Win32_Foundation" "Win32_Storage_FileSystem" ];
           }
         ];
         devDependencies = [
@@ -11580,6 +11666,10 @@ rec {
             packageId = "nix 0.31.3";
             target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null));
             features = [ "process" "signal" "fs" ];
+          }
+          {
+            name = "ulid";
+            packageId = "ulid";
           }
         ];
 

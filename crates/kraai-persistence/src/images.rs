@@ -4,21 +4,24 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail, ensure, eyre};
 use image::{ImageDecoder, ImageFormat, ImageReader, Limits};
+use kraai_io::fs::{FinalSymlinkPolicy, open_regular_file_async};
+use kraai_io::read::{ReadLimitError, read_bounded_async};
 use kraai_types::image::{ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 
 static IMAGE_DECODERS: Semaphore = Semaphore::const_new(2);
 
 #[derive(Debug, Clone)]
 pub struct FileImageStore {
+    root: PathBuf,
     directory: PathBuf,
 }
 
 impl FileImageStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
+            root: data_dir.to_path_buf(),
             directory: data_dir.join("images"),
         }
     }
@@ -36,34 +39,33 @@ impl FileImageStore {
         })
         .await
         .context("Image validation task failed")??;
-        crate::atomic_write(&self.directory.join(&attachment.id), &bytes).await?;
-        if let Some(parent) = self.directory.parent() {
-            crate::sync_parent_directory(parent).await?;
-        }
+        kraai_io::fs::atomic_replace_in_async(
+            &self.root,
+            &self.directory.join(&attachment.id),
+            &bytes,
+        )
+        .await?
+        .into_result()?;
         Ok(attachment)
     }
 
     pub async fn read(&self, attachment: &ImageAttachment) -> Result<Vec<u8>> {
         attachment.validate().map_err(|error| eyre!(error))?;
         let path = self.directory.join(&attachment.id);
-        let mut options = tokio::fs::OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-        let file = options
-            .open(&path)
+        let file = open_regular_file_async(&path, FinalSymlinkPolicy::Reject)
             .await
             .with_context(|| format!("Failed to read image {}", attachment.id))?;
         let metadata = file.metadata().await?;
-        ensure!(metadata.is_file(), "Stored image is not a regular file");
         ensure!(
             metadata.len() == attachment.byte_length,
             "Stored image length does not match attachment"
         );
-        let mut bytes = Vec::new();
-        file.take(MAX_IMAGE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .await?;
+        let bytes = read_bounded_async(file, MAX_IMAGE_BYTES as u64)
+            .await
+            .map_err(|error| match error {
+                ReadLimitError::Io(error) => color_eyre::Report::from(error),
+                ReadLimitError::Exceeded { .. } => eyre!("Image exceeds {MAX_IMAGE_BYTES} bytes"),
+            })?;
         let expected = attachment.clone();
         let permit = IMAGE_DECODERS.acquire().await?;
         let bytes = tokio::task::spawn_blocking(move || {

@@ -12,6 +12,7 @@ mod script_recovery;
 mod scripts;
 mod state_effects;
 mod stream_driver;
+mod stream_tasks;
 mod streaming;
 
 pub use builder::RuntimeBuilder;

@@ -28,6 +28,7 @@ pub trait RequestUsageStore: Send + Sync {
 }
 
 pub struct FileRequestUsageStore {
+    storage_root: PathBuf,
     root: PathBuf,
     hot: tokio::sync::RwLock<BTreeMap<String, Arc<SessionRequests>>>,
 }
@@ -35,6 +36,7 @@ pub struct FileRequestUsageStore {
 impl FileRequestUsageStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
+            storage_root: data_dir.to_path_buf(),
             root: data_dir.join("usage"),
             hot: Default::default(),
         }
@@ -118,15 +120,17 @@ impl RequestUsageStore for FileRequestUsageStore {
         let io = Arc::clone(&cache.io).lock_owned().await;
         let bytes = serde_json::to_vec(request)?;
         let request = request.clone();
+        let storage_root = self.storage_root.clone();
         complete_commit(
             io,
             async move {
-                let outcome = crate::atomic_file::atomic_write_with_outcome(&path, &bytes).await?;
+                let outcome =
+                    kraai_io::fs::atomic_replace_in_async(&storage_root, &path, &bytes).await?;
                 if let Some(requests) = cache.requests.write().await.as_mut() {
                     requests.insert(request.message_id.clone(), request);
                 }
                 cache.revision.fetch_add(1, Ordering::Release);
-                outcome.into_result()
+                outcome.into_result().map_err(color_eyre::Report::from)
             },
             "Request usage commit task failed",
         )
@@ -140,14 +144,12 @@ impl RequestUsageStore for FileRequestUsageStore {
         complete_commit(
             io,
             async move {
-                match fs::remove_dir_all(path).await {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-                let previous = cache.requests.write().await.replace(BTreeMap::new());
+                let removal = kraai_io::fs::remove_dir_all_durable_async(&path).await;
+                let next = removal.as_ref().ok().map(|()| BTreeMap::new());
+                let previous = std::mem::replace(&mut *cache.requests.write().await, next);
                 drop(previous);
                 cache.revision.fetch_add(1, Ordering::Release);
+                removal?;
                 Ok(())
             },
             "Request usage commit task failed",
@@ -208,6 +210,7 @@ mod tests {
         for deleting in [false, true] {
             let directory = std::env::temp_dir()
                 .join(format!("kraai-usage-cancelled-{}", ulid::Ulid::generate()));
+            fs::create_dir(&directory).await?;
             let store = Arc::new(FileRequestUsageStore::new(&directory));
             let mut request = request();
             store.save("session", &request).await?;
@@ -268,6 +271,7 @@ mod tests {
     async fn failed_refresh_uses_initialized_cache_and_recovers() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await?;
         let store = FileRequestUsageStore::new(&directory);
         let mut request = request();
         store.save("session", &request).await?;
@@ -294,6 +298,7 @@ mod tests {
     async fn refresh_observes_other_store_writes_and_local_updates() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await?;
         let first = FileRequestUsageStore::new(&directory);
         let second = FileRequestUsageStore::new(&directory);
         let mut request = request();
@@ -323,6 +328,7 @@ mod tests {
     async fn refresh_rejects_reads_superseded_by_save_or_delete() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await?;
         let store = FileRequestUsageStore::new(&directory);
         let mut request = request();
         store.save("session", &request).await?;
@@ -350,6 +356,7 @@ mod tests {
     async fn busy_session_does_not_block_other_session_ledger() -> Result<()> {
         let directory =
             std::env::temp_dir().join(format!("kraai-usage-{}", ulid::Ulid::generate()));
+        fs::create_dir(&directory).await?;
         let store = FileRequestUsageStore::new(&directory);
         store.save("busy", &request()).await?;
         store.load("busy").await?;

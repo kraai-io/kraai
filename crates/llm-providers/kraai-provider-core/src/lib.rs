@@ -7,7 +7,10 @@ mod config;
 mod definition;
 mod error;
 mod history;
-mod http_client;
+mod http_body;
+#[cfg(test)]
+mod http_tests;
+pub use http_body::read_error_body;
 mod http_retry;
 pub use history::prepare_history;
 mod images;
@@ -28,11 +31,7 @@ mod test_support;
 pub use config::{DynamicConfig, DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
 pub use definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
 pub use error::{ProviderError, ProviderModelCacheRefreshError};
-pub use http_client::{
-    HTTP_CONNECT_TIMEOUT, HTTP_FINITE_REQUEST_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT,
-    build_finite_http_client, build_streaming_http_client, finite_request,
-    streaming_http_client_builder,
-};
+
 pub use http_retry::{DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, send_with_retry};
 pub use manager::ProviderManager;
 pub use model_metadata::ConfiguredModelMetadata;

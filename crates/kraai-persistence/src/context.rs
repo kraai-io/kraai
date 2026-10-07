@@ -7,12 +7,13 @@ use kraai_types::{
     MessageId, ScriptExecutionId,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use tokio::fs;
 use ulid::Ulid;
 
-use crate::atomic_write;
 use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
+use kraai_io::fs::atomic_replace_in_async;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ContextStateDocument {
@@ -86,6 +87,7 @@ pub trait ContextStateStore: Send + Sync {
 }
 
 pub struct FileContextStateStore {
+    storage_root: PathBuf,
     directory: PathBuf,
     session_locks: KeyedLocks<String>,
 }
@@ -93,6 +95,7 @@ pub struct FileContextStateStore {
 impl FileContextStateStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
+            storage_root: data_dir.to_path_buf(),
             directory: data_dir.join("context-state"),
             session_locks: KeyedLocks::default(),
         }
@@ -117,14 +120,13 @@ impl FileContextStateStore {
 
     async fn load_document(&self, session_id: &str) -> Result<ContextStateDocument> {
         let path = self.document_path(session_id)?;
-        match fs::read(&path).await {
-            Ok(bytes) => serde_json::from_slice(&bytes)
+        let bytes = kraai_io::fs::read_optional_async(&path)
+            .await
+            .with_context(|| format!("Failed to read context state document: {path:?}"))?;
+        match bytes {
+            Some(bytes) => serde_json::from_slice(&bytes)
                 .with_context(|| format!("Failed to parse context state document: {path:?}")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(ContextStateDocument::default())
-            }
-            Err(error) => Err(error)
-                .with_context(|| format!("Failed to read context state document: {path:?}")),
+            None => Ok(ContextStateDocument::default()),
         }
     }
 
@@ -169,11 +171,17 @@ impl FileContextStateStore {
         };
         document.push_event(event.clone());
         let path = self.document_path(session_id)?;
+        let storage_root = self.storage_root.clone();
         let bytes = serde_json::to_vec_pretty(&document)
             .context("Failed to serialize context state document")?;
         complete_commit(
             guard,
-            async move { atomic_write(&path, &bytes).await },
+            async move {
+                atomic_replace_in_async(&storage_root, &path, &bytes)
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)
+            },
             "Context state commit task failed",
         )
         .await
@@ -256,10 +264,16 @@ impl ContextStateStore for FileContextStateStore {
             });
         }
         let path = self.document_path(session_id)?;
+        let storage_root = self.storage_root.clone();
         let bytes = serde_json::to_vec_pretty(&document)?;
         complete_commit(
             guard,
-            async move { atomic_write(&path, &bytes).await },
+            async move {
+                atomic_replace_in_async(&storage_root, &path, &bytes)
+                    .await?
+                    .into_result()
+                    .map_err(color_eyre::Report::from)
+            },
             "File context snapshot commit failed",
         )
         .await
@@ -271,13 +285,12 @@ impl ContextStateStore for FileContextStateStore {
         complete_commit(
             guard,
             async move {
-                match fs::remove_file(&path).await {
-                    Ok(()) => Ok(()),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                    Err(error) => Err(error).with_context(|| {
+                kraai_io::fs::remove_file_durable_async(&path)
+                    .await
+                    .with_context(|| {
                         format!("Failed to delete context state document: {path:?}")
-                    }),
-                }
+                    })?;
+                Ok(())
             },
             "Context state commit task failed",
         )
@@ -295,7 +308,10 @@ mod tests {
     use kraai_types::PinnedFileScope;
 
     fn test_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::generate()))
+        let directory =
+            std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::generate()));
+        std::fs::create_dir(&directory).unwrap();
+        directory
     }
 
     fn pin(path: &str) -> ContextStateMutation {
@@ -330,12 +346,16 @@ mod tests {
             document.events.push(cancelled.clone());
             let bytes = serde_json::to_vec_pretty(&document).unwrap();
             let path = store.document_path("session").unwrap();
+            let storage_root = store.storage_root.clone();
             tokio::spawn(complete_commit(
                 guard,
                 async move {
                     let _ = entered_tx.send(());
                     release_rx.await?;
-                    atomic_write(&path, &bytes).await
+                    atomic_replace_in_async(&storage_root, &path, &bytes)
+                        .await?
+                        .into_result()
+                        .map_err(color_eyre::Report::from)
                 },
                 "Context state commit task failed",
             ))

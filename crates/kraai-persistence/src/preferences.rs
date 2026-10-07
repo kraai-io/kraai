@@ -5,7 +5,7 @@ use color_eyre::eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::atomic_file::atomic_write_sync;
+use kraai_io::fs::{atomic_replace_in, read_optional_text};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePreferences {
@@ -18,23 +18,23 @@ pub struct WorkspacePreferences {
 }
 
 pub struct WorkspacePreferencesStore {
+    storage_root: PathBuf,
     root: PathBuf,
 }
 
 impl WorkspacePreferencesStore {
     pub fn new(storage_root: &Path) -> Self {
         Self {
+            storage_root: storage_root.to_path_buf(),
             root: storage_root.join("workspaces"),
         }
     }
 
     pub fn load(&self, workspace: &Path) -> Result<WorkspacePreferences> {
         let path = self.preference_path(workspace);
-        if !path.exists() {
+        let Some(content) = read_optional_text(&path)? else {
             return Ok(WorkspacePreferences::default());
-        }
-
-        let content = std::fs::read_to_string(&path)?;
+        };
         serde_json::from_str(&content).with_context(|| {
             format!(
                 "Failed to parse workspace preferences from {}",
@@ -45,9 +45,10 @@ impl WorkspacePreferencesStore {
 
     pub fn save(&self, workspace: &Path, preferences: &WorkspacePreferences) -> Result<()> {
         let path = self.preference_path(workspace);
-        std::fs::create_dir_all(&self.root)?;
         let content = serde_json::to_string_pretty(preferences)?;
-        atomic_write_sync(&path, content.as_bytes())
+        atomic_replace_in(&self.storage_root, &path, content.as_bytes())?
+            .into_result()
+            .map_err(Into::into)
     }
 
     fn preference_path(&self, workspace: &Path) -> PathBuf {
@@ -164,6 +165,7 @@ mod tests {
         let workspace = root.join("workspace-component-".repeat(10));
         let other_workspace = workspace.join("nested");
         std::fs::create_dir_all(&other_workspace)?;
+        std::fs::create_dir(root.join("state"))?;
         let store = WorkspacePreferencesStore::new(&root.join("state"));
         let preferences = preferences_for_writer(1);
         let other_preferences = preferences_for_writer(2);
@@ -267,6 +269,9 @@ mod tests {
     }
 
     fn test_root() -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-preferences-{}", ulid::Ulid::generate()))
+        let root =
+            std::env::temp_dir().join(format!("kraai-preferences-{}", ulid::Ulid::generate()));
+        std::fs::create_dir(&root).expect("create preference storage root");
+        root
     }
 }

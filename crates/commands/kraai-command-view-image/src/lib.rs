@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::Path;
 
 use kraai_command_core::{command_error, declare_kraai_command};
+use kraai_io::fs::{FinalSymlinkPolicy, open_regular_file};
+use kraai_io::read::{ReadLimitError, read_bounded};
 use kraai_types::image::MAX_IMAGE_BYTES;
 use nu_engine::CallExt;
 use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};
@@ -50,31 +50,15 @@ declare_kraai_command! {
 
 fn read_image(cwd: &Path, requested: &Path) -> std::io::Result<Vec<u8>> {
     let path = cwd.join(requested);
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
-    }
-    let file = options.open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "image path is not a regular file",
-        ));
-    }
+    let file = open_regular_file(&path, FinalSymlinkPolicy::Follow)?;
     let limit = MAX_IMAGE_BYTES as u64;
-    if metadata.len() > limit {
+    if file.metadata()?.len() > limit {
         return Err(image_too_large());
     }
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(image_too_large());
-    }
-    Ok(bytes)
+    read_bounded(file, limit).map_err(|error| match error {
+        ReadLimitError::Io(error) => error,
+        ReadLimitError::Exceeded { .. } => image_too_large(),
+    })
 }
 
 fn image_too_large() -> std::io::Error {

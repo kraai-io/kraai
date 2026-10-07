@@ -1,41 +1,3 @@
-use std::time::Duration;
-
-use reqwest::{Client, ClientBuilder, RequestBuilder};
-
-pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub const HTTP_FINITE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-pub const HTTP_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Build a client suitable for long-lived streams.
-///
-/// The read timeout resets whenever bytes arrive, so healthy streams may live
-/// indefinitely while stalled response bodies are bounded.
-pub fn build_streaming_http_client() -> reqwest::Result<Client> {
-    streaming_http_client_builder().build()
-}
-
-pub fn streaming_http_client_builder() -> ClientBuilder {
-    base_client_builder(HTTP_CONNECT_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT)
-}
-
-/// Build a client for authentication and other finite JSON requests.
-pub fn build_finite_http_client() -> reqwest::Result<Client> {
-    base_client_builder(HTTP_CONNECT_TIMEOUT, HTTP_STREAM_IDLE_TIMEOUT)
-        .timeout(HTTP_FINITE_REQUEST_TIMEOUT)
-        .build()
-}
-
-/// Apply the finite-operation deadline to a request made by a streaming client.
-pub fn finite_request(builder: RequestBuilder) -> RequestBuilder {
-    builder.timeout(HTTP_FINITE_REQUEST_TIMEOUT)
-}
-
-fn base_client_builder(connect_timeout: Duration, read_timeout: Duration) -> ClientBuilder {
-    Client::builder()
-        .connect_timeout(connect_timeout)
-        .read_timeout(read_timeout)
-}
-
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -43,7 +5,20 @@ fn base_client_builder(connect_timeout: Duration, read_timeout: Duration) -> Cli
     reason = "HTTP timeout tests use direct local fixture assertions"
 )]
 mod tests {
-    use super::*;
+    use kraai_io::http::{HttpTimeouts, client_builder};
+    use reqwest::{Client, ClientBuilder};
+    use std::time::Duration;
+
+    fn base_client_builder(connect: Duration, read: Duration) -> ClientBuilder {
+        client_builder(
+            HttpTimeouts {
+                connect: Some(connect),
+                read: Some(read),
+                request: None,
+            },
+            reqwest::redirect::Policy::default(),
+        )
+    }
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

@@ -13,6 +13,117 @@ use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_prof
 use crate::Event;
 
 #[tokio::test]
+async fn deletion_cannot_overtake_initial_stream_publication() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let (entered, release) = harness.runtime.stream_tasks.pause_next_publication();
+    let sending = tokio::spawn({
+        let runtime = harness.runtime.clone();
+        let session_id = session_id.clone();
+        async move {
+            let _state = runtime.session_state_barrier.read().await;
+            runtime
+                .handle_send_message(
+                    session_id,
+                    "hello".into(),
+                    kraai_types::ModelId::new("mock-model"),
+                    kraai_types::ProviderId::new("mock"),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified()).await?;
+    assert!(harness.runtime.active_streams.lock().await.is_empty());
+    let (response, deleted) = tokio::sync::oneshot::channel();
+    let runtime = harness.runtime.clone();
+    let deletion = runtime.handle_command(crate::handle::Command::DeleteSession {
+        session_id: session_id.clone(),
+        response,
+    });
+    tokio::pin!(deletion);
+    assert!(futures::poll!(&mut deletion).is_pending());
+    release.notify_one();
+    let sent = tokio::time::timeout(Duration::from_secs(5), sending).await???;
+    assert!(matches!(sent, crate::SubmitMessageOutcome::Started { .. }));
+    tokio::time::timeout(Duration::from_secs(5), &mut deletion).await??;
+    deleted.await??;
+    assert!(
+        !harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deletion_waits_for_aborted_stream_to_stop_polling() -> Result<()> {
+    assert_deletion_waits_for_stream(false).await?;
+    assert_deletion_waits_for_stream(true).await
+}
+
+async fn assert_deletion_waits_for_stream(cancel_first: bool) -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let entered = tokio_util::sync::CancellationToken::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let task_entered = entered.clone();
+    let task = harness.runtime.stream_tasks.spawn(&session_id, async move {
+        let mut stream = futures::stream::poll_fn(move |_| {
+            task_entered.cancel();
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("release stream poll");
+            std::task::Poll::Ready(Some(()))
+        });
+        let _ = futures::StreamExt::next(&mut stream).await;
+    });
+    harness.runtime.active_streams.lock().await.insert(
+        session_id.clone(),
+        super::super::core::ActiveStream {
+            message_id: kraai_types::MessageId::new("blocked-stream"),
+            abort_handle: task.abort_handle(),
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(1), entered.cancelled()).await?;
+    if cancel_first {
+        harness.runtime.cancel_stream(session_id.clone()).await?;
+        assert!(harness.runtime.active_streams.lock().await.is_empty());
+    }
+    let (response, deleted) = tokio::sync::oneshot::channel();
+    let runtime = harness.runtime.clone();
+    let deletion = runtime.handle_command(crate::handle::Command::DeleteSession {
+        session_id: session_id.clone(),
+        response,
+    });
+    tokio::pin!(deletion);
+    assert!(futures::poll!(&mut deletion).is_pending());
+    assert!(!task.is_finished());
+    release_tx.send(())?;
+    tokio::time::timeout(Duration::from_secs(5), &mut deletion).await??;
+    deleted.await??;
+    let outcome = task.await;
+    assert!(outcome.is_ok() || outcome.is_err_and(|error| error.is_cancelled()));
+    assert!(
+        !harness
+            .handle
+            .list_sessions()
+            .await?
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() -> Result<()> {
     let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call-1",

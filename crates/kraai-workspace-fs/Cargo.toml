@@ -7,21 +7,17 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
+kraai-io.workspace = true
 thiserror.workspace = true
-ulid.workspace = true
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-rustix.workspace = true
+[dev-dependencies]
+ulid.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 nix = { workspace = true, features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
-  "Wdk_Foundation",
-  "Wdk_Storage_FileSystem",
   "Win32_Foundation",
-  "Win32_Security",
   "Win32_Storage_FileSystem",
-  "Win32_System_IO",
 ] }

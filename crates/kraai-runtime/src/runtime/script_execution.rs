@@ -172,11 +172,13 @@ impl RuntimeCore {
             executions: self.execution_store.clone(),
         });
         plan.state_effect_handler = Arc::new(DurableStateEffects {
+            session_task: Arc::new(self.stream_tasks.session_token(&request.session_id)),
             execution_id: execution_id.clone(),
             session_id: request.session_id,
             workspace_root: request.workspace_root,
             effective_capabilities: request.effective_capabilities,
             store: self.context_state_store.clone(),
+            barrier: self.session_state_barrier.clone(),
         });
 
         let execution = kraai_nushell_runtime::execute(plan, cancellation).await;

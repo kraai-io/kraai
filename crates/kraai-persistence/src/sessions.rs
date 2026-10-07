@@ -8,10 +8,16 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
-use crate::MessageStore;
-use crate::atomic_file::{AtomicWriteOutcome, atomic_write_with_outcome};
+use crate::FileCompactionStore;
 use crate::commit::complete_commit;
 use crate::keyed_locks::KeyedLocks;
+use crate::{
+    ContextStateStore, FileContextStateStore, FileRequestUsageStore, MessageStore,
+    RequestUsageStore,
+};
+use kraai_io::fs::{AtomicWriteOutcome, atomic_replace_async};
+
+mod deletion;
 
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,13 +85,18 @@ pub struct FileSessionStore {
     state: Arc<SessionState>,
     write_guard: Arc<Mutex<()>>,
     message_mutations: KeyedLocks<MessageId>,
+    pub(crate) context: Arc<dyn ContextStateStore>,
+    pub(crate) usage: Arc<dyn RequestUsageStore>,
 }
 
 struct SessionState {
+    compactions: FileCompactionStore,
     /// Sessions metadata
     sessions: RwLock<HashMap<String, SessionMeta>>,
     /// Path to sessions file
     sessions_path: PathBuf,
+    deletions_dir: PathBuf,
+    deleting: RwLock<HashSet<String>>,
     /// Reference to message store for GC
     message_store: Arc<dyn MessageStore>,
 }
@@ -95,28 +106,37 @@ impl FileSessionStore {
         let sessions_path = data_dir.join("sessions.json");
         Self {
             state: Arc::new(SessionState {
+                compactions: FileCompactionStore::new(data_dir),
                 sessions: RwLock::new(HashMap::new()),
                 sessions_path,
+                deletions_dir: data_dir.join("session-deletions"),
+                deleting: RwLock::default(),
                 message_store,
             }),
             write_guard: Arc::default(),
             message_mutations: KeyedLocks::default(),
+            context: Arc::new(FileContextStateStore::new(data_dir)),
+            usage: Arc::new(FileRequestUsageStore::new(data_dir)),
         }
     }
 
     pub(crate) async fn load(&self) -> Result<()> {
-        self.state.load().await
+        self.state.load().await?;
+        self.load_deletions().await
     }
 
     pub(crate) async fn cleanup_orphans(&self) -> Result<usize> {
         self.state.cleanup_orphans().await
     }
 
+    pub(crate) fn compactions(&self) -> FileCompactionStore {
+        self.state.compactions.clone()
+    }
+
     async fn commit_sessions(
         &self,
         guard: OwnedMutexGuard<()>,
         next_sessions: HashMap<String, SessionMeta>,
-        deleted_tree: Option<HashSet<MessageId>>,
     ) -> Result<()> {
         let state = self.state.clone();
         complete_commit(
@@ -125,11 +145,6 @@ impl FileSessionStore {
                 let outcome =
                     SessionState::persist_sessions(&next_sessions, &state.sessions_path).await?;
                 state.publish_sessions(next_sessions, outcome).await?;
-                if let Some(tree) = deleted_tree {
-                    state
-                        .gc_orphaned_messages(tree, state.message_store.as_ref())
-                        .await?;
-                }
                 Ok(())
             },
             "Session commit task failed",
@@ -145,6 +160,9 @@ impl FileSessionStore {
     ) -> Result<bool> {
         let guard = self.write_guard.clone().lock_owned().await;
 
+        if self.state.deleting.read().await.contains(&session.id) {
+            return Ok(false);
+        }
         let sessions = self.state.sessions.read().await;
         let Some(current) = sessions.get(&session.id) else {
             return Ok(false);
@@ -164,22 +182,26 @@ impl FileSessionStore {
         }
         next_sessions.insert(session.id.clone(), session.clone());
 
-        self.commit_sessions(guard, next_sessions, None)
+        self.commit_sessions(guard, next_sessions)
             .await
             .map(|()| true)
     }
 }
 
 impl SessionState {
+    async fn delete_message(&self, id: &MessageId, message_store: &dyn MessageStore) -> Result<()> {
+        self.compactions.delete(id).await?;
+        message_store.delete(id).await
+    }
+
     /// Load sessions from disk (should be called on startup)
     async fn load(&self) -> Result<()> {
-        if !self.sessions_path.exists() {
-            return Ok(());
-        }
-
-        let content = fs::read_to_string(&self.sessions_path)
+        let Some(content) = kraai_io::fs::read_optional_text_async(&self.sessions_path)
             .await
-            .with_context(|| format!("Failed to read sessions file: {:?}", self.sessions_path))?;
+            .with_context(|| format!("Failed to read sessions file: {:?}", self.sessions_path))?
+        else {
+            return Ok(());
+        };
 
         let sessions: HashMap<String, SessionMeta> =
             serde_json::from_str(&content).with_context(|| "Failed to parse sessions file")?;
@@ -198,7 +220,7 @@ impl SessionState {
         let content = serde_json::to_string_pretty(sessions)
             .with_context(|| "Failed to serialize sessions")?;
 
-        atomic_write_with_outcome(path, content.as_bytes()).await
+        Ok(atomic_replace_async(path, content.as_bytes()).await?)
     }
 
     async fn publish_sessions(
@@ -208,7 +230,7 @@ impl SessionState {
     ) -> Result<()> {
         let previous = std::mem::replace(&mut *self.sessions.write().await, next_sessions);
         drop(previous);
-        outcome.into_result()
+        Ok(outcome.into_result()?)
     }
 
     /// Collect all message IDs in a session's tree (from tip to root)
@@ -281,7 +303,7 @@ impl SessionState {
         let mut errors = Vec::new();
         for msg_id in deleted_messages {
             if !still_referenced.contains(&msg_id)
-                && let Err(e) = message_store.delete(&msg_id).await
+                && let Err(e) = self.delete_message(&msg_id, message_store).await
             {
                 errors.push((msg_id, e));
             }
@@ -308,34 +330,51 @@ impl SessionState {
 #[async_trait::async_trait]
 impl SessionStore for FileSessionStore {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
-        let mut list: Vec<_> = self.state.sessions.read().await.values().cloned().collect();
-        list.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        Ok(list)
-    }
-
-    async fn list_ids(&self) -> Result<HashSet<String>> {
-        Ok(self
+        let deleting = self.state.deleting.read().await.clone();
+        let mut list: Vec<_> = self
             .state
             .sessions
             .read()
             .await
             .values()
-            .map(|session| session.id.clone())
+            .filter(|session| !deleting.contains(&session.id))
+            .cloned()
+            .collect();
+        list.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+        Ok(list)
+    }
+
+    async fn list_ids(&self) -> Result<HashSet<String>> {
+        let deleting = self.state.deleting.read().await.clone();
+        Ok(self
+            .state
+            .sessions
+            .read()
+            .await
+            .keys()
+            .filter(|id| !deleting.contains(*id))
+            .cloned()
             .collect())
     }
 
     async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
+        if self.state.deleting.read().await.contains(id) {
+            return Ok(None);
+        }
         let sessions = self.state.sessions.read().await;
         Ok(sessions.get(id).cloned())
     }
 
     async fn save(&self, session: &SessionMeta) -> Result<()> {
         let guard = self.write_guard.clone().lock_owned().await;
+        if self.state.deleting.read().await.contains(&session.id) {
+            return Err(eyre!("Session {} is being deleted", session.id));
+        }
 
         let mut next_sessions = self.state.sessions.read().await.clone();
         next_sessions.insert(session.id.clone(), session.clone());
 
-        self.commit_sessions(guard, next_sessions, None).await
+        self.commit_sessions(guard, next_sessions).await
     }
 
     async fn save_if_tip_matches(
@@ -357,26 +396,7 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let guard = self.write_guard.clone().lock_owned().await;
-
-        let current_sessions = self.state.sessions.read().await.clone();
-        let tip_id_to_delete = current_sessions.get(id).and_then(|s| s.tip_id.clone());
-        let mut sessions_without_deleted = current_sessions;
-        sessions_without_deleted.remove(id);
-
-        let tree_to_delete = if let Some(tip_id) = tip_id_to_delete {
-            Some(
-                self.state
-                    .collect_tree_messages(&tip_id)
-                    .await
-                    .with_context(|| format!("Failed to traverse messages for session {id}"))?,
-            )
-        } else {
-            None
-        };
-
-        self.commit_sessions(guard, sessions_without_deleted, tree_to_delete)
-            .await
+        self.delete_session(id).await
     }
 
     async fn lock_message_mutation(&self, id: &MessageId) -> OwnedMutexGuard<()> {
@@ -412,7 +432,10 @@ impl SessionState {
 
         let mut deleted_count = 0;
         for msg_id in on_disk.difference(&referenced) {
-            match self.message_store.delete(msg_id).await {
+            match self
+                .delete_message(msg_id, self.message_store.as_ref())
+                .await
+            {
                 Ok(()) => deleted_count += 1,
                 Err(e) => {
                     tracing::error!("Failed to delete orphaned message {}: {}", msg_id, e);

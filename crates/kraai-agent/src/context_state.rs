@@ -3,9 +3,9 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
+use kraai_io::fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
 use kraai_persistence::{ContextStateStore, FileContextSnapshot};
 use kraai_types::{ContextStateEvent, ContextStateMutation, MessageId, PinnedFileScope};
-use kraai_workspace_fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PinnedFile {

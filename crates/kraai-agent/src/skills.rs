@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use kraai_workspace_fs::open_scoped_file;
+use kraai_io::fs::open_scoped_file;
 use serde::{Deserialize, Serialize};
 
 const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;

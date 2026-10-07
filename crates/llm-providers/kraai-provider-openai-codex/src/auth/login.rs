@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use super::token::{StoredAuth, StoredTokens, generate_generation, parse_id_token_claims};
-use super::{AuthConfig, DEFAULT_ORIGINATOR, unix_now};
+use super::{AuthConfig, DEFAULT_ORIGINATOR, read_auth_response, unix_now};
 
 const DEVICE_CODE_TIMEOUT_SECS: u64 = 15 * 60;
 const CALLBACK_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -185,16 +185,13 @@ pub(super) async fn request_device_code(
 
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = kraai_provider_core::read_error_body(response).await;
         return Err(io::Error::other(format!(
             "OpenAI device-code start failed: {status}: {body}"
         )));
     }
 
-    let response = response
-        .json::<DeviceCodeResponse>()
-        .await
-        .map_err(io::Error::other)?;
+    let response: DeviceCodeResponse = read_auth_response(response).await?;
     Ok(DeviceCodeResponseData {
         device_auth_id: response.device_auth_id,
         user_code: response.user_code,
@@ -252,10 +249,7 @@ async fn run_device_code_login_inner(
 
         let status = response.status();
         if status.is_success() {
-            let response = response
-                .json::<DeviceCodePollSuccess>()
-                .await
-                .map_err(io::Error::other)?;
+            let response: DeviceCodePollSuccess = read_auth_response(response).await?;
             let auth = exchange_authorization_code(
                 client,
                 config,
@@ -275,7 +269,7 @@ async fn run_device_code_login_inner(
             continue;
         }
 
-        let body = response.text().await.unwrap_or_default();
+        let body = kraai_provider_core::read_error_body(response).await;
         return Err(io::Error::other(format!(
             "OpenAI device-code poll failed: {status}: {body} ({verification_url})"
         )));
@@ -305,16 +299,13 @@ async fn exchange_authorization_code(
 
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = kraai_provider_core::read_error_body(response).await;
         return Err(io::Error::other(format!(
             "OpenAI OAuth token exchange failed: {status}: {body}"
         )));
     }
 
-    let tokens = response
-        .json::<OAuthTokenResponse>()
-        .await
-        .map_err(io::Error::other)?;
+    let tokens: OAuthTokenResponse = read_auth_response(response).await?;
     let claims = parse_id_token_claims(&tokens.id_token)?;
     let account_id = claims
         .account_id

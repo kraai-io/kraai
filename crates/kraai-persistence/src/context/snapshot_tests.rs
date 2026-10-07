@@ -5,6 +5,7 @@ use kraai_types::PinnedFileScope;
 async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Result<()> {
     for source in ["command", "runtime", "refresh"] {
         let root = std::env::temp_dir().join(format!("file-context-close-{}", Ulid::generate()));
+        fs::create_dir(&root).await?;
         let store = FileContextStateStore::new(&root);
         let closed = root.join("closed.txt");
         let retained = root.join("retained.txt");
@@ -101,6 +102,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
 #[tokio::test]
 async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals() -> Result<()> {
     let root = std::env::temp_dir().join(format!("file-context-{}", Ulid::generate()));
+    fs::create_dir(&root).await?;
     let store = FileContextStateStore::new(&root);
     let path = root.join("file.txt");
     let event = store

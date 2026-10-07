@@ -94,9 +94,9 @@ fn auth_controller_with_refresh_timeout_or_skip(
 }
 
 fn temp_auth_path() -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("agent-openai-codex-{}", Ulid::generate()))
-        .join("auth.json")
+    let directory = std::env::temp_dir().join(format!("agent-openai-codex-{}", Ulid::generate()));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory.join("auth.json")
 }
 
 fn fake_jwt(email: &str, plan_type: &str, account_id: &str) -> String {
@@ -337,7 +337,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
     assert!(controller.inner.login_gate.try_lock().is_err());
 
     controller
-        .clear_auth_with_error_locked(String::from("refresh rejected"))
+        .clear_auth_with_error_locked(String::from("refresh rejected"), file_lock.clone())
         .await
         .unwrap();
     drop(file_lock);
@@ -841,28 +841,14 @@ fn failed_auth_replacement_cleans_temp_and_preserves_destination() {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
-#[test]
-fn auth_temp_files_do_not_overwrite_existing_paths() {
-    let path = temp_auth_path();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, b"keep").unwrap();
-
-    let error = storage::create_auth_temp_file(&path).unwrap_err();
-
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&path).unwrap(), b"keep");
-    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-}
-
 #[cfg(unix)]
 #[test]
-fn auth_files_are_private_at_creation_and_after_replacement() {
+fn auth_replacement_restricts_existing_public_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
     let path = temp_auth_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = storage::create_auth_temp_file(&path).unwrap();
-    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o077, 0);
+    let file = std::fs::File::create(&path).unwrap();
     file.set_permissions(std::fs::Permissions::from_mode(0o644))
         .unwrap();
     drop(file);

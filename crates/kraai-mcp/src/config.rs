@@ -88,12 +88,11 @@ const fn call_timeout() -> u64 {
 
 impl McpConfig {
     pub async fn load(path: &Path) -> Result<Self, String> {
-        let contents = match tokio::fs::read_to_string(path).await {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+        let Some(contents) = kraai_io::fs::read_optional_text_async(path)
+            .await
+            .map_err(|error| format!("Unable to read {}: {error}", path.display()))?
+        else {
+            return Ok(Self::default());
         };
         let mut config: Self = toml::from_str(&contents)
             .map_err(|error| format!("Invalid MCP config {}: {error}", path.display()))?;

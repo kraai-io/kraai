@@ -1,9 +1,11 @@
+use kraai_io::fs::atomic_replace_in_async;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use crate::{commit::complete_commit, keyed_locks::KeyedLocks};
 use color_eyre::eyre::{Context, Result, ensure, eyre};
 use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionCheckpoint {
@@ -50,13 +52,17 @@ impl CompactionCheckpoint {
 
 #[derive(Clone)]
 pub struct FileCompactionStore {
+    anchor: PathBuf,
     root: PathBuf,
+    locks: Arc<KeyedLocks<MessageId>>,
 }
 
 impl FileCompactionStore {
     pub fn new(storage_root: &Path) -> Self {
         Self {
+            anchor: storage_root.to_path_buf(),
             root: storage_root.join("compactions"),
+            locks: Arc::default(),
         }
     }
 
@@ -67,12 +73,11 @@ impl FileCompactionStore {
 
     pub async fn get(&self, boundary: &MessageId) -> Result<Option<CompactionCheckpoint>> {
         let path = self.path(boundary)?;
-        let bytes = match fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to read compaction: {path:?}"));
-            }
+        let Some(bytes) = kraai_io::fs::read_optional_async(&path)
+            .await
+            .with_context(|| format!("Failed to read compaction: {path:?}"))?
+        else {
+            return Ok(None);
         };
         let checkpoint: CompactionCheckpoint = serde_json::from_slice(&bytes)
             .with_context(|| format!("Failed to parse compaction: {path:?}"))?;
@@ -85,193 +90,67 @@ impl FileCompactionStore {
     }
 
     pub async fn save(&self, checkpoint: &CompactionCheckpoint) -> Result<()> {
+        self.save_checkpoint(checkpoint, None).await
+    }
+
+    pub async fn save_with_barrier(
+        &self,
+        checkpoint: &CompactionCheckpoint,
+        barrier: Arc<tokio::sync::RwLock<()>>,
+    ) -> Result<()> {
+        self.save_checkpoint(checkpoint, Some(barrier)).await
+    }
+
+    async fn save_checkpoint(
+        &self,
+        checkpoint: &CompactionCheckpoint,
+        barrier: Option<Arc<tokio::sync::RwLock<()>>>,
+    ) -> Result<()> {
         checkpoint.validate()?;
         let path = self.path(&checkpoint.covered_through)?;
-        crate::atomic_write(&path, &serde_json::to_vec(checkpoint)?).await
+        let bytes = serde_json::to_vec(checkpoint)?;
+        let anchor = self.anchor.clone();
+        self.commit(&checkpoint.covered_through, barrier, async move {
+            Ok(atomic_replace_in_async(&anchor, &path, &bytes)
+                .await?
+                .into_result()?)
+        })
+        .await
     }
 
     pub async fn delete(&self, boundary: &MessageId) -> Result<()> {
         let path = self.path(boundary)?;
-        match fs::remove_file(&path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => {
-                Err(error).with_context(|| format!("Failed to delete compaction: {path:?}"))
-            }
-        }
+        self.commit(boundary, None, async move {
+            kraai_io::fs::remove_file_durable_async(&path)
+                .await
+                .with_context(|| format!("Failed to delete compaction: {path:?}"))?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn commit(
+        &self,
+        boundary: &MessageId,
+        barrier: Option<Arc<tokio::sync::RwLock<()>>>,
+        operation: impl Future<Output = Result<()>> + Send + 'static,
+    ) -> Result<()> {
+        let barrier = match barrier {
+            Some(barrier) => Some(barrier.read_owned().await),
+            None => None,
+        };
+        complete_commit(
+            self.locks.lock(boundary).await,
+            async move {
+                let result = operation.await;
+                drop(barrier);
+                result
+            },
+            "Compaction commit task failed",
+        )
+        .await
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    fn directory() -> PathBuf {
-        std::env::temp_dir().join(format!("kraai-compaction-{}", ulid::Ulid::generate()))
-    }
-
-    fn checkpoint() -> CompactionCheckpoint {
-        CompactionCheckpoint {
-            covered_through: MessageId::new("boundary"),
-            superseded_usage: vec![MessageId::new("latest")],
-            previous_boundary: Some(MessageId::new("previous")),
-            replacement: vec![ConversationItem::User {
-                content: "User requested a parser; the parser is implemented.".into(),
-            }],
-            model_id: ModelId::new("model"),
-            provider_id: ProviderId::new("provider"),
-            prompt_version: 1,
-            usage: Some(TokenUsage {
-                input_tokens: 120,
-                output_tokens: 15,
-                ..TokenUsage::default()
-            }),
-        }
-    }
-
-    #[tokio::test]
-    async fn checkpoint_survives_restart_without_changing_history() -> Result<()> {
-        let directory = directory();
-        let store = FileCompactionStore::new(&directory);
-        let checkpoint = checkpoint();
-        ensure!(store.get(&checkpoint.covered_through).await?.is_none());
-        let history = directory.join("messages").join("boundary.json");
-        crate::atomic_write(&history, b"original history").await?;
-        store.save(&checkpoint).await?;
-        let reopened = FileCompactionStore::new(&directory);
-        ensure!(reopened.get(&checkpoint.covered_through).await?.as_ref() == Some(&checkpoint));
-        ensure!(fs::read(&history).await? == b"original history");
-        fs::remove_dir_all(directory).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rejects_unsafe_ids_and_invalid_checkpoints_without_replacing_saved_state() -> Result<()>
-    {
-        let directory = directory();
-        let store = FileCompactionStore::new(&directory);
-        let original = checkpoint();
-        store.save(&original).await?;
-        for raw in ["../escape", "/tmp/escape", r"..\escape", "C:escape", ""] {
-            let id = MessageId(Arc::from(raw));
-            ensure!(store.get(&id).await.is_err());
-            let mut invalid = original.clone();
-            invalid.covered_through = id.clone();
-            ensure!(store.save(&invalid).await.is_err());
-            invalid.covered_through = original.covered_through.clone();
-            invalid.previous_boundary = Some(id);
-            ensure!(store.save(&invalid).await.is_err());
-        }
-        let mut invalid = original.clone();
-        invalid.replacement.clear();
-        ensure!(store.save(&invalid).await.is_err());
-        invalid = original.clone();
-        invalid.prompt_version = 2;
-        ensure!(store.save(&invalid).await.is_err());
-        invalid = original.clone();
-        invalid.previous_boundary = Some(invalid.covered_through.clone());
-        ensure!(store.save(&invalid).await.is_err());
-        ensure!(store.get(&original.covered_through).await?.as_ref() == Some(&original));
-        fs::remove_dir_all(directory).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rejects_corrupt_or_mismatched_files() -> Result<()> {
-        let directory = directory();
-        let store = FileCompactionStore::new(&directory);
-        let checkpoint = checkpoint();
-        store.save(&checkpoint).await?;
-        let other = MessageId::new("other");
-        crate::atomic_write(&store.path(&other)?, &serde_json::to_vec(&checkpoint)?).await?;
-        ensure!(store.get(&other).await.is_err());
-        for bytes in [b"{".as_slice(), b"null"] {
-            fs::write(store.path(&other)?, bytes).await?;
-            ensure!(store.get(&other).await.is_err());
-        }
-        let mut invalid = checkpoint.clone();
-        invalid.replacement.clear();
-        fs::write(
-            store.path(&checkpoint.covered_through)?,
-            serde_json::to_vec(&invalid)?,
-        )
-        .await?;
-        ensure!(store.get(&checkpoint.covered_through).await.is_err());
-        invalid = checkpoint.clone();
-        invalid.prompt_version = 0;
-        fs::write(
-            store.path(&checkpoint.covered_through)?,
-            serde_json::to_vec(&invalid)?,
-        )
-        .await?;
-        ensure!(store.get(&checkpoint.covered_through).await.is_err());
-        fs::remove_dir_all(directory).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn failed_write_keeps_previous_checkpoint_readable() -> Result<()> {
-        let directory = directory();
-        let store = FileCompactionStore::new(&directory);
-        let original = checkpoint();
-        store.save(&original).await?;
-        let mut next = original.clone();
-        next.covered_through = MessageId::new("next");
-        next.previous_boundary = Some(original.covered_through.clone());
-        fs::create_dir(store.path(&next.covered_through)?).await?;
-        ensure!(store.save(&next).await.is_err());
-        ensure!(store.get(&original.covered_through).await?.as_ref() == Some(&original));
-        let mut entries = fs::read_dir(&store.root).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            ensure!(
-                entry
-                    .path()
-                    .extension()
-                    .is_none_or(|extension| extension != "tmp")
-            );
-        }
-        fs::remove_dir_all(directory).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn failed_checkpoint_deletion_preserves_source_message() -> Result<()> {
-        use crate::{FileMessageStore, MessageStore};
-        use kraai_types::{ConversationItem, Message, MessageStatus};
-
-        let directory = directory();
-        let store = FileCompactionStore::new(&directory);
-        let messages = FileMessageStore::new(&directory);
-        let checkpoint = checkpoint();
-        let message = Message {
-            id: checkpoint.covered_through.clone(),
-            parent_id: None,
-            content: ConversationItem::User {
-                content: String::from("hello").into(),
-            },
-            status: MessageStatus::Complete,
-            agent_profile_id: None,
-            generation: None,
-        };
-        messages.save(&message).await?;
-        let path = store.path(&message.id)?;
-        fs::create_dir_all(&path).await?;
-        ensure!(messages.delete(&message.id).await.is_err());
-        let retained = messages
-            .get(&message.id)
-            .await?
-            .ok_or_else(|| eyre!("Source message was removed after checkpoint deletion failed"))?;
-        ensure!(retained.id == message.id);
-        ensure!(retained.content == message.content);
-        ensure!(messages.exists(&message.id).await?);
-        fs::remove_dir(&path).await?;
-        store.save(&checkpoint).await?;
-        messages.delete(&message.id).await?;
-        ensure!(messages.get(&message.id).await?.is_none());
-        ensure!(store.get(&message.id).await?.is_none());
-        messages.delete(&message.id).await?;
-        fs::remove_dir_all(directory).await?;
-        Ok(())
-    }
-}
+mod tests;

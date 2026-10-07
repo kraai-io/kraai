@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail};
@@ -93,13 +93,7 @@ impl ResultStore {
                 pricing,
             )?;
             let output = path.with_file_name("request-accounting.json");
-            let temporary =
-                path.with_file_name(format!("request-accounting-{}.tmp", ulid::Ulid::generate()));
-            replace_cached_accounting(
-                &temporary,
-                &output,
-                &serde_json::to_vec_pretty(&accounting)?,
-            )?;
+            replace_cached_accounting(&output, &serde_json::to_vec_pretty(&accounting)?)?;
             proxy.accounting = Some(accounting);
             proxy.accounting_error = None;
         } else {
@@ -148,20 +142,9 @@ impl ResultStore {
     }
 }
 
-fn replace_cached_accounting(temporary: &Path, output: &Path, contents: &[u8]) -> Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temporary)?;
-    let written = file.write_all(contents);
-    drop(file);
-    let result = written
-        .map_err(Into::into)
-        .and_then(|()| fs::rename(temporary, output).wrap_err("replace cached request accounting"));
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
+fn replace_cached_accounting(output: &Path, contents: &[u8]) -> Result<()> {
+    kraai_io::fs::atomic_replace_unsynced(output, contents)
+        .wrap_err("replace cached request accounting")
 }
 
 pub fn load_run_result(path: &Path) -> Result<RunResult> {
@@ -293,7 +276,7 @@ mod tests {
     use color_eyre::eyre::ensure;
 
     #[test]
-    fn cached_accounting_preserves_existing_temporary_files() -> Result<()> {
+    fn cached_accounting_leaves_unrelated_temporary_files_untouched() -> Result<()> {
         let root = std::env::temp_dir().join(format!(
             "kraai-accounting-collision-{}",
             ulid::Ulid::generate()
@@ -303,10 +286,9 @@ mod tests {
         let output = root.join("accounting.json");
         fs::write(&temporary, b"another writer")?;
         fs::write(&output, b"original")?;
-        let result = replace_cached_accounting(&temporary, &output, b"replacement");
-        ensure!(result.is_err());
+        replace_cached_accounting(&output, b"replacement")?;
         ensure!(fs::read(&temporary)? == b"another writer");
-        ensure!(fs::read(&output)? == b"original");
+        ensure!(fs::read(&output)? == b"replacement");
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -318,22 +300,21 @@ mod tests {
             ulid::Ulid::generate()
         ));
         fs::create_dir(&root)?;
-        let temporary = root.join("accounting.tmp");
         let output = root.join("accounting.json");
         fs::create_dir(&output)?;
         fs::write(output.join("retained"), b"original")?;
-        let result = replace_cached_accounting(&temporary, &output, b"replacement");
+        let result = replace_cached_accounting(&output, b"replacement");
         ensure!(
             result.err().map(|error| error.to_string()).as_deref()
                 == Some("replace cached request accounting"),
             "publication error lost its context"
         );
-        ensure!(!temporary.exists());
+        ensure!(fs::read_dir(&root)?.count() == 1);
         ensure!(fs::read(output.join("retained"))? == b"original");
         fs::remove_dir_all(&output)?;
         fs::write(&output, b"original")?;
-        replace_cached_accounting(&temporary, &output, b"replacement")?;
-        ensure!(!temporary.exists());
+        replace_cached_accounting(&output, b"replacement")?;
+        ensure!(fs::read_dir(&root)?.count() == 1);
         ensure!(fs::read(&output)? == b"replacement");
         fs::remove_dir_all(root)?;
         Ok(())

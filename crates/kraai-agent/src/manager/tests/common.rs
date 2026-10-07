@@ -3,7 +3,6 @@ use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
 use kraai_provider_core::{Provider, ProviderRequest};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) struct MockProvider {
@@ -61,12 +60,9 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     let data_dir = test_dir("manager");
     tokio::fs::create_dir_all(&data_dir).await.unwrap();
 
-    let message_store = Arc::new(kraai_persistence::FileMessageStore::new(&data_dir));
-    let session_store = Arc::new(kraai_persistence::FileSessionStore::new(
-        &data_dir,
-        message_store.clone(),
-    ));
-    let context_state_store = Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
+    let persistence = kraai_persistence::Persistence::open(&data_dir)
+        .await
+        .unwrap();
 
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -85,10 +81,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     let manager = AgentManager::new(
         providers,
         PathBuf::from("/tmp/default-workspace"),
-        message_store,
-        session_store,
-        context_state_store,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
+        persistence,
         data_dir.clone(),
     );
     (manager, data_dir)

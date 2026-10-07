@@ -296,13 +296,19 @@ impl RuntimeCore {
                     ))));
                     return Ok(());
                 }
-                let mut agent = self.agent_manager.write().await;
+                let agent = self.agent_manager.write().await;
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
-                self.queued_messages.lock().await.remove(&session_id);
-                let result = agent.delete_session(&session_id).await;
                 drop(agent);
+                self.stream_tasks.wait_session(&session_id).await;
+                self.queued_messages.lock().await.remove(&session_id);
+                let result = self
+                    .agent_manager
+                    .write()
+                    .await
+                    .delete_session(&session_id)
+                    .await;
                 if result.is_ok() {
                     self.event_tx.remove_timer(&session_id);
                 }

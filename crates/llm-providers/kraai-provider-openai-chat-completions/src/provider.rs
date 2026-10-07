@@ -1,3 +1,4 @@
+use kraai_io::http::{build_streaming_http_client, finite_request};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
@@ -7,7 +8,7 @@ use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
     ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
     ProviderRequestContext, ProviderStreamEvent, ResolvedImages, ScriptToolDefinition,
-    build_streaming_http_client, finite_request, send_with_retry, stream_sse_data,
+    send_with_retry, stream_sse_data,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
@@ -108,7 +109,8 @@ where
         )
         .await?;
         let response = ensure_success_response("list models", response).await?;
-        let models = response.json::<ListModelsResponse>().await?;
+        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
+        let models: ListModelsResponse = serde_json::from_slice(&bytes)?;
 
         if let Some(catalog) = &self.model_catalog {
             catalog.initialize().await;
@@ -221,10 +223,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
 
     let url = response.url().to_string();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|error| format!("<failed to read body: {error}>"));
+    let body = kraai_provider_core::read_error_body(response).await;
 
     if let Some(error) = kraai_provider_core::ProviderError::from_api_error(&body) {
         return Err(error.into());

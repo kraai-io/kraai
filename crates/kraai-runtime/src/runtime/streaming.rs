@@ -207,7 +207,8 @@ impl RuntimeCore {
         let request_message_id = request.message_id.clone();
         let active_message_id = request_message_id.clone();
         let terminal_message_id = request_message_id.clone();
-        let task = self.stream_tasks.spawn({
+        let auxiliary_usage_task = self.stream_tasks.session_token(&session_id);
+        let task = self.stream_tasks.spawn(&session_id, {
             let start_gate = start_gate.clone();
             async move {
                 start_gate.notified().await;
@@ -218,6 +219,7 @@ impl RuntimeCore {
                     task_runtime.agent_manager.clone(),
                     task_runtime.event_tx.clone(),
                     task_runtime.session_state_barrier.clone(),
+                    auxiliary_usage_task,
                 ))
                 .catch_unwind()
                 .await
@@ -247,6 +249,9 @@ impl RuntimeCore {
                     .await;
             }
         });
+
+        #[cfg(test)]
+        self.stream_tasks.before_publication().await;
 
         let previous = self.active_streams.lock().await.insert(
             session_id.clone(),

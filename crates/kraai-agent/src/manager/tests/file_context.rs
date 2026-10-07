@@ -151,16 +151,8 @@ async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
     let before = request(&manager, &session).await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let (messages, sessions, _, context) = kraai_persistence::init_at(&root).await?;
-    let manager = AgentManager::new(
-        providers,
-        root.clone(),
-        messages,
-        sessions,
-        context,
-        Arc::new(kraai_persistence::FileRequestUsageStore::new(&root)),
-        root.clone(),
-    );
+    let persistence = kraai_persistence::Persistence::open(&root).await?;
+    let manager = AgentManager::new(providers, root.clone(), persistence, root.clone());
     assert_eq!(request(&manager, &session).await?.messages, before.messages);
     cleanup_dir(root).await;
     Ok(())

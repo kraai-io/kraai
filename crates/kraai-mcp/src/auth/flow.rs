@@ -34,11 +34,15 @@ pub(super) fn validate_url(value: &str, allow_loopback: bool) -> Result<url::Url
 
 pub(super) async fn manager(url: &str, store: FileStore) -> Result<AuthorizationManager, String> {
     validate_url(url, true)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = kraai_io::http::client_builder(
+        kraai_io::http::HttpTimeouts {
+            request: Some(Duration::from_secs(30)),
+            ..Default::default()
+        },
+        reqwest::redirect::Policy::none(),
+    )
+    .build()
+    .map_err(|error| error.to_string())?;
     let response = client
         .get(url)
         .header("accept", "text/event-stream")

@@ -74,11 +74,9 @@ pub(crate) async fn read_provider_config(
 }
 
 async fn load_provider_config(path: &Path) -> Result<Option<ProviderManagerConfig>> {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+    let Some(content) = kraai_io::fs::read_optional_async(path).await? else {
         return Ok(None);
-    }
-
-    let content = tokio::fs::read(path).await?;
+    };
     parse_provider_config(&content, path).map(Some)
 }
 
@@ -94,7 +92,15 @@ pub(crate) async fn write_settings_document(
     let config = provider_config_from_settings(settings)?;
     let toml_string = toml::to_string_pretty(&config)?;
 
-    kraai_persistence::atomic_write(path, toml_string.as_bytes()).await
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    kraai_io::fs::create_dir_all_async(directory).await?;
+    kraai_io::fs::atomic_replace_async(path, toml_string.as_bytes())
+        .await?
+        .into_result()
+        .map_err(Into::into)
 }
 
 fn settings_from_provider_config(
@@ -464,6 +470,23 @@ provider_id = "none"
         ensure!(
             config.as_ref().err().map(ToString::to_string).as_deref() == Some(expected.as_str())
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn settings_readers_surface_path_resolution_errors() -> Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "kraai-provider-config-loop-{}.toml",
+            ulid::Ulid::generate()
+        ));
+        std::os::unix::fs::symlink(&path, &path)?;
+        let registry = ProviderRegistry::default();
+        let settings = read_settings_document(&path, &registry).await;
+        let config = read_provider_config(&path, &registry).await;
+        std::fs::remove_file(&path)?;
+        ensure!(settings.is_err());
+        ensure!(config.is_err());
         Ok(())
     }
 

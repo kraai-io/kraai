@@ -83,14 +83,10 @@ pub fn serve_model_proxy(request: ProxyServiceRequest) -> Result<()> {
             .map(|directory| directory.join("agents.toml")),
         provider_config,
     };
-    let temporary = state_dir.join("ready.tmp");
-    fs::write(&temporary, serde_json::to_vec(&ready)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-    }
-    fs::rename(temporary, state_dir.join("ready.json"))?;
+    kraai_io::fs::atomic_replace_private_unsynced(
+        &state_dir.join("ready.json"),
+        &serde_json::to_vec(&ready)?,
+    )?;
     std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink())?;
     let metrics = proxy.finish()?;
     fs::write(

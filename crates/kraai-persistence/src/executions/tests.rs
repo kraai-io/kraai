@@ -3,7 +3,10 @@ use kraai_types::{SandboxCapability, ToolCallId};
 use ulid::Ulid;
 
 fn test_dir(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("kraai-executions-{name}-{}", Ulid::generate()))
+    let directory =
+        std::env::temp_dir().join(format!("kraai-executions-{name}-{}", Ulid::generate()));
+    std::fs::create_dir(&directory).unwrap();
+    directory
 }
 
 fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
@@ -44,7 +47,7 @@ async fn cancelled_creation_finishes_before_a_waiting_phase_transition() {
             .is_pending()
     );
     drop(create);
-    assert!(!data_dir.exists());
+    assert!(!store.executions_dir.exists());
 
     let mut running = Box::pin(store.mark_running(&id));
     assert!(
@@ -128,8 +131,10 @@ async fn output_reads_wait_for_both_streams_to_finish_replacement() {
     store.create(execution(&id)).await.unwrap();
     let execution_dir = store.execution_dir(&id).unwrap();
     let guard = store.execution_locks.lock(&id).await;
-    atomic_write(&execution_dir.join(STDOUT_FILE), b"final stdout")
+    atomic_replace_async(&execution_dir.join(STDOUT_FILE), b"final stdout")
         .await
+        .unwrap()
+        .into_result()
         .unwrap();
 
     let mut output = Box::pin(store.read_output(&id));
@@ -139,8 +144,10 @@ async fn output_reads_wait_for_both_streams_to_finish_replacement() {
             .is_err()
     );
 
-    atomic_write(&execution_dir.join(STDERR_FILE), b"final stderr")
+    atomic_replace_async(&execution_dir.join(STDERR_FILE), b"final stderr")
         .await
+        .unwrap()
+        .into_result()
         .unwrap();
     drop(guard);
     let output = output.await.unwrap();

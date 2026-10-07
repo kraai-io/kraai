@@ -9,12 +9,10 @@ version = "0.1.0"
 [dependencies]
 kraai-command-catalog.workspace = true
 kraai-command-core.workspace = true
+kraai-io.workspace = true
 kraai-types.workspace = true
 nu-engine.workspace = true
 nu-protocol.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

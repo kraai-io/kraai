@@ -191,6 +191,7 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session),
     )
     .await;
     assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
@@ -258,6 +259,7 @@ async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Resul
             harness.runtime.agent_manager.clone(),
             harness.runtime.event_tx.clone(),
             harness.runtime.session_state_barrier.clone(),
+            harness.runtime.stream_tasks.session_token(&session),
         )
         .await;
         assert!(matches!(result, StreamDriveResult::Completed(_)));
@@ -296,6 +298,7 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session),
     ));
     entered.cancelled().await;
     task.abort();
@@ -324,12 +327,13 @@ async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> 
         .await
         .cloned_provider_manager();
     let result = RuntimeCore::drive_stream(
-        session,
+        session.clone(),
         request,
         providers,
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session),
     )
     .await;
     assert!(matches!(result, StreamDriveResult::Completed(_)));
@@ -356,6 +360,7 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
         harness.runtime.agent_manager.clone(),
         harness.runtime.event_tx.clone(),
         harness.runtime.session_state_barrier.clone(),
+        harness.runtime.stream_tasks.session_token(&session),
     ));
     entered.cancelled().await;
     assert!(

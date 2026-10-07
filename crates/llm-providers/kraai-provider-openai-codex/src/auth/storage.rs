@@ -1,9 +1,9 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use base64::Engine;
-use rand::Rng;
+use kraai_io::fs::AtomicWriteOutcome;
+use kraai_io::lock::{FileLock, open_private_lock_file};
 use serde::{Deserialize, Serialize};
 
 use super::token::{StoredAuth, StoredTokens, parse_id_token_claims, token_generation};
@@ -18,11 +18,9 @@ struct StoredAuthFile {
 }
 
 pub(super) fn load_auth_file(path: &Path) -> io::Result<Option<StoredAuth>> {
-    if !path.exists() {
+    let Some(file) = kraai_io::fs::read_optional(path)? else {
         return Ok(None);
-    }
-
-    let file = std::fs::read(path)?;
+    };
     let stored = serde_json::from_slice::<StoredAuthFile>(&file).map_err(io::Error::other)?;
     let claims = parse_id_token_claims(&stored.tokens.id_token)?;
     let generation = if stored.generation.is_empty() {
@@ -38,11 +36,7 @@ pub(super) fn load_auth_file(path: &Path) -> io::Result<Option<StoredAuth>> {
     }))
 }
 
-pub(super) fn persist_auth_file(path: &Path, auth: &StoredAuth) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
+pub(super) fn persist_auth_file(path: &Path, auth: &StoredAuth) -> io::Result<AtomicWriteOutcome> {
     let payload = serde_json::to_vec_pretty(&StoredAuthFile {
         auth_mode: "chatgpt".to_string(),
         tokens: auth.tokens.clone(),
@@ -50,77 +44,23 @@ pub(super) fn persist_auth_file(path: &Path, auth: &StoredAuth) -> io::Result<()
         generation: auth.generation.clone(),
     })
     .map_err(io::Error::other)?;
-    let temp_path = temp_auth_write_path(path);
-    let mut temp_file = create_auth_temp_file(&temp_path)?;
-    let write_result: io::Result<()> = (|| {
-        temp_file.write_all(&payload)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            temp_file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
-    })();
-    drop(temp_file);
-    let result = write_result.and_then(|()| std::fs::rename(&temp_path, path));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
-}
-
-pub(super) fn create_auth_temp_file(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)
-}
-
-fn temp_auth_write_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "auth.json".to_string());
-    let mut random_bytes = [0u8; 8];
-    rand::rng().fill_bytes(&mut random_bytes);
-    let suffix = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes);
-    path.with_file_name(format!(".{file_name}.{suffix}.tmp"))
+    kraai_io::fs::atomic_replace_private(path, &payload)
 }
 
 pub(super) fn delete_auth_file(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    Ok(())
+    kraai_io::fs::remove_file_durable(path).map(|_removed| ())
 }
 
-pub(super) struct AuthFileLock {
-    _file: File,
-}
-
-impl AuthFileLock {
-    fn acquire(auth_path: &Path) -> io::Result<Self> {
+pub(super) async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<Arc<FileLock>> {
+    let file = tokio::task::spawn_blocking(move || {
         if let Some(parent) = auth_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            kraai_io::fs::create_private_dir_all(parent)?;
         }
-        let lock_path = auth_path.with_extension("json.refresh.lock");
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)?;
-        file.lock()?;
-        Ok(Self { _file: file })
-    }
-}
-
-pub(super) async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<AuthFileLock> {
-    tokio::task::spawn_blocking(move || AuthFileLock::acquire(&auth_path))
+        open_private_lock_file(&auth_path.with_extension("json.refresh.lock"))
+    })
+    .await
+    .map_err(io::Error::other)??;
+    FileLock::acquire_until(file, None, std::time::Duration::from_millis(20))
         .await
-        .map_err(io::Error::other)?
+        .map(Arc::new)
 }

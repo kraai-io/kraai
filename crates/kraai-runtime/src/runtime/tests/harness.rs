@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
-use kraai_persistence::{FileMessageStore, FileScriptExecutionStore, FileSessionStore};
+use kraai_persistence::FileMessageStore;
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
 use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
@@ -346,17 +346,17 @@ path = \"inherit\"\n",
 
         let message_store =
             message_store.unwrap_or_else(|| Arc::new(FileMessageStore::new(&data_dir)));
-        let session_store = Arc::new(FileSessionStore::new(&data_dir, message_store.clone()));
-        let execution_store = Arc::new(FileScriptExecutionStore::new(&data_dir));
-        let context_state_store =
-            Arc::new(kraai_persistence::FileContextStateStore::new(&data_dir));
+        let persistence =
+            kraai_persistence::Persistence::open_with_messages(&data_dir, message_store)
+                .await
+                .expect("initialize persistence");
+        let execution_store = persistence.executions().clone();
+        let context_state_store = persistence.context().clone();
+        let image_store = persistence.images().clone();
         let agent_manager = Arc::new(tokio::sync::RwLock::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
-            message_store,
-            session_store,
-            context_state_store.clone(),
-            Arc::new(kraai_persistence::FileRequestUsageStore::new(&data_dir)),
+            persistence,
             data_dir.clone(),
         )));
 
@@ -383,9 +383,7 @@ path = \"inherit\"\n",
             startup_rx,
         };
         let runtime = RuntimeCore {
-            image_store: Arc::new(kraai_persistence::FileImageStore::new(
-                &data_dir.join("data"),
-            )),
+            image_store,
             queue_drains: Arc::default(),
             session_preparations: Arc::default(),
             event_tx: event_tx.clone(),
