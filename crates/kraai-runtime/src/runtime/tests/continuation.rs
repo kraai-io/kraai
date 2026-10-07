@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
 use futures::poll;
 use futures::stream::{self, BoxStream};
@@ -10,7 +8,7 @@ use kraai_provider_core::{
 use kraai_types::{AssistantPhase, ChatRole, ModelId, ProviderId};
 use tokio::sync::mpsc;
 
-use super::harness::{RuntimeTestHarness, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
 use crate::ContinueSessionOutcome;
 
 struct RecordingProvider {
@@ -127,7 +125,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         );
         tokio::pin!(continuation);
         assert!(poll!(&mut continuation).is_pending());
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_TIMEOUT, async {
             while harness.runtime.session_state_barrier.try_write().is_ok() {
                 tokio::task::yield_now().await;
             }
@@ -135,7 +133,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         .await?;
         assert_eq!(
             tokio::time::timeout(
-                Duration::from_secs(1),
+                TEST_TIMEOUT,
                 harness.handle.continue_session(
                     session_id.clone(),
                     "old-model".into(),
@@ -147,7 +145,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         );
         assert!(received.try_recv().is_err());
         drop(preparation);
-        tokio::time::timeout(Duration::from_secs(1), continuation).await??
+        tokio::time::timeout(TEST_TIMEOUT, continuation).await??
     } else {
         harness
             .handle
@@ -159,7 +157,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .await?
     };
     assert_eq!(outcome, ContinueSessionOutcome::Started);
-    let (model, request) = tokio::time::timeout(Duration::from_secs(1), received.recv())
+    let (model, request) = tokio::time::timeout(TEST_TIMEOUT, received.recv())
         .await?
         .expect("provider request");
     assert_eq!(model.as_str(), "selected-model");

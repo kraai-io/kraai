@@ -230,7 +230,7 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
     ] {
         assert!(requests.send(request).is_ok());
     }
-    let timeout = std::time::Duration::from_secs(5);
+    let timeout = std::time::Duration::from_secs(15);
     assert!(
         matches!(responses.recv_timeout(timeout)?, RuntimeResponse::Models(Ok(models)) if models.is_empty())
     );

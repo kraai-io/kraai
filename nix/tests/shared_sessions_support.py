@@ -77,7 +77,7 @@ class Provider:
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                     self.wfile.flush()
 
-                try:
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                     if reply.script is not None:
                         emit(
                             {
@@ -107,8 +107,6 @@ class Provider:
                         emit({}, "stop")
                     self.wfile.write(b"data: [DONE]\n\n")
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
