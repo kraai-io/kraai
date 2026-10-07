@@ -7,29 +7,33 @@ use std::path::PathBuf;
 mod commit;
 mod compaction;
 mod context;
+mod database;
 mod executions;
 mod images;
 mod keyed_locks;
+mod leases;
 mod messages;
 mod preferences;
 mod repository;
 mod sessions;
 mod turns;
 mod usage;
-pub use compaction::{CompactionCheckpoint, FileCompactionStore};
+pub use compaction::{CompactionCheckpoint, SqliteCompactionStore};
+pub use database::Database as SqliteDatabase;
 pub use images::FileImageStore;
-pub use messages::{FileMessageStore, MessageStore};
+pub use leases::{SessionObservation, TURN_LEASE_DURATION};
+pub use messages::{ConversationSnapshot, MessageStore, SqliteMessageStore};
 pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};
 pub use repository::Persistence;
-pub use sessions::{FileSessionStore, SessionMeta, SessionStore};
-pub use usage::{FileRequestUsageStore, RequestUsageStore};
+pub use sessions::{SessionMeta, SessionStore, SqliteSessionStore};
+pub use usage::{RequestUsageStore, SqliteRequestUsageStore};
 
 pub use context::{
-    ContextStateDocument, ContextStateStore, FileContextSnapshot, FileContextStateStore,
+    ContextStateDocument, ContextStateStore, FileContextSnapshot, SqliteContextStateStore,
 };
 pub use executions::{
-    FileScriptExecutionStore, NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion,
-    ScriptExecutionRecord, ScriptExecutionStore,
+    NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
+    ScriptExecutionStore, SqliteScriptExecutionStore,
 };
 pub use turns::{
     AppendMessageRequest, AppendedMessage, ConversationStore, IdempotentAppendOutcome,
@@ -47,4 +51,4 @@ pub fn get_data_dir() -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod test_support;
+mod tests;

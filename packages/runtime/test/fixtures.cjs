@@ -63,4 +63,15 @@ function unwrap(result) {
   return result.Ok;
 }
 
-module.exports = { localProvider, unwrap };
+function readRecord(storage, kind, id) {
+  const { DatabaseSync } = require('node:sqlite');
+  const { join } = require('node:path');
+  const database = new DatabaseSync(join(storage, 'data', 'kraai.sqlite3'), { readOnly: true });
+  try {
+    return JSON.parse(database.prepare('SELECT data FROM records WHERE kind = ? AND id = ?').get(kind, id).data);
+  } finally {
+    database.close();
+  }
+}
+
+module.exports = { localProvider, unwrap, readRecord };

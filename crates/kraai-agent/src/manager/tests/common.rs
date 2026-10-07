@@ -90,3 +90,11 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
 pub(super) async fn cleanup_dir(data_dir: PathBuf) {
     let _ = tokio::fs::remove_dir_all(data_dir).await;
 }
+
+pub(super) fn corrupt_message(data_dir: &Path, id: &MessageId, data: &str) -> Result<()> {
+    rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?.execute(
+        "INSERT INTO records(kind, id, data) VALUES ('message', ?1, ?2) ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data",
+        rusqlite::params![id.as_str(), data],
+    )?;
+    Ok(())
+}

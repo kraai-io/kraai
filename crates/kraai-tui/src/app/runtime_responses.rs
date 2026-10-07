@@ -397,7 +397,7 @@ impl App {
                                 | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
                             };
                             if self.state.mode == UiMode::Executions
-                                && self.state.script_phase == ScriptPhase::AwaitingApproval
+                                && self.state.has_local_script_approval()
                             {
                                 self.close_executions();
                             }

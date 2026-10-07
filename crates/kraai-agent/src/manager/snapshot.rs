@@ -19,6 +19,7 @@ pub struct SessionSnapshotReader {
     storage_root: std::path::PathBuf,
     in_flight: HashMap<MessageId, Message>,
     requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
+    persisted_history: Option<BTreeMap<MessageId, Message>>,
 }
 
 pub struct SessionSnapshotData {
@@ -40,7 +41,15 @@ impl AgentManager {
         &self,
         session_id: &str,
     ) -> Result<SessionSnapshotReader> {
-        let session = self.require_session(session_id).await?;
+        let persisted = self.message_store.read_conversation(session_id).await?;
+        let (session, persisted_history, requests) = match persisted {
+            Some(snapshot) => (snapshot.session, Some(snapshot.history), snapshot.requests),
+            None => (
+                self.require_session(session_id).await?,
+                None,
+                self.usage_store.load(session_id).await?,
+            ),
+        };
         let in_flight = self.capture_in_flight_messages(Some(session_id)).await;
         Ok(SessionSnapshotReader {
             session,
@@ -49,7 +58,8 @@ impl AgentManager {
             messages: self.message_store.clone(),
             storage_root: self.storage_root.clone(),
             in_flight,
-            requests: self.usage_store.load(session_id).await?,
+            requests,
+            persisted_history,
         })
     }
 
@@ -105,22 +115,37 @@ impl SessionSnapshotReader {
     /// Performs history and profile I/O without holding the runtime or manager locks.
     pub async fn load(self) -> Result<SessionSnapshotData> {
         let mut context_usage = None;
-        let mut history = BTreeMap::new();
-        visit_history(
-            self.messages.as_ref(),
-            self.session.tip_id.clone(),
-            &self.in_flight,
-            |message| {
-                if context_usage.is_none() {
-                    context_usage = message_context_usage(&message);
-                }
-                if let Cow::Owned(message) = message {
-                    history.entry(message.id.clone()).or_insert(message);
-                }
-            },
-        )
-        .await?;
+        let mut history = self.persisted_history.unwrap_or_default();
+        if history.is_empty() && self.session.tip_id.is_some() {
+            visit_history(
+                self.messages.as_ref(),
+                self.session.tip_id.clone(),
+                &self.in_flight,
+                |message| {
+                    if context_usage.is_none() {
+                        context_usage = message_context_usage(&message);
+                    }
+                    if let Cow::Owned(message) = message {
+                        history.entry(message.id.clone()).or_insert(message);
+                    }
+                },
+            )
+            .await?;
+        }
         history.extend(self.in_flight);
+        if context_usage.is_none() {
+            let mut cursor = self.session.tip_id.clone();
+            while let Some(id) = cursor {
+                let Some(message) = history.get(&id) else {
+                    break;
+                };
+                if let Some(usage) = message_context_usage(message) {
+                    context_usage = Some(usage);
+                    break;
+                }
+                cursor = message.parent_id.clone();
+            }
+        }
 
         let mut requests = self.requests;
         for message in history.values() {

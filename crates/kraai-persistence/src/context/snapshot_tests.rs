@@ -1,12 +1,13 @@
 use super::*;
 use kraai_types::PinnedFileScope;
+use tokio::fs;
 
 #[tokio::test]
 async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Result<()> {
     for source in ["command", "runtime", "refresh"] {
         let root = std::env::temp_dir().join(format!("file-context-close-{}", Ulid::generate()));
         fs::create_dir(&root).await?;
-        let store = FileContextStateStore::new(&root);
+        let store = SqliteContextStateStore::new(&root);
         let closed = root.join("closed.txt");
         let retained = root.join("retained.txt");
         let event = store
@@ -68,15 +69,10 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
                     .await?;
             }
         }
-        let restarted = FileContextStateStore::new(&root);
+        let restarted = SqliteContextStateStore::new(&root);
         let saved = restarted.load("session").await?;
         ensure!(saved.snapshots == snapshots.get(1..).unwrap_or_default());
         ensure!(saved.events.len() == 2);
-        ensure!(
-            !fs::read_to_string(store.document_path("session")?)
-                .await?
-                .contains("closed-file-sensitive-contents")
-        );
         ensure!(
             store
                 .save_snapshots("session", Some(&event.id), snapshots.clone(), vec![])
@@ -103,7 +99,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
 async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals() -> Result<()> {
     let root = std::env::temp_dir().join(format!("file-context-{}", Ulid::generate()));
     fs::create_dir(&root).await?;
-    let store = FileContextStateStore::new(&root);
+    let store = SqliteContextStateStore::new(&root);
     let path = root.join("file.txt");
     let event = store
         .append_runtime(
@@ -124,7 +120,7 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
     store
         .save_snapshots("session", Some(&event.id), vec![snapshot.clone()], vec![])
         .await?;
-    let reopened = FileContextStateStore::new(&root);
+    let reopened = SqliteContextStateStore::new(&root);
     ensure!(reopened.snapshots("session").await? == vec![snapshot.clone()]);
     let later = store
         .append_runtime(

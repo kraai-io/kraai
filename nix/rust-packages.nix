@@ -252,6 +252,9 @@
       workspaceTestChecks
       // cargoTestChecks
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        sessions-vm = import ./sessions-vm.nix {
+          inherit pkgs kraai-acp;
+        };
         sandbox-vm = import ./sandbox-vm.nix {
           inherit pkgs;
           sandboxTests = vmTestBinaries "kraai-sandbox";

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use futures::{StreamExt, poll};
-use kraai_persistence::{FileMessageStore, MessageStore};
+use kraai_persistence::{MessageStore, SqliteMessageStore};
 use kraai_types::{Message, MessageId};
 use tokio_util::sync::CancellationToken;
 
@@ -82,7 +82,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
         std::env::temp_dir().join(format!("kraai-script-handoff-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(true),
         fail_script_result_save: AtomicBool::new(false),
@@ -214,7 +214,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         std::env::temp_dir().join(format!("kraai-cancelled-script-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(false),
         fail_script_result_save: AtomicBool::new(fail_after_save.is_some()),
@@ -341,7 +341,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
                 if *phase == kraai_types::AssistantPhase::Commentary && text == "I am partway through.")))
     }));
     let mut result_count = 0;
-    let mut on_disk: Vec<_> = store.list_all_on_disk().await?.into_iter().collect();
+    let mut on_disk: Vec<_> = store.list_ids().await?.into_iter().collect();
     on_disk.sort();
     for id in on_disk {
         if let Some(message) = store.get(&id).await?
@@ -907,7 +907,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         std::env::temp_dir().join(format!("kraai-slow-history-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(false),
         fail_script_result_save: AtomicBool::new(false),
@@ -986,7 +986,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
 }
 
 struct PausedMessageStore {
-    inner: FileMessageStore,
+    inner: SqliteMessageStore,
     pause: AtomicBool,
     pause_completed_script: AtomicBool,
     fail_script_result_save: AtomicBool,
@@ -997,6 +997,9 @@ struct PausedMessageStore {
 
 #[async_trait::async_trait]
 impl MessageStore for PausedMessageStore {
+    fn sqlite_database(&self) -> Option<kraai_persistence::SqliteDatabase> {
+        self.inner.sqlite_database()
+    }
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         if self.pause.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -1027,19 +1030,13 @@ impl MessageStore for PausedMessageStore {
         }
         self.inner.save(message).await
     }
-    async fn unload(&self, id: &MessageId) {
-        self.inner.unload(id).await;
-    }
     async fn delete(&self, id: &MessageId) -> Result<()> {
         self.inner.delete(id).await
     }
     async fn exists(&self, id: &MessageId) -> Result<bool> {
         self.inner.exists(id).await
     }
-    async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_all_on_disk().await
-    }
-    async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_hot().await
+    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
+        self.inner.list_ids().await
     }
 }

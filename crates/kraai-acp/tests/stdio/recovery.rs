@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use color_eyre::eyre::Result;
+use kraai_persistence::ScriptExecutionStore;
 use serde_json::json;
 
 use crate::support::{Harness, Reply, prompt};
@@ -35,7 +36,7 @@ async fn restart_after_pending_approval_waits_for_the_next_prompt() -> Result<()
             .and_then(|value| value.get("result"))
             .is_some()
     );
-    assert!(values.iter().any(|value| {
+    assert!(!values.iter().any(|value| {
         value.pointer("/params/update/sessionUpdate") == Some(&json!("tool_call_update"))
             && value.pointer("/params/update/status") == Some(&json!("failed"))
     }));
@@ -50,5 +51,13 @@ async fn restart_after_pending_approval_waits_for_the_next_prompt() -> Result<()
                 == Some(&json!("After restart")))
     );
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 2);
+    let persistence =
+        kraai_persistence::Persistence::open(&harness.root.path().join("state/data")).await?;
+    let executions = persistence.executions().list_for_session(&session).await?;
+    assert_eq!(executions.len(), 1);
+    assert_eq!(
+        executions.first().and_then(|execution| execution.status),
+        Some(kraai_types::ScriptExecutionStatus::Cancelled)
+    );
     harness.stop().await
 }

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct LimitedWrites {
     inner: Arc<dyn SessionStore>,
+    messages: Arc<dyn MessageStore>,
     remaining: AtomicUsize,
 }
 
@@ -64,6 +65,25 @@ impl SessionStore for LimitedWrites {
     }
 }
 
+#[async_trait::async_trait]
+impl MessageStore for LimitedWrites {
+    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+        self.messages.get(id).await
+    }
+    async fn save(&self, message: &Message) -> Result<()> {
+        self.messages.save(message).await
+    }
+    async fn delete(&self, id: &MessageId) -> Result<()> {
+        self.messages.delete(id).await
+    }
+    async fn exists(&self, id: &MessageId) -> Result<bool> {
+        self.messages.exists(id).await
+    }
+    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
+        self.messages.list_ids().await
+    }
+}
+
 #[tokio::test]
 async fn rejected_interception_preserves_active_model_and_provider() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
@@ -114,11 +134,11 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
     manager.clear_active_turn(&session_id);
     let store = Arc::new(LimitedWrites {
         inner: manager.session_store.clone(),
+        messages: manager.message_store.clone(),
         // Append three messages, restore the last, then fail the remaining rollback.
         remaining: AtomicUsize::new(4),
     });
-    manager.conversation_store =
-        ConversationStore::new(manager.message_store.clone(), store.clone());
+    manager.conversation_store = ConversationStore::new(store.clone(), store.clone());
     let messages = vec!["one".into(), "two".into(), "three".into()];
     let error = manager
         .prepare_messages_stream(

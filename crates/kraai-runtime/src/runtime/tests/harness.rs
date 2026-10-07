@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
-use kraai_persistence::FileMessageStore;
+use kraai_persistence::SqliteMessageStore;
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
 use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
@@ -283,6 +283,8 @@ pub(super) struct RuntimeTestHarness {
     runtime_task: tokio::task::JoinHandle<()>,
     event_task: tokio::task::JoinHandle<()>,
     pub(super) data_dir: PathBuf,
+    owns_directory: bool,
+    pub(super) maintenance_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl RuntimeTestHarness {
@@ -318,12 +320,37 @@ impl RuntimeTestHarness {
         providers: ProviderManager,
         message_store: Option<Arc<dyn kraai_persistence::MessageStore>>,
     ) -> Option<Self> {
+        Self::new_in_directory(providers, message_store, None).await
+    }
+
+    pub(super) async fn new_shared(
+        scripts: Vec<Vec<ScriptedChunk>>,
+        data_dir: PathBuf,
+    ) -> Option<Self> {
+        let mut providers = ProviderManager::new();
+        providers.register_provider(
+            ProviderId::new("mock"),
+            Box::new(ScriptedProvider {
+                id: ProviderId::new("mock"),
+                scripts: StdMutex::new(scripts.into()),
+            }),
+        );
+        Self::new_in_directory(providers, None, Some(data_dir)).await
+    }
+
+    pub(super) async fn new_in_directory(
+        providers: ProviderManager,
+        message_store: Option<Arc<dyn kraai_persistence::MessageStore>>,
+        shared_directory: Option<PathBuf>,
+    ) -> Option<Self> {
+        let owns_directory = shared_directory.is_none();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let data_dir =
-            std::env::temp_dir().join(format!("kraai-runtime-test-{}-{nanos}", std::process::id()));
+        let data_dir = shared_directory.unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("kraai-runtime-test-{}-{nanos}", std::process::id()))
+        });
         tokio::fs::create_dir_all(data_dir.join("workspace/.kraai"))
             .await
             .expect("create test workspace");
@@ -345,11 +372,12 @@ path = \"inherit\"\n",
         .expect("write test profile");
 
         let message_store =
-            message_store.unwrap_or_else(|| Arc::new(FileMessageStore::new(&data_dir)));
+            message_store.unwrap_or_else(|| Arc::new(SqliteMessageStore::new(&data_dir)));
         let persistence =
             kraai_persistence::Persistence::open_with_messages(&data_dir, message_store)
                 .await
                 .expect("initialize persistence");
+        let session_store = persistence.sessions().clone();
         let execution_store = persistence.executions().clone();
         let context_state_store = persistence.context().clone();
         let image_store = persistence.images().clone();
@@ -384,6 +412,8 @@ path = \"inherit\"\n",
             startup_rx,
         };
         let runtime = RuntimeCore {
+            observed_sessions: Arc::default(),
+            session_store,
             image_store,
             queue_drains: Arc::default(),
             session_preparations: Arc::default(),
@@ -405,7 +435,6 @@ path = \"inherit\"\n",
             config: Arc::new(RuntimeConfig {
                 provider_config_path: data_dir.join("providers.toml"),
                 use_current_executable_as_nushell_host: false,
-                resume_recovered_turns: true,
                 nushell_host_path: None,
                 script_runtime_roots: None,
             }),
@@ -440,7 +469,13 @@ path = \"inherit\"\n",
             }
         });
 
+        let maintenance_tasks = vec![
+            runtime.spawn_lease_heartbeat(),
+            runtime.spawn_session_observers(),
+        ];
         Some(Self {
+            owns_directory,
+            maintenance_tasks,
             handle,
             events,
             runtime,
@@ -455,7 +490,13 @@ path = \"inherit\"\n",
         self.event_task.abort();
         let _ = self.event_task.await;
         let _ = self.runtime_task.await;
-        let _ = tokio::fs::remove_dir_all(self.data_dir).await;
+        for task in self.maintenance_tasks {
+            task.abort();
+            let _ = task.await;
+        }
+        if self.owns_directory {
+            let _ = tokio::fs::remove_dir_all(self.data_dir).await;
+        }
     }
 }
 

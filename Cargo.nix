@@ -10059,6 +10059,10 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -10152,6 +10156,11 @@ rec {
           {
             name = "kraai-provider-openai-chat-completions";
             packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
           }
           {
             name = "tokio";
@@ -10911,6 +10920,11 @@ rec {
             packageId = "kraai-types";
           }
           {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -11316,6 +11330,11 @@ rec {
             packageId = "image";
             usesDefaultFeatures = false;
             features = [ "jpeg" "png" ];
+          }
+          {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
           }
         ];
         features = {
@@ -11917,10 +11936,10 @@ rec {
       };
       "libsqlite3-sys" = rec {
         crateName = "libsqlite3-sys";
-        version = "0.38.1";
+        version = "0.38.2";
         edition = "2021";
         links = "sqlite3";
-        sha256 = "1nv1g8ws2qm4j24xa5q5a9yg9qxk7p0skdkikllsq8aw8c2rmhgn";
+        sha256 = "1s01ckmldqx09m71z5whsxrd173nhwqj6cj502rvj4zm2zphplpi";
         libName = "libsqlite3_sys";
         authors = [
           "The rusqlite developers"
@@ -20584,9 +20603,9 @@ rec {
       };
       "rusqlite" = rec {
         crateName = "rusqlite";
-        version = "0.40.1";
+        version = "0.40.2";
         edition = "2021";
-        sha256 = "08rkljp4mg4ng2y0g1175v7ji548bvnx2cvc8jv0jccyn4886hqi";
+        sha256 = "1cxmqcl6k6j9v1r8vypfn7h9bzs0bjrp2biardrkr1z3ldyskwi3";
         authors = [
           "The rusqlite developers"
         ];

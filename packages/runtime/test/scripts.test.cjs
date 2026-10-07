@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { createRuntime } = require('..');
-const { localProvider, unwrap } = require('./fixtures.cjs');
+const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 
 for (const profile of ['coding', 'coding-no-sandbox']) {
   test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: 30000 }, async t => {
@@ -111,8 +111,7 @@ for (const { codex, symlinked } of fileContextCases) {
     assert.match(text(messages[5].at(-1)), /1\|updated\r\n/);
     const history = unwrap(await runtime.getChatHistory(session));
     assert.ok(!Object.values(history).some(message => message.content.type === 'file_context'));
-    const context = JSON.parse(readFileSync(
-      join(directory, 'storage', 'data', 'context-state', `${session}.json`), 'utf8'));
+    const context = readRecord(join(directory, 'storage'), 'context', session);
     const pins = context.events.flatMap(event => event.mutations)
       .filter(mutation => mutation.kind === 'pin-file');
     assert.equal(pins.length, 2);

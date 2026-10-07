@@ -188,15 +188,32 @@ impl RuntimeCore {
                 .is_some_and(|queue| !queue.is_empty())
                 || self.session_preparations.is_active(&session_id)
         };
-        let mut agent = self.agent_manager.write().await;
-        let preparation = if agent.is_turn_active(&session_id) || has_pending_messages {
-            None
-        } else {
-            self.session_preparations
-                .try_begin_with_drain(&session_id, Some(&self.queue_drains))
-        };
+        let active_script = self.has_active_script_tasks(&session_id).await;
+        let agent = self.agent_manager.write().await;
+        let preparation =
+            if agent.is_turn_active(&session_id) || has_pending_messages || active_script {
+                None
+            } else {
+                self.session_preparations
+                    .try_begin_with_drain(&session_id, Some(&self.queue_drains))
+            };
         let Some(preparation) = preparation else {
             drop(agent);
+            if !self
+                .session_store
+                .owns_turn(&session_id)
+                .await
+                .map_err(RuntimeError::from_report)?
+            {
+                self.session_store
+                    .claim_turn(&session_id)
+                    .await
+                    .map_err(RuntimeError::from_report)?;
+                if let Err(error) = self.recover_session_executions(&session_id).await {
+                    self.release_turn(&session_id).await;
+                    return Err(RuntimeError::from_report(error));
+                }
+            }
             let position = self
                 .enqueue_message(
                     &session_id,
@@ -211,15 +228,39 @@ impl RuntimeCore {
             return Ok(SubmitMessageOutcome::Queued { position });
         };
 
+        let newly_claimed = !self
+            .session_store
+            .owns_turn(&session_id)
+            .await
+            .map_err(RuntimeError::from_report)?;
+        if newly_claimed {
+            self.session_store
+                .claim_turn(&session_id)
+                .await
+                .map_err(RuntimeError::from_report)?;
+        }
+        drop(agent);
+        if newly_claimed && let Err(error) = self.recover_session_executions(&session_id).await {
+            self.release_turn(&session_id).await;
+            return Err(RuntimeError::from_report(error));
+        }
+        let mut agent = self.agent_manager.write().await;
         let stream_request = {
             let result = agent
                 .prepare_start_stream(&session_id, message, model_id, provider_id)
                 .await;
             let providers = agent.cloned_provider_manager();
             drop(agent);
-            result
-                .map(|result| (providers, result))
-                .map_err(RuntimeError::from_report)?
+            if result.is_err() {
+                self.release_turn(&session_id).await;
+            }
+            match result {
+                Ok(request) => (providers, request),
+                Err(error) => {
+                    self.finish_turn(&session_id).await;
+                    return Err(RuntimeError::from_report(error));
+                }
+            }
         };
 
         let (providers, request) = stream_request;
@@ -251,7 +292,7 @@ impl RuntimeCore {
             let agent = self.agent_manager.read().await;
             agent.is_turn_active(&session_id)
         };
-        if is_turn_active {
+        if is_turn_active || self.has_active_script_tasks(&session_id).await {
             return;
         }
 
@@ -277,6 +318,9 @@ impl RuntimeCore {
             }
             let providers = agent.cloned_provider_manager();
             drop(agent);
+            if result.is_err() {
+                self.release_turn(&session_id).await;
+            }
             match result {
                 Ok(Some(result)) => Some((providers, result)),
                 Ok(None) => {

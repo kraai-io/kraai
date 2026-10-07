@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::components::{ChatHistory, TextInput};
 
-use super::{AppState, ScriptPhase, UiMode};
+use super::{AppState, UiMode};
 
 mod command_popup;
 mod error;
@@ -41,7 +41,7 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
         return 0;
     }
     let available = area.height.saturating_sub(footer_height(state, area));
-    if state.mode == UiMode::Chat && state.script_phase == ScriptPhase::AwaitingApproval {
+    if state.mode == UiMode::Chat && state.has_local_script_approval() {
         if state.approval_expanded {
             available
         } else {
@@ -91,12 +91,12 @@ impl Widget for &AppState {
         }
         render_status(self, status_area, buf);
 
-        if self.mode == UiMode::Chat && self.script_phase == ScriptPhase::AwaitingApproval {
+        if self.mode == UiMode::Chat && self.has_local_script_approval() {
             render_script_approval_panel(self, input_area, buf);
         } else {
             TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
         }
-        if self.mode == UiMode::Chat && self.script_phase != ScriptPhase::AwaitingApproval {
+        if self.mode == UiMode::Chat && !self.has_local_script_approval() {
             render_command_popup(self, area, input_area, buf);
         }
 

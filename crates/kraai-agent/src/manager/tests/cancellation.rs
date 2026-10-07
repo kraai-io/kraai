@@ -86,6 +86,11 @@ async fn restart_after_cancellation_failure(
         );
     }
     let providers = manager.cloned_provider_manager();
+    manager
+        .persistence
+        .sessions()
+        .release_turn(&session_id)
+        .await?;
     drop(manager);
 
     let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
@@ -96,6 +101,14 @@ async fn restart_after_cancellation_failure(
         data_dir.clone(),
     );
     assert!(reopened.prepare_session(&session_id).await?);
+    reopened
+        .persistence
+        .sessions()
+        .claim_turn(&session_id)
+        .await?;
+    reopened
+        .recover_interrupted_stream(reopened.require_session(&session_id).await?)
+        .await?;
     let history = reopened.get_chat_history(&session_id).await?;
     if fail_assistant_completion {
         let assistant = history
@@ -245,6 +258,9 @@ struct FailingCancellationStore {
 
 #[async_trait::async_trait]
 impl MessageStore for FailingCancellationStore {
+    fn sqlite_database(&self) -> Option<kraai_persistence::SqliteDatabase> {
+        self.inner.sqlite_database()
+    }
     async fn save(&self, message: &Message) -> Result<()> {
         let target = if self.fail_assistant_completion {
             message.status == MessageStatus::Complete
@@ -261,19 +277,13 @@ impl MessageStore for FailingCancellationStore {
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         self.inner.get(id).await
     }
-    async fn unload(&self, id: &MessageId) {
-        self.inner.unload(id).await;
-    }
     async fn delete(&self, id: &MessageId) -> Result<()> {
         self.inner.delete(id).await
     }
     async fn exists(&self, id: &MessageId) -> Result<bool> {
         self.inner.exists(id).await
     }
-    async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_all_on_disk().await
-    }
-    async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_hot().await
+    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
+        self.inner.list_ids().await
     }
 }

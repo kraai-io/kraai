@@ -28,6 +28,9 @@ pub(crate) struct RuntimeCore {
     pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
     pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
     pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(crate) observed_sessions:
+        Arc<Mutex<HashMap<String, kraai_persistence::SessionObservation>>>,
+    pub(crate) session_store: Arc<kraai_persistence::SqliteSessionStore>,
     pub(crate) image_store: Arc<kraai_persistence::FileImageStore>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
@@ -51,7 +54,6 @@ pub(crate) struct RuntimeConfig {
     pub(crate) nushell_host_path: Option<PathBuf>,
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
-    pub(crate) resume_recovered_turns: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -117,19 +119,13 @@ impl RuntimeCore {
             self.spawn_config_watcher(),
             self.spawn_openai_auth_forwarder(),
             self.spawn_mcp_auth_forwarder().await,
+            self.spawn_lease_heartbeat(),
+            self.spawn_session_observers(),
         ];
         match self.load_providers_config_and_emit().await {
-            Ok(()) => match self.recover_script_executions().await {
-                Ok(()) => {
-                    self.startup_tx.send_replace(RuntimeStartupState::Ready);
-                }
-                Err(error) => {
-                    let error = format!("Failed to recover script executions: {error:#}");
-                    self.startup_tx
-                        .send_replace(RuntimeStartupState::Failed(error.clone()));
-                    self.send_service_error(error);
-                }
-            },
+            Ok(()) => {
+                self.startup_tx.send_replace(RuntimeStartupState::Ready);
+            }
             Err(error) => {
                 let error = format!("Failed to load config: {error}");
                 self.startup_tx
@@ -164,6 +160,11 @@ impl RuntimeCore {
 
         self.stop_active_work().await;
 
+        if let Ok(sessions) = self.session_store.owned_sessions().await {
+            for session in sessions {
+                self.release_turn(&session).await;
+            }
+        }
         self.shutdown_mcp().await;
 
         for task in background_tasks {

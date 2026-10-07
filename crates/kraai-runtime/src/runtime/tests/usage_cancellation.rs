@@ -1,6 +1,6 @@
 use color_eyre::eyre::Result;
 use futures::poll;
-use kraai_persistence::{FileRequestUsageStore, RequestUsageStore};
+use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
 use kraai_types::{ModelId, ProviderId, TokenUsage};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::oneshot;
@@ -29,7 +29,7 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     let event_tx = crate::handle::RuntimeEventSender::new(8);
     let mut events = event_tx.subscribe();
     let recorder = kraai_agent::AuxiliaryUsageRecorder {
-        store: Arc::new(FileRequestUsageStore::new(&directory)),
+        store: Arc::new(SqliteRequestUsageStore::new(&directory)),
         session_id: String::from("session"),
         barrier: Some(barrier.clone()),
         on_usage: Some(super::super::stream_driver::auxiliary_usage_observer(
@@ -70,7 +70,7 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
         ));
     };
     assert_eq!(session_id, "session");
-    let reopened = FileRequestUsageStore::new(&directory);
+    let reopened = SqliteRequestUsageStore::new(&directory);
     assert_eq!(
         reopened.load("session").await?.get(&request.message_id),
         Some(request.as_ref())
@@ -154,7 +154,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
     assert!(cancelled?);
     let saved = saved?;
     assert!(task.await.unwrap_err().is_cancelled());
-    let requests = FileRequestUsageStore::new(&harness.data_dir)
+    let requests = SqliteRequestUsageStore::new(&harness.data_dir)
         .load(&session_id)
         .await?;
     assert_eq!(requests.len(), 1);

@@ -5,6 +5,62 @@ use kraai_types::MessageStatus;
 use std::path::PathBuf;
 
 #[tokio::test]
+async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    assert!(manager.prepare_session(&session_id).await?);
+    let obsolete = data_dir.join("obsolete-workspace");
+    manager.set_workspace_dir(&session_id, obsolete).await?;
+    let foreign = kraai_persistence::Persistence::open(&data_dir).await?;
+    let workspace = data_dir.join("foreign-workspace");
+    tokio::fs::create_dir_all(&workspace).await?;
+    let mut session = foreign.sessions().get(&session_id).await?.unwrap();
+    session.workspace_dir = workspace.clone();
+    foreign.sessions().save(&session).await?;
+    assert_eq!(
+        manager.get_workspace_dir_state(&session_id).await?,
+        Some((workspace.clone(), false))
+    );
+    manager
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+        )
+        .await?;
+    assert_eq!(
+        manager.script_turn_context(&session_id)?.workspace_dir,
+        workspace
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    manager
+        .add_message(
+            &session_id,
+            ChatRole::User,
+            "restore this input".into(),
+            None,
+        )
+        .await?;
+    let connection = rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?;
+    connection.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records WHEN OLD.kind = 'message' BEGIN SELECT RAISE(FAIL, 'injected cleanup failure'); END;")?;
+    assert_eq!(
+        manager.undo_last_user_message(&session_id).await?,
+        Some("restore this input".into())
+    );
+    assert!(manager.get_tip(&session_id).await?.is_none());
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
@@ -571,7 +627,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
 }
 
 #[tokio::test]
-async fn loading_session_recovers_persisted_interrupted_stream() -> Result<()> {
+async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
@@ -584,12 +640,18 @@ async fn loading_session_recovers_persisted_interrupted_stream() -> Result<()> {
         )
         .await?;
 
-    // Simulate process loss: the in-memory active-stream map and hot cache vanish, while the
+    // Simulate process loss: the in-memory active-stream map vanishes, while the
     // persisted session still points at the durable streaming placeholder.
     manager.streaming_messages.write().await.clear();
-    manager.message_store.unload(&request.message_id).await;
 
     assert!(manager.prepare_session(&session_id).await?);
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(request.message_id.clone())
+    );
+    manager
+        .recover_interrupted_stream(manager.require_session(&session_id).await?)
+        .await?;
 
     let history = manager.get_chat_history(&session_id).await?;
     assert_eq!(history.len(), 1);

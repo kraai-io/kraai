@@ -6,11 +6,15 @@ use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus};
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
-use super::scripts::host_failure;
 
 impl RuntimeCore {
-    pub(crate) async fn recover_script_executions(&self) -> Result<()> {
-        let records = self.execution_store.list_all().await?;
+    pub(crate) async fn recover_session_executions(&self, session_id: &str) -> Result<()> {
+        if !self.session_store.owns_turn(session_id).await? {
+            return Err(color_eyre::eyre::eyre!(
+                "Session recovery requires turn ownership"
+            ));
+        }
+        let records = self.execution_store.list_for_session(session_id).await?;
         if records.is_empty() {
             return Ok(());
         }
@@ -25,7 +29,6 @@ impl RuntimeCore {
             }
         }
         let mut histories: HashMap<String, HashSet<MessageId>> = HashMap::new();
-        let mut continuations = Vec::new();
         for record in records {
             if !sessions.contains(&record.session_id) {
                 continue;
@@ -86,33 +89,6 @@ impl RuntimeCore {
                     completed.record.outcome()?,
                 )
                 .await?;
-
-            let tip = self.agent_manager.read().await.get_tip(&session_id).await?;
-            if tip.as_ref() == Some(&result_message_id) {
-                if !self.config.resume_recovered_turns {
-                    self.agent_manager
-                        .write()
-                        .await
-                        .clear_active_turn(&session_id);
-                    continue;
-                }
-                if completed.record.status == Some(ScriptExecutionStatus::HostUnavailable) {
-                    self.fail_script_turn(&session_id, &host_failure(&completed))
-                        .await;
-                    continue;
-                }
-                self.agent_manager
-                    .write()
-                    .await
-                    .prepare_script_recovery(&session_id, &completed.record.source_message_id)
-                    .await?;
-                continuations.push((session_id, result_message_id));
-            }
-        }
-        continuations.sort();
-        continuations.dedup();
-        for (session_id, expected_tip) in continuations {
-            self.spawn_continuation(session_id, expected_tip);
         }
         Ok(())
     }

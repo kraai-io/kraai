@@ -8,6 +8,9 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<Option<PendingStreamRequest>> {
+        if !self.persistence.sessions().owns_turn(session_id).await? {
+            self.persistence.sessions().claim_turn(session_id).await?;
+        }
         self.finish_pending_message_rollback(session_id).await?;
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
@@ -65,6 +68,9 @@ impl AgentManager {
         }
         if matches!(result, Ok(Some(_))) {
             self.last_used_profile_id = Some(profile.id.clone());
+        }
+        if !matches!(result, Ok(Some(_))) && !self.is_turn_active(session_id) {
+            self.persistence.sessions().release_turn(session_id).await?;
         }
         result
     }

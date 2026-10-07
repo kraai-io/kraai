@@ -28,10 +28,6 @@ impl RequestUsageStore for ControlledUsageStore {
     ) -> Result<BTreeMap<MessageId, kraai_types::RequestUsage>> {
         self.inner.load(session_id).await
     }
-
-    async fn refresh(&self, session_id: &str) -> Result<()> {
-        self.inner.refresh(session_id).await
-    }
 }
 
 #[tokio::test]
@@ -163,7 +159,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
             .await?
             .contains_key(&pending.message_id)
     );
-    let store = kraai_persistence::FileRequestUsageStore::new(&data_dir);
+    let store = kraai_persistence::SqliteRequestUsageStore::new(&data_dir);
     let requests = store.load(&session_id).await?;
     assert_eq!(
         requests
@@ -183,7 +179,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
             .map(|request| request.unpriced_attempts),
         Some(1)
     );
-    assert!(store.load("../escape").await.is_err());
+    assert!(store.load("../escape").await?.is_empty());
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -202,7 +198,7 @@ async fn aborted_request_without_usage_remains_unknown() -> Result<()> {
         .await?;
     manager.record_request_started(&pending.message_id).await?;
     manager.abort_streaming_message(&pending.message_id).await?;
-    let requests = kraai_persistence::FileRequestUsageStore::new(&data_dir)
+    let requests = kraai_persistence::SqliteRequestUsageStore::new(&data_dir)
         .load(&session_id)
         .await?;
     assert!(

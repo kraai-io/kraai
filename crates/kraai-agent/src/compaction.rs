@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
-    CompactionCheckpoint, FileCompactionStore, FileContextSnapshot, RequestUsageStore,
+    CompactionCheckpoint, FileContextSnapshot, RequestUsageStore, SqliteCompactionStore,
 };
 use kraai_provider_core::{ProviderManager, ProviderRequest};
 use kraai_types::{ConversationItem, Message, ModelId, ProviderId, RequestUsage};
@@ -14,7 +14,7 @@ mod tests;
 
 #[derive(Clone)]
 pub struct ContextCompaction {
-    pub(crate) store: FileCompactionStore,
+    pub(crate) store: SqliteCompactionStore,
     pub(crate) usage_store: Arc<dyn RequestUsageStore>,
     pub(crate) session_id: String,
     pub(crate) original: ProviderRequest,

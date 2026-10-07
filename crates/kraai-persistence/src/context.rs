@@ -1,20 +1,13 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-
-use color_eyre::eyre::{Context, Result, ensure, eyre};
+use crate::database::{Database, assert_owner, bump_revision, read_record, write_record};
+use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{
     CommandInvocationId, ContextStateEvent, ContextStateEventSource, ContextStateMutation,
     MessageId, ScriptExecutionId,
 };
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use tokio::fs;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use ulid::Ulid;
-
-use crate::commit::complete_commit;
-use crate::keyed_locks::KeyedLocks;
-use kraai_io::fs::atomic_replace_in_async;
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ContextStateDocument {
     pub events: Vec<ContextStateEvent>,
@@ -86,48 +79,16 @@ pub trait ContextStateStore: Send + Sync {
     async fn delete(&self, session_id: &str) -> Result<()>;
 }
 
-pub struct FileContextStateStore {
-    storage_root: PathBuf,
-    directory: PathBuf,
-    session_locks: KeyedLocks<String>,
+pub struct SqliteContextStateStore {
+    database: Database,
 }
 
-impl FileContextStateStore {
+impl SqliteContextStateStore {
     pub fn new(data_dir: &Path) -> Self {
-        Self {
-            storage_root: data_dir.to_path_buf(),
-            directory: data_dir.join("context-state"),
-            session_locks: KeyedLocks::default(),
-        }
+        Self::with_database(Database::new(data_dir))
     }
-
-    fn document_path(&self, session_id: &str) -> Result<PathBuf> {
-        if session_id.is_empty()
-            || !session_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-        {
-            return Err(eyre!("Unsafe session id for context state: {session_id:?}"));
-        }
-        let path = self.directory.join(format!("{session_id}.json"));
-        if path.parent() != Some(self.directory.as_path()) {
-            return Err(eyre!(
-                "Context state path escaped storage directory: {path:?}"
-            ));
-        }
-        Ok(path)
-    }
-
-    async fn load_document(&self, session_id: &str) -> Result<ContextStateDocument> {
-        let path = self.document_path(session_id)?;
-        let bytes = kraai_io::fs::read_optional_async(&path)
-            .await
-            .with_context(|| format!("Failed to read context state document: {path:?}"))?;
-        match bytes {
-            Some(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("Failed to parse context state document: {path:?}")),
-            None => Ok(ContextStateDocument::default()),
-        }
+    pub(crate) fn with_database(database: Database) -> Self {
+        Self { database }
     }
 
     async fn append_event(
@@ -136,64 +97,37 @@ impl FileContextStateStore {
         source: ContextStateEventSource,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent> {
-        if mutations.is_empty() {
-            return Err(eyre!("Context state events require at least one mutation"));
-        }
-        let guard = self.session_locks.lock(session_id).await;
-        let mut document = self.load_document(session_id).await?;
-        if let ContextStateEventSource::Command {
-            execution_id,
-            sequence,
-            invocation_id,
-            ..
-        } = &source
-            && document.events.iter().any(|event| {
-                matches!(
-                    &event.source,
-                    ContextStateEventSource::Command {
-                        execution_id: existing_execution,
-                        sequence: existing_sequence,
-                        invocation_id: existing_invocation,
-                        ..
-                    } if existing_execution == execution_id
-                        && (existing_sequence == sequence || existing_invocation == invocation_id)
-                )
-            })
-        {
-            return Err(eyre!(
-                "Context state effect {invocation_id} was already persisted for execution {execution_id}"
-            ));
-        }
-        let event = ContextStateEvent {
-            id: Ulid::generate().to_string(),
-            source,
-            mutations,
-        };
-        document.push_event(event.clone());
-        let path = self.document_path(session_id)?;
-        let storage_root = self.storage_root.clone();
-        let bytes = serde_json::to_vec_pretty(&document)
-            .context("Failed to serialize context state document")?;
-        complete_commit(
-            guard,
-            async move {
-                atomic_replace_in_async(&storage_root, &path, &bytes)
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)
-            },
-            "Context state commit task failed",
-        )
-        .await
-        .map(|()| event)
+        ensure!(
+            !mutations.is_empty(),
+            "Context state events require at least one mutation"
+        );
+        let session = session_id.to_string();
+        self.database.transaction(move |transaction, leases| {
+            assert_owner(transaction, leases, &session)?;
+            let mut document = read_record::<ContextStateDocument>(transaction, "context", &session)?.unwrap_or_default();
+            if let ContextStateEventSource::Command { execution_id, sequence, invocation_id, .. } = &source {
+                ensure!(!document.events.iter().any(|event| matches!(&event.source,
+                    ContextStateEventSource::Command { execution_id: other_execution, sequence: other_sequence, invocation_id: other_invocation, .. }
+                    if other_execution == execution_id && (other_sequence == sequence || other_invocation == invocation_id))),
+                    "Context state effect {invocation_id} was already persisted for execution {execution_id}");
+            }
+            let event = ContextStateEvent { id: Ulid::generate().to_string(), source, mutations };
+            document.push_event(event.clone());
+            write_record(transaction, "context", &session, Some(&session), &document)?;
+            Ok(event)
+        }).await
     }
 }
 
 #[async_trait::async_trait]
-impl ContextStateStore for FileContextStateStore {
+impl ContextStateStore for SqliteContextStateStore {
     async fn load(&self, session_id: &str) -> Result<ContextStateDocument> {
-        let _guard = self.session_locks.lock(session_id).await;
-        self.load_document(session_id).await
+        let session = session_id.to_string();
+        self.database
+            .run(move |connection, _| {
+                Ok(read_record(connection, "context", &session)?.unwrap_or_default())
+            })
+            .await
     }
 
     async fn append_command(
@@ -211,7 +145,7 @@ impl ContextStateStore for FileContextStateStore {
                 execution_id: execution_id.clone(),
                 sequence,
                 invocation_id: invocation_id.clone(),
-                command_id: command_id.to_owned(),
+                command_id: command_id.to_string(),
             },
             mutations,
         )
@@ -227,7 +161,7 @@ impl ContextStateStore for FileContextStateStore {
         self.append_event(
             session_id,
             ContextStateEventSource::Runtime {
-                component: component.to_owned(),
+                component: component.to_string(),
             },
             mutations,
         )
@@ -241,240 +175,53 @@ impl ContextStateStore for FileContextStateStore {
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
     ) -> Result<()> {
-        let guard = self.session_locks.lock(session_id).await;
-        let mut document = self.load_document(session_id).await?;
-        ensure!(
-            document.events.last().map(|event| event.id.as_str()) == through_event,
-            "File context changed while snapshots were being refreshed"
-        );
-        if document.snapshots == snapshots && removals.is_empty() {
-            return Ok(());
-        }
-        for snapshot in &snapshots {
-            MessageId::try_new(snapshot.anchor.as_str()).map_err(|error| eyre!(error))?;
-        }
-        document.snapshots = snapshots;
-        if !removals.is_empty() {
-            document.push_event(ContextStateEvent {
-                id: Ulid::generate().to_string(),
-                source: ContextStateEventSource::Runtime {
-                    component: "file-context-refresh".into(),
-                },
-                mutations: removals,
-            });
-        }
-        let path = self.document_path(session_id)?;
-        let storage_root = self.storage_root.clone();
-        let bytes = serde_json::to_vec_pretty(&document)?;
-        complete_commit(
-            guard,
-            async move {
-                atomic_replace_in_async(&storage_root, &path, &bytes)
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)
-            },
-            "File context snapshot commit failed",
-        )
-        .await
+        let session = session_id.to_string();
+        let through_event = through_event.map(str::to_string);
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                let mut document =
+                    read_record::<ContextStateDocument>(transaction, "context", &session)?
+                        .unwrap_or_default();
+                ensure!(
+                    document.events.last().map(|event| &event.id) == through_event.as_ref(),
+                    "File context changed while snapshots were being refreshed"
+                );
+                if document.snapshots == snapshots && removals.is_empty() {
+                    return Ok(());
+                }
+                for snapshot in &snapshots {
+                    MessageId::try_new(snapshot.anchor.as_str()).map_err(|error| eyre!(error))?;
+                }
+                document.snapshots = snapshots;
+                if !removals.is_empty() {
+                    document.push_event(ContextStateEvent {
+                        id: Ulid::generate().to_string(),
+                        source: ContextStateEventSource::Runtime {
+                            component: "file-context-refresh".into(),
+                        },
+                        mutations: removals,
+                    });
+                }
+                write_record(transaction, "context", &session, Some(&session), &document)
+            })
+            .await
     }
 
     async fn delete(&self, session_id: &str) -> Result<()> {
-        let guard = self.session_locks.lock(session_id).await;
-        let path = self.document_path(session_id)?;
-        complete_commit(
-            guard,
-            async move {
-                kraai_io::fs::remove_file_durable_async(&path)
-                    .await
-                    .with_context(|| {
-                        format!("Failed to delete context state document: {path:?}")
-                    })?;
-                Ok(())
-            },
-            "Context state commit task failed",
-        )
-        .await
+        let session = session_id.to_string();
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                transaction.execute(
+                    "DELETE FROM records WHERE kind = 'context' AND id = ?1",
+                    [&session],
+                )?;
+                bump_revision(transaction, &session)
+            })
+            .await
     }
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "context state persistence tests use direct fixture assertions"
-)]
-mod tests {
-    use super::*;
-    use kraai_types::PinnedFileScope;
-
-    fn test_dir(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("kraai-context-state-{name}-{}", Ulid::generate()));
-        std::fs::create_dir(&directory).unwrap();
-        directory
-    }
-
-    fn pin(path: &str) -> ContextStateMutation {
-        ContextStateMutation::PinFile {
-            path: PathBuf::from(path),
-            scope: PinnedFileScope::Workspace {
-                root: PathBuf::from("/workspace"),
-            },
-        }
-    }
-
-    #[tokio::test]
-    async fn cancelled_commit_keeps_later_appends_in_order() {
-        let data_dir = test_dir("cancelled-commit");
-        let store = FileContextStateStore::new(&data_dir);
-        let initial = store
-            .append_runtime("session", "initial", vec![pin("/workspace/initial.rs")])
-            .await
-            .unwrap();
-        let cancelled = ContextStateEvent {
-            id: String::from("cancelled"),
-            source: ContextStateEventSource::Runtime {
-                component: String::from("cancelled"),
-            },
-            mutations: vec![pin("/workspace/cancelled.rs")],
-        };
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let caller = {
-            let guard = store.session_locks.lock("session").await;
-            let mut document = store.load_document("session").await.unwrap();
-            document.events.push(cancelled.clone());
-            let bytes = serde_json::to_vec_pretty(&document).unwrap();
-            let path = store.document_path("session").unwrap();
-            let storage_root = store.storage_root.clone();
-            tokio::spawn(complete_commit(
-                guard,
-                async move {
-                    let _ = entered_tx.send(());
-                    release_rx.await?;
-                    atomic_replace_in_async(&storage_root, &path, &bytes)
-                        .await?
-                        .into_result()
-                        .map_err(color_eyre::Report::from)
-                },
-                "Context state commit task failed",
-            ))
-        };
-        entered_rx.await.unwrap();
-        caller.abort();
-        assert!(caller.await.unwrap_err().is_cancelled());
-
-        {
-            let mut waiting = std::pin::pin!(store.session_locks.lock("session"));
-            assert!(
-                waiting
-                    .as_mut()
-                    .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
-                    .is_pending()
-            );
-        }
-        let mut later = std::pin::pin!(store.append_runtime(
-            "session",
-            "later",
-            vec![pin("/workspace/later.rs")],
-        ));
-        assert!(
-            later
-                .as_mut()
-                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
-                .is_pending()
-        );
-        store
-            .append_runtime("other", "independent", vec![pin("/workspace/other.rs")])
-            .await
-            .unwrap();
-        release_tx.send(()).unwrap();
-        let later = later.await.unwrap();
-        assert_eq!(
-            store.list("session").await.unwrap(),
-            vec![initial, cancelled, later]
-        );
-        fs::remove_dir_all(data_dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn command_and_runtime_events_survive_recreation_in_order() {
-        let data_dir = test_dir("durable");
-        let execution_id = ScriptExecutionId::new(Ulid::generate());
-        let invocation_id = CommandInvocationId::new(Ulid::generate());
-        let store = FileContextStateStore::new(&data_dir);
-        store
-            .append_command(
-                "session",
-                &execution_id,
-                1,
-                &invocation_id,
-                "kraai-open-files",
-                vec![pin("/workspace/a.rs")],
-            )
-            .await
-            .unwrap();
-        store
-            .append_runtime(
-                "session",
-                "pinned-file-refresh",
-                vec![ContextStateMutation::UnpinFile {
-                    path: PathBuf::from("/workspace/a.rs"),
-                    reason: Some(String::from("file no longer exists")),
-                }],
-            )
-            .await
-            .unwrap();
-        drop(store);
-
-        let reopened = FileContextStateStore::new(&data_dir);
-        let events = reopened.list("session").await.unwrap();
-        assert_eq!(events.len(), 2);
-        assert!(matches!(
-            events.first().map(|event| &event.source),
-            Some(ContextStateEventSource::Command { .. })
-        ));
-        assert!(matches!(
-            events.get(1).map(|event| &event.source),
-            Some(ContextStateEventSource::Runtime { .. })
-        ));
-        let _ = fs::remove_dir_all(data_dir).await;
-    }
-
-    #[tokio::test]
-    async fn duplicate_command_effects_do_not_mutate_the_log() {
-        let data_dir = test_dir("duplicate");
-        let execution_id = ScriptExecutionId::new(Ulid::generate());
-        let invocation_id = CommandInvocationId::new(Ulid::generate());
-        let store = FileContextStateStore::new(&data_dir);
-        store
-            .append_command(
-                "session",
-                &execution_id,
-                1,
-                &invocation_id,
-                "kraai-open-files",
-                vec![pin("/workspace/a.rs")],
-            )
-            .await
-            .unwrap();
-        let error = store
-            .append_command(
-                "session",
-                &execution_id,
-                1,
-                &invocation_id,
-                "kraai-open-files",
-                vec![pin("/workspace/b.rs")],
-            )
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("already persisted"));
-        assert_eq!(store.list("session").await.unwrap().len(), 1);
-        let _ = fs::remove_dir_all(data_dir).await;
-    }
-}
-
-#[cfg(test)]
-#[path = "context/snapshot_tests.rs"]
 mod snapshot_tests;

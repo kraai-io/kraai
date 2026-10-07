@@ -111,9 +111,12 @@ async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_con
     assert!(cancellation.is_cancelled());
     assert!(!completion.is_cancelled());
     assert!(!runtime.agent_manager.read().await.is_turn_active(&session));
+    let observer = kraai_persistence::Persistence::open(&harness.data_dir).await?;
+    assert!(observer.sessions().claim_turn(&session).await.is_err());
     finish_tx.send(()).expect("release finalization");
     assert!(tokio::time::timeout(Duration::from_secs(1), cancel).await??);
     assert!(completion.is_cancelled());
+    assert!(!runtime.session_store.owns_turn(&session).await?);
     let snapshot = runtime.build_session_snapshot(&session).await?;
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.values().any(|message| matches!(

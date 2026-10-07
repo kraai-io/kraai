@@ -1,6 +1,11 @@
 use super::*;
 
 impl AgentManager {
+    pub fn discard_turn_state(&mut self, session_id: &str) {
+        self.clear_active_turn(session_id);
+        self.pending_message_rollbacks.remove(session_id);
+    }
+
     pub fn clear_active_turn(&mut self, session_id: &str) {
         if let Some(state) = self.session_states.get_mut(session_id) {
             state.active_turn_profile = None;
@@ -20,6 +25,14 @@ impl AgentManager {
             .values()
             .map(|state| state.session_id.clone())
             .collect()
+    }
+
+    pub async fn get_message(&self, id: &MessageId) -> Result<Option<Message>> {
+        self.message_store.get(id).await
+    }
+
+    pub fn shared_session_store(&self) -> Arc<kraai_persistence::SqliteSessionStore> {
+        self.persistence.sessions().clone()
     }
 
     pub fn cloned_provider_manager(&self) -> ProviderManager {
@@ -49,7 +62,7 @@ impl AgentManager {
             session_states: HashMap::new(),
             pending_message_rollbacks: HashMap::new(),
             last_used_profile_id: None,
-            streaming_messages: RwLock::new(HashMap::new()),
+            streaming_messages: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -82,6 +95,7 @@ impl AgentManager {
             ))));
         }
         let session = SessionMeta {
+            revision: 0,
             id: session_id.clone(),
             tip_id: None,
             workspace_dir: workspace_dir.clone(),
@@ -133,9 +147,8 @@ impl AgentManager {
     pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
-                let session = self.recover_interrupted_stream(session).await?;
                 self.ensure_runtime_state(session_id, &session.workspace_dir);
-                self.cleanup_hot_cache_for_session(&session).await?;
+                self.validate_history_for_session(&session).await?;
                 Ok(true)
             }
             None => Ok(false),
@@ -180,6 +193,9 @@ impl AgentManager {
     ) -> Result<SessionMeta> {
         // A loaded background session can legitimately have a streaming tip. Only recover a
         // placeholder when this process has no corresponding active stream.
+        if !self.persistence.sessions().owns_turn(&session.id).await? {
+            return Ok(session);
+        }
         if self.session_has_active_stream(&session.id).await {
             return Ok(session);
         }
@@ -217,7 +233,7 @@ impl AgentManager {
         Ok(session)
     }
 
-    pub(super) async fn cleanup_hot_cache_for_session(&self, session: &SessionMeta) -> Result<()> {
+    pub(super) async fn validate_history_for_session(&self, session: &SessionMeta) -> Result<()> {
         let mut keep_ids = HashSet::new();
 
         if let Some(tip_id) = &session.tip_id {
@@ -234,11 +250,6 @@ impl AgentManager {
                     break;
                 }
             }
-        }
-
-        let hot_ids = self.message_store.list_hot().await?;
-        for id in hot_ids.difference(&keep_ids) {
-            self.message_store.unload(id).await;
         }
 
         Ok(())
@@ -291,6 +302,10 @@ impl AgentManager {
     }
 
     pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
+        self.persistence
+            .sessions()
+            .ensure_writable(session_id)
+            .await?;
         self.abort_streaming_messages_for_session(session_id)
             .await?;
         if let Some(mcp) = self.session_mcp.remove(session_id) {
@@ -432,6 +447,7 @@ impl AgentManager {
             .and_then(|session| session.tip_id))
     }
 
+    #[cfg(test)]
     pub(super) async fn set_tip(&self, session_id: &str, new_tip: Option<MessageId>) -> Result<()> {
         if let Some(mut session) = self.session_store.get(session_id).await? {
             session.tip_id = new_tip;
@@ -447,9 +463,21 @@ impl AgentManager {
         session_id: &str,
         workspace_dir: &Path,
     ) -> &mut SessionRuntimeState {
-        self.session_states
+        let state = self
+            .session_states
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()))
+            .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()));
+        if state.active_turn_profile.is_none() {
+            state.active_workspace_dir = workspace_dir.to_path_buf();
+            if state
+                .pending_workspace_dir
+                .as_deref()
+                .is_some_and(|pending| pending != workspace_dir)
+            {
+                state.pending_workspace_dir = None;
+            }
+        }
+        state
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
