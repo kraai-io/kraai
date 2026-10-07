@@ -315,12 +315,9 @@ mod tests {
             Some(io::ErrorKind::NotADirectory)
         );
         let fifo = root.path().join("fifo");
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
+        nix::unistd::mkfifo(
             &fifo,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            0,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )?;
         assert_eq!(
             sync_directory(&fifo).err().map(|error| error.kind()),

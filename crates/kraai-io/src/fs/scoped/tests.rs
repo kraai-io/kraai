@@ -53,12 +53,25 @@ fn rejecting_symlinks_applies_to_the_root_and_every_component() {
     symlink("nested", root.path().join("link-dir")).unwrap();
     symlink("nested/file", root.path().join("link-file")).unwrap();
     let scope = ScopedDirectory::open(root.path(), SymlinkPolicy::Reject).unwrap();
-    for name in ["link-file", "link-dir/file", "nested/../nested/file"] {
+    for name in ["link-file", "nested/../nested/file"] {
         assert!(matches!(
             scope.open_file(&root.path().join(name)),
             Err(ScopedReadError::OutsideRoot(_))
         ));
     }
+    let directory_symlink_error = scope
+        .open_file(&root.path().join("link-dir/file"))
+        .unwrap_err();
+    #[cfg(target_os = "linux")]
+    assert!(matches!(
+        directory_symlink_error,
+        ScopedReadError::OutsideRoot(_)
+    ));
+    #[cfg(target_os = "macos")]
+    assert!(matches!(
+        directory_symlink_error,
+        ScopedReadError::NotFile(_)
+    ));
     assert!(ScopedDirectory::open(&root.path().join("link-dir"), SymlinkPolicy::Reject).is_err());
 }
 

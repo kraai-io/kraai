@@ -18,8 +18,8 @@ fn dropping_guard_releases_lock_without_truncating_file() {
     ));
     drop(guard);
     let acquired = FileLock::try_acquire(open_private_lock_file(&path).unwrap()).unwrap();
-    assert_eq!(std::fs::read(path).unwrap(), b"keep");
     drop(acquired);
+    assert_eq!(std::fs::read(path).unwrap(), b"keep");
 }
 
 #[cfg(feature = "async")]
