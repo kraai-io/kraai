@@ -725,6 +725,7 @@ mod tests {
 
     fn auth_controller() -> Option<OpenAiCodexAuthController> {
         match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+            std::env::temp_dir(),
             std::env::temp_dir()
                 .join(format!("provider-openai-codex-{}", Ulid::generate()))
                 .join("auth.json"),

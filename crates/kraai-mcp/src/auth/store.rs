@@ -1,5 +1,6 @@
 use kraai_io::lock::{FileLock, open_private_lock_file};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::transport::auth::{
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone)]
 pub(super) struct FileStore {
     path: PathBuf,
+    directory: Arc<kraai_io::fs::DirectoryBootstrap>,
     generation: u64,
 }
 
@@ -25,9 +27,13 @@ fn error(error: impl std::fmt::Display) -> AuthError {
 }
 
 impl FileStore {
-    pub(super) fn current(path: PathBuf) -> Result<Self, AuthError> {
+    pub(super) fn current(
+        path: PathBuf,
+        directory: Arc<kraai_io::fs::DirectoryBootstrap>,
+    ) -> Result<Self, AuthError> {
         let mut store = Self {
             path,
+            directory,
             generation: 0,
         };
         store.generation = store.read()?.generation;
@@ -50,11 +56,9 @@ impl FileStore {
 
     pub(super) async fn lock(&self) -> Result<FileLock, AuthError> {
         let path = self.path.clone();
+        let directory = self.directory.clone();
         let file = tokio::task::spawn_blocking(move || {
-            let parent = path
-                .parent()
-                .ok_or_else(|| std::io::Error::other("Missing credential directory"))?;
-            kraai_io::fs::create_private_dir_all(parent)?;
+            directory.create_private()?;
             open_private_lock_file(&path.with_extension("lock"))
         })
         .await
@@ -88,6 +92,7 @@ impl FileStore {
             })?;
             Ok(Self {
                 path: store.path,
+                directory: store.directory,
                 generation,
             })
         })
@@ -179,11 +184,17 @@ mod tests {
     async fn cancelled_commit_keeps_lock_until_blocking_write_finishes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("auth/credentials.json");
-        let store = FileStore::current(path.clone())
-            .unwrap()
-            .reset()
-            .await
-            .unwrap();
+        let store = FileStore::current(
+            path.clone(),
+            Arc::new(kraai_io::fs::DirectoryBootstrap::new(
+                directory.path().to_path_buf(),
+                directory.path().join("auth"),
+            )),
+        )
+        .unwrap()
+        .reset()
+        .await
+        .unwrap();
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let committing = store.clone();

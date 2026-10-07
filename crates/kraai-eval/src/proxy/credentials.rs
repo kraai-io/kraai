@@ -92,10 +92,10 @@ impl UpstreamCredentials {
 }
 
 fn codex_credentials() -> Result<UpstreamCredentials> {
-    let auth_path =
-        kraai_persistence::agent_state_root()?.join("provider-state/openai-codex/auth.json");
+    let storage_root = kraai_persistence::agent_state_root()?;
+    let auth_path = storage_root.join("provider-state/openai-codex/auth.json");
     let controller = OpenAiCodexAuthController::new_with_options(
-        OpenAiCodexAuthControllerOptions::new(auth_path),
+        OpenAiCodexAuthControllerOptions::new(storage_root, auth_path),
     )?;
     let worker = controller.clone();
     let thread = std::thread::spawn(move || -> Result<String> {

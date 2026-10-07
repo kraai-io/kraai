@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use kraai_io::fs::DirectoryBootstrap;
 use kraai_io::http::build_finite_http_client;
 use kraai_io::lock::FileLock;
 use reqwest::{Client, RequestBuilder, StatusCode};
@@ -48,16 +49,18 @@ pub struct OpenAiCodexAuthControllerOptions {
     pub client_id: String,
     pub default_callback_port: u16,
     pub fallback_callback_ports: Vec<u16>,
+    pub storage_root: PathBuf,
     pub auth_path: PathBuf,
 }
 
 impl OpenAiCodexAuthControllerOptions {
-    pub fn new(auth_path: PathBuf) -> Self {
+    pub fn new(storage_root: PathBuf, auth_path: PathBuf) -> Self {
         Self {
             issuer: AUTH_ISSUER.to_string(),
             client_id: CLIENT_ID.to_string(),
             default_callback_port: DEFAULT_CALLBACK_PORT,
             fallback_callback_ports: vec![REGISTERED_FALLBACK_CALLBACK_PORT],
+            storage_root,
             auth_path,
         }
     }
@@ -93,6 +96,7 @@ impl OpenAiCodexRequestAuth {
 
 struct Inner {
     client: Client,
+    auth_directory: Arc<DirectoryBootstrap>,
     state: Arc<Mutex<ControllerState>>,
     login_gate: Mutex<()>,
     refresh_gate: Mutex<()>,
@@ -106,6 +110,7 @@ struct AuthConfig {
     client_id: String,
     default_callback_port: u16,
     fallback_callback_ports: Vec<u16>,
+    storage_root: PathBuf,
     auth_path: PathBuf,
     refresh_timeout: Duration,
 }
@@ -117,6 +122,7 @@ impl From<OpenAiCodexAuthControllerOptions> for AuthConfig {
             client_id: value.client_id,
             default_callback_port: value.default_callback_port,
             fallback_callback_ports: value.fallback_callback_ports,
+            storage_root: value.storage_root,
             auth_path: value.auth_path,
             refresh_timeout: TOKEN_REFRESH_TIMEOUT,
         }
@@ -195,6 +201,14 @@ impl OpenAiCodexAuthController {
         Ok(Self {
             inner: std::sync::Arc::new(Inner {
                 client,
+                auth_directory: Arc::new(DirectoryBootstrap::new(
+                    config.storage_root.clone(),
+                    config
+                        .auth_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .to_path_buf(),
+                )),
                 state: Arc::new(Mutex::new(ControllerState {
                     status_sequence: 0,
                     auth,
@@ -211,6 +225,14 @@ impl OpenAiCodexAuthController {
 
     pub fn subscribe(&self) -> broadcast::Receiver<OpenAiCodexAuthStatus> {
         self.inner.updates.subscribe()
+    }
+
+    async fn acquire_file_lock(&self) -> io::Result<Arc<FileLock>> {
+        acquire_auth_file_lock(
+            self.inner.config.auth_path.clone(),
+            self.inner.auth_directory.clone(),
+        )
+        .await
     }
 
     pub async fn get_status(&self) -> OpenAiCodexAuthStatus {
@@ -305,7 +327,7 @@ impl OpenAiCodexAuthController {
     pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
-        let file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = self.acquire_file_lock().await?;
         {
             let state = self.inner.state.clone().lock_owned().await;
             let path = self.inner.config.auth_path.clone();
@@ -348,7 +370,7 @@ impl OpenAiCodexAuthController {
         expected_auth: &OpenAiCodexRequestAuth,
     ) -> io::Result<OpenAiCodexRequestAuth> {
         let _refresh_guard = self.inner.refresh_gate.lock().await;
-        let file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = self.acquire_file_lock().await?;
 
         let disk_auth = load_auth_file(&self.inner.config.auth_path)?;
         let (old_auth, state_changed) = {
@@ -547,7 +569,7 @@ impl OpenAiCodexAuthController {
         }
 
         let result = match result {
-            Ok(auth) => match acquire_auth_file_lock(self.inner.config.auth_path.clone()).await {
+            Ok(auth) => match self.acquire_file_lock().await {
                 Ok(file_lock) => Ok((auth, file_lock)),
                 Err(error) => Err(error.to_string()),
             },
@@ -591,7 +613,7 @@ impl OpenAiCodexAuthController {
     async fn replace_auth_for_test(&self, auth: StoredAuth) -> io::Result<()> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
-        let file_lock = acquire_auth_file_lock(self.inner.config.auth_path.clone()).await?;
+        let file_lock = self.acquire_file_lock().await?;
         self.persist_auth_locked(auth, file_lock).await
     }
 

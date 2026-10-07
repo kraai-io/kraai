@@ -2,7 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kraai_io::fs::AtomicWriteOutcome;
+use kraai_io::fs::{AtomicWriteOutcome, DirectoryBootstrap};
 use kraai_io::lock::{FileLock, open_private_lock_file};
 use serde::{Deserialize, Serialize};
 
@@ -51,11 +51,12 @@ pub(super) fn delete_auth_file(path: &Path) -> io::Result<()> {
     kraai_io::fs::remove_file_durable(path).map(|_removed| ())
 }
 
-pub(super) async fn acquire_auth_file_lock(auth_path: PathBuf) -> io::Result<Arc<FileLock>> {
+pub(super) async fn acquire_auth_file_lock(
+    auth_path: PathBuf,
+    directory: Arc<DirectoryBootstrap>,
+) -> io::Result<Arc<FileLock>> {
     let file = tokio::task::spawn_blocking(move || {
-        if let Some(parent) = auth_path.parent() {
-            kraai_io::fs::create_private_dir_all(parent)?;
-        }
+        directory.create_private()?;
         open_private_lock_file(&auth_path.with_extension("json.refresh.lock"))
     })
     .await

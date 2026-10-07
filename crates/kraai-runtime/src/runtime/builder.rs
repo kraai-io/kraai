@@ -266,11 +266,15 @@ impl RuntimeBuilder {
             Some(path) => path,
             None => agent_state_root()?,
         };
+        kraai_io::fs::create_dir_all_async(&storage_root)
+            .await
+            .wrap_err("Failed to initialize storage root")?;
         if host_options.initialize_tracing {
             Self::init_tracing(&storage_root)?;
         }
         let data_dir = storage_root.join("data");
         let auth_options = OpenAiCodexAuthControllerOptions::new(
+            storage_root.clone(),
             storage_root.join("provider-state/openai-codex/auth.json"),
         );
         let (persistence, auth) = tokio::join!(
@@ -312,9 +316,12 @@ impl RuntimeBuilder {
         let mcp_config = kraai_mcp::McpConfig::load(&mcp_config_path)
             .await
             .map_err(|error| eyre!(error))?;
-        let mcp =
-            kraai_mcp::McpManager::with_auth_storage(mcp_config, storage_root.join("mcp-auth"))
-                .map_err(|error| eyre!(error))?;
+        let mcp = kraai_mcp::McpManager::with_auth_storage(
+            mcp_config,
+            storage_root.clone(),
+            storage_root.join("mcp-auth"),
+        )
+        .map_err(|error| eyre!(error))?;
         agent_manager.write().await.set_mcp(Arc::new(mcp));
 
         let runtime = RuntimeCore {

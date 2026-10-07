@@ -57,7 +57,7 @@ impl Server {
     pub(crate) fn new(
         config: ServerConfig,
         name: String,
-        root: Option<&std::path::Path>,
+        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
         server: std::sync::Weak<Self>,
         events: tokio::sync::broadcast::Sender<crate::McpAuthStatus>,
     ) -> Self {

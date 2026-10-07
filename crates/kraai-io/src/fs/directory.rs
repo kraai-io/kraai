@@ -2,6 +2,10 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+mod bootstrap;
+
+pub use bootstrap::DirectoryBootstrap;
+
 pub fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -21,14 +25,6 @@ pub fn sync_directory(path: &Path) -> io::Result<()> {
 /// Bootstrap a storage root, accepting its nearest existing ancestor as durable.
 /// Subsequent writes should retain that root and use `create_dir_all_in`.
 pub fn create_dir_all(path: &Path) -> io::Result<()> {
-    create_directories(path, false)
-}
-
-pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
-    create_directories(path, true)
-}
-
-fn create_directories(path: &Path, private: bool) -> io::Result<()> {
     let path = nonempty_path(path);
     let mut anchor = path;
     loop {
@@ -44,7 +40,7 @@ fn create_directories(path: &Path, private: bool) -> io::Result<()> {
     if anchor == path {
         return Ok(());
     }
-    create_directories_with_sync(anchor, path, private, sync_directory)
+    create_directories_with_sync(anchor, path, false, sync_directory)
 }
 
 /// The existing anchor and its ancestors must already be durable. Every descendant

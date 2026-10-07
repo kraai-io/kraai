@@ -23,22 +23,45 @@ pub(super) fn open_file(
     path: &Path,
     policy: SymlinkPolicy,
 ) -> Result<File, ScopedReadError> {
-    use rustix::fs::{ResolveFlags, openat2};
+    open_file_with_openat2(root, relative, path, policy, |resolve| {
+        rustix::fs::openat2(
+            root,
+            relative,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+            resolve,
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn open_file_with_openat2(
+    root: &File,
+    relative: &Path,
+    path: &Path,
+    policy: SymlinkPolicy,
+    try_open: impl FnOnce(rustix::fs::ResolveFlags) -> rustix::io::Result<rustix::fd::OwnedFd>,
+) -> Result<File, ScopedReadError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    use rustix::fs::ResolveFlags;
+    use rustix::io::Errno;
 
     let mut resolve = ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS;
     if policy == SymlinkPolicy::Reject {
         validate_components(relative, path)?;
         resolve |= ResolveFlags::NO_SYMLINKS;
     }
-    let descriptor = openat2(
-        root,
-        relative,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-        Mode::empty(),
-        resolve,
-    )
-    .map_err(|error| open_error(error, path))?;
-    validate_file(File::from(descriptor), path)
+    if relative.as_os_str().as_bytes().contains(&0) {
+        return Err(open_error(Errno::INVAL, path));
+    }
+    match try_open(resolve) {
+        Ok(descriptor) => validate_file(File::from(descriptor), path),
+        Err(Errno::NOSYS | Errno::PERM | Errno::INVAL) if policy == SymlinkPolicy::Reject => {
+            open_file_walk(root, relative, path)
+        }
+        Err(error) => Err(open_error(error, path)),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -77,7 +100,6 @@ fn open_error(error: rustix::io::Errno, path: &Path) -> ScopedReadError {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn open_file_walk(root: &File, relative: &Path, path: &Path) -> Result<File, ScopedReadError> {
     use rustix::fs::openat;
 
@@ -109,35 +131,4 @@ fn open_file_walk(root: &File, relative: &Path, path: &Path) -> Result<File, Sco
     clippy::unwrap_used,
     reason = "scoped walk tests assert fixture operations"
 )]
-mod tests {
-    use std::fs;
-    use std::os::unix::fs::symlink;
-
-    use super::*;
-
-    #[test]
-    fn fallback_walk_rejects_symlinks_and_reads_nested_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = open_root(directory.path()).unwrap();
-        fs::create_dir(directory.path().join("nested")).unwrap();
-        fs::write(directory.path().join("nested/file"), b"inside").unwrap();
-        assert!(open_file_walk(&root, Path::new("nested/file"), directory.path()).is_ok());
-        assert!(matches!(
-            open_file_walk(&root, Path::new("../outside"), directory.path()),
-            Err(ScopedReadError::OutsideRoot(_))
-        ));
-        symlink("nested", directory.path().join("alias")).unwrap();
-        assert!(open_file_walk(&root, Path::new("alias/file"), directory.path()).is_err());
-        symlink("file", directory.path().join("nested/link")).unwrap();
-        assert!(open_file_walk(&root, Path::new("nested/link"), directory.path()).is_err());
-        nix::unistd::mkfifo(
-            directory.path().join("fifo").as_path(),
-            nix::sys::stat::Mode::S_IRWXU,
-        )
-        .unwrap();
-        assert!(matches!(
-            open_file_walk(&root, Path::new("fifo"), directory.path()),
-            Err(ScopedReadError::NotFile(_))
-        ));
-    }
-}
+mod tests;

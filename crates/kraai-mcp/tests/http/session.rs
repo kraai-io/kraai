@@ -108,8 +108,12 @@ async fn attachment_credentials_do_not_use_the_base_auth_store() {
     let headers = [("Authorization".into(), "Bearer ephemeral-secret".into())].into();
     let (unused, state, task) = fixture_with_headers(headers).await;
     let root = tempfile::tempdir().unwrap();
-    let base =
-        McpManager::with_auth_storage(McpConfig::default(), root.path().to_path_buf()).unwrap();
+    let base = McpManager::with_auth_storage(
+        McpConfig::default(),
+        root.path().to_path_buf(),
+        root.path().to_path_buf(),
+    )
+    .unwrap();
     let overlay = base
         .with_session_servers(attachment("temporary", &state))
         .unwrap();

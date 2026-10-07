@@ -360,12 +360,13 @@ path = \"inherit\"\n",
             data_dir.clone(),
         )));
 
-        let auth_path = kraai_persistence::agent_state_root()
-            .expect("locate application state")
-            .join("provider-state/openai-codex/auth.json");
+        let auth_root = kraai_persistence::agent_state_root().expect("locate application state");
+        let auth_path = auth_root.join("provider-state/openai-codex/auth.json");
         let openai_codex_auth =
             match kraai_provider_openai_codex::OpenAiCodexAuthController::new_with_options(
-                kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions::new(auth_path),
+                kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions::new(
+                    auth_root, auth_path,
+                ),
             ) {
                 Ok(controller) => Arc::new(controller),
                 Err(error) if is_missing_system_ca_error(&error) => return None,
