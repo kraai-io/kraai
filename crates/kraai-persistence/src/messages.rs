@@ -1,10 +1,10 @@
-use crate::database::{
-    Database, assert_owner, list_records, read_record, record_session, write_record,
+use crate::database::{Database, assert_owner, list_records, read_record, record_session};
+use crate::message_references::{
+    assert_message_owners, delete_message_record, write_message_record,
 };
 use crate::{SessionMeta, SessionStore};
 use color_eyre::eyre::{Result, ensure};
 use kraai_types::{Message, MessageId};
-use rusqlite::params;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -127,18 +127,21 @@ impl MessageStore for SqliteMessageStore {
         let message = message.clone();
         self.database
             .transaction(move |transaction, leases| {
-                let session =
-                    record_session(transaction, "message", message.id.as_str())?.or(match &message
-                        .parent_id
-                    {
-                        Some(parent) => record_session(transaction, "message", parent.as_str())?,
-                        None => None,
-                    });
-                if let Some(session) = &session {
-                    assert_owner(transaction, leases, session)?;
+                let mut session = record_session(transaction, "message", message.id.as_str())?;
+                let associated_session_exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+                    [session.as_deref()],
+                    |row| row.get(0),
+                )?;
+                if !associated_session_exists && let Some(parent) = &message.parent_id {
+                    assert_message_owners(transaction, leases, parent.as_str(), None)?;
+                    if session.is_none() {
+                        session = record_session(transaction, "message", parent.as_str())?;
+                    }
                 }
-                write_record(
+                write_message_record(
                     transaction,
+                    leases,
                     "message",
                     message.id.as_str(),
                     session.as_deref(),
@@ -177,8 +180,9 @@ impl MessageStore for SqliteMessageStore {
                         "Message ID reused with different content"
                     );
                 }
-                write_record(
+                write_message_record(
                     transaction,
+                    leases,
                     "message",
                     message.id.as_str(),
                     Some(&session.id),
@@ -194,14 +198,7 @@ impl MessageStore for SqliteMessageStore {
         let id = id.to_string();
         self.database
             .transaction(move |transaction, leases| {
-                if let Some(session) = record_session(transaction, "message", &id)? {
-                    assert_owner(transaction, leases, &session)?;
-                }
-                transaction.execute(
-                    "DELETE FROM records WHERE kind = 'message' AND id = ?1",
-                    params![id],
-                )?;
-                Ok(())
+                delete_message_record(transaction, leases, "message", &id)
             })
             .await
     }

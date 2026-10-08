@@ -1,6 +1,5 @@
-use crate::database::{
-    Database, assert_owner, bump_revision, read_record, record_session, write_record,
-};
+use crate::database::{Database, read_record, record_session};
+use crate::message_references::{delete_message_record, write_message_record};
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
@@ -80,11 +79,9 @@ impl SqliteCompactionStore {
             .transaction(move |transaction, leases| {
                 let boundary = checkpoint.covered_through.as_str();
                 let session = record_session(transaction, "message", boundary)?;
-                if let Some(session) = &session {
-                    assert_owner(transaction, leases, session)?;
-                }
-                write_record(
+                write_message_record(
                     transaction,
+                    leases,
                     "compaction",
                     boundary,
                     session.as_deref(),
@@ -107,18 +104,7 @@ impl SqliteCompactionStore {
         let boundary = boundary.to_string();
         self.database
             .transaction(move |transaction, leases| {
-                let session = record_session(transaction, "compaction", &boundary)?;
-                if let Some(session) = &session {
-                    assert_owner(transaction, leases, session)?;
-                }
-                transaction.execute(
-                    "DELETE FROM records WHERE kind = 'compaction' AND id = ?1",
-                    [boundary],
-                )?;
-                if let Some(session) = &session {
-                    bump_revision(transaction, session)?;
-                }
-                Ok(())
+                delete_message_record(transaction, leases, "compaction", &boundary)
             })
             .await
     }

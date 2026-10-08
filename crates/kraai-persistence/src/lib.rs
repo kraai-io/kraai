@@ -12,6 +12,7 @@ mod executions;
 mod images;
 mod keyed_locks;
 mod leases;
+mod message_references;
 mod messages;
 mod preferences;
 mod repository;

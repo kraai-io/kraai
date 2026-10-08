@@ -1,7 +1,7 @@
 use crate::SqliteSessionStore;
 use crate::database::now_nanos;
 use color_eyre::eyre::{Result, ensure, eyre};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::time::Duration;
 
 pub const TURN_LEASE_DURATION: Duration = Duration::from_secs(30);
@@ -11,6 +11,29 @@ pub struct SessionObservation {
     pub revision: i64,
     pub lease_active: bool,
     pub lease_expires_at: i64,
+}
+
+fn claimable_lease(connection: &Connection, session: &str) -> Result<(i64, i64)> {
+    let (active, previous): (bool, i64) = connection
+        .query_row(
+            "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1",
+            [session],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            eyre!(kraai_types::DomainError::not_found(format!(
+                "Session not found: {session}"
+            )))
+        })?;
+    let now = now_nanos()?;
+    ensure!(
+        !active || previous < now,
+        kraai_types::DomainError::conflict(format!(
+            "Session {session} is already running in another instance"
+        ))
+    );
+    Ok((previous, now))
 }
 
 impl SqliteSessionStore {
@@ -58,13 +81,9 @@ impl SqliteSessionStore {
         ensure!(!duration.is_zero(), "Lease duration must be positive");
         let session = session_id.to_string();
         self.database.run(move |connection, leases| {
+            claimable_lease(connection, &session)?;
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (active, previous): (bool, i64) = transaction.query_row(
-                "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1", [&session],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional()?.ok_or_else(|| eyre!(kraai_types::DomainError::not_found(format!("Session not found: {session}"))))?;
-            let now = now_nanos()?;
-            ensure!(!active || previous < now, kraai_types::DomainError::conflict(format!("Session {session} is already running in another instance")));
+            let (previous, now) = claimable_lease(&transaction, &session)?;
             let expiry = now.checked_add(i64::try_from(duration.as_nanos())?).ok_or_else(|| eyre!("Lease expiry overflow"))?;
             ensure!(expiry > previous, kraai_types::DomainError::conflict("Clock has not advanced enough to issue a new session lease"));
             transaction.execute("UPDATE sessions SET lease_active = 1, lease_expires_at = ?2, revision = revision + 1 WHERE id = ?1", params![session, expiry])?;

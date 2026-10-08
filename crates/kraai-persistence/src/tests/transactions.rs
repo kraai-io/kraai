@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let owner = Persistence::open(directory.path()).await?;
+    owner.sessions().save(&session("session")).await?;
+    owner.sessions().claim_turn("session").await?;
+    let observer = Persistence::open(directory.path()).await?;
+    observer
+        .sessions()
+        .sqlite_database()
+        .run(|connection, _| {
+            connection.busy_timeout(Duration::ZERO)?;
+            Ok(())
+        })
+        .await?;
+    let mut connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let error = observer
+        .sessions()
+        .claim_turn("session")
+        .await
+        .err()
+        .ok_or_else(|| color_eyre::eyre::eyre!("An active foreign lease must reject the claim"))?;
+    ensure!(
+        error
+            .downcast_ref::<kraai_types::DomainError>()
+            .is_some_and(|error| error.kind() == kraai_types::DomainErrorKind::Conflict),
+        "Expected an ownership conflict while the writer is held, got {error}"
+    );
+    transaction.rollback()?;
+    ensure!(owner.sessions().owns_turn("session").await?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let persistence = Persistence::open(directory.path()).await?;

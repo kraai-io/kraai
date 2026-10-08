@@ -392,5 +392,6 @@ async fn cancelled_waiter_does_not_interrupt_a_database_commit() -> Result<()> {
     Ok(())
 }
 
+mod shared_references;
 mod storage;
 mod transactions;

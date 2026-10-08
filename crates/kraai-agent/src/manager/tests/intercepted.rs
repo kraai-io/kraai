@@ -9,6 +9,72 @@ struct LimitedWrites {
 }
 
 #[tokio::test]
+async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()> {
+    for already_owned in [false, true] {
+        let (mut manager, data_dir) = test_manager().await;
+        let session = manager.create_session().await?;
+        let observer = kraai_persistence::Persistence::open(&data_dir).await?;
+        if already_owned {
+            manager.persistence.sessions().claim_turn(&session).await?;
+        }
+        assert!(
+            manager
+                .prepare_messages_stream(
+                    &session,
+                    Vec::new(),
+                    ModelId::new("mock-model"),
+                    ProviderId::new("mock"),
+                )
+                .await?
+                .is_none()
+        );
+        assert_eq!(
+            manager.persistence.sessions().owns_turn(&session).await?,
+            already_owned
+        );
+        if already_owned {
+            assert!(observer.sessions().claim_turn(&session).await.is_err());
+            manager
+                .persistence
+                .sessions()
+                .release_turn(&session)
+                .await?;
+        } else {
+            observer.sessions().claim_turn(&session).await?;
+            observer.sessions().release_turn(&session).await?;
+        }
+        cleanup_dir(data_dir).await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    let mut metadata = manager.session_store.get(&session).await?.expect("session");
+    metadata.selected_profile_id = Some("missing-profile".into());
+    manager.session_store.save(&metadata).await?;
+    assert!(
+        manager
+            .prepare_messages_stream(
+                &session,
+                vec!["queued".into()],
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+            )
+            .await
+            .is_err()
+    );
+    assert!(!manager.persistence.sessions().owns_turn(&session).await?);
+    let observer = kraai_persistence::Persistence::open(&data_dir).await?;
+    observer.sessions().claim_turn(&session).await?;
+    assert!(manager.get_chat_history(&session).await?.is_empty());
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn preparation_error_survives_lease_release_failure() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
@@ -139,6 +205,13 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
             )
             .await?;
         assert!(rejected.is_none());
+        assert!(
+            manager
+                .persistence
+                .sessions()
+                .owns_turn(&session_id)
+                .await?
+        );
     }
     manager.complete_message(&first.message_id).await?;
     let continuation = manager
