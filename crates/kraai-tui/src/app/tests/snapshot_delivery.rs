@@ -499,3 +499,78 @@ fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshot
         harness.app.handle_runtime_event(call.clone());
     }
 }
+
+#[test]
+fn loading_session_restores_model_without_overwriting_later_selection() {
+    let mut harness = test_harness();
+    harness
+        .app
+        .reset_chat_session(Some("session".into()), "Session loaded");
+    let mut snapshot = session_snapshot_at(1, None);
+    snapshot.session.selected_model = Some(kraai_types::ModelSelection {
+        provider_id: ProviderId::new("saved-provider"),
+        model_id: ModelId::new("saved-model"),
+    });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            session_id: "session".into(),
+            result: Box::new(Ok(snapshot.clone())),
+        });
+    assert_eq!(
+        harness.app.state.selected_provider_id.as_deref(),
+        Some("saved-provider")
+    );
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("saved-model")
+    );
+    harness.app.state.selected_model_id = Some("new-model".into());
+    snapshot.event_sequence += 1;
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            session_id: "session".into(),
+            result: Box::new(Ok(snapshot)),
+        });
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("new-model")
+    );
+}
+
+#[test]
+fn observer_refreshes_model_when_saved_selection_changes() {
+    let mut harness = test_harness();
+    harness
+        .app
+        .reset_chat_session(Some("session".into()), "Session loaded");
+    for (sequence, selection) in [
+        None,
+        Some(("first-provider", "first-model")),
+        Some(("second-provider", "second-model")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut snapshot = session_snapshot_at(sequence as u64, None);
+        snapshot.session.selected_model =
+            selection.map(|(provider, model)| kraai_types::ModelSelection {
+                provider_id: ProviderId::new(provider),
+                model_id: ModelId::new(model),
+            });
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                session_id: "session".into(),
+                result: Box::new(Ok(snapshot)),
+            });
+        if let Some((provider, model)) = selection {
+            assert_eq!(
+                harness.app.state.selected_provider_id.as_deref(),
+                Some(provider)
+            );
+            assert_eq!(harness.app.state.selected_model_id.as_deref(), Some(model));
+        }
+    }
+}

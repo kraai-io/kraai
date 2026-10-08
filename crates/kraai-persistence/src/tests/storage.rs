@@ -131,3 +131,39 @@ async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Resu
     ensure!(observer.messages().get(&root.message.id).await?.is_some());
     Ok(())
 }
+
+#[tokio::test]
+async fn last_used_model_survives_reopening_and_messages_without_generation() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = Persistence::open(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    for model in ["first", "last"] {
+        let mut request = request("session", "answer");
+        request.content = ConversationItem::Assistant { items: Vec::new() };
+        request.generation = Some(kraai_types::MessageGeneration {
+            provider_id: kraai_types::ProviderId::new("provider"),
+            model_id: kraai_types::ModelId::new(model),
+            max_context: None,
+            usage: None,
+        });
+        persistence.conversations().append_message(request).await?;
+    }
+    persistence
+        .conversations()
+        .append_message(request("session", "next question"))
+        .await?;
+    let reopened = Persistence::open(directory.path()).await?;
+    let saved = reopened
+        .sessions()
+        .get("session")
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
+    ensure!(
+        saved.selected_model
+            == Some(kraai_types::ModelSelection {
+                provider_id: kraai_types::ProviderId::new("provider"),
+                model_id: kraai_types::ModelId::new("last"),
+            })
+    );
+    Ok(())
+}

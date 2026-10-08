@@ -293,6 +293,7 @@ impl App {
         let has_session = session_id.is_some();
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
+        self.state.last_session_model = None;
         self.state.current_tip_id = None;
         self.state.last_error = None;
         self.state.error_open = false;

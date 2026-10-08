@@ -56,6 +56,12 @@ impl ConversationStore {
         };
 
         session.tip_id = Some(message_id.clone());
+        if let Some(generation) = &message.generation {
+            session.selected_model = Some(kraai_types::ModelSelection {
+                model_id: generation.model_id.clone(),
+                provider_id: generation.provider_id.clone(),
+            });
+        }
         if previous_tip.is_none()
             && session.title.is_none()
             && let Some(title) = request.title_if_first_message
