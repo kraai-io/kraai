@@ -17,6 +17,7 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
                     "hello".into(),
                     ModelId::new("mock-model"),
                     ProviderId::new("mock"),
+                    Default::default(),
                 )
                 .await?;
             manager
@@ -86,6 +87,7 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
             String::from("cycle").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&request.message_id).await?;
@@ -123,6 +125,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager
@@ -185,6 +188,7 @@ async fn captured_snapshot_survives_deletion_of_an_aborted_stream() -> Result<()
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let reader = manager.capture_session_snapshot(&session_id).await?;
@@ -207,6 +211,7 @@ async fn snapshot_keeps_captured_streams_outside_the_tip_chain() -> Result<()> {
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let parent_id = manager
@@ -238,6 +243,7 @@ async fn snapshot_reports_missing_history_instead_of_returning_partial_state() -
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&request.message_id).await?;

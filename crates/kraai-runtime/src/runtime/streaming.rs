@@ -32,6 +32,7 @@ impl RuntimeCore {
         session_id: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: kraai_types::ModelOptionValues,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         if self.is_stopping() {
             return Ok(ContinueSessionOutcome::NothingToContinue);
@@ -39,8 +40,18 @@ impl RuntimeCore {
         let Some(preparation) = self.session_preparations.try_begin(&session_id) else {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         };
-        self.continue_prepared_session(session_id, preparation, Some((model_id, provider_id)))
+        self.agent_manager
+            .read()
             .await
+            .validate_model_options(&provider_id, &model_id, &options, true)
+            .await
+            .map_err(RuntimeError::from_report)?;
+        self.continue_prepared_session(
+            session_id,
+            preparation,
+            Some((model_id, provider_id, options)),
+        )
+        .await
     }
 
     pub(crate) async fn start_continuation_when_ready(
@@ -48,20 +59,31 @@ impl RuntimeCore {
         session_id: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: kraai_types::ModelOptionValues,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         if self.is_stopping() {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         }
         let preparation = self.session_preparations.begin(&session_id).await;
-        self.continue_prepared_session(session_id, preparation, Some((model_id, provider_id)))
+        self.agent_manager
+            .read()
             .await
+            .validate_model_options(&provider_id, &model_id, &options, true)
+            .await
+            .map_err(RuntimeError::from_report)?;
+        self.continue_prepared_session(
+            session_id,
+            preparation,
+            Some((model_id, provider_id, options)),
+        )
+        .await
     }
 
     async fn continue_prepared_session(
         &self,
         session_id: String,
         preparation: SessionPreparation,
-        selection: Option<(ModelId, ProviderId)>,
+        selection: Option<(ModelId, ProviderId, kraai_types::ModelOptionValues)>,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         if self.is_stopping() {
             return Ok(ContinueSessionOutcome::NothingToContinue);
@@ -108,11 +130,15 @@ impl RuntimeCore {
             let continuation = {
                 let mut agent = self.agent_manager.write().await;
                 let selected_model = selection.clone().or_else(|| {
-                    queued_messages
-                        .last()
-                        .map(|message| (message.model_id.clone(), message.provider_id.clone()))
+                    queued_messages.last().map(|message| {
+                        (
+                            message.model_id.clone(),
+                            message.provider_id.clone(),
+                            message.options.clone(),
+                        )
+                    })
                 });
-                let result = if let Some((model_id, provider_id)) = selected_model {
+                let result = if let Some((model_id, provider_id, options)) = selected_model {
                     agent
                         .prepare_messages_stream(
                             &session_id,
@@ -122,6 +148,7 @@ impl RuntimeCore {
                                 .collect(),
                             model_id,
                             provider_id,
+                            options,
                         )
                         .await
                 } else {

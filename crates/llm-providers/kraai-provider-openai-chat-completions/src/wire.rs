@@ -201,6 +201,15 @@ pub struct ListModelsResponse {
 #[derive(Debug, Deserialize)]
 pub struct ListModelEntry {
     pub id: String,
+    #[serde(flatten)]
+    pub options: kraai_provider_core::DiscoveredModelOptions,
+    #[serde(default)]
+    pub supported_reasoning_levels: Vec<ReasoningLevel>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReasoningLevel {
+    pub effort: String,
 }
 
 #[cfg(test)]

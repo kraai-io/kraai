@@ -225,6 +225,7 @@ fn completed_call_projection_preserves_message_metadata_and_item_order() {
     );
     original.agent_profile_id = Some(String::from("profile"));
     original.generation = Some(MessageGeneration {
+        options: Default::default(),
         provider_id: ProviderId::new("provider"),
         model_id: ModelId::new("model"),
         max_context: Some(4096),

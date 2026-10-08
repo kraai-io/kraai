@@ -181,21 +181,7 @@ impl OpenAiCodexFactory {
                     default_value: None,
                 },
             ],
-            model_fields: {
-                let mut fields = ConfiguredModelMetadata::fields();
-                fields.push(FieldDefinition {
-                    key: "fast_mode".into(),
-                    label: "Fast Mode".into(),
-                    value_kind: FieldValueKind::Boolean,
-                    required: false,
-                    secret: false,
-                    help_text: Some(
-                        "Use priority processing with higher subscription usage".into(),
-                    ),
-                    default_value: Some(DynamicValue::Bool(false)),
-                });
-                fields
-            },
+            model_fields: ConfiguredModelMetadata::fields(),
             supports_model_discovery: true,
             default_provider_id_prefix: "openai-codex".to_string(),
         }
@@ -251,17 +237,7 @@ impl OpenAiCodexFactory {
     }
 
     pub fn validate_model_config(config: &DynamicConfig) -> Vec<ValidationError> {
-        let mut errors = ConfiguredModelMetadata::validate(config);
-        if config
-            .get("fast_mode")
-            .is_some_and(|value| value.as_bool().is_none())
-        {
-            errors.push(ValidationError {
-                field: "fast_mode".into(),
-                message: "Fast Mode must be a boolean".into(),
-            });
-        }
-        errors
+        ConfiguredModelMetadata::validate(config)
     }
 
     pub fn create(&self, id: ProviderId, config: DynamicConfig) -> Result<Box<dyn Provider>> {
@@ -303,7 +279,6 @@ impl OpenAiCodexFactory {
             models: RwLock::new(DiscoveredModels::default()),
             rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
-            fast_models: std::collections::BTreeSet::new(),
             base_url,
             proxy_token,
             allow_http_proxy,
@@ -318,7 +293,6 @@ pub struct OpenAiCodexProvider {
     models: RwLock<DiscoveredModels>,
     rejected_reasoning: RwLock<RejectedReasoning>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
-    fast_models: std::collections::BTreeSet<ModelId>,
     base_url: String,
     proxy_token: Option<String>,
     allow_http_proxy: bool,
@@ -328,12 +302,6 @@ pub struct OpenAiCodexProvider {
 impl Provider for OpenAiCodexProvider {
     fn get_provider_id(&self) -> ProviderId {
         self.id.clone()
-    }
-
-    async fn pricing_model_id(&self, model_id: &ModelId) -> Result<ModelId> {
-        Ok(ModelId::new(
-            self.models.read().await.resolve(model_id)?.api_model,
-        ))
     }
 
     async fn list_models(&self) -> Vec<Model> {
@@ -346,28 +314,17 @@ impl Provider for OpenAiCodexProvider {
 
     async fn cache_models(&self) -> Result<()> {
         let models = self.fetch_models().await?;
+        for model in models.list(&self.model_configs) {
+            kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
+                .map_err(|errors| eyre!("Invalid model options for {}: {errors:?}", model.id))?;
+        }
         let previous = std::mem::replace(&mut *self.models.write().await, models);
         drop(previous);
         Ok(())
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
-        let fast_mode = model
-            .config
-            .get("fast_mode")
-            .map(|value| {
-                value
-                    .as_bool()
-                    .ok_or_else(|| eyre!("Fast Mode must be a boolean"))
-            })
-            .transpose()?
-            .unwrap_or(false);
-        let metadata = ConfiguredModelMetadata::from_config(&model.config)?;
-        if fast_mode {
-            self.fast_models.insert(model.id.clone());
-        } else {
-            self.fast_models.remove(&model.id);
-        }
+        let metadata = ConfiguredModelMetadata::from_model_config(&model)?;
         self.model_configs.insert(model.id, metadata);
         Ok(())
     }
@@ -462,15 +419,23 @@ impl OpenAiCodexProvider {
         request_context: &ProviderRequestContext,
         compact: bool,
     ) -> Result<Response> {
-        let supports_images = self
+        let model = self
             .models
             .read()
             .await
-            .supports_images(model_id, &self.model_configs)?;
+            .get(model_id, &self.model_configs)
+            .ok_or_else(|| eyre!("OpenAI Codex model '{model_id}' is unavailable"))?;
+        kraai_types::validate_model_options(&model.options, &provider_request.options)
+            .map_err(|errors| eyre!("Invalid model options: {errors:?}"))?;
+        kraai_provider_core::validate_model_option_effects(
+            &model.options,
+            &provider_request.options,
+        )?;
+        let options = provider_request.options;
         let images = kraai_provider_core::ResolvedImages::for_model(
             &provider_request.messages,
             model_id,
-            supports_images,
+            model.supports_images,
             request_context,
         )
         .await?;
@@ -485,28 +450,38 @@ impl OpenAiCodexProvider {
             })
             .collect();
         let normalized = normalize_conversation(provider_request.messages, &self.id, &images)?;
-        let resolved_model = self.models.read().await.resolve(model_id)?;
-        let include = if resolved_model.reasoning.is_some() {
-            vec!["reasoning.encrypted_content"]
-        } else {
-            Vec::new()
-        };
         let mut request = ResponsesRequest {
-            model: resolved_model.api_model,
-            service_tier: self.fast_models.contains(model_id).then_some("priority"),
+            model: model_id.to_string(),
+            service_tier: None,
             instructions: normalized.instructions,
             input: normalized.input,
-            reasoning: resolved_model.reasoning,
+            reasoning: None,
             tools,
             tool_choice: Some(if has_tool { "auto" } else { "none" }),
             parallel_tool_calls: has_tool.then_some(false),
             stream: true,
             store: false,
-            include,
+            include: Vec::new(),
             prompt_cache_key: request_context.prompt_cache_key().map(ToString::to_string),
         };
+        let mut body = serde_json::to_value(&request)?;
+        let headers =
+            kraai_provider_core::apply_model_options(&model.options, &options, &mut body)?;
+        let has_reasoning = body.get("reasoning").is_some();
+        if let Some(reasoning) = body
+            .get_mut("reasoning")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            reasoning.insert("context".into(), serde_json::json!("all_turns"));
+            body.as_object_mut()
+                .ok_or_else(|| eyre!("Responses request is not an object"))?
+                .insert(
+                    "include".into(),
+                    serde_json::json!(["reasoning.encrypted_content"]),
+                );
+        }
 
-        if request.reasoning.is_none() {
+        if !has_reasoning {
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });
@@ -523,7 +498,11 @@ impl OpenAiCodexProvider {
                     serde_json::json!({"type": "compaction_trigger"}),
                 ));
         }
-        let response = self.post_responses(&request, request_context).await;
+        *body
+            .get_mut("input")
+            .ok_or_else(|| eyre!("Responses request input is missing"))? =
+            serde_json::to_value(&request.input)?;
+        let response = self.post_responses(&body, &headers, request_context).await;
         if let Some(error) = response
             .as_ref()
             .err()
@@ -543,22 +522,30 @@ impl OpenAiCodexProvider {
             request.input.retain(|item| {
                 !matches!(item, crate::messages::ResponsesRequestItem::Reasoning(_))
             });
+            *body
+                .get_mut("input")
+                .ok_or_else(|| eyre!("Responses request input is missing"))? =
+                serde_json::to_value(&request.input)?;
             warn!("Provider rejected encrypted reasoning; retrying once without reasoning history");
-            return self.post_responses(&request, request_context).await;
+            return self.post_responses(&body, &headers, request_context).await;
         }
         response
     }
 
     async fn post_responses(
         &self,
-        request: &ResponsesRequest,
+        body: &serde_json::Value,
+        headers: &BTreeMap<String, String>,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
         self.send_authenticated_request("responses", request_context, |auth| {
-            let builder = self
+            let mut builder = self
                 .authenticated_post(&self.endpoint("codex/responses"), auth)
                 .header(ACCEPT, responses_accept_header())
-                .json(request);
+                .json(body);
+            for (name, value) in headers {
+                builder = builder.header(name, value);
+            }
             apply_responses_session_headers(builder, request_context.prompt_cache_key())
         })
         .await
@@ -754,7 +741,6 @@ mod tests {
             models: RwLock::new(DiscoveredModels::default()),
             rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
-            fast_models: std::collections::BTreeSet::new(),
             base_url: DEFAULT_CHATGPT_BACKEND_URL.to_string(),
             proxy_token: None,
             allow_http_proxy: false,

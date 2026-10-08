@@ -143,5 +143,5 @@ fn assert_commands(messages: &[Value]) {
         .filter_map(|command| command.get("name").and_then(Value::as_str))
         .collect::<Vec<_>>();
     names.sort_unstable();
-    assert_eq!(names, ["continue", "undo"]);
+    assert_eq!(names, ["continue", "option", "undo"]);
 }

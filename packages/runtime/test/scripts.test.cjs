@@ -27,7 +27,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
     unwrap(await runtime.saveSettings(provider.settings));
     const session = unwrap(await runtime.createSessionWith({ workspace_dir: workspace, profile_id: profile }));
     const events = runtime.subscribe();
-    unwrap(await runtime.sendMessage(session, 'Calculate', 'test-model', 'local'));
+    unwrap(await runtime.sendMessage(session, 'Calculate', 'test-model', 'local', {}));
     let call;
     for (;;) {
       const read = await events.next();
@@ -83,7 +83,7 @@ for (const { codex, symlinked } of fileContextCases) {
     const session = unwrap(await runtime.createSessionWith({ workspace_dir: sessionWorkspace, profile_id: 'coding-no-sandbox' }));
     const events = runtime.subscribe();
     t.after(() => events.close());
-    unwrap(await runtime.sendMessage(session, 'Exercise the opened files', 'test-model', 'local'));
+    unwrap(await runtime.sendMessage(session, 'Exercise the opened files', 'test-model', 'local', {}));
     for (;;) {
       const read = await events.next();
       assert.equal(read.type, 'event');

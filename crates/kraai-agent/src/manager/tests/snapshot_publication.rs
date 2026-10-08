@@ -47,6 +47,7 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
                 "start".into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         let store = Arc::new(ControlledSaves {
@@ -115,6 +116,7 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
             "start".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let store = Arc::new(ControlledSaves {

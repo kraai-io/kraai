@@ -19,6 +19,7 @@ async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> 
             "Explain the envelope".into(),
             "mock-model".into(),
             "mock-native".into(),
+            Default::default(),
         )
         .await?;
     let events = harness.events.wait_for("native text completion", |events| {

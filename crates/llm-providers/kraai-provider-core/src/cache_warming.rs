@@ -47,7 +47,7 @@ struct Sessions {
     next_cleanup: Option<Instant>,
 }
 
-type CacheKey = (ProviderId, ModelId, String);
+type CacheKey = (ProviderId, ModelId, String, String);
 type SharedState = Arc<Mutex<State>>;
 
 #[derive(Default)]
@@ -133,9 +133,9 @@ impl ProviderManager {
             return Ok(None);
         }
         let now = Instant::now();
-        let state = self
-            .cache_warming
-            .state(provider_id, model_id, session_id)?;
+        let state =
+            self.cache_warming
+                .state(provider_id, model_id, session_id, &request.options)?;
         {
             let mut entry = state
                 .lock()
@@ -206,6 +206,7 @@ impl ProviderManager {
                 messages: messages.to_vec(),
                 script_tool: request.script_tool.clone(),
                 cacheable_messages: None,
+                options: request.options.clone(),
             },
             prefix: Some(prefix),
             state,
@@ -226,7 +227,9 @@ impl CacheWarming {
         provider_id: &ProviderId,
         model_id: &ModelId,
         session_id: &str,
+        options: &kraai_types::ModelOptionValues,
     ) -> Result<SharedState> {
+        let options = serde_json::to_string(options)?;
         let now = Instant::now();
         let mut sessions = self
             .sessions
@@ -246,7 +249,12 @@ impl CacheWarming {
         }
         let state = sessions
             .entries
-            .entry((provider_id.clone(), model_id.clone(), session_id.to_owned()))
+            .entry((
+                provider_id.clone(),
+                model_id.clone(),
+                session_id.to_owned(),
+                options,
+            ))
             .or_default()
             .clone();
         drop(sessions);
@@ -333,7 +341,7 @@ impl ProviderManager {
             suffix,
             state: self
                 .cache_warming
-                .state(provider_id, model_id, session_id)?,
+                .state(provider_id, model_id, session_id, &request.options)?,
         }))
     }
 }

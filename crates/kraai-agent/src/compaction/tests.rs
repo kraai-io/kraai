@@ -160,6 +160,7 @@ fn fixture(
         None,
         &history,
         Some(kraai_provider_core::ScriptToolDefinition::nushell()),
+        &Default::default(),
     );
     let context = ContextCompaction {
         store: SqliteCompactionStore::new(&root),
@@ -264,6 +265,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         Some(&saved),
         &[],
         context.original.script_tool.clone(),
+        &Default::default(),
     );
     ensure!(replay.messages.get(1..3) == Some(saved.replacement.as_slice()));
     ensure!(outcome.request.cacheable_messages.is_none());
@@ -608,6 +610,7 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
         },
     };
     let mut request = ProviderRequest {
+        options: Default::default(),
         messages: (0..40)
             .map(|index| ConversationItem::User {
                 content: kraai_types::MessageContent(vec![image(index)]),
@@ -634,6 +637,45 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
     assert!(
         matches!(request.messages.last(), Some(ConversationItem::User { content }) if content.has_images())
     );
+}
+
+#[tokio::test]
+async fn compaction_preserves_options_for_summary_and_following_generation() -> Result<()> {
+    for native in [false, true] {
+        let events = if native {
+            vec![ProviderStreamEvent::Compaction {
+                payload: serde_json::json!({"type":"compaction","encrypted_content":"opaque"}),
+            }]
+        } else {
+            vec![ProviderStreamEvent::TextDelta {
+                item_id: "summary".into(),
+                phase: AssistantPhase::FinalAnswer,
+                delta: "Retained context".into(),
+            }]
+        };
+        let (mut context, providers, requests, root) = fixture(native, events, false);
+        let options = kraai_types::ModelOptionValues::from([
+            (
+                "effort".into(),
+                kraai_types::ModelOptionValue::Choice("high".into()),
+            ),
+            (
+                "fast_mode".into(),
+                kraai_types::ModelOptionValue::Boolean(true),
+            ),
+        ]);
+        context.original.options = options.clone();
+        let outcome = context
+            .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
+            .await?;
+        ensure!(outcome.request.options == options);
+        let requests = requests.lock().map_err(|error| eyre!("{error}"))?;
+        ensure!(!requests.is_empty());
+        ensure!(requests.iter().all(|request| request.options == options));
+        drop(requests);
+        std::fs::remove_dir_all(root)?;
+    }
+    Ok(())
 }
 
 struct TestImageResolver;

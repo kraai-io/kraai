@@ -169,6 +169,7 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
             String::from("hello"),
             String::from("mock-model"),
             String::from("retry-mock"),
+            Default::default(),
         )
         .await?;
 
@@ -235,6 +236,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
             String::from("hello"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -354,6 +356,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
             String::from("hello"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -430,6 +433,7 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
             String::from("message"),
             String::new(),
             String::from("provider"),
+            Default::default(),
         )
         .await
         .unwrap_err();
@@ -442,6 +446,7 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
             String::from("message"),
             String::from("model"),
             String::new(),
+            Default::default(),
         )
         .await
         .unwrap_err();

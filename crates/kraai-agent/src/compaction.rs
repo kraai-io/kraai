@@ -48,6 +48,7 @@ pub(crate) fn assemble(
     previous: Option<&CompactionCheckpoint>,
     history: &[Message],
     tool: Option<kraai_provider_core::ScriptToolDefinition>,
+    options: &kraai_types::ModelOptionValues,
 ) -> ProviderRequest {
     let mut messages = vec![ConversationItem::System {
         text: prefix.to_string(),
@@ -77,6 +78,7 @@ pub(crate) fn assemble(
         messages,
         script_tool: tool,
         cacheable_messages: None,
+        options: options.clone(),
     };
     limit_request_images(&mut request);
     request
@@ -147,6 +149,7 @@ impl ContextCompaction {
             Some(&checkpoint),
             &[],
             self.original.script_tool.clone(),
+            &self.original.options,
         );
         crate::context_state::append_notifications(&mut request, &self.file_notifications);
         Ok(CompactionOutcome {

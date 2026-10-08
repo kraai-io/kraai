@@ -253,6 +253,7 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
             .metadata(None, Some("https://vision.test/v1/"), "shared")
             .await,
         Some(CatalogModelMetadata {
+            options: Vec::new(),
             name: Some("Vision model".into()),
             max_context: Some(65536),
             supports_images: Some(true)

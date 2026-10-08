@@ -88,12 +88,14 @@ runtime_methods! {
     list_agent_profiles(session_id: String) -> AgentProfilesState;
     get_agent_profile_catalog(workspace_dir: Option<String>) -> AgentProfileCatalog;
     set_session_profile(session_id: String, profile_id: String) -> ();
+    get_session_model(session_id: String) -> Option<kraai_types::ModelSelection>;
+    set_session_model(session_id: String, selection: kraai_types::ModelSelection) -> ();
     save_settings(settings: SettingsDocument) -> ();
     create_session() -> String;
     create_session_with(request: CreateSessionRequest) -> String;
     import_image(bytes: Vec<u8>) -> kraai_types::ImageAttachment;
-    send_content(session_id: String, message: kraai_types::MessageContent, model_id: String, provider_id: String) -> SubmitMessageOutcome;
-    send_message(session_id: String, message: String, model_id: String, provider_id: String) -> SubmitMessageOutcome;
+    send_content(session_id: String, message: kraai_types::MessageContent, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
+    send_message(session_id: String, message: String, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
     get_chat_history(session_id: String) -> BTreeMap<MessageId, kraai_types::Message>;
     get_session_snapshot(session_id: String) -> SessionSnapshot;
     get_session_context_usage(session_id: String) -> Option<SessionContextUsage>;
@@ -109,7 +111,7 @@ runtime_methods! {
     approve_script(session_id: String, execution_id: String) -> ();
     deny_script(session_id: String, execution_id: String) -> ();
     cancel_stream(session_id: String) -> bool;
-    continue_session(session_id: String, model_id: String, provider_id: String) -> ContinueSessionOutcome;
+    continue_session(session_id: String, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> ContinueSessionOutcome;
     get_openai_codex_auth_status() -> OpenAiCodexAuthStatus;
     get_mcp_auth_statuses() -> Vec<McpAuthStatus>;
     start_mcp_login(server: String) -> McpAuthStatus;

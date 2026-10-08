@@ -98,6 +98,7 @@ mod tests {
             ],
             script_tool: None,
             cacheable_messages: None,
+            options: Default::default(),
         };
         trim_tool_outputs(&mut request, Some(1000));
         assert_eq!(request.messages.first(), Some(&encrypted));
@@ -136,6 +137,7 @@ mod tests {
             }],
             script_tool: None,
             cacheable_messages: None,
+            options: Default::default(),
         };
         trim_tool_outputs(&mut request, Some(1000));
         let Some(ConversationItem::ScriptResult { output, .. }) = request.messages.first() else {

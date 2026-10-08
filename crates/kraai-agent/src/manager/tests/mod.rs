@@ -6,6 +6,7 @@ mod continuation;
 mod file_context;
 mod history;
 mod intercepted;
+mod model_options;
 mod prompts;
 mod sessions;
 mod snapshot;

@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 24 * 60 * 60;
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 mod resolution;
 
@@ -39,6 +39,8 @@ struct CatalogModel {
     modalities: Option<Modalities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<Limits>,
+    #[serde(flatten)]
+    options: crate::DiscoveredModelOptions,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +58,7 @@ pub struct CatalogModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
     pub supports_images: Option<bool>,
+    pub options: Vec<kraai_types::ModelOptionDefinition>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,7 +208,36 @@ impl ModelCatalog {
         api: Option<&str>,
         model: &str,
     ) -> Option<CatalogModelMetadata> {
+        self.metadata_with_protocol(provider, api, model, None)
+            .await
+    }
+
+    pub async fn metadata_for_protocol(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+        protocol: crate::ModelOptionsProtocol,
+    ) -> Option<CatalogModelMetadata> {
+        self.metadata_with_protocol(provider, api, model, Some(protocol))
+            .await
+    }
+
+    async fn metadata_with_protocol(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+        protocol: Option<crate::ModelOptionsProtocol>,
+    ) -> Option<CatalogModelMetadata> {
         let snapshot = self.snapshot.read().await;
+        let options = protocol
+            .and_then(|protocol| {
+                snapshot
+                    .serving_model(provider, api, model)
+                    .map(|(_, _, model)| model.options.definitions(protocol))
+            })
+            .unwrap_or_default();
         let (_, _, model) = snapshot.model(provider, api, model)?;
         let metadata = CatalogModelMetadata {
             name: model.name.clone(),
@@ -218,6 +250,7 @@ impl ModelCatalog {
                 .modalities
                 .as_ref()
                 .map(|modalities| modalities.input.iter().any(|input| input == "image")),
+            options,
         };
         drop(snapshot);
         Some(metadata)

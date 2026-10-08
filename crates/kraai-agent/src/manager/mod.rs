@@ -13,8 +13,8 @@ use kraai_provider_core::{
 };
 use kraai_types::{
     AgentProfilesState, AssistantItem, AssistantPhase, ChatRole, ConversationItem, Message,
-    MessageGeneration, MessageId, MessageStatus, ModelId, ProviderId, ScriptProfileSnapshot,
-    StreamId, TokenUsage, ToolCallId,
+    MessageGeneration, MessageId, MessageStatus, ModelId, ModelOptionValues, ProviderId,
+    ScriptProfileSnapshot, StreamId, TokenUsage, ToolCallId,
 };
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
@@ -102,6 +102,7 @@ struct SessionRuntimeState {
     pending_workspace_dir: Option<PathBuf>,
     last_model: Option<ModelId>,
     last_provider: Option<ProviderId>,
+    last_options: ModelOptionValues,
     active_turn_profile: Option<Arc<AgentProfile>>,
 }
 
@@ -112,6 +113,7 @@ impl SessionRuntimeState {
             pending_workspace_dir: None,
             last_model: None,
             last_provider: None,
+            last_options: ModelOptionValues::new(),
             active_turn_profile: None,
         }
     }

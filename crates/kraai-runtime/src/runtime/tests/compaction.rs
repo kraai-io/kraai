@@ -42,6 +42,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                 "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         agent
@@ -61,6 +62,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                 String::from("continue").into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         (request, agent.cloned_provider_manager())
@@ -94,6 +96,7 @@ impl Provider for TestSummarizer {
 
     async fn list_models(&self) -> Vec<Model> {
         vec![Model {
+            options: Default::default(),
             supports_images: true,
             id: ModelId::new("mock-model"),
             name: String::from("Mock model"),
@@ -164,6 +167,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
                 "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         agent
@@ -185,6 +189,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
             String::from("continue"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
     tokio::time::timeout(TEST_TIMEOUT, entered.cancelled()).await?;
@@ -195,6 +200,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
             String::from("hello"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         ),
     )
     .await??;
@@ -246,6 +252,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                 "old detail ".repeat(9000).into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         agent
@@ -265,6 +272,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                 String::from("continue").into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         (request, agent.cloned_provider_manager())

@@ -145,3 +145,78 @@ fn old_cache_retains_data_but_requires_refresh() -> color_eyre::Result<()> {
     assert!(!snapshot.is_fresh(99));
     Ok(())
 }
+
+#[tokio::test]
+async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufacturer_fallback()
+-> color_eyre::Result<()> {
+    let catalog = ModelCatalog::default();
+    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+        "version": CACHE_VERSION,
+        "fetched_at": 123,
+        "providers": {
+            "manufacturer":{"models":{"model":{
+                "canonical_model_id":"manufacturer/model",
+                "name":"Canonical","limit":{"context":400000},
+                "reasoning_options":[{"type":"effort","values":["manufacturer-effort"]}],
+                "experimental":{"modes":{"manufacturer-mode":{"provider":{"body":{"speed":"manufacturer"}}}}}
+            }}},
+            "reseller":{"api":"https://reseller.test/v1","models":{"model":{
+                "canonical_model_id":"manufacturer/model","name":"Reseller",
+                "reasoning_options":[{"type":"effort","values":[null,"host-effort"]}],
+                "experimental":{"modes":{"host-mode":{"provider":{"body":{"speed":"host"},"headers":{"x-mode":"host"}}}}}
+            }}}
+        }
+    }))?;
+    let unknown = catalog
+        .metadata_for_protocol(
+            None,
+            Some("https://unknown.test/v1"),
+            "manufacturer/model",
+            crate::ModelOptionsProtocol::OpenAiChatCompletions,
+        )
+        .await
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing canonical metadata"))?;
+    assert_eq!(unknown.name.as_deref(), Some("Canonical"));
+    assert!(unknown.options.is_empty());
+    let host = catalog
+        .metadata_for_protocol(
+            None,
+            Some("https://reseller.test/v1"),
+            "model",
+            crate::ModelOptionsProtocol::OpenAiChatCompletions,
+        )
+        .await
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing host metadata"))?;
+    let mut body = serde_json::json!({});
+    let headers = crate::apply_model_options(
+        &host.options,
+        &kraai_types::ModelOptionValues::from([
+            (
+                "reasoning_effort".into(),
+                kraai_types::ModelOptionValue::Choice("host-effort".into()),
+            ),
+            (
+                "mode:host-mode".into(),
+                kraai_types::ModelOptionValue::Boolean(true),
+            ),
+        ]),
+        &mut body,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"reasoning_effort":"host-effort","speed":"host"})
+    );
+    assert_eq!(headers.get("x-mode").map(String::as_str), Some("host"));
+    let encoded = serde_json::to_value(&*catalog.snapshot.read().await)?;
+    assert_eq!(
+        encoded.pointer("/providers/reseller/models/model/reasoning_options/0/values"),
+        Some(&serde_json::json!([null, "host-effort"]))
+    );
+    assert_eq!(
+        encoded.pointer(
+            "/providers/reseller/models/model/experimental/modes/host-mode/provider/body/speed"
+        ),
+        Some(&serde_json::json!("host"))
+    );
+    Ok(())
+}

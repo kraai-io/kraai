@@ -96,6 +96,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let message_id = request.message_id;

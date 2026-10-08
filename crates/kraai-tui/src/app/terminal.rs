@@ -180,6 +180,7 @@ impl App {
             UiMode::Executions => self.handle_execution_key_event(key_event),
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
+            UiMode::ModelOptionsMenu => self.handle_model_options_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
             UiMode::Mcp => self.handle_mcp_key_event(key_event),
             UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
@@ -437,7 +438,7 @@ impl App {
                     self.state.selected_provider_id = Some(provider_id);
                     self.state.selected_model_id = Some(model_id);
                     self.state.status = status;
-                    self.save_workspace_preferences();
+                    self.save_model_selection();
                     self.state.mode = UiMode::Chat;
                 }
             }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ProviderId, ScriptExecutionId};
+use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -62,6 +62,7 @@ pub(crate) enum Command {
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: ModelOptionValues,
         response: oneshot::Sender<RuntimeResult<SubmitMessageOutcome>>,
     },
     ImportImage {
@@ -160,6 +161,7 @@ pub(crate) enum Command {
         session_id: String,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: ModelOptionValues,
         wait_for_preparation: bool,
         response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
     },

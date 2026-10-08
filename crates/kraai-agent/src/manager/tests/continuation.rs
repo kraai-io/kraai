@@ -11,6 +11,7 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             "first".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager
@@ -31,6 +32,7 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             Vec::new(),
             ModelId::new("new-model"),
             ProviderId::new("mock-alternate"),
+            Default::default(),
         )
         .await?
         .expect("restored session can continue");
@@ -57,6 +59,7 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             "next".into(),
             ModelId::new("new-model"),
             ProviderId::new("mock-alternate"),
+            Default::default(),
         )
         .await?;
     let mut normal_history = normal.provider_request.messages;
@@ -89,6 +92,7 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
             "first".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&first.message_id).await?;
@@ -99,7 +103,8 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
                 &session,
                 Vec::new(),
                 ModelId::new("new-model"),
-                ProviderId::new("missing")
+                ProviderId::new("missing"),
+                Default::default(),
             )
             .await
             .is_err()

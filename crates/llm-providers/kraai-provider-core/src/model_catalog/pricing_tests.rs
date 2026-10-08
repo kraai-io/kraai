@@ -97,6 +97,8 @@ async fn pricing_prefers_manufacturer_without_replacing_serving_limits() -> colo
                 }],
                 models: if configured {
                     vec![ModelConfig {
+                        options: Vec::new(),
+                        remove_options: Vec::new(),
                         id: model.clone(),
                         provider_id: provider.clone(),
                         config: DynamicConfig::from([

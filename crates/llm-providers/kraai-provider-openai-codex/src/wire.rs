@@ -51,8 +51,10 @@ pub struct ListModelEntry {
     pub context_window: Option<usize>,
     #[serde(default)]
     pub input_modalities: Vec<String>,
-    pub default_reasoning_level: Option<String>,
+    #[serde(default)]
     pub supported_reasoning_levels: Vec<ReasoningLevel>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -66,6 +68,12 @@ pub enum ModelVisibility {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReasoningLevel {
     pub effort: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Deserialize)]

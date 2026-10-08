@@ -257,6 +257,7 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
@@ -304,6 +305,7 @@ fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
@@ -515,6 +517,7 @@ fn pending_script_resync_clears_stale_approval_state() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot(None))),
         });
@@ -610,6 +613,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot)),
         });
@@ -642,7 +646,9 @@ mod auth_response;
 mod mcp_auth;
 
 mod images;
+mod model_options;
 mod responsiveness;
+mod session_model;
 #[path = "tests/startup.rs"]
 mod startup;
 mod submission_recovery;

@@ -1,10 +1,19 @@
-import { createRuntime, type MessageContent, type RuntimeResult, type SessionSnapshot, type SettingsDocument } from '..';
+import { createRuntime, type MessageContent, type ModelSelection, type RuntimeResult, type SessionSnapshot, type SettingsDocument } from '..';
 
 const runtime = createRuntime({ storage_root: '/tmp/kraai-client' });
 const snapshot: Promise<RuntimeResult<SessionSnapshot>> = runtime.getSessionSnapshot('session');
 const settings: Promise<RuntimeResult<SettingsDocument>> = runtime.getSettings();
+const selection: ModelSelection = {
+  provider_id: 'provider',
+  model_id: 'model',
+  options: { reasoning_effort: 'custom', fast: false, budget: 0 },
+};
+const selectedModel: Promise<RuntimeResult<ModelSelection | null>> = runtime.getSessionModel('session');
+const savedModel: Promise<RuntimeResult<null>> = runtime.setSessionModel('session', selection);
 void snapshot;
 void settings;
+void selectedModel;
+void savedModel;
 
 async function consume() {
   const subscription = runtime.subscribe();
@@ -39,7 +48,7 @@ async function sendImage(bytes: number[]) {
     { type: 'text', text: 'Inspect this image' },
     { type: 'image', image: imported.Ok },
   ];
-  await runtime.sendContent('session', content, 'model', 'provider');
+  await runtime.sendContent('session', content, 'model', 'provider', {});
   const restored: RuntimeResult<MessageContent | null> = await runtime.undoLastUserMessage('session');
   void restored;
 }

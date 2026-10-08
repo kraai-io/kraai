@@ -65,7 +65,6 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
         models: RwLock::new(DiscoveredModels::default()),
         rejected_reasoning: RwLock::new(RejectedReasoning::default()),
         model_configs: BTreeMap::new(),
-        fast_models: std::collections::BTreeSet::new(),
         base_url,
         proxy_token: Some("test-token".into()),
         allow_http_proxy: false,
@@ -188,9 +187,10 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         });
         let events = provider
             .generate_reply_stream(
-                &ModelId::new("summary-model-low"),
+                &ModelId::new("summary-model"),
                 ProviderRequest {
                     cacheable_messages: None,
+                    options: reasoning("low"),
                     messages: vec![
                         ConversationItem::System {
                             text: "Summarize the conversation. Do not execute tools.".into(),
@@ -359,12 +359,13 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     let models = provider.list_models().await;
     assert_eq!(models.len(), 1);
     let model = models.first().ok_or_else(|| eyre!("no discovered model"))?;
-    assert_eq!(model.id.as_str(), "brand-new-codex-high");
+    assert_eq!(model.id.as_str(), "brand-new-codex");
     assert!(provider.cache_warming_policy(&model.id).is_some());
-    assert_eq!(model.name, "Brand New high");
+    assert_eq!(model.name, "Brand New");
     assert_eq!(model.max_context, Some(234567));
     let request = ProviderRequest {
         cacheable_messages: None,
+        options: reasoning("high"),
         messages: vec![],
         script_tool: Some(ScriptToolDefinition {
             name: "kraai_nushell".into(),
@@ -390,7 +391,14 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     );
     provider.cache_models().await?;
     assert!(provider.list_models().await.is_empty());
-    assert!(provider.models.read().await.resolve(&model.id).is_err());
+    assert!(
+        provider
+            .models
+            .read()
+            .await
+            .get(&model.id, &provider.model_configs)
+            .is_none()
+    );
 
     let requests = server.await??;
     assert_eq!(requests.len(), 5);
@@ -440,7 +448,7 @@ async fn initial_discovery_failure_does_not_create_models() -> Result<()> {
 }
 
 #[tokio::test]
-async fn pricing_uses_discovered_base_model_for_reasoning_variants() -> Result<()> {
+async fn pricing_uses_the_discovered_model_identity() -> Result<()> {
     let provider = provider(String::from("http://127.0.0.1/backend-api"))?;
     *provider.models.write().await = DiscoveredModels::new(vec![serde_json::from_value(json!({
         "slug": "gpt-6-astra",
@@ -451,7 +459,7 @@ async fn pricing_uses_discovered_base_model_for_reasoning_variants() -> Result<(
     }))?])?;
     assert_eq!(
         provider
-            .pricing_model_id(&ModelId::new("gpt-6-astra-low"))
+            .pricing_model_id(&ModelId::new("gpt-6-astra"))
             .await?,
         ModelId::new("gpt-6-astra")
     );
@@ -499,6 +507,7 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Res
         provider.cache_models().await?;
         let request = ProviderRequest {
             cacheable_messages: None,
+            options: reasoning("low"),
             script_tool: None,
             messages: vec![
                 ConversationItem::Assistant {
@@ -529,6 +538,7 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Res
         for model in ["plain", "non-reasoning"] {
             let mut next = request.clone();
             if model == "non-reasoning" {
+                next.options.clear();
                 for message in &mut next.messages {
                     if let ConversationItem::Assistant { items } = message {
                         for item in items {
@@ -600,7 +610,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
     .await?;
     let provider = provider(base_url)?;
     provider.cache_models().await?;
-    let reasoning =
+    let reasoning_payload =
         json!({"type":"reasoning","id":"rs-1","encrypted_content":"prior-reasoning","summary":[]});
     let request = ProviderRequest {
         messages: vec![
@@ -613,7 +623,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
             ConversationItem::Assistant {
                 items: vec![kraai_types::AssistantItem::Reasoning {
                     provider_id: provider.id.clone(),
-                    payload: reasoning.clone(),
+                    payload: reasoning_payload.clone(),
                 }],
             },
         ],
@@ -622,10 +632,11 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
             description: "Run script".into(),
         }),
         cacheable_messages: None,
+        options: reasoning("low"),
     };
     let events = provider
         .compact_stream(
-            &ModelId::new("astra-low"),
+            &ModelId::new("astra"),
             request.clone(),
             &ProviderRequestContext::default(),
         )
@@ -646,7 +657,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
     });
     provider
         .generate_reply_stream(
-            &ModelId::new("astra-low"),
+            &ModelId::new("astra"),
             replay,
             &ProviderRequestContext::default(),
         )
@@ -675,7 +686,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
     assert!(
         compact["input"]
             .as_array()
-            .is_some_and(|items| items.contains(&reasoning))
+            .is_some_and(|items| items.contains(&reasoning_payload))
     );
     assert_eq!(
         compact.pointer("/tools/0/name").and_then(Value::as_str),
@@ -721,11 +732,12 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
         }],
         script_tool: None,
         cacheable_messages: None,
+        options: reasoning("low"),
     };
     assert!(
         provider
             .compact_stream(
-                &ModelId::new("astra-low"),
+                &ModelId::new("astra"),
                 request.clone(),
                 &ProviderRequestContext::default()
             )
@@ -734,7 +746,7 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
     );
     provider
         .compact_stream(
-            &ModelId::new("astra-low"),
+            &ModelId::new("astra"),
             request,
             &ProviderRequestContext::default(),
         )
@@ -767,55 +779,86 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
 }
 
 #[tokio::test]
-async fn fast_mode_preserves_model_and_reasoning_for_generation_and_compaction() -> Result<()> {
+async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation_and_compaction()
+-> Result<()> {
     let models = json!({"models": [{
         "slug": "gpt-6-astra", "display_name": "Astra", "visibility": "list",
-        "default_reasoning_level": "low",
-        "supported_reasoning_levels": [{"effort": "low", "description": "Low"}]
+        "supported_reasoning_levels": [{"effort": "low", "description": "Low"}],
+        "service_tiers": [{"id":"priority","name":"Fast"}],
+        "default_service_tier": "priority"
     }]})
     .to_string();
     let mut responses = vec![("200 OK", models)];
-    responses.extend((0..6).map(|_| ("200 OK", "data: [DONE]\n\n".into())));
+    responses.extend((0..4).map(|_| ("200 OK", "data: [DONE]\n\n".into())));
     let (base_url, server) = server(responses).await?;
-    let mut provider = provider(base_url)?;
+    let provider = provider(base_url)?;
     provider.cache_models().await?;
-    let model_id = ModelId::new("gpt-6-astra-low");
-    for enabled in [None, Some(true), Some(false)] {
-        if let Some(enabled) = enabled {
-            provider
-                .register_model(ModelConfig {
-                    id: model_id.clone(),
-                    provider_id: provider.id.clone(),
-                    config: DynamicConfig::from([(
-                        "fast_mode".into(),
-                        DynamicValue::Bool(enabled),
-                    )]),
-                })
-                .await?;
-        }
-        for compact in [false, true] {
-            let request = ProviderRequest {
-                messages: vec![ConversationItem::User {
-                    content: "Hello".into(),
-                }],
-                cacheable_messages: None,
-                script_tool: None,
-            };
+    let model_id = ModelId::new("gpt-6-astra");
+    for options in [Default::default(), reasoning("low"), {
+        let mut options = reasoning("low");
+        options.insert(
+            "processing_mode_enabled".into(),
+            kraai_types::ModelOptionValue::Boolean(true),
+        );
+        options.insert(
+            "service_tier".into(),
+            kraai_types::ModelOptionValue::Choice("unsupported".into()),
+        );
+        options
+    }] {
+        assert!(
             provider
                 .send_responses_request(
                     &model_id,
-                    request,
+                    ProviderRequest {
+                        messages: Vec::new(),
+                        script_tool: None,
+                        cacheable_messages: None,
+                        options,
+                    },
+                    &ProviderRequestContext::default(),
+                    false
+                )
+                .await
+                .is_err()
+        );
+    }
+    for tier in [None, Some("priority")] {
+        for compact in [false, true] {
+            let mut options = reasoning("low");
+            options.insert(
+                "processing_mode_enabled".into(),
+                kraai_types::ModelOptionValue::Boolean(tier.is_some()),
+            );
+            if let Some(tier) = tier {
+                options.insert(
+                    "service_tier".into(),
+                    kraai_types::ModelOptionValue::Choice(tier.into()),
+                );
+            }
+            provider
+                .send_responses_request(
+                    &model_id,
+                    ProviderRequest {
+                        messages: vec![ConversationItem::User {
+                            content: "Hello".into(),
+                        }],
+                        cacheable_messages: None,
+                        script_tool: None,
+                        options,
+                    },
                     &ProviderRequestContext::default(),
                     compact,
                 )
                 .await?;
         }
     }
-    for (request, enabled) in server
-        .await??
-        .iter()
-        .skip(1)
-        .zip([false, false, true, true, false, false])
+    for (request, tier) in
+        server
+            .await??
+            .iter()
+            .skip(1)
+            .zip([None, None, Some("priority"), Some("priority")])
     {
         let (_, body) = request
             .split_once("\r\n\r\n")
@@ -825,20 +868,75 @@ async fn fast_mode_preserves_model_and_reasoning_for_generation_and_compaction()
         assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("low")));
         assert_eq!(
             body.get("service_tier"),
-            enabled.then_some(&json!("priority"))
+            tier.map(|tier| json!(tier)).as_ref()
         );
     }
-    let invalid = DynamicConfig::from([("fast_mode".into(), DynamicValue::String("true".into()))]);
-    assert_eq!(OpenAiCodexFactory::validate_model_config(&invalid).len(), 1);
+    Ok(())
+}
+
+fn reasoning(effort: &str) -> kraai_types::ModelOptionValues {
+    kraai_types::ModelOptionValues::from([(
+        "reasoning_effort".into(),
+        kraai_types::ModelOptionValue::Choice(effort.into()),
+    )])
+}
+
+#[tokio::test]
+async fn configured_custom_models_send_their_settings_without_native_discovery_entries()
+-> Result<()> {
+    let (base_url, server) = server(vec![
+        ("200 OK", json!({"models":[]}).to_string()),
+        (
+            "200 OK",
+            format!(
+                "data: {}\n\n",
+                json!({"type":"response.completed", "response":{"usage":{"input_tokens":1,"output_tokens":1}}})
+            ),
+        ),
+    ])
+    .await?;
+    let mut provider = provider(base_url)?;
+    let id = ModelId::new("custom-model");
+    provider.register_model(ModelConfig {
+        id: id.clone(), provider_id: provider.id.clone(), config: DynamicConfig::new(),
+        options: vec![serde_json::from_value(json!({
+            "id":"priority-processing","label":"Priority Processing","type":"boolean","required":true,
+            "enabled":{"body":{"priority_processing":true},"headers":{"x-processing":"priority"}},
+            "disabled":{"body":{"priority_processing":false}}
+        }))?], remove_options: Vec::new(),
+    }).await?;
+    provider.cache_models().await?;
+    assert_eq!(provider.list_models().await.len(), 1);
+    assert_eq!(provider.pricing_model_id(&id).await?, id);
+    provider
+        .generate_reply_stream(
+            &id,
+            ProviderRequest {
+                messages: Vec::new(),
+                script_tool: None,
+                cacheable_messages: None,
+                options: kraai_types::ModelOptionValues::from([(
+                    "priority-processing".into(),
+                    kraai_types::ModelOptionValue::Boolean(true),
+                )]),
+            },
+            &ProviderRequestContext::default(),
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    let requests = server.await??;
+    let (headers, body) = requests
+        .get(1)
+        .and_then(|request| request.split_once("\r\n\r\n"))
+        .ok_or_else(|| eyre!("missing generation request"))?;
     assert!(
-        provider
-            .register_model(ModelConfig {
-                id: model_id,
-                provider_id: provider.id.clone(),
-                config: invalid
-            })
-            .await
-            .is_err()
+        headers
+            .to_ascii_lowercase()
+            .contains("x-processing: priority")
     );
+    let body: Value = serde_json::from_str(body)?;
+    assert_eq!(body.get("model"), Some(&json!("custom-model")));
+    assert_eq!(body.get("priority_processing"), Some(&json!(true)));
     Ok(())
 }

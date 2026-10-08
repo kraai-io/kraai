@@ -294,6 +294,7 @@ impl App {
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
         self.state.last_session_model = None;
+        self.restore_pending_session_model();
         self.state.current_tip_id = None;
         self.state.last_error = None;
         self.state.error_open = false;
@@ -360,6 +361,7 @@ impl App {
         message: MessageContent,
         model_id: String,
         provider_id: String,
+        options: kraai_types::ModelOptionValues,
         source: types::SubmissionSource,
     ) {
         let is_foreground = self.state.current_session_id.as_deref() == Some(session_id.as_str());
@@ -370,6 +372,7 @@ impl App {
             message: message.clone(),
             model_id: model_id.clone(),
             provider_id: provider_id.clone(),
+            options,
         }) == RuntimeRequestDelivery::Disconnected
         {
             if !message_was_draft {
@@ -377,6 +380,7 @@ impl App {
             }
             return;
         }
+        self.mark_session_model_active(&session_id);
 
         self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
         let local_id = format!("local-user-{}", self.state.optimistic_seq);

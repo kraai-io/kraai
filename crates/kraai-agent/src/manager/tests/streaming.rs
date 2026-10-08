@@ -14,6 +14,7 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             "start".into(),
             ModelId::new("mock-model"),
             provider.clone(),
+            Default::default(),
         )
         .await?;
     let payload = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque","summary":[]});
@@ -46,6 +47,7 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             "continue".into(),
             ModelId::new("mock-model"),
             provider,
+            Default::default(),
         )
         .await?;
     assert!(next.provider_request.messages.contains(&stored.content));
@@ -64,6 +66,7 @@ async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<(
             "start".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager
@@ -97,6 +100,7 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
             String::from("start").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager
@@ -180,6 +184,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let messages = vec!["queued one".into(), "queued two".into()];
@@ -189,6 +194,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             messages.clone(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert!(result.is_none());
@@ -203,6 +209,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             messages,
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?
         .expect("retry should start a stream");
@@ -235,6 +242,7 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&first_request.message_id).await?;
@@ -275,6 +283,7 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&first_request.message_id).await?;
@@ -303,6 +312,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let call_id = ToolCallId::new("call-1");
@@ -336,6 +346,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             vec!["queued one".into(), "queued two".into()],
             ModelId::new("new-model"),
             ProviderId::new("mock-alternate"),
+            Default::default(),
         )
         .await?
         .expect("intercepted messages should start one generation");
@@ -381,6 +392,7 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
             String::from("start with the first provider").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert_eq!(
@@ -406,6 +418,7 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
             String::from("continue with a different provider").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock-alternate"),
+            Default::default(),
         )
         .await?;
 

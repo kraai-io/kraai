@@ -78,6 +78,7 @@ provider_id = "mock"
     let (id, session) = crate::session::create(
         &runtime,
         &crate::Options {
+            options: Vec::new(),
             provider: Some("mock".into()),
             model: Some("mock-model".into()),
             profile: None,
@@ -107,6 +108,7 @@ provider_id = "mock"
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     let partial_id = loop {

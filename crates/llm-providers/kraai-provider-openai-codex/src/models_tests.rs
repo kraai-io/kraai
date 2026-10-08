@@ -1,10 +1,11 @@
 #![expect(
     clippy::panic_in_result_fn,
-    reason = "tests assert discovery behavior and propagate fixture errors"
+    reason = "tests assert discovered model metadata"
 )]
 
 use super::*;
-use crate::wire::ListModelsResponse;
+use color_eyre::eyre::eyre;
+use kraai_types::{ModelOptionKind, ModelOptionValue, ModelOptionValues};
 use serde_json::json;
 
 fn model(slug: &str) -> Result<ListModelEntry> {
@@ -19,403 +20,212 @@ fn model(slug: &str) -> Result<ListModelEntry> {
             {"effort": "high", "description": "Thorough"},
             {"effort": "future-effort", "description": "New effort"}
         ],
+        "service_tiers": [{"id":"future-tier","name":"New Speed","description":"A future tier"}],
         "unknown_future_field": true
     }))?)
 }
 
 #[test]
-fn discovery_uses_remote_models_efforts_names_and_context() -> Result<()> {
-    let models = DiscoveredModels::new(vec![model("new-codex-model")?])?;
+fn discovery_lists_base_models_and_requires_explicit_advertised_options() -> Result<()> {
+    let models = DiscoveredModels::new(vec![model("new-model")?])?;
     let listed = models.list(&BTreeMap::new());
-    assert_eq!(listed.len(), 3);
-    let future = listed
-        .iter()
-        .find(|model| model.id.as_str() == "new-codex-model-future-effort")
-        .ok_or_else(|| eyre!("missing new reasoning variant"))?;
-    assert_eq!(future.name, "New Codex Model future-effort");
-    assert_eq!(future.max_context, Some(123456));
-    for (id, effort) in [
-        ("new-codex-model", "high"),
-        ("new-codex-model-low", "low"),
-        ("new-codex-model-future-effort", "future-effort"),
-    ] {
-        let resolved = models.resolve(&ModelId::new(id))?;
-        assert_eq!(resolved.api_model, "new-codex-model");
-        assert_eq!(
-            resolved
-                .reasoning
-                .map(|reasoning| reasoning.effort)
-                .as_deref(),
-            Some(effort)
-        );
-    }
+    assert_eq!(listed.len(), 1);
+    let listed = listed.first().ok_or_else(|| eyre!("missing model"))?;
+    assert_eq!(listed.id.as_str(), "new-model");
+    assert_eq!(listed.name, "New Codex Model");
+    assert_eq!(listed.max_context, Some(123456));
+    assert!(listed.options.iter().all(|option| option.required));
+    assert!(
+        kraai_types::validate_model_options(&listed.options, &ModelOptionValues::new()).is_err()
+    );
+    let options = ModelOptionValues::from([
+        (
+            "reasoning_effort".into(),
+            ModelOptionValue::Choice("future-effort".into()),
+        ),
+        (
+            "processing_mode_enabled".into(),
+            ModelOptionValue::Boolean(true),
+        ),
+        (
+            "service_tier".into(),
+            ModelOptionValue::Choice("future-tier".into()),
+        ),
+    ]);
+    let mut body = json!({"model":"new-model"});
+    kraai_provider_core::apply_model_options(&listed.options, &options, &mut body)?;
+    assert_eq!(
+        body.pointer("/reasoning/effort"),
+        Some(&json!("future-effort"))
+    );
+    assert_eq!(body.get("service_tier"), Some(&json!("future-tier")));
+    assert!(
+        models
+            .get(&ModelId::new("new-model-future-effort"), &BTreeMap::new())
+            .is_none()
+    );
     Ok(())
 }
 
 #[test]
-fn listing_sorts_ids_across_interleaved_base_names_and_reasoning_variants() -> Result<()> {
-    let mut plain = model("a-j")?;
+fn processing_with_only_priority_metadata_allows_explicit_off_and_on() -> Result<()> {
+    let entry: ListModelEntry = serde_json::from_value(json!({
+        "slug":"priority-model", "display_name":"Priority Model", "visibility":"list",
+        "service_tiers":[{"id":"priority", "name":"Fast"}],
+        "default_service_tier":"priority"
+    }))?;
+    let models = DiscoveredModels::new(vec![entry])?;
+    let model = models
+        .get(&ModelId::new("priority-model"), &BTreeMap::new())
+        .ok_or_else(|| eyre!("missing priority model"))?;
+    let mode = model
+        .options
+        .iter()
+        .find(|option| option.id == "service_tier")
+        .ok_or_else(|| eyre!("missing tier choices"))?;
+    assert!(matches!(&mode.kind, ModelOptionKind::Choice { choices }
+        if choices.len() == 1 && choices.first().is_some_and(|choice| choice.id == "priority" && choice.label == "Fast")));
+    let mut options = ModelOptionValues::from([(
+        "processing_mode_enabled".into(),
+        ModelOptionValue::Boolean(false),
+    )]);
+    let mut body = json!({"model":"priority-model"});
+    kraai_provider_core::apply_model_options(&model.options, &options, &mut body)?;
+    assert!(body.get("service_tier").is_none());
+    options.insert(
+        "processing_mode_enabled".into(),
+        ModelOptionValue::Boolean(true),
+    );
+    options.insert(
+        "service_tier".into(),
+        ModelOptionValue::Choice("priority".into()),
+    );
+    kraai_provider_core::apply_model_options(&model.options, &options, &mut body)?;
+    assert_eq!(body.get("service_tier"), Some(&json!("priority")));
+    Ok(())
+}
+
+#[test]
+fn real_model_names_never_collide_with_reasoning_choices() -> Result<()> {
+    let mut plain = model("new-model-high")?;
     plain.supported_reasoning_levels.clear();
-    plain.default_reasoning_level = None;
-    let mut unicode = model("模型")?;
-    unicode.supported_reasoning_levels.clear();
-    unicode.default_reasoning_level = None;
+    plain.service_tiers.clear();
     let mut hidden = model("hidden")?;
     hidden.visibility = ModelVisibility::Hide;
-    let models = DiscoveredModels::new(vec![model("z")?, unicode, plain, hidden, model("a")?])?;
+    let models = DiscoveredModels::new(vec![model("new-model")?, plain, hidden])?;
+    assert_eq!(
+        models
+            .list(&BTreeMap::new())
+            .into_iter()
+            .map(|model| model.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["new-model", "new-model-high"]
+    );
+    let plain = models
+        .get(&ModelId::new("new-model-high"), &BTreeMap::new())
+        .ok_or_else(|| eyre!("missing real model"))?;
+    assert!(plain.options.is_empty());
+    assert!(
+        models
+            .get(&ModelId::new("hidden"), &BTreeMap::new())
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_metadata_and_options_override_discovery_and_can_remove_controls() -> Result<()> {
+    let mut entry = model("vision")?;
+    entry.input_modalities = vec!["text".into(), "image".into()];
+    let models = DiscoveredModels::new(vec![entry])?;
+    let override_option = kraai_provider_core::reasoning_effort_option(
+        ModelOptionsProtocol::OpenAiResponses,
+        ["custom-effort".into()],
+    );
+    let config = ConfiguredModelMetadata {
+        name: Some("Configured".into()),
+        max_context: Some(4096),
+        supports_images: Some(false),
+        options: vec![override_option],
+        remove_options: vec!["processing_mode_enabled".into(), "service_tier".into()],
+    };
+    let configs = BTreeMap::from([(ModelId::new("vision"), config)]);
+    let listed = models
+        .get(&ModelId::new("vision"), &configs)
+        .ok_or_else(|| eyre!("missing vision model"))?;
+    assert_eq!(listed.name, "Configured");
+    assert_eq!(listed.max_context, Some(4096));
+    assert!(!listed.supports_images);
+    assert_eq!(listed.options.len(), 1);
+    assert!(matches!(&listed.options.first().map(|option| &option.kind),
+        Some(ModelOptionKind::Choice { choices }) if choices.first().is_some_and(|choice| choice.id == "custom-effort")));
+    Ok(())
+}
+
+#[test]
+fn malformed_discovery_fails_without_inventing_models_or_controls() -> Result<()> {
+    let unknown = DiscoveredModels::new(vec![serde_json::from_value(json!({
+        "slug":"no-capability-metadata","display_name":"Unknown Capabilities","visibility":"list"
+    }))?])?;
+    assert!(
+        unknown
+            .get(&ModelId::new("no-capability-metadata"), &BTreeMap::new())
+            .ok_or_else(|| eyre!("missing model without advertised controls"))?
+            .options
+            .is_empty()
+    );
+    let duplicate = model("duplicate")?;
+    assert!(DiscoveredModels::new(vec![duplicate.clone(), duplicate]).is_err());
+    let mut duplicate_effort = model("effort")?;
+    duplicate_effort
+        .supported_reasoning_levels
+        .push(crate::wire::ReasoningLevel {
+            effort: "low".into(),
+        });
+    assert!(DiscoveredModels::new(vec![duplicate_effort]).is_err());
+    let mut empty_tier = model("tier")?;
+    empty_tier
+        .service_tiers
+        .first_mut()
+        .ok_or_else(|| eyre!("missing tier"))?
+        .id
+        .clear();
+    assert!(DiscoveredModels::new(vec![empty_tier]).is_err());
+    let models = DiscoveredModels::new(Vec::new())?;
+    assert!(models.list(&BTreeMap::new()).is_empty());
+    assert!(
+        models
+            .get(&ModelId::new("unknown"), &BTreeMap::new())
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_models_absent_from_discovery_keep_their_identity_and_custom_options() -> Result<()> {
+    let models = DiscoveredModels::default();
+    let id = ModelId::new("custom-model");
     let configs = BTreeMap::from([(
-        ModelId::new("a-j"),
+        id.clone(),
         ConfiguredModelMetadata {
-            supports_images: None,
-            name: Some(String::from("First by display name")),
-            max_context: Some(42),
+            name: Some("Custom".into()),
+            max_context: Some(32768),
+            supports_images: Some(true),
+            options: vec![kraai_provider_core::reasoning_effort_option(
+                ModelOptionsProtocol::OpenAiResponses,
+                ["custom-effort".into()],
+            )],
+            remove_options: Vec::new(),
         },
     )]);
     let listed = models.list(&configs);
-    assert_eq!(
-        listed
-            .iter()
-            .map(|model| model.id.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "a-future-effort",
-            "a-high",
-            "a-j",
-            "a-low",
-            "z-future-effort",
-            "z-high",
-            "z-low",
-            "模型",
-        ],
-    );
-    let configured = listed
-        .iter()
-        .find(|model| model.id.as_str() == "a-j")
-        .ok_or_else(|| eyre!("configured model missing"))?;
-    assert_eq!(configured.name, "First by display name");
-    assert_eq!(configured.max_context, Some(42));
-    Ok(())
-}
-
-#[test]
-fn hidden_models_resolve_without_appearing_in_the_picker() -> Result<()> {
-    for value in ["hide", "none"] {
-        let mut hidden = model("hidden-model")?;
-        hidden.visibility = serde_json::from_value(json!(value))?;
-        let models = DiscoveredModels::new(vec![hidden])?;
-        assert!(models.list(&BTreeMap::new()).is_empty());
-        for id in ["hidden-model", "hidden-model-low"] {
-            assert_eq!(models.resolve(&ModelId::new(id))?.api_model, "hidden-model");
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn unknown_visibility_is_rejected_during_deserialization() {
-    for visibility in ["hidden", "LIST", "", "future"] {
-        let value = json!({
-            "slug": "invalid-model",
-            "display_name": "Invalid Model",
-            "visibility": visibility,
-            "supported_reasoning_levels": []
-        });
-        assert!(serde_json::from_value::<ListModelEntry>(value).is_err());
-    }
-}
-
-#[test]
-fn models_without_reasoning_are_listed_and_sent_without_reasoning() -> Result<()> {
-    let mut plain = model("plain-model")?;
-    plain.default_reasoning_level = None;
-    plain.supported_reasoning_levels.clear();
-    let models = DiscoveredModels::new(vec![plain])?;
-    let listed = models.list(&BTreeMap::new());
-    assert_eq!(listed.len(), 1);
-    assert_eq!(
-        listed.first().map(|model| model.id.as_str()),
-        Some("plain-model")
-    );
-    assert_eq!(
-        models.resolve(&ModelId::new("plain-model"))?.reasoning,
-        None
-    );
-    Ok(())
-}
-
-#[test]
-fn model_configs_override_remote_metadata() -> Result<()> {
-    let models = DiscoveredModels::new(vec![model("new-model")?])?;
-    let configs = BTreeMap::from([
-        (
-            ModelId::new("new-model"),
-            ConfiguredModelMetadata {
-                supports_images: None,
-                name: Some("Custom".into()),
-                max_context: Some(200000),
-            },
-        ),
-        (
-            ModelId::new("new-model-high"),
-            ConfiguredModelMetadata {
-                supports_images: None,
-                name: Some("Thorough".into()),
-                max_context: Some(150000),
-            },
-        ),
-    ]);
-    let listed = models
-        .list(&configs)
-        .into_iter()
-        .map(|model| (model.id.clone(), model))
-        .collect::<BTreeMap<_, _>>();
-    let low = listed
-        .get(&ModelId::new("new-model-low"))
-        .ok_or_else(|| eyre!("missing low variant"))?;
-    assert_eq!(low.name, "Custom low");
-    assert_eq!(low.max_context, Some(200000));
-    let high = listed
-        .get(&ModelId::new("new-model-high"))
-        .ok_or_else(|| eyre!("missing high variant"))?;
-    assert_eq!(high.name, "Thorough");
-    assert_eq!(high.max_context, Some(150000));
-    Ok(())
-}
-
-#[test]
-fn model_lookup_matches_listing_for_visibility_variants_and_overrides() -> Result<()> {
-    let mut base = model("model")?;
-    base.supported_reasoning_levels
-        .push(crate::wire::ReasoningLevel {
-            effort: String::from("mini-special"),
-        });
-    let mut plain = model("plain")?;
-    plain.default_reasoning_level = None;
-    plain.supported_reasoning_levels.clear();
-    plain.display_name.clear();
-    let mut hidden = model("hidden")?;
-    hidden.visibility = ModelVisibility::Hide;
-    let mut unlisted = model("unlisted")?;
-    unlisted.visibility = ModelVisibility::None;
-    let models = DiscoveredModels::new(vec![
-        base,
-        model("model-mini")?,
-        model("模型-🦀")?,
-        plain,
-        hidden,
-        unlisted,
-    ])?;
-    let overrides = BTreeMap::from([
-        (
-            ModelId::new("model"),
-            ConfiguredModelMetadata {
-                supports_images: None,
-                name: Some(String::from("Configured base")),
-                max_context: Some(200_000),
-            },
-        ),
-        (
-            ModelId::new("model-mini-special"),
-            ConfiguredModelMetadata {
-                supports_images: None,
-                name: Some(String::from("Configured effort")),
-                max_context: Some(150_000),
-            },
-        ),
-    ]);
-    for configs in [BTreeMap::new(), overrides] {
-        let listed = models.list(&configs);
-        let metadata = |model: Model| (model.id, model.name, model.max_context);
-        let ids = listed.iter().map(|model| model.id.clone()).chain(
-            [
-                "model",
-                "model-mini",
-                "model-invalid",
-                "model-mini-special-invalid",
-                "hidden",
-                "hidden-low",
-                "unlisted",
-                "unlisted-high",
-                "plain-low",
-                "missing",
-            ]
-            .into_iter()
-            .map(ModelId::new),
-        );
-        for id in ids {
-            let expected = listed.iter().find(|model| model.id == id).cloned();
-            assert_eq!(
-                models.get(&id, &configs).map(metadata),
-                expected.map(metadata),
-                "model ID {id:?}"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn resolution_uses_the_longest_model_slug_and_rejects_unknown_efforts() -> Result<()> {
-    let models = DiscoveredModels::new(vec![model("new-model")?, model("new-model-mini")?])?;
-    assert_eq!(
-        models.resolve(&ModelId::new("new-model-mini"))?.api_model,
-        "new-model-mini"
-    );
-    assert_eq!(
-        models
-            .resolve(&ModelId::new("new-model-mini-low"))?
-            .api_model,
-        "new-model-mini"
-    );
-    assert!(models.resolve(&ModelId::new("unknown-model")).is_err());
-    assert!(
-        models
-            .resolve(&ModelId::new("new-model-invalid"))
-            .is_err_and(|error| error.to_string().contains("unsupported reasoning effort"))
-    );
-    Ok(())
-}
-
-#[test]
-fn indexed_resolution_matches_prefix_scan_for_overlapping_and_unusual_ids() -> Result<()> {
-    let mut entries = [
-        "model",
-        "model-mini",
-        "model-mini--edge",
-        "模型",
-        "模型-mini",
-        " model ",
-        "-leading",
-        "trailing-",
-    ]
-    .into_iter()
-    .map(model)
-    .collect::<Result<Vec<_>>>()?;
-    let mut plain = model("plain")?;
-    plain.supported_reasoning_levels.clear();
-    plain.default_reasoning_level = None;
-    entries.push(plain);
-    let models = DiscoveredModels::new(entries)?;
-    let mut ids = vec![String::from("unknown"), String::from("unknown-low")];
-    for slug in models.entries.keys() {
-        ids.push(slug.clone());
-        for suffix in ["low", "high", "future-effort", "invalid", "", "-low"] {
-            ids.push(format!("{slug}-{suffix}"));
-        }
-    }
-    for id in ids {
-        let expected = resolve_by_prefix_scan(&models, &id);
-        let actual = models
-            .resolve(&ModelId::new(id.clone()))
-            .map(|resolved| {
-                (
-                    resolved.api_model,
-                    resolved.reasoning.map(|value| value.effort),
-                )
-            })
-            .map_err(|error| error.to_string());
-        assert_eq!(actual, expected, "model ID {id:?}");
-    }
-    Ok(())
-}
-
-fn resolve_by_prefix_scan(
-    models: &DiscoveredModels,
-    raw: &str,
-) -> std::result::Result<(String, Option<String>), String> {
-    let (model, effort) = if let Some(model) = models.entries.get(raw) {
-        (model, model.default_reasoning_level.as_deref())
-    } else {
-        let (model, suffix) = models
-            .entries
-            .values()
-            .filter_map(|model| {
-                raw.strip_prefix(&model.slug)
-                    .and_then(|suffix| suffix.strip_prefix('-'))
-                    .map(|suffix| (model, suffix))
-            })
-            .max_by_key(|(model, _)| model.slug.len())
-            .ok_or_else(|| {
-                format!("OpenAI Codex model '{raw}' was not returned by model discovery")
-            })?;
-        if !model
-            .supported_reasoning_levels
-            .iter()
-            .any(|level| level.effort == suffix)
-        {
-            return Err(format!(
-                "OpenAI Codex model '{raw}' uses unsupported reasoning effort '{suffix}' for base model '{}'",
-                model.slug
-            ));
-        }
-        (model, Some(suffix))
-    };
-    Ok((model.slug.clone(), effort.map(String::from)))
-}
-
-#[test]
-fn malformed_metadata_fails_and_empty_discovery_has_no_fallback() -> Result<()> {
-    assert!(serde_json::from_str::<ListModelsResponse>(r#"{"data":[]}"#).is_err());
-    assert!(
-        serde_json::from_str::<ListModelsResponse>(r#"{"models":[{"slug":"old-format"}]}"#)
-            .is_err()
-    );
-    let response = serde_json::from_str::<ListModelsResponse>(r#"{"models":[]}"#)?;
-    let models = DiscoveredModels::new(response.models)?;
-    assert!(models.list(&BTreeMap::new()).is_empty());
-    assert!(models.resolve(&ModelId::new("gpt-5.5-high")).is_err());
-    let duplicate = model("duplicate")?;
-    assert!(DiscoveredModels::new(vec![duplicate.clone(), duplicate]).is_err());
-    let mut invalid = model("invalid")?;
-    invalid.default_reasoning_level = Some("unsupported".into());
-    assert!(DiscoveredModels::new(vec![invalid]).is_err());
-    assert!(DiscoveredModels::new(vec![model("new-model")?, model("new-model-low")?]).is_err());
-    Ok(())
-}
-
-#[test]
-fn image_capabilities_follow_discovery_and_explicit_variant_overrides() -> Result<()> {
-    let mut entry = model("vision")?;
-    entry.input_modalities = vec!["text".into(), "image".into()];
-    let models = DiscoveredModels::new(vec![entry, model("unknown")?])?;
-    assert!(models.supports_images(&ModelId::new("vision"), &BTreeMap::new())?);
-    assert!(
-        models
-            .get(&ModelId::new("vision-high"), &BTreeMap::new())
-            .is_some_and(|model| model.supports_images)
-    );
-    assert!(
-        models
-            .get(&ModelId::new("unknown-high"), &BTreeMap::new())
-            .is_some_and(|model| !model.supports_images)
-    );
-    let configs = BTreeMap::from([
-        (
-            ModelId::new("vision"),
-            ConfiguredModelMetadata {
-                name: None,
-                max_context: None,
-                supports_images: Some(false),
-            },
-        ),
-        (
-            ModelId::new("vision-high"),
-            ConfiguredModelMetadata {
-                name: None,
-                max_context: None,
-                supports_images: Some(true),
-            },
-        ),
-    ]);
-    assert!(
-        models
-            .get(&ModelId::new("vision-low"), &configs)
-            .is_some_and(|model| !model.supports_images)
-    );
-    assert!(
-        models
-            .get(&ModelId::new("vision-high"), &configs)
-            .is_some_and(|model| model.supports_images)
-    );
+    let found = models
+        .get(&id, &configs)
+        .ok_or_else(|| eyre!("custom model missing"))?;
+    assert_eq!(listed.first().map(|model| &model.id), Some(&id));
+    assert_eq!(found.id, id);
+    assert_eq!(found.name, "Custom");
+    assert!(found.supports_images);
+    assert_eq!(found.options.len(), 1);
     Ok(())
 }

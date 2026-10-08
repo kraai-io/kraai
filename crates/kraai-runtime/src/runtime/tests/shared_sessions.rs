@@ -22,7 +22,7 @@ impl Provider for ControlledProvider {
         ProviderId::new("mock")
     }
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
-        Vec::new()
+        vec![super::harness::mock_model()]
     }
     async fn cache_models(&self) -> Result<()> {
         Ok(())
@@ -80,6 +80,7 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     sender.send(Ok(ProviderStreamEvent::TextDelta {
@@ -115,7 +116,8 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
                 session.clone(),
                 "rejected".into(),
                 "mock-model".into(),
-                "mock".into()
+                "mock".into(),
+                Default::default(),
             )
             .await
             .is_err()
@@ -158,6 +160,7 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             "second".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     observer.events.wait_for("observer completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
@@ -192,6 +195,7 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     assert!(matches!(
@@ -202,6 +206,7 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
                 "second".into(),
                 "mock-model".into(),
                 "mock".into(),
+                Default::default(),
             )
             .await?,
         crate::SubmitMessageOutcome::Queued { .. }
@@ -253,12 +258,18 @@ async fn continuation_during_a_live_stream_preserves_ownership() -> Result<()> {
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     assert_eq!(
         owner
             .handle
-            .continue_session(session.clone(), "mock-model".into(), "mock".into(),)
+            .continue_session(
+                session.clone(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default()
+            )
             .await?,
         crate::ContinueSessionOutcome::NothingToContinue
     );
@@ -310,6 +321,7 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     owner
@@ -318,9 +330,11 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             session.clone(),
             "preserve this message".into(),
             "mock-model".into(),
-            "missing-provider".into(),
+            "mock".into(),
+            Default::default(),
         )
         .await?;
+    tokio::fs::write(owner.data_dir.join("AGENTS.md"), [0xff]).await?;
     sender.send(Ok(ProviderStreamEvent::ScriptCall {
         call_id: kraai_types::ToolCallId::new("call"),
         name: "kraai_nushell".into(),
@@ -397,6 +411,7 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
                 "replacement turn".into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         (agent.cloned_provider_manager(), request)
@@ -457,6 +472,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             "hello".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;

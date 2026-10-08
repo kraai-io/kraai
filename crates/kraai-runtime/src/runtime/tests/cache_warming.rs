@@ -43,6 +43,7 @@ impl Provider for WarmingProvider {
     }
     async fn list_models(&self) -> Vec<Model> {
         vec![Model {
+            options: Default::default(),
             supports_images: true,
             id: ModelId::new("mock-model"),
             name: "Mock".into(),
@@ -167,6 +168,7 @@ async fn fixture(
             "history ".repeat(1500).into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     request.provider_request.cacheable_messages = Some(request.provider_request.messages.len());

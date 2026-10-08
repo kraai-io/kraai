@@ -268,9 +268,10 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
         .provider_config_path(config)
         .build();
     let failure = RuntimeError::unavailable("failed to create tokio runtime: injected");
-    let bridge = RequestBridge {
+    let mut bridge = RequestBridge {
         runtime: runtime.clone(),
         executor: Err(failure.clone()),
+        model_save_ids: Default::default(),
     };
     let attempted = std::cell::Cell::new(false);
     let result = bridge.execute(|_| {
@@ -289,7 +290,7 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
     ));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::GetSessionSnapshot { session_id: "missing".into() }),
-        RuntimeResponse::SessionSnapshot { session_id, result }
+        RuntimeResponse::SessionSnapshot { session_id, result, .. }
             if session_id == "missing" && result.as_ref().as_ref().err() == Some(&failure)
     ));
     assert!(matches!(

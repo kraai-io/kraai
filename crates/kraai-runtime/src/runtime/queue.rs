@@ -162,7 +162,15 @@ impl RuntimeCore {
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: kraai_types::ModelOptionValues,
     ) -> RuntimeResult<SubmitMessageOutcome> {
+        let has_pending_messages = self.has_pending_messages(&session_id).await;
+        self.agent_manager
+            .read()
+            .await
+            .validate_model_options(&provider_id, &model_id, &options, true)
+            .await
+            .map_err(RuntimeError::from_report)?;
         if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
             return Err(RuntimeError::invalid_argument("Too many image attachments"));
         }
@@ -181,14 +189,9 @@ impl RuntimeCore {
                 .await
                 .map_err(RuntimeError::internal)?;
         }
-        let has_pending_messages = {
-            let queued = self.queued_messages.lock().await;
-            queued
-                .get(&session_id)
-                .is_some_and(|queue| !queue.is_empty())
-                || self.session_preparations.is_active(&session_id)
-        };
         let active_script = self.has_active_script_tasks(&session_id).await;
+        let has_pending_messages =
+            has_pending_messages || self.has_pending_messages(&session_id).await;
         let agent = self.agent_manager.write().await;
         let preparation =
             if agent.is_turn_active(&session_id) || has_pending_messages || active_script {
@@ -221,6 +224,7 @@ impl RuntimeCore {
                         message,
                         model_id,
                         provider_id,
+                        options,
                     },
                 )
                 .await;
@@ -247,7 +251,7 @@ impl RuntimeCore {
         let mut agent = self.agent_manager.write().await;
         let stream_request = {
             let result = agent
-                .prepare_start_stream(&session_id, message, model_id, provider_id)
+                .prepare_start_stream(&session_id, message, model_id, provider_id, options)
                 .await;
             let providers = agent.cloned_provider_manager();
             drop(agent);
@@ -272,7 +276,19 @@ impl RuntimeCore {
         Ok(SubmitMessageOutcome::Started { message_id })
     }
 
-    async fn enqueue_message(&self, session_id: &str, queued_message: QueuedMessage) -> usize {
+    async fn has_pending_messages(&self, session_id: &str) -> bool {
+        let queued = self.queued_messages.lock().await;
+        queued
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+            || self.session_preparations.is_active(session_id)
+    }
+
+    pub(super) async fn enqueue_message(
+        &self,
+        session_id: &str,
+        queued_message: QueuedMessage,
+    ) -> usize {
         let mut queued = self.queued_messages.lock().await;
         let queue = queued.entry(session_id.to_string()).or_default();
         queue.push_back(queued_message);
@@ -302,6 +318,7 @@ impl RuntimeCore {
         };
         let model_id = last_message.model_id.clone();
         let provider_id = last_message.provider_id.clone();
+        let options = last_message.options.clone();
         let contents = messages
             .iter()
             .map(|message| message.message.clone())
@@ -310,7 +327,7 @@ impl RuntimeCore {
         let stream_request = {
             let mut agent = self.agent_manager.write().await;
             let result = agent
-                .prepare_messages_stream(&session_id, contents, model_id, provider_id)
+                .prepare_messages_stream(&session_id, contents, model_id, provider_id, options)
                 .await;
             if result.is_err() {
                 agent.clear_active_turn(&session_id);

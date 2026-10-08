@@ -37,6 +37,7 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
             "first".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     harness
@@ -77,7 +78,8 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
                 session_id.clone(),
                 "queued".into(),
                 "mock-model".into(),
-                "mock".into()
+                "mock".into(),
+                Default::default(),
             )
             .await?,
         SubmitMessageOutcome::Queued { .. }

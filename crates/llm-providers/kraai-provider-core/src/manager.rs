@@ -472,6 +472,8 @@ mod tests {
                 .collect(),
             models: (0..provider_count)
                 .map(|index| ModelConfig {
+                    options: Vec::new(),
+                    remove_options: Vec::new(),
                     id: ModelId::new(format!("model-{index}")),
                     provider_id: ProviderId::new(format!("provider-{index}")),
                     config: DynamicConfig::new(),

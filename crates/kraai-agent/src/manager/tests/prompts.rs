@@ -51,6 +51,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert!(request_prefix(&first).contains("ORIGINAL TURN PROMPT"));
@@ -69,6 +70,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
                 vec!["queued".into()],
                 ModelId::new("mock-model"),
                 ProviderId::new("missing"),
+                Default::default(),
             )
             .await
             .is_err()
@@ -102,6 +104,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
             String::from("next turn").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert!(request_prefix(&next).contains("REFRESHED TURN PROMPT"));
@@ -161,6 +164,7 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
             String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -202,6 +206,7 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
             String::from("continue").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert_eq!(
@@ -256,6 +261,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
             String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -315,6 +321,7 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
             String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -422,6 +429,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
             String::from("follow up").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -455,6 +463,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let first_system_prompt = request_prefix(&first_request);
@@ -519,6 +528,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&first_request.message_id).await?;
@@ -616,6 +626,7 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
             String::from("review this").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let prompt = request_prefix(&request);
@@ -660,6 +671,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let prompt = request_prefix(&request);
@@ -722,6 +734,7 @@ async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_er
             String::from("first").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert!(request_prefix(&request).contains("Global instructions only"));

@@ -74,6 +74,10 @@ pub struct ProviderManagerConfig {
 pub struct ModelConfig {
     pub id: ModelId,
     pub provider_id: ProviderId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<kraai_types::ModelOptionDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_options: Vec<String>,
     #[serde(flatten)]
     pub config: DynamicConfig,
 }

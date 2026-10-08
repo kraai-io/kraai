@@ -44,6 +44,7 @@ async fn restart_after_cancellation_failure(
             "first".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager
@@ -148,6 +149,7 @@ async fn restart_after_cancellation_failure(
             "next".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let calls = next
@@ -190,6 +192,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
                 "first".into(),
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         manager

@@ -113,7 +113,7 @@ test('streams a reply from a local provider and persists the conversation', { ti
   unwrap(await runtime.saveSettings(provider.settings));
   const session = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: null }));
   const events = runtime.subscribe();
-  const outcome = unwrap(await runtime.sendMessage(session, 'Hello', 'test-model', 'local'));
+  const outcome = unwrap(await runtime.sendMessage(session, 'Hello', 'test-model', 'local', {}));
   assert.equal(outcome.disposition, 'started');
   let chunks = '';
   let sequence = 0;
@@ -157,6 +157,88 @@ test('native methods reject invalid and wrong-class receivers', { timeout: 30000
   assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
   events.close();
   assert.deepEqual(await events.next(), { type: 'closed' });
+});
+
+test('model options require explicit choices and survive request persistence', { timeout: 30000 }, async t => {
+  const { directory, create } = fixture(t);
+  const provider = await localProvider(t, ['Chosen options']);
+  provider.settings.models[0].options = [{
+    id: 'effort', label: 'Effort', type: 'choice', required: true,
+    choices: [
+      { id: 'low', label: 'Low', patch: { body: { reasoning_effort: 'low' }, headers: {} } },
+      { id: 'high', label: 'High', patch: { body: { reasoning_effort: 'high' }, headers: {} } },
+    ],
+  }];
+  const runtime = create();
+  unwrap(await runtime.waitForStartup());
+  unwrap(await runtime.saveSettings(provider.settings));
+  const settings = unwrap(await runtime.getSettings());
+  assert.deepEqual(settings.models[0].options, provider.settings.models[0].options);
+  const session = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: null }));
+  const missing = await runtime.sendMessage(session, 'Hello', 'test-model', 'local', {});
+  assert.ok('Err' in missing);
+  assert.equal(provider.requests.length, 0);
+  const events = runtime.subscribe();
+  unwrap(await runtime.sendMessage(session, 'Hello', 'test-model', 'local', { effort: 'high' }));
+  for (;;) {
+    const read = await events.next();
+    assert.equal(read.type, 'event');
+    const event = read.value.event;
+    if (typeof event === 'object' && 'StreamError' in event) assert.fail(JSON.stringify(event));
+    if (typeof event === 'object' && 'StreamComplete' in event) break;
+  }
+  assert.equal(provider.requests[0].reasoning_effort, 'high');
+  const snapshot = unwrap(await runtime.getSessionSnapshot(session));
+  assert.deepEqual(snapshot.session.selected_model.options, { effort: 'high' });
+  events.close();
+});
+
+test('session model options persist before a prompt and survive restart', { timeout: 30000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'kraai-node-model-options-'));
+  let runtime;
+  t.after(async () => {
+    await runtime?.shutdown();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const provider = await localProvider(t, []);
+  provider.settings.models[0].options = [
+    {
+      id: 'effort', label: 'Effort', type: 'choice', required: true,
+      binding: { type: 'body', path: '/reasoning_effort' },
+      choices: [{ id: 'custom', label: 'Custom', patch: { body: {}, headers: {} } }],
+    },
+    { id: 'fast', label: 'Fast', type: 'boolean', required: true, binding: { type: 'body', path: '/fast' } },
+    { id: 'budget', label: 'Budget', type: 'integer', min: 0, max: 100, binding: { type: 'body', path: '/custom_budget' } },
+  ];
+  runtime = createRuntime({ storage_root: directory });
+  unwrap(await runtime.waitForStartup());
+  unwrap(await runtime.saveSettings(provider.settings));
+  const full = unwrap(await runtime.createSession());
+  const partial = unwrap(await runtime.createSession());
+  const selections = [
+    [full, { provider_id: 'local', model_id: 'test-model', options: { effort: 'custom', fast: false, budget: 0 } }],
+    [partial, { provider_id: 'local', model_id: 'test-model', options: { fast: true, budget: 50 } }],
+  ];
+  assert.equal(unwrap(await runtime.getSessionModel(full)), null);
+  for (const [session, selection] of selections) {
+    unwrap(await runtime.setSessionModel(session, selection));
+    assert.deepEqual(unwrap(await runtime.getSessionModel(session)), selection);
+  }
+  const invalid = await runtime.setSessionModel(full, {
+    ...selections[0][1], options: { effort: 'unsupported', fast: true },
+  });
+  assert.equal(invalid.Err.kind, 'invalid_argument');
+  unwrap(await runtime.shutdown());
+  runtime = createRuntime({ storage_root: directory });
+  unwrap(await runtime.waitForStartup());
+  for (const [session, selection] of selections) {
+    assert.equal(unwrap(await runtime.loadSession(session)), true);
+    assert.deepEqual(unwrap(await runtime.getSessionModel(session)), selection);
+    const snapshot = unwrap(await runtime.getSessionSnapshot(session));
+    assert.deepEqual(snapshot.session.selected_model, selection);
+    assert.deepEqual(snapshot.history, {});
+  }
+  assert.equal(provider.requests.length, 0);
 });
 
 test('storage roots must be absolute and may be created at startup', { timeout: 30000 }, async t => {

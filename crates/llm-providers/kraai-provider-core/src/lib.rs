@@ -16,7 +16,9 @@ pub use history::prepare_history;
 mod images;
 mod manager;
 pub use images::{ImageResolver, ResolvedImages, validate_image_support};
+mod model_discovery;
 mod model_metadata;
+mod model_options;
 mod pricing;
 pub use pricing::{PriceQuote, Pricing, ProviderPricingCatalog, ProviderPricingPolicy};
 mod provider;
@@ -34,7 +36,12 @@ pub use error::{ProviderError, ProviderModelCacheRefreshError};
 
 pub use http_retry::{DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, send_with_retry};
 pub use manager::ProviderManager;
+pub use model_discovery::DiscoveredModelOptions;
 pub use model_metadata::ConfiguredModelMetadata;
+pub use model_options::{
+    ModelOptionsProtocol, apply_model_options, reasoning_budget_option, reasoning_effort_option,
+    reasoning_toggle_option, service_tier_options, validate_model_option_effects,
+};
 pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition};
 pub use registry::{ProviderFactory, ProviderRegistry};
 pub use request_context::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};

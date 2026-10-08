@@ -73,6 +73,14 @@ pub(super) struct AppState {
     pub(super) selected_provider_id: Option<String>,
     pub(super) selected_model_id: Option<String>,
     pub(super) last_session_model: Option<kraai_types::ModelSelection>,
+    pub(super) session_model_saves: HashMap<String, super::session_model::SessionModelSave>,
+    pub(super) next_model_save_id: u64,
+    pub(super) selected_model_options: kraai_types::ModelOptionValues,
+    pub(super) startup_model_options_applied: bool,
+    pub(super) option_menu_index: usize,
+    pub(super) option_choice_index: usize,
+    pub(super) option_editing: bool,
+    pub(super) option_editor_input: String,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
     pub(super) sessions: Vec<Session>,
@@ -180,6 +188,14 @@ impl Default for AppState {
             selected_provider_id: None,
             selected_model_id: None,
             last_session_model: None,
+            session_model_saves: HashMap::new(),
+            next_model_save_id: 0,
+            selected_model_options: Default::default(),
+            startup_model_options_applied: false,
+            option_menu_index: 0,
+            option_choice_index: 0,
+            option_editing: false,
+            option_editor_input: String::new(),
             context_usage: None,
             pending_script: None,
             sessions: Vec::new(),
@@ -242,6 +258,13 @@ impl AppState {
                 .model_id
                 .clone()
                 .or(workspace_preferences.model_id),
+            selected_model_options: if startup_options.provider_id.is_none()
+                && startup_options.model_id.is_none()
+            {
+                workspace_preferences.options
+            } else {
+                Default::default()
+            },
             selected_profile_id: startup_options
                 .agent_profile_id
                 .clone()

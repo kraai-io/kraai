@@ -6,6 +6,7 @@ use crate::{content, error};
 pub(crate) enum Command {
     Continue,
     Undo,
+    Option { id: String, value: String },
 }
 
 pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
@@ -13,7 +14,23 @@ pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
         return Ok(None);
     };
     let mut words = text.text.split_whitespace();
-    let (command, usage) = match words.next() {
+    let first = words.next();
+    if first == Some("/option") {
+        let id = words
+            .next()
+            .ok_or_else(|| error::invalid("Usage: /option <id> <value>"))?;
+        let value = words
+            .next()
+            .ok_or_else(|| error::invalid("Usage: /option <id> <value>"))?;
+        if words.next().is_some() {
+            return Err(error::invalid("Usage: /option <id> <value>"));
+        }
+        return Ok(Some(Command::Option {
+            id: id.to_owned(),
+            value: value.to_owned(),
+        }));
+    }
+    let (command, usage) = match first {
         Some("/continue") => (Command::Continue, "Usage: /continue"),
         Some("/undo") => (Command::Undo, "Usage: /undo"),
         _ => return Ok(None),
@@ -40,6 +57,7 @@ pub(crate) async fn advertise(
                     "undo",
                     "Remove the last user turn from conversation context; keep file changes",
                 ),
+                acp::AvailableCommand::new("option", "Set a model option: /option <id> <value>"),
             ])),
         ))
         .await

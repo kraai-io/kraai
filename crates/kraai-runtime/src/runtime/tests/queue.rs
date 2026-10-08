@@ -21,6 +21,7 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
             ["one", "two"]
                 .into_iter()
                 .map(|message| crate::runtime::core::QueuedMessage {
+                    options: Default::default(),
                     message: message.into(),
                     model_id: kraai_types::ModelId::new("mock-model"),
                     provider_id: kraai_types::ProviderId::new("missing-provider"),
@@ -94,6 +95,7 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
         .restore_queued_messages(
             &session_id,
             vec![crate::runtime::core::QueuedMessage {
+                options: Default::default(),
                 message: "queued".into(),
                 model_id: kraai_types::ModelId::new("mock-model"),
                 provider_id: kraai_types::ProviderId::new("missing-provider"),
@@ -109,6 +111,7 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
             session_id.clone(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("missing-provider"),
+            Default::default(),
         ),
     )
     .await?;
@@ -180,9 +183,10 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
     let mut runtime = harness.runtime.clone();
     runtime.queue_drains = Arc::default();
     let message = |text: &str| crate::runtime::core::QueuedMessage {
+        options: Default::default(),
         message: text.into(),
         model_id: kraai_types::ModelId::new("mock-model"),
-        provider_id: kraai_types::ProviderId::new("missing"),
+        provider_id: kraai_types::ProviderId::new("mock"),
     };
     runtime
         .restore_queued_messages(&session_id, vec![message("first")])
@@ -192,18 +196,23 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
         session_id.clone(),
         kraai_types::ModelId::new("mock-model"),
         kraai_types::ProviderId::new("missing"),
+        Default::default(),
     );
     tokio::pin!(first);
     assert!(poll!(&mut first).is_pending());
-    runtime
-        .restore_queued_messages(&session_id, vec![message("second")])
-        .await;
+    assert_eq!(
+        runtime
+            .enqueue_message(&session_id, message("second"))
+            .await,
+        2
+    );
     assert!(matches!(
         runtime
             .start_continuation(
                 session_id.clone(),
                 kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("mock")
+                kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await?,
         crate::ContinueSessionOutcome::NothingToContinue
@@ -245,6 +254,7 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
         "new message".into(),
         kraai_types::ModelId::new("mock-model"),
         kraai_types::ProviderId::new("mock"),
+        Default::default(),
     );
     tokio::pin!(send);
     assert!(poll!(&mut send).is_pending());
@@ -293,6 +303,7 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
         "new message".into(),
         kraai_types::ModelId::new("mock-model"),
         kraai_types::ProviderId::new("mock"),
+        Default::default(),
     );
     tokio::pin!(send);
     assert!(poll!(&mut send).is_pending());
@@ -326,7 +337,7 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
 }
 
 #[tokio::test]
-async fn failed_interception_releases_turn_and_preserves_pending_workspace() -> Result<()> {
+async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut runtime = harness.runtime.clone();
@@ -339,6 +350,7 @@ async fn failed_interception_releases_turn_and_preserves_pending_workspace() -> 
                 "first".into(),
                 kraai_types::ModelId::new("mock-model"),
                 kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
         agent.complete_message(&request.message_id).await?;
@@ -360,6 +372,7 @@ async fn failed_interception_releases_turn_and_preserves_pending_workspace() -> 
         .restore_queued_messages(
             &session_id,
             vec![crate::runtime::core::QueuedMessage {
+                options: Default::default(),
                 message: "queued".into(),
                 model_id: kraai_types::ModelId::new("mock-model"),
                 provider_id: kraai_types::ProviderId::new("missing"),
@@ -372,15 +385,16 @@ async fn failed_interception_releases_turn_and_preserves_pending_workspace() -> 
             runtime.start_continuation(
                 session_id.clone(),
                 kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("missing")
+                kraai_types::ProviderId::new("missing"),
+                Default::default(),
             ),
         )
         .await?
         .is_err()
     );
     let agent = runtime.agent_manager.read().await;
-    assert!(!agent.is_turn_active(&session_id));
-    assert!(!runtime.session_store.owns_turn(&session_id).await?);
+    assert!(agent.is_turn_active(&session_id));
+    assert!(runtime.session_store.owns_turn(&session_id).await?);
     assert_eq!(agent.get_tip(&session_id).await?, Some(tip));
     drop(agent);
     assert_eq!(

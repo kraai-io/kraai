@@ -139,6 +139,7 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
     harness.runtime.queued_messages.lock().await.insert(
         session.clone(),
         [super::super::core::QueuedMessage {
+            options: Default::default(),
             message: "queued".into(),
             model_id: kraai_types::ModelId::new("mock-model"),
             provider_id: kraai_types::ProviderId::new("mock"),

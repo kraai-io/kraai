@@ -30,6 +30,7 @@ async fn deletion_cannot_overtake_initial_stream_publication() -> Result<()> {
                     "hello".into(),
                     kraai_types::ModelId::new("mock-model"),
                     kraai_types::ProviderId::new("mock"),
+                    Default::default(),
                 )
                 .await
         }
@@ -63,8 +64,8 @@ async fn deletion_cannot_overtake_initial_stream_publication() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deletion_waits_for_aborted_stream_to_stop_polling() -> Result<()> {
-    assert_deletion_waits_for_stream(false).await?;
-    assert_deletion_waits_for_stream(true).await
+    Box::pin(assert_deletion_waits_for_stream(false)).await?;
+    Box::pin(assert_deletion_waits_for_stream(true)).await
 }
 
 async fn assert_deletion_waits_for_stream(cancel_first: bool) -> Result<()> {
@@ -148,6 +149,7 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
                 "change it".into(),
                 kraai_types::ModelId::new("mock-model"),
                 kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await?;
     }

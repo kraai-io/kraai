@@ -23,9 +23,10 @@ impl App {
         }
 
         match event {
-            Event::TurnCompleted { .. }
-            | Event::ScriptPrepared { .. }
-            | Event::ScriptStarted { .. } => {}
+            Event::TurnCompleted { session_id } => {
+                self.request(RuntimeRequest::GetSessionSnapshot { session_id });
+            }
+            Event::ScriptPrepared { .. } | Event::ScriptStarted { .. } => {}
             Event::RequestUsageUpdated {
                 session_id,
                 request,
@@ -72,6 +73,7 @@ impl App {
                 session_id,
                 message_id,
             } => {
+                self.mark_session_model_active(&session_id);
                 self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                     return;

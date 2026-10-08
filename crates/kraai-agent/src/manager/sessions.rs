@@ -161,11 +161,6 @@ impl AgentManager {
         session_id: &str,
         source_message_id: &MessageId,
     ) -> Result<()> {
-        if !self.prepare_session(session_id).await? {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
-                "Session not found: {session_id}"
-            ))));
-        }
         let source = self
             .message_store
             .get(source_message_id)
@@ -174,11 +169,24 @@ impl AgentManager {
         let generation = source.generation.ok_or_else(|| {
             eyre!("Script source message {source_message_id} has no provider generation metadata")
         })?;
+        self.validate_model_options(
+            &generation.provider_id,
+            &generation.model_id,
+            &generation.options,
+            true,
+        )
+        .await?;
+        if !self.prepare_session(session_id).await? {
+            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+                "Session not found: {session_id}"
+            ))));
+        }
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
         let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
         state.last_model = Some(generation.model_id);
         state.last_provider = Some(generation.provider_id);
+        state.last_options = generation.options;
         state.active_turn_profile = Some(Arc::new(profile));
         Ok(())
     }
@@ -394,17 +402,66 @@ impl AgentManager {
                 "Cannot change model while the current turn is active"
             )));
         }
+        self.require_session(session_id).await?;
+        self.validate_model_options(
+            &selection.provider_id,
+            &selection.model_id,
+            &selection.options,
+            false,
+        )
+        .await?;
+        self.persist_model_selection(session_id, &selection).await
+    }
+
+    pub(super) async fn persist_model_selection(
+        &self,
+        session_id: &str,
+        selection: &kraai_types::ModelSelection,
+    ) -> Result<()> {
         let mut session = self.require_session(session_id).await?;
-        let provider = self
-            .providers
-            .get_provider(&selection.provider_id)
-            .ok_or_else(|| eyre!(kraai_types::DomainError::not_found("Unknown provider")))?;
-        if provider.get_model(&selection.model_id).await.is_none() {
-            return Err(eyre!(kraai_types::DomainError::not_found("Unknown model")));
+        if session.selected_model.as_ref() != Some(selection) {
+            session.selected_model = Some(selection.clone());
+            session.updated_at = current_unix_timestamp();
+            self.session_store.save(&session).await?;
         }
-        session.selected_model = Some(selection);
-        session.updated_at = current_unix_timestamp();
-        self.session_store.save(&session).await
+        Ok(())
+    }
+
+    pub async fn validate_model_options(
+        &self,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+        options: &ModelOptionValues,
+        require_all: bool,
+    ) -> Result<()> {
+        let provider = self.providers.get_provider(provider_id).ok_or_else(|| {
+            eyre!(kraai_types::DomainError::not_found(format!(
+                "Unknown provider: {provider_id}"
+            )))
+        })?;
+        let model = provider.get_model(model_id).await.ok_or_else(|| {
+            eyre!(kraai_types::DomainError::not_found(format!(
+                "Unknown model: {model_id}"
+            )))
+        })?;
+        kraai_types::validate_model_option_values(&model.options, options, require_all).map_err(
+            |errors| {
+                eyre!(kraai_types::DomainError::invalid_argument(
+                    errors
+                        .into_iter()
+                        .map(|error| format!("{}: {}", error.option, error.message))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ))
+            },
+        )?;
+        kraai_provider_core::validate_model_option_effects(&model.options, options).map_err(
+            |error| {
+                eyre!(kraai_types::DomainError::invalid_argument(
+                    error.to_string()
+                ))
+            },
+        )
     }
 
     pub async fn get_workspace_dir_state(

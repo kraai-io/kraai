@@ -23,7 +23,13 @@ impl Provider for RecordingProvider {
     }
 
     async fn list_models(&self) -> Vec<Model> {
-        Vec::new()
+        ["old-model", "selected-model"]
+            .into_iter()
+            .map(|id| Model {
+                id: ModelId::new(id),
+                ..super::harness::mock_model()
+            })
+            .collect()
     }
 
     async fn cache_models(&self) -> Result<()> {
@@ -84,6 +90,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
                 "first message".into(),
                 ModelId::new("old-model"),
                 ProviderId::new("old-provider"),
+                Default::default(),
             )
             .await?;
         agent
@@ -105,6 +112,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .restore_queued_messages(
                 &session_id,
                 vec![super::super::core::QueuedMessage {
+                    options: Default::default(),
                     message: "queued message".into(),
                     model_id: ModelId::new("old-model"),
                     provider_id: ProviderId::new("old-provider"),
@@ -122,6 +130,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             session_id.clone(),
             "selected-model".into(),
             "selected-provider".into(),
+            Default::default(),
         );
         tokio::pin!(continuation);
         assert!(poll!(&mut continuation).is_pending());
@@ -138,6 +147,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
                     session_id.clone(),
                     "old-model".into(),
                     "old-provider".into(),
+                    Default::default(),
                 )
             )
             .await??,
@@ -153,6 +163,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
                 session_id.clone(),
                 "selected-model".into(),
                 "selected-provider".into(),
+                Default::default(),
             )
             .await?
     };
@@ -209,7 +220,12 @@ async fn continuing_empty_session_does_not_start_a_turn() -> Result<()> {
     assert_eq!(
         harness
             .handle
-            .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+            .continue_session(
+                session_id.clone(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default()
+            )
             .await?,
         ContinueSessionOutcome::NothingToContinue
     );

@@ -51,7 +51,11 @@ async fn request(manager: &AgentManager, session: &str) -> Result<ProviderReques
             },
             None,
             None,
-            (&provider, &model),
+            &kraai_types::ModelSelection {
+                provider_id: provider.clone(),
+                model_id: model.clone(),
+                options: Default::default(),
+            },
         )
         .await?;
     assert!(request.cacheable_messages.is_none());

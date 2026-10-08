@@ -49,14 +49,14 @@ impl AgentManager {
         prompt: &prompts::TurnSystemPrompt,
         script_tool: Option<ScriptToolDefinition>,
         max_context: Option<usize>,
-        identity: (&ProviderId, &ModelId),
+        selection: &kraai_types::ModelSelection,
     ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
         let store = self.persistence.compactions().clone();
         let mut previous = None;
         let mut start = 0;
         for (index, message) in history.iter().enumerate().rev() {
             if let Some(checkpoint) = store.get(&message.id).await?
-                && checkpoint.compatible_with(identity.0, identity.1)
+                && checkpoint.compatible_with(&selection.provider_id, &selection.model_id)
             {
                 previous = Some(checkpoint);
                 start = index + 1;
@@ -107,6 +107,7 @@ impl AgentManager {
             previous.as_ref(),
             &history,
             script_tool,
+            &selection.options,
         );
         if let Some(user) = &pinned_user
             && !previous.as_ref().is_some_and(|p| {

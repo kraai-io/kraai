@@ -14,12 +14,14 @@ pub struct Options {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub profile: Option<String>,
+    pub options: Vec<String>,
 }
 
 #[derive(Clone)]
 pub(crate) struct Model {
     pub(crate) provider: String,
     pub(crate) model: String,
+    pub(crate) options: kraai_types::ModelOptionValues,
 }
 
 impl Model {
@@ -89,6 +91,7 @@ pub(crate) async fn selected_model(runtime: &RuntimeHandle, id: &acp::SessionId)
     Ok(Model {
         provider: selected.provider_id.to_string(),
         model: selected.model_id.to_string(),
+        options: selected.options,
     })
 }
 
@@ -98,6 +101,7 @@ impl Model {
             provider_id: kraai_types::ProviderId::try_new(self.provider.clone())
                 .map_err(error::invalid)?,
             model_id: kraai_types::ModelId::try_new(self.model.clone()).map_err(error::invalid)?,
+            options: self.options.clone(),
         })
     }
 }
@@ -123,17 +127,24 @@ pub(crate) async fn select_model(
                 .as_ref()
                 .is_none_or(|id| id == saved.model_id.as_str());
         if matches_overrides {
-            if providers
+            if let Some(model) = providers
                 .get(saved.provider_id.as_str())
-                .is_some_and(|models| {
+                .and_then(|models| {
                     models
                         .iter()
-                        .any(|model| model.id == saved.model_id.as_str())
+                        .find(|model| model.id == saved.model_id.as_str())
                 })
             {
+                let values = kraai_types::parse_model_option_assignments(
+                    &model.options,
+                    &options.options,
+                    saved.options,
+                )
+                .map_err(error::invalid)?;
                 return Ok(Model {
                     provider: saved.provider_id.to_string(),
                     model: saved.model_id.to_string(),
+                    options: values,
                 });
             }
             if options.provider.is_none() && options.model.is_none() {
@@ -158,9 +169,16 @@ pub(crate) async fn select_model(
                 .as_ref()
                 .is_none_or(|selected| selected == &model.id)
             {
+                let values = kraai_types::parse_model_option_assignments(
+                    &model.options,
+                    &options.options,
+                    Default::default(),
+                )
+                .map_err(error::invalid)?;
                 return Ok(Model {
                     provider,
                     model: model.id,
+                    options: values,
                 });
             }
         }

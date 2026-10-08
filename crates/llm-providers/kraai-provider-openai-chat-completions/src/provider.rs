@@ -48,7 +48,8 @@ where
     async fn send_chat_completion_request(
         &self,
         operation: &'static str,
-        request: &ChatCompletionRequest,
+        request: &serde_json::Value,
+        headers: &BTreeMap<String, String>,
         request_context: &ProviderRequestContext,
     ) -> Result<Response> {
         let response = send_with_retry(
@@ -56,11 +57,14 @@ where
             &DEFAULT_HTTP_RETRY_POLICY,
             request_context,
             || {
-                let builder = self
+                let mut builder = self
                     .auth
                     .apply(self.client.post(self.build_endpoint("chat/completions")))
                     .json(request);
-                if request.stream {
+                for (name, value) in headers {
+                    builder = builder.header(name, value);
+                }
+                if request.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
                     builder.send()
                 } else {
                     finite_request(builder).send()
@@ -70,6 +74,31 @@ where
         .await?;
 
         ensure_success_response(operation, response).await
+    }
+
+    fn options_protocol(&self) -> kraai_provider_core::ModelOptionsProtocol {
+        match self.catalog_provider.as_deref() {
+            Some("openrouter") => {
+                return kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions;
+            }
+            Some("deepseek") => {
+                return kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions;
+            }
+            _ => {}
+        }
+        match reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(ToString::to_string))
+            .as_deref()
+        {
+            Some("openrouter.ai") => {
+                kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions
+            }
+            Some("api.deepseek.com") => {
+                kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions
+            }
+            _ => kraai_provider_core::ModelOptionsProtocol::OpenAiChatCompletions,
+        }
     }
 }
 
@@ -127,20 +156,60 @@ where
             let catalog = match &self.model_catalog {
                 Some(catalog) => {
                     catalog
-                        .metadata(
+                        .metadata_for_protocol(
                             self.catalog_provider.as_deref(),
                             Some(&self.base_url),
                             &raw_id,
+                            self.options_protocol(),
                         )
                         .await
                 }
                 None => None,
             };
 
-            cache.insert(
-                id.clone(),
-                configured.cloned().unwrap_or_default().resolve(id, catalog),
+            let configured = configured.cloned().unwrap_or_default();
+            let mut resolved = configured.resolve(id.clone(), catalog);
+            let discovered = model.options.definitions_with_reasoning_levels(
+                self.options_protocol(),
+                model
+                    .supported_reasoning_levels
+                    .into_iter()
+                    .map(|level| level.effort),
             );
+            let native = ConfiguredModelMetadata {
+                options: discovered,
+                ..Default::default()
+            };
+            resolved.options = configured.merge_options(native.merge_options(resolved.options));
+            kraai_types::validate_model_option_values(
+                &resolved.options,
+                &Default::default(),
+                false,
+            )
+            .map_err(|errors| eyre!("Invalid discovered model options for {id}: {errors:?}"))?;
+            cache.insert(id, resolved);
+        }
+        for (id, configured) in &self.model_configs {
+            if cache.contains_key(id) {
+                continue;
+            }
+            let catalog = match &self.model_catalog {
+                Some(catalog) => {
+                    catalog
+                        .metadata_for_protocol(
+                            self.catalog_provider.as_deref(),
+                            Some(&self.base_url),
+                            id.as_str(),
+                            self.options_protocol(),
+                        )
+                        .await
+                }
+                None => None,
+            };
+            let model = configured.resolve(id.clone(), catalog);
+            kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
+                .map_err(|errors| eyre!("Invalid configured model options for {id}: {errors:?}"))?;
+            cache.insert(id.clone(), model);
         }
         let previous = std::mem::replace(&mut *self.cached_models.write().await, cache);
         drop(previous);
@@ -149,7 +218,11 @@ where
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
-        let metadata = ConfiguredModelMetadata::from_config(&model.config)?;
+        let metadata = ConfiguredModelMetadata::from_model_config(&model)?;
+        self.cached_models
+            .write()
+            .await
+            .insert(model.id.clone(), metadata.resolve(model.id.clone(), None));
         self.model_configs.insert(model.id, metadata);
         Ok(())
     }
@@ -160,15 +233,20 @@ where
         provider_request: ProviderRequest,
         request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        let model = self.get_model(model_id).await;
+        let definitions = model
+            .as_ref()
+            .map(|model| model.options.as_slice())
+            .unwrap_or_default();
+        kraai_types::validate_model_options(definitions, &provider_request.options)
+            .map_err(|errors| eyre!("Invalid model options: {errors:?}"))?;
+        kraai_provider_core::validate_model_option_effects(definitions, &provider_request.options)?;
+        let options = provider_request.options;
         let supports_images = self
             .model_configs
             .get(model_id)
             .and_then(|metadata| metadata.supports_images)
-            .unwrap_or(
-                self.get_model(model_id)
-                    .await
-                    .is_some_and(|model| model.supports_images),
-            );
+            .unwrap_or(model.as_ref().is_some_and(|model| model.supports_images));
         let images = ResolvedImages::for_model(
             &provider_request.messages,
             model_id,
@@ -202,8 +280,15 @@ where
             }),
         };
 
+        let mut body = serde_json::to_value(request)?;
+        let headers = kraai_provider_core::apply_model_options(definitions, &options, &mut body)?;
         let response = self
-            .send_chat_completion_request("chat completions stream", &request, request_context)
+            .send_chat_completion_request(
+                "chat completions stream",
+                &body,
+                &headers,
+                request_context,
+            )
             .await?;
 
         Ok(adapt_chat_completion_stream(
@@ -320,353 +405,5 @@ impl ProviderFactory for OpenAiFactory {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    reason = "provider tests use direct assertions for local HTTP fixtures"
-)]
-mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-    use std::net::SocketAddr;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    use futures::StreamExt;
-    use kraai_provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    #[test]
-    fn provider_creation_uses_the_same_catalog_identity_as_pricing() {
-        let credentials = DynamicConfig::from([("api_key".into(), DynamicValue::from("fixture"))]);
-        let direct = create_provider::<OpenAiChatCompletionsProfile>(
-            ProviderId::new("direct"),
-            credentials.clone(),
-        )
-        .unwrap();
-        assert_eq!(direct.catalog_provider.as_deref(), Some("openai"));
-        for (endpoint, override_id, expected) in [
-            ("https://api.openai.com/v1/", None, Some("openai")),
-            ("https://api.openai.com/v1", Some("custom"), Some("custom")),
-            ("https://proxy.test/v1", Some("custom"), Some("custom")),
-            ("https://api.groq.com/openai/v1", None, None),
-        ] {
-            let mut config = credentials.clone();
-            config.insert("base_url".into(), DynamicValue::from(endpoint));
-            if let Some(id) = override_id {
-                config.insert("catalog_provider".into(), DynamicValue::from(id));
-            }
-            let pricing = GenericChatCompletionsProfile::pricing_catalog(&config);
-            let provider = create_provider::<GenericChatCompletionsProfile>(
-                ProviderId::new("compatible"),
-                config,
-            )
-            .unwrap();
-            assert_eq!(provider.catalog_provider.as_deref(), expected);
-            assert_eq!(provider.catalog_provider, pricing.provider);
-        }
-    }
-
-    fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
-        let mut current = Some(error);
-        while let Some(error) = current {
-            let display = error.to_string();
-            let debug = format!("{error:?}");
-            if display.contains("No CA certificates were loaded from the system")
-                || debug.contains("No CA certificates were loaded from the system")
-                || display == "builder error"
-            {
-                return true;
-            }
-            current = error.source();
-        }
-        false
-    }
-
-    fn test_client_or_skip() -> Option<Client> {
-        match Client::builder().timeout(Duration::from_secs(2)).build() {
-            Ok(client) => Some(client),
-            Err(error) if is_missing_system_ca_error(&error) => None,
-            Err(error) => panic!("unexpected reqwest client build error: {error}"),
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct RetryCollector {
-        events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
-    }
-
-    impl RetryCollector {
-        fn snapshot(&self) -> Vec<ProviderRetryEvent> {
-            self.events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone()
-        }
-    }
-
-    impl ProviderRetryObserver for RetryCollector {
-        fn on_retry_scheduled(&self, event: &ProviderRetryEvent) {
-            self.events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(event.clone());
-        }
-    }
-
-    enum ScriptedResponse {
-        Status {
-            status_line: &'static str,
-            body: &'static str,
-        },
-    }
-
-    async fn spawn_server(script: Vec<ScriptedResponse>) -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let script = Arc::new(tokio::sync::Mutex::new(VecDeque::from(script)));
-
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-
-                let next = {
-                    let mut guard = script.lock().await;
-                    guard.pop_front()
-                };
-                let Some(next) = next else {
-                    break;
-                };
-
-                let mut buffer = [0_u8; 4096];
-                let _ = stream.read(&mut buffer).await;
-
-                match next {
-                    ScriptedResponse::Status { status_line, body } => {
-                        write_json_response(&mut stream, status_line, body).await;
-                    }
-                }
-            }
-        });
-
-        address
-    }
-
-    async fn write_json_response(
-        stream: &mut tokio::net::TcpStream,
-        status_line: &str,
-        body: &str,
-    ) {
-        let response = format!(
-            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-
-        stream.write_all(response.as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
-        let address = spawn_server(vec![
-            ScriptedResponse::Status {
-                status_line: "429 Too Many Requests",
-                body: r#"{"error":{"message":"slow down"}}"#,
-            },
-            ScriptedResponse::Status {
-                status_line: "200 OK",
-                body: "data: {\"choices\":[{\"delta\":{\"content\":\"ok after retry\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-            },
-        ])
-        .await;
-
-        let Some(client) = test_client_or_skip() else {
-            return;
-        };
-
-        let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
-            id: ProviderId::new("openai-chat-completions"),
-            client,
-            base_url: format!("http://{address}"),
-            auth: ApiKeyAuth::resolve(&BTreeMap::from([(
-                String::from("api_key"),
-                kraai_provider_core::DynamicValue::from("test-key"),
-            )]))
-            .unwrap(),
-            only_listed_models: false,
-            cached_models: RwLock::new(BTreeMap::new()),
-            model_configs: BTreeMap::new(),
-            model_catalog: None,
-            catalog_provider: None,
-            _profile: PhantomData,
-        };
-
-        let collector = Arc::new(RetryCollector::default());
-        let events = provider
-            .generate_reply_stream(
-                &ModelId::new("gpt-4.1-mini"),
-                ProviderRequest {
-                    cacheable_messages: None,
-                    messages: vec![kraai_types::ConversationItem::User {
-                        content: String::from("hello").into(),
-                    }],
-                    script_tool: None,
-                },
-                &ProviderRequestContext::with_retry_observer(collector.clone()),
-            )
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
-
-        assert!(matches!(
-            events.first(),
-            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. }))
-                if delta == "ok after retry"
-        ));
-
-        let retries = collector.snapshot();
-        assert_eq!(retries.len(), 1);
-        assert_eq!(retries[0].operation, "chat completions stream");
-        assert_eq!(retries[0].retry_number, 1);
-        assert_eq!(retries[0].reason, "HTTP 429 Too Many Requests");
-    }
-
-    #[tokio::test]
-    async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
-        let address = spawn_server(vec![ScriptedResponse::Status {
-            status_line: "200 OK",
-            body: concat!(
-                "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
-                "data: {\"error\":{\"code\":502,\"message\":\"Provider disconnected\"},\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
-                "data: [DONE]\n\n",
-            ),
-        }])
-        .await;
-        let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
-            id: ProviderId::new("fixture"),
-            client: Client::builder().tls_certs_only([]).build().unwrap(),
-            base_url: format!("http://{address}"),
-            auth: ApiKeyAuth::resolve(&BTreeMap::from([(
-                String::from("api_key"),
-                DynamicValue::from("test-key"),
-            )]))
-            .unwrap(),
-            only_listed_models: false,
-            cached_models: RwLock::new(BTreeMap::new()),
-            model_configs: BTreeMap::new(),
-            model_catalog: None,
-            catalog_provider: None,
-            _profile: PhantomData,
-        };
-        let events = provider
-            .generate_reply_stream(
-                &ModelId::new("fixture-model"),
-                ProviderRequest {
-                    cacheable_messages: None,
-                    messages: vec![kraai_types::ConversationItem::User {
-                        content: String::from("hello").into(),
-                    }],
-                    script_tool: None,
-                },
-                &ProviderRequestContext::default(),
-            )
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
-        assert!(matches!(
-            events.first(),
-            Some(Ok(ProviderStreamEvent::TextDelta { delta, .. })) if delta == "partial"
-        ));
-        assert!(events.get(1).is_some_and(|event| {
-            event
-                .as_ref()
-                .is_err_and(|error| error.to_string().contains("Provider disconnected"))
-        }));
-        assert_eq!(events.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn model_cache_replacement_preserves_selection_metadata_and_failed_refreshes() {
-        for only_listed_models in [false, true] {
-            let address = spawn_server(vec![
-                ScriptedResponse::Status {
-                    status_line: "200 OK",
-                    body: r#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"}]}"#,
-                },
-                ScriptedResponse::Status {
-                    status_line: "200 OK",
-                    body: r#"{"data":[{"id":42}]}"#,
-                },
-            ])
-            .await;
-            let Some(client) = test_client_or_skip() else {
-                return;
-            };
-            let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
-                id: ProviderId::new("fixture"),
-                client,
-                base_url: format!("http://{address}"),
-                auth: ApiKeyAuth::resolve(&BTreeMap::from([(
-                    String::from("api_key"),
-                    DynamicValue::from("fixture-key"),
-                )]))
-                .unwrap(),
-                only_listed_models,
-                cached_models: RwLock::new(BTreeMap::from([(
-                    ModelId::new("stale"),
-                    Model {
-                        supports_images: false,
-                        id: ModelId::new("stale"),
-                        name: String::from("Stale model"),
-                        max_context: None,
-                    },
-                )])),
-                model_configs: BTreeMap::from([(
-                    ModelId::new("alpha"),
-                    ConfiguredModelMetadata {
-                        supports_images: None,
-                        name: Some(String::from("Configured alpha")),
-                        max_context: Some(4096),
-                    },
-                )]),
-                model_catalog: None,
-                catalog_provider: None,
-                _profile: PhantomData,
-            };
-            let metadata = |models: Vec<Model>| {
-                models
-                    .into_iter()
-                    .map(|model| (model.id.to_string(), model.name, model.max_context))
-                    .collect::<Vec<_>>()
-            };
-            let mut expected = vec![(
-                String::from("alpha"),
-                String::from("Configured alpha"),
-                Some(4096),
-            )];
-            if !only_listed_models {
-                expected.push((String::from("zeta"), String::from("zeta"), None));
-            }
-
-            provider.cache_models().await.unwrap();
-            assert_eq!(metadata(provider.list_models().await), expected);
-            for listed in provider.list_models().await {
-                let found = provider.get_model(&listed.id).await.unwrap();
-                assert_eq!(metadata(vec![found]), metadata(vec![listed]));
-            }
-            assert!(provider.get_model(&ModelId::new("unknown")).await.is_none());
-            assert!(provider.get_model(&ModelId::new("stale")).await.is_none());
-            if only_listed_models {
-                assert!(provider.get_model(&ModelId::new("zeta")).await.is_none());
-            }
-            assert!(provider.cache_models().await.is_err());
-            assert_eq!(metadata(provider.list_models().await), expected);
-        }
-    }
-}
+#[path = "provider_tests.rs"]
+mod tests;

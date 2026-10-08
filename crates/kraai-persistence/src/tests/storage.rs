@@ -137,12 +137,16 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
     let directory = tempfile::tempdir()?;
     let persistence = Persistence::open(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
-    for model in ["first", "last"] {
+    for (model, effort) in [("first", "light"), ("last", "deep")] {
         let mut request = request("session", "answer");
         request.content = ConversationItem::Assistant { items: Vec::new() };
         request.generation = Some(kraai_types::MessageGeneration {
             provider_id: kraai_types::ProviderId::new("provider"),
             model_id: kraai_types::ModelId::new(model),
+            options: kraai_types::ModelOptionValues::from([(
+                "reasoning_effort".into(),
+                kraai_types::ModelOptionValue::Choice(effort.into()),
+            )]),
             max_context: None,
             usage: None,
         });
@@ -163,6 +167,10 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
             == Some(kraai_types::ModelSelection {
                 provider_id: kraai_types::ProviderId::new("provider"),
                 model_id: kraai_types::ModelId::new("last"),
+                options: kraai_types::ModelOptionValues::from([(
+                    "reasoning_effort".into(),
+                    kraai_types::ModelOptionValue::Choice("deep".into()),
+                )]),
             })
     );
     Ok(())

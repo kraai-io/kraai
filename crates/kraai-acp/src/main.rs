@@ -13,6 +13,8 @@ struct Cli {
     provider: Option<String>,
     #[arg(long)]
     model: Option<String>,
+    #[arg(long = "option", value_name = "ID=VALUE")]
+    options: Vec<String>,
     #[arg(long)]
     agent_profile: Option<String>,
     #[arg(long)]
@@ -46,7 +48,7 @@ async fn run(cli: Cli) -> Result<()> {
         if let RuntimeStartupState::Failed(error) = runtime.wait_for_startup().await? {
             return Err(eyre!(error));
         }
-        let options = kraai_acp::Options { provider: cli.provider, model: cli.model, profile: cli.agent_profile };
+        let options = kraai_acp::Options { provider: cli.provider, model: cli.model, profile: cli.agent_profile, options: cli.options };
         tokio::select! {
             result = kraai_acp::serve(runtime.clone(), options, kraai_acp::Stdio::new()) => result.map_err(|error| eyre!(error)),
             result = tokio::signal::ctrl_c() => result.map_err(Into::into),

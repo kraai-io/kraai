@@ -60,6 +60,7 @@ impl ConversationStore {
             session.selected_model = Some(kraai_types::ModelSelection {
                 model_id: generation.model_id.clone(),
                 provider_id: generation.provider_id.clone(),
+                options: generation.options.clone(),
             });
         }
         if previous_tip.is_none()

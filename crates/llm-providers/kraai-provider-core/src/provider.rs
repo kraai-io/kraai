@@ -77,6 +77,7 @@ pub struct ProviderRequest {
     pub messages: Vec<ConversationItem>,
     pub script_tool: Option<ScriptToolDefinition>,
     pub cacheable_messages: Option<usize>,
+    pub options: kraai_types::ModelOptionValues,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +86,8 @@ pub struct Model {
     pub name: String,
     pub max_context: Option<usize>,
     pub supports_images: bool,
+    #[serde(default)]
+    pub options: Vec<kraai_types::ModelOptionDefinition>,
 }
 
 #[cfg(test)]

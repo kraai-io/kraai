@@ -1,4 +1,4 @@
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, ensure, eyre};
 
 use crate::{DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, ValidationError};
 
@@ -7,6 +7,8 @@ pub struct ConfiguredModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
     pub supports_images: Option<bool>,
+    pub options: Vec<kraai_types::ModelOptionDefinition>,
+    pub remove_options: Vec<String>,
 }
 
 impl ConfiguredModelMetadata {
@@ -28,7 +30,58 @@ impl ConfiguredModelMetadata {
                 .supports_images
                 .or(catalog.supports_images)
                 .unwrap_or(false),
+            options: self.merge_options(catalog.options),
         }
+    }
+
+    pub fn merge_options(
+        &self,
+        discovered: Vec<kraai_types::ModelOptionDefinition>,
+    ) -> Vec<kraai_types::ModelOptionDefinition> {
+        let mut options = discovered
+            .into_iter()
+            .map(|option| (option.id.clone(), option))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for id in &self.remove_options {
+            options.remove(id);
+        }
+        for option in &self.options {
+            options.insert(option.id.clone(), option.clone());
+        }
+        options.into_values().collect()
+    }
+
+    pub fn from_model_config(config: &crate::ModelConfig) -> Result<Self> {
+        let mut metadata = Self::from_config(&config.config)?;
+        metadata.options.clone_from(&config.options);
+        metadata.remove_options.clone_from(&config.remove_options);
+        for (kind, values) in [
+            (
+                "options",
+                metadata
+                    .options
+                    .iter()
+                    .map(|option| option.id.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "remove_options",
+                metadata
+                    .remove_options
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            ensure!(
+                values
+                    .into_iter()
+                    .all(|id| !id.trim().is_empty() && seen.insert(id)),
+                "Model {kind} contains an empty or duplicate option ID"
+            );
+        }
+        Ok(metadata)
     }
 
     pub fn fields() -> Vec<FieldDefinition> {
@@ -121,6 +174,8 @@ impl ConfiguredModelMetadata {
             name,
             max_context,
             supports_images,
+            options: Vec::new(),
+            remove_options: Vec::new(),
         })
     }
 }
@@ -139,6 +194,7 @@ mod tests {
             name: Some("Catalog".into()),
             max_context: Some(65536),
             supports_images: Some(true),
+            options: Vec::new(),
         };
         let id = kraai_types::ModelId::new("model");
         let discovered =
@@ -149,6 +205,8 @@ mod tests {
             name: Some("Override".into()),
             max_context: Some(4096),
             supports_images: Some(false),
+            options: Vec::new(),
+            remove_options: Vec::new(),
         }
         .resolve(id, Some(catalog));
         assert!(!configured.supports_images);
@@ -221,6 +279,66 @@ mod tests {
             )]))
             .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_option_conditions_can_reference_inherited_definitions() -> Result<()> {
+        let toggle =
+            crate::reasoning_toggle_option(crate::ModelOptionsProtocol::OpenRouterChatCompletions)
+                .ok_or_else(|| eyre!("missing toggle"))?;
+        let mut budget = crate::reasoning_budget_option(
+            crate::ModelOptionsProtocol::OpenRouterChatCompletions,
+            Some(1),
+            Some(10000),
+        )
+        .ok_or_else(|| eyre!("missing budget"))?;
+        budget.active_when = Some(kraai_types::ModelOptionCondition {
+            option: toggle.id.clone(),
+            value: kraai_types::ModelOptionValue::Boolean(true),
+        });
+        let id = kraai_types::ModelId::new("model");
+        let config = crate::ModelConfig {
+            id: id.clone(),
+            provider_id: kraai_types::ProviderId::new("provider"),
+            options: vec![budget],
+            remove_options: Vec::new(),
+            config: DynamicConfig::new(),
+        };
+        let metadata = ConfiguredModelMetadata::from_model_config(&config)?;
+        let model = metadata.resolve(
+            id,
+            Some(crate::CatalogModelMetadata {
+                options: vec![toggle],
+                ..Default::default()
+            }),
+        );
+        assert!(
+            kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_override_and_removal_ids_fail_before_merging() -> Result<()> {
+        let option = crate::reasoning_effort_option(
+            crate::ModelOptionsProtocol::OpenAiChatCompletions,
+            ["custom".into()],
+        );
+        let mut config = crate::ModelConfig {
+            id: kraai_types::ModelId::new("model"),
+            provider_id: kraai_types::ProviderId::new("provider"),
+            options: vec![option.clone(), option],
+            remove_options: Vec::new(),
+            config: DynamicConfig::new(),
+        };
+        assert!(ConfiguredModelMetadata::from_model_config(&config).is_err());
+        config.options.clear();
+        config.remove_options = vec!["mode".into(), "mode".into()];
+        assert!(ConfiguredModelMetadata::from_model_config(&config).is_err());
+        config.remove_options = vec!["".into()];
+        assert!(ConfiguredModelMetadata::from_model_config(&config).is_err());
         Ok(())
     }
 }

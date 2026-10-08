@@ -117,6 +117,7 @@ fn lag_recovery_restores_costs_from_background_sessions() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "background".into(),
             result: Box::new(Ok(background)),
         });
@@ -186,6 +187,7 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "session".into(),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
