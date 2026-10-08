@@ -167,6 +167,7 @@ impl AgentManager {
     }
 
     pub async fn discard_streaming_state(&self, session_id: &str) {
+        let _persistence = self.streaming_persistence.lock().await;
         self.streaming_messages
             .write()
             .await
@@ -271,6 +272,7 @@ impl AgentManager {
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
             return Ok(None);
@@ -288,6 +290,7 @@ impl AgentManager {
     }
 
     pub async fn abort_streaming_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(state) = state else {
             return Ok(None);
@@ -316,6 +319,7 @@ impl AgentManager {
         message_id: &MessageId,
         cancelled_script_output: &str,
     ) -> Result<Option<CancelledStreamResult>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
             return Ok(None);
@@ -507,18 +511,26 @@ impl AgentManager {
 
 impl AgentManager {
     pub async fn publish_streaming_snapshots(&self) -> Result<()> {
-        let mut streaming = self.streaming_messages.write().await;
-        let result = async {
-            for state in streaming.values_mut() {
-                if state.snapshot_dirty {
-                    self.message_store.save(&state.message).await?;
-                    state.snapshot_dirty = false;
-                }
+        let _persistence = self.streaming_persistence.lock().await;
+        let snapshots: Vec<_> = self
+            .streaming_messages
+            .read()
+            .await
+            .values()
+            .filter(|state| state.snapshot_dirty)
+            .map(|state| state.message.clone())
+            .collect();
+        for message in snapshots {
+            self.message_store.save(&message).await?;
+            let mut streaming = self.streaming_messages.write().await;
+            if let Some(state) = streaming.get_mut(&message.id)
+                && state.message.content == message.content
+                && state.message.generation == message.generation
+            {
+                state.snapshot_dirty = false;
             }
-            Ok(())
+            drop(streaming);
         }
-        .await;
-        drop(streaming);
-        result
+        Ok(())
     }
 }

@@ -63,6 +63,7 @@ impl AgentManager {
             pending_message_rollbacks: HashMap::new(),
             last_used_profile_id: None,
             streaming_messages: RwLock::new(BTreeMap::new()),
+            streaming_persistence: Mutex::new(()),
         }
     }
 

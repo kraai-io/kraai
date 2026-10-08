@@ -7,7 +7,9 @@ use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderSt
 use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptExecutionId, ScriptExecutionStatus};
 use tokio::sync::{Mutex, mpsc};
 
-use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
+use super::harness::{
+    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
+};
 use crate::{Event, SessionActivity};
 
 pub(super) struct ControlledProvider {
@@ -86,7 +88,7 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
         delta: "partial".into(),
     }))?;
     observer.events.wait_for("observer update", |events| events.iter().any(|event| matches!(event, Event::HistoryUpdated { session_id } if session_id == &session))).await;
-    let snapshot = tokio::time::timeout(Duration::from_secs(3), async {
+    let snapshot = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             let snapshot = observer
                 .handle

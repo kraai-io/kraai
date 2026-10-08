@@ -69,8 +69,11 @@ impl AgentManager {
         if matches!(result, Ok(Some(_))) {
             self.last_used_profile_id = Some(profile.id.clone());
         }
-        if !matches!(result, Ok(Some(_))) && !self.is_turn_active(session_id) {
-            self.persistence.sessions().release_turn(session_id).await?;
+        if !matches!(result, Ok(Some(_)))
+            && !self.is_turn_active(session_id)
+            && let Err(error) = self.persistence.sessions().release_turn(session_id).await
+        {
+            tracing::warn!(%session_id, %error, "Failed to release session after stream preparation");
         }
         result
     }

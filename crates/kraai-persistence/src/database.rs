@@ -49,6 +49,12 @@ impl Database {
                     format!("Failed to open database {}", database.path.display())
                 })?;
                 connection.busy_timeout(Duration::from_secs(5))?;
+                let version: i64 =
+                    connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+                ensure!(
+                    matches!(version, 0 | 1),
+                    "Unsupported SQLite schema version {version}"
+                );
                 connection.execute_batch(include_str!("schema.sql"))?;
                 state.connection = Some(connection);
             }

@@ -8,6 +8,39 @@ struct LimitedWrites {
     remaining: AtomicUsize,
 }
 
+#[tokio::test]
+async fn preparation_error_survives_lease_release_failure() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?.execute_batch(
+        "CREATE TRIGGER fail_lease_release BEFORE UPDATE OF lease_active ON sessions
+         WHEN NEW.lease_active = 0 BEGIN SELECT RAISE(FAIL, 'injected lease release failure'); END;",
+    )?;
+    let error = manager
+        .prepare_messages_stream(
+            &session,
+            vec!["queued".into()],
+            ModelId::new("mock-model"),
+            ProviderId::new("missing-provider"),
+        )
+        .await
+        .expect_err("preparation fails");
+    assert!(format!("{error:?}").contains("missing-provider"));
+    assert!(!format!("{error:?}").contains("injected lease release failure"));
+    assert!(manager.get_chat_history(&session).await?.is_empty());
+    assert!(
+        manager
+            .persistence
+            .sessions()
+            .observe(&session)
+            .await?
+            .expect("lease")
+            .lease_active
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
 impl LimitedWrites {
     fn consume_write(&self) -> Result<()> {
         self.remaining

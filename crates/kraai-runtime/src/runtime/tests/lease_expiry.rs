@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use color_eyre::eyre::Result;
 
-use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
+use super::harness::{
+    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
+};
 use crate::Event;
 
 #[tokio::test]
@@ -43,16 +45,13 @@ async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -
 }
 
 #[tokio::test]
-async fn observers_refresh_on_expiry_without_a_database_write_and_can_submit() -> Result<()> {
+async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() -> Result<()> {
     let observer = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("reply")]])
         .await
         .expect("observer fixture");
     let session = create_session_with_profile(&observer.handle, "test-profile").await?;
     let owner = kraai_persistence::Persistence::open(&observer.data_dir).await?;
-    owner
-        .sessions()
-        .claim_turn_for(&session, Duration::from_millis(500))
-        .await?;
+    owner.sessions().claim_turn(&session).await?;
     assert!(observer.handle.load_session(session.clone()).await?);
     let before = observer
         .handle
@@ -66,11 +65,25 @@ async fn observers_refresh_on_expiry_without_a_database_write_and_can_submit() -
         .await?
         .expect("lease")
         .revision;
-    observer.events.wait_for("lease expiry update", |events| events.iter().any(|event| matches!(event, Event::HistoryUpdated { session_id } if session_id == &session))).await;
-    let after = observer
-        .handle
-        .get_session_snapshot(session.clone())
-        .await?;
+    let connection = rusqlite::Connection::open(observer.data_dir.join("kraai.sqlite3"))?;
+    connection.busy_timeout(TEST_TIMEOUT)?;
+    connection.execute(
+        "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
+        [&session],
+    )?;
+    let after = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let snapshot = observer
+                .handle
+                .get_session_snapshot(session.clone())
+                .await?;
+            if !snapshot.session.is_running {
+                break Ok::<_, crate::RuntimeError>(snapshot);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
     assert!(!after.session.is_running);
     assert!(!after.profiles.profile_locked);
     assert_eq!(

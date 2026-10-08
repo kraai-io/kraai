@@ -29,3 +29,4 @@ CREATE TABLE IF NOT EXISTS execution_output (
     bytes BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS execution_output_id ON execution_output(execution_id, sequence);
+PRAGMA user_version = 1;

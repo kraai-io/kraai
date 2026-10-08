@@ -68,7 +68,9 @@ function readRecord(storage, kind, id) {
   const { join } = require('node:path');
   const database = new DatabaseSync(join(storage, 'data', 'kraai.sqlite3'), { readOnly: true });
   try {
-    return JSON.parse(database.prepare('SELECT data FROM records WHERE kind = ? AND id = ?').get(kind, id).data);
+    const row = database.prepare('SELECT data FROM records WHERE kind = ? AND id = ?').get(kind, id);
+    assert.ok(row, `missing ${kind} record ${id}`);
+    return JSON.parse(row.data);
   } finally {
     database.close();
   }

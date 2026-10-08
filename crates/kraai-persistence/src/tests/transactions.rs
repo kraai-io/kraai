@@ -401,5 +401,35 @@ async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
             .await?
             .is_some_and(|message| message.content.text() == Some("original"))
     );
+    persistence.sessions().claim_turn("session").await?;
+    let before = reopened
+        .sessions()
+        .observe("session")
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
+    ensure!(
+        reopened
+            .compactions()
+            .delete(&checkpoint.covered_through)
+            .await
+            .is_err()
+    );
+    persistence
+        .compactions()
+        .delete(&checkpoint.covered_through)
+        .await?;
+    let after = reopened
+        .sessions()
+        .observe("session")
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
+    ensure!(after.revision == before.revision + 1);
+    ensure!(
+        reopened
+            .compactions()
+            .get(&checkpoint.covered_through)
+            .await?
+            .is_none()
+    );
     Ok(())
 }

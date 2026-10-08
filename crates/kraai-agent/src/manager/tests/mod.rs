@@ -9,6 +9,7 @@ mod intercepted;
 mod prompts;
 mod sessions;
 mod snapshot;
+mod snapshot_publication;
 mod streaming;
 
 mod usage;

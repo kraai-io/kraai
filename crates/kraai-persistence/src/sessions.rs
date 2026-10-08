@@ -186,6 +186,10 @@ pub(crate) fn delete_unreferenced(
     if message_referenced(connection, id)? {
         return Ok(());
     }
+    delete_message_records(connection, leases, id)
+}
+
+fn delete_message_records(connection: &Connection, leases: &LeaseTokens, id: &str) -> Result<()> {
     if let Some(session) = crate::database::record_session(connection, "message", id)?
         && read_session(connection, &session)?.is_some()
     {
@@ -251,11 +255,16 @@ impl SessionStore for SqliteSessionStore {
                     SELECT tip_id FROM sessions WHERE id = ?1 AND tip_id IS NOT NULL
                     UNION SELECT json_extract(records.data, '$.parent_id') FROM records JOIN history ON records.id = history.id
                     WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
-                ) SELECT id FROM history UNION SELECT id FROM records WHERE kind = 'message' AND session_id = ?1")?;
+                ), retained_history(id) AS (
+                    SELECT tip_id FROM sessions WHERE id != ?1 AND tip_id IS NOT NULL
+                    UNION SELECT json_extract(records.data, '$.parent_id') FROM records JOIN retained_history ON records.id = retained_history.id
+                    WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
+                ) SELECT id FROM history UNION SELECT id FROM records WHERE kind = 'message' AND session_id = ?1
+                EXCEPT SELECT id FROM retained_history")?;
                 statement.query_map([&id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
             };
             transaction.execute("DELETE FROM sessions WHERE id = ?1", [&id])?;
-            for message in message_ids { delete_unreferenced(transaction, leases, &message)?; }
+            for message in message_ids { delete_message_records(transaction, leases, &message)?; }
             transaction.execute("DELETE FROM execution_output WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
             transaction.execute("DELETE FROM execution_sources WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
             transaction.execute("DELETE FROM records WHERE session_id = ?1 AND kind NOT IN ('message', 'compaction')", [&id])?;

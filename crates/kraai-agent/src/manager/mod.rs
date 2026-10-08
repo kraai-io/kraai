@@ -16,7 +16,7 @@ use kraai_types::{
     MessageGeneration, MessageId, MessageStatus, ModelId, ProviderId, ScriptProfileSnapshot,
     StreamId, TokenUsage, ToolCallId,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
@@ -162,6 +162,7 @@ pub struct AgentManager {
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,
+    streaming_persistence: Mutex<()>,
 }
 
 impl AgentManager {

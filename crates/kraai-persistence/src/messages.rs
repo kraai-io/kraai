@@ -212,10 +212,13 @@ impl MessageStore for SqliteMessageStore {
     async fn list_ids(&self) -> Result<HashSet<MessageId>> {
         self.database
             .run(|connection, _| {
-                Ok(list_records::<Message>(connection, "message", None)?
-                    .into_iter()
-                    .map(|message| message.id)
-                    .collect())
+                let mut statement =
+                    connection.prepare("SELECT id FROM records WHERE kind = 'message'")?;
+                let ids = statement.query_map([], |row| row.get::<_, String>(0))?;
+                ids.map(|id| {
+                    MessageId::try_new(id?).map_err(|error| color_eyre::eyre::eyre!(error))
+                })
+                .collect()
             })
             .await
     }
