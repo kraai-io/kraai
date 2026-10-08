@@ -32,7 +32,7 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
     assert_eq!(visible.as_deref(), Some("Answer"));
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session);
-    let stored = kraai_persistence::FileMessageStore::new(&data_dir)
+    let stored = kraai_persistence::SqliteMessageStore::new(&data_dir)
         .get(&request.message_id)
         .await?
         .expect("saved message");
@@ -117,7 +117,7 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     tokio::fs::write(&blocked_root, b"not a directory").await?;
     let working_store = std::mem::replace(
         &mut manager.message_store,
-        Arc::new(kraai_persistence::FileMessageStore::new(&blocked_root)),
+        Arc::new(kraai_persistence::SqliteMessageStore::new(&blocked_root)),
     );
 
     assert!(manager.complete_message(&request.message_id).await.is_err());

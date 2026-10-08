@@ -1,12 +1,10 @@
-use kraai_io::fs::atomic_replace_in_async;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use crate::{commit::complete_commit, keyed_locks::KeyedLocks};
-use color_eyre::eyre::{Context, Result, ensure, eyre};
+use crate::database::{Database, read_record, record_session};
+use crate::message_references::{delete_message_record, write_message_record};
+use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
-
+use std::path::Path;
+use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionCheckpoint {
     pub covered_through: MessageId,
@@ -51,106 +49,63 @@ impl CompactionCheckpoint {
 }
 
 #[derive(Clone)]
-pub struct FileCompactionStore {
-    anchor: PathBuf,
-    root: PathBuf,
-    locks: Arc<KeyedLocks<MessageId>>,
+pub struct SqliteCompactionStore {
+    database: Database,
 }
-
-impl FileCompactionStore {
-    pub fn new(storage_root: &Path) -> Self {
-        Self {
-            anchor: storage_root.to_path_buf(),
-            root: storage_root.join("compactions"),
-            locks: Arc::default(),
-        }
+impl SqliteCompactionStore {
+    pub fn new(data_dir: &Path) -> Self {
+        Self::with_database(Database::new(data_dir))
     }
-
-    fn path(&self, boundary: &MessageId) -> Result<PathBuf> {
-        MessageId::try_new(boundary.as_str()).map_err(|error| eyre!(error))?;
-        Ok(self.root.join(format!("{boundary}.json")))
+    pub(crate) fn with_database(database: Database) -> Self {
+        Self { database }
     }
-
     pub async fn get(&self, boundary: &MessageId) -> Result<Option<CompactionCheckpoint>> {
-        let path = self.path(boundary)?;
-        let Some(bytes) = kraai_io::fs::read_optional_async(&path)
+        let boundary = boundary.to_string();
+        self.database
+            .run(move |connection, _| {
+                let checkpoint =
+                    read_record::<CompactionCheckpoint>(connection, "compaction", &boundary)?;
+                if let Some(checkpoint) = &checkpoint {
+                    checkpoint.validate()?;
+                }
+                Ok(checkpoint)
+            })
             .await
-            .with_context(|| format!("Failed to read compaction: {path:?}"))?
-        else {
-            return Ok(None);
-        };
-        let checkpoint: CompactionCheckpoint = serde_json::from_slice(&bytes)
-            .with_context(|| format!("Failed to parse compaction: {path:?}"))?;
-        checkpoint.validate()?;
-        ensure!(
-            &checkpoint.covered_through == boundary,
-            "Compaction checkpoint boundary does not match its filename"
-        );
-        Ok(Some(checkpoint))
     }
-
     pub async fn save(&self, checkpoint: &CompactionCheckpoint) -> Result<()> {
-        self.save_checkpoint(checkpoint, None).await
+        checkpoint.validate()?;
+        let checkpoint = checkpoint.clone();
+        self.database
+            .transaction(move |transaction, leases| {
+                let boundary = checkpoint.covered_through.as_str();
+                let session = record_session(transaction, "message", boundary)?;
+                write_message_record(
+                    transaction,
+                    leases,
+                    "compaction",
+                    boundary,
+                    session.as_deref(),
+                    &checkpoint,
+                )
+            })
+            .await
     }
-
     pub async fn save_with_barrier(
         &self,
         checkpoint: &CompactionCheckpoint,
         barrier: Arc<tokio::sync::RwLock<()>>,
     ) -> Result<()> {
-        self.save_checkpoint(checkpoint, Some(barrier)).await
+        let guard = barrier.read_owned().await;
+        let result = self.save(checkpoint).await;
+        drop(guard);
+        result
     }
-
-    async fn save_checkpoint(
-        &self,
-        checkpoint: &CompactionCheckpoint,
-        barrier: Option<Arc<tokio::sync::RwLock<()>>>,
-    ) -> Result<()> {
-        checkpoint.validate()?;
-        let path = self.path(&checkpoint.covered_through)?;
-        let bytes = serde_json::to_vec(checkpoint)?;
-        let anchor = self.anchor.clone();
-        self.commit(&checkpoint.covered_through, barrier, async move {
-            Ok(atomic_replace_in_async(&anchor, &path, &bytes)
-                .await?
-                .into_result()?)
-        })
-        .await
-    }
-
     pub async fn delete(&self, boundary: &MessageId) -> Result<()> {
-        let path = self.path(boundary)?;
-        self.commit(boundary, None, async move {
-            kraai_io::fs::remove_file_durable_async(&path)
-                .await
-                .with_context(|| format!("Failed to delete compaction: {path:?}"))?;
-            Ok(())
-        })
-        .await
-    }
-
-    async fn commit(
-        &self,
-        boundary: &MessageId,
-        barrier: Option<Arc<tokio::sync::RwLock<()>>>,
-        operation: impl Future<Output = Result<()>> + Send + 'static,
-    ) -> Result<()> {
-        let barrier = match barrier {
-            Some(barrier) => Some(barrier.read_owned().await),
-            None => None,
-        };
-        complete_commit(
-            self.locks.lock(boundary).await,
-            async move {
-                let result = operation.await;
-                drop(barrier);
-                result
-            },
-            "Compaction commit task failed",
-        )
-        .await
+        let boundary = boundary.to_string();
+        self.database
+            .transaction(move |transaction, leases| {
+                delete_message_record(transaction, leases, "compaction", &boundary)
+            })
+            .await
     }
 }
-
-#[cfg(test)]
-mod tests;

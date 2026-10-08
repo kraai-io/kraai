@@ -55,8 +55,6 @@ impl ConversationStore {
             generation: request.generation,
         };
 
-        self.message_store.save(&message).await?;
-
         session.tip_id = Some(message_id.clone());
         if previous_tip.is_none()
             && session.title.is_none()
@@ -67,8 +65,13 @@ impl ConversationStore {
         session.updated_at = current_unix_timestamp();
 
         match self
-            .session_store
-            .save_if_tip_matches(&session, previous_tip.as_ref())
+            .message_store
+            .save_linked(
+                &message,
+                &session,
+                previous_tip.as_ref(),
+                self.session_store.clone(),
+            )
             .await
         {
             Ok(true) => {}
@@ -280,6 +283,7 @@ impl ConversationStore {
     }
 }
 
+#[derive(Clone)]
 pub struct AppendMessageRequest {
     pub session_id: String,
     pub content: ConversationItem,
@@ -315,10 +319,3 @@ fn validate_idempotent_message(existing: &Message, request: &AppendMessageReques
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "turn persistence tests use direct assertions for fixture and failure-path setup"
-)]
-mod tests;

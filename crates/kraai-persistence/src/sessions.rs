@@ -1,27 +1,19 @@
-use std::collections::{HashMap, HashSet};
+use crate::MessageStore;
+use crate::database::{Database, LeaseTokens, assert_owner};
+use crate::keyed_locks::KeyedLocks;
+use color_eyre::eyre::{Result, ensure};
+use kraai_types::{Message, MessageId};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use color_eyre::eyre::{Context, Result, eyre};
-use kraai_types::MessageId;
-use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
-
-use crate::FileCompactionStore;
-use crate::commit::complete_commit;
-use crate::keyed_locks::KeyedLocks;
-use crate::{
-    ContextStateStore, FileContextStateStore, FileRequestUsageStore, MessageStore,
-    RequestUsageStore,
-};
-use kraai_io::fs::{AtomicWriteOutcome, atomic_replace_async};
-
-mod deletion;
-
+use tokio::sync::OwnedMutexGuard;
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
+    #[serde(skip)]
+    pub revision: i64,
     pub id: String,
     pub tip_id: Option<MessageId>,
     pub workspace_dir: PathBuf,
@@ -80,301 +72,160 @@ pub trait SessionStore: Send + Sync {
     async fn delete(&self, id: &str) -> Result<()>;
 }
 
-/// File-based session store
-pub struct FileSessionStore {
-    state: Arc<SessionState>,
-    write_guard: Arc<Mutex<()>>,
+pub struct SqliteSessionStore {
+    pub(crate) database: Database,
     message_mutations: KeyedLocks<MessageId>,
-    pub(crate) context: Arc<dyn ContextStateStore>,
-    pub(crate) usage: Arc<dyn RequestUsageStore>,
 }
 
-struct SessionState {
-    compactions: FileCompactionStore,
-    /// Sessions metadata
-    sessions: RwLock<HashMap<String, SessionMeta>>,
-    /// Path to sessions file
-    sessions_path: PathBuf,
-    deletions_dir: PathBuf,
-    deleting: RwLock<HashSet<String>>,
-    /// Reference to message store for GC
-    message_store: Arc<dyn MessageStore>,
-}
-
-impl FileSessionStore {
+impl SqliteSessionStore {
     pub fn new(data_dir: &Path, message_store: Arc<dyn MessageStore>) -> Self {
-        let sessions_path = data_dir.join("sessions.json");
+        Self::with_database(
+            message_store
+                .sqlite_database()
+                .unwrap_or_else(|| Database::new(data_dir)),
+        )
+    }
+
+    pub fn sqlite_database(&self) -> crate::SqliteDatabase {
+        self.database.clone()
+    }
+
+    pub(crate) fn with_database(database: Database) -> Self {
         Self {
-            state: Arc::new(SessionState {
-                compactions: FileCompactionStore::new(data_dir),
-                sessions: RwLock::new(HashMap::new()),
-                sessions_path,
-                deletions_dir: data_dir.join("session-deletions"),
-                deleting: RwLock::default(),
-                message_store,
-            }),
-            write_guard: Arc::default(),
+            database,
             message_mutations: KeyedLocks::default(),
-            context: Arc::new(FileContextStateStore::new(data_dir)),
-            usage: Arc::new(FileRequestUsageStore::new(data_dir)),
         }
     }
 
     pub(crate) async fn load(&self) -> Result<()> {
-        self.state.load().await?;
-        self.load_deletions().await
+        self.database.run(|_, _| Ok(())).await
     }
 
-    pub(crate) async fn cleanup_orphans(&self) -> Result<usize> {
-        self.state.cleanup_orphans().await
-    }
-
-    pub(crate) fn compactions(&self) -> FileCompactionStore {
-        self.state.compactions.clone()
-    }
-
-    async fn commit_sessions(
-        &self,
-        guard: OwnedMutexGuard<()>,
-        next_sessions: HashMap<String, SessionMeta>,
-    ) -> Result<()> {
-        let state = self.state.clone();
-        complete_commit(
-            guard,
-            async move {
-                let outcome =
-                    SessionState::persist_sessions(&next_sessions, &state.sessions_path).await?;
-                state.publish_sessions(next_sessions, outcome).await?;
-                Ok(())
-            },
-            "Session commit task failed",
-        )
-        .await
-    }
-
-    async fn update_if_tip_matches(
+    async fn update(
         &self,
         session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-        required_message: Option<&MessageId>,
+        expected: Option<Option<MessageId>>,
+        require_message: bool,
     ) -> Result<bool> {
-        let guard = self.write_guard.clone().lock_owned().await;
-
-        if self.state.deleting.read().await.contains(&session.id) {
-            return Ok(false);
-        }
-        let sessions = self.state.sessions.read().await;
-        let Some(current) = sessions.get(&session.id) else {
-            return Ok(false);
-        };
-        if current.tip_id.as_ref() != expected_tip {
-            return Ok(false);
-        }
-        let mut next_sessions = sessions.clone();
-        drop(sessions);
-        if let Some(message_id) = required_message
-            && !self.state.message_store.exists(message_id).await?
-        {
-            return Err(eyre!(
-                "Cannot link missing message {message_id} to session {}",
-                session.id
-            ));
-        }
-        next_sessions.insert(session.id.clone(), session.clone());
-
-        self.commit_sessions(guard, next_sessions)
-            .await
-            .map(|()| true)
+        let session = session.clone();
+        self.database.transaction(move |transaction, leases| {
+            assert_owner(transaction, leases, &session.id)?;
+            let current = read_session(transaction, &session.id)?;
+            if let Some(expected) = expected
+                && current.as_ref().is_none_or(|current| current.tip_id != expected) {
+                return Ok(false);
+            }
+            assert_session_revision(current.as_ref(), &session)?;
+            if require_message && let Some(tip) = &session.tip_id {
+                ensure!(crate::database::read_record::<Message>(transaction, "message", tip.as_str())?.is_some(),
+                    "Cannot link missing message {tip}");
+            }
+            save_session(transaction, &session)?;
+            if let Some(tip) = &session.tip_id {
+                transaction.execute("UPDATE records SET session_id = COALESCE(session_id, ?1) WHERE kind = 'message' AND id = ?2",
+                    params![session.id, tip.as_str()])?;
+            }
+            Ok(true)
+        }).await
     }
 }
 
-impl SessionState {
-    async fn delete_message(&self, id: &MessageId, message_store: &dyn MessageStore) -> Result<()> {
-        self.compactions.delete(id).await?;
-        message_store.delete(id).await
+pub(crate) fn assert_session_revision(
+    current: Option<&SessionMeta>,
+    updated: &SessionMeta,
+) -> Result<()> {
+    match current {
+        Some(current) => ensure!(
+            current.revision == updated.revision,
+            kraai_types::DomainError::conflict("Session changed while updating metadata")
+        ),
+        None => ensure!(
+            updated.revision == 0,
+            kraai_types::DomainError::not_found(format!("Session not found: {}", updated.id))
+        ),
     }
+    Ok(())
+}
 
-    /// Load sessions from disk (should be called on startup)
-    async fn load(&self) -> Result<()> {
-        let Some(content) = kraai_io::fs::read_optional_text_async(&self.sessions_path)
-            .await
-            .with_context(|| format!("Failed to read sessions file: {:?}", self.sessions_path))?
-        else {
-            return Ok(());
-        };
+pub(crate) fn read_session(connection: &Connection, id: &str) -> Result<Option<SessionMeta>> {
+    let row: Option<(String, i64)> = connection
+        .query_row(
+            "SELECT data, metadata_revision FROM sessions WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    row.map(|(json, revision)| {
+        let mut session: SessionMeta = serde_json::from_str(&json)?;
+        session.revision = revision;
+        Ok(session)
+    })
+    .transpose()
+}
 
-        let sessions: HashMap<String, SessionMeta> =
-            serde_json::from_str(&content).with_context(|| "Failed to parse sessions file")?;
+pub(crate) fn save_session(connection: &Connection, session: &SessionMeta) -> Result<()> {
+    connection.execute("INSERT INTO sessions(id, data, tip_id, revision, metadata_revision) VALUES (?1, ?2, ?3, 1, 1)
+        ON CONFLICT(id) DO UPDATE SET data = excluded.data, tip_id = excluded.tip_id, revision = sessions.revision + 1, metadata_revision = sessions.metadata_revision + 1",
+        params![session.id, serde_json::to_string(session)?, session.tip_id.as_ref().map(MessageId::as_str)])?;
+    Ok(())
+}
 
-        let previous = std::mem::replace(&mut *self.sessions.write().await, sessions);
-        drop(previous);
+pub(crate) fn message_referenced(connection: &Connection, id: &str) -> Result<bool> {
+    Ok(connection.query_row("WITH RECURSIVE history(id) AS (
+        SELECT tip_id FROM sessions WHERE tip_id IS NOT NULL
+        UNION SELECT json_extract(records.data, '$.parent_id') FROM records JOIN history ON records.id = history.id
+        WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
+    ) SELECT EXISTS(SELECT 1 FROM history WHERE id = ?1)", [id], |row| row.get(0))?)
+}
 
-        Ok(())
+pub(crate) fn delete_unreferenced(
+    connection: &Connection,
+    leases: &LeaseTokens,
+    id: &str,
+) -> Result<()> {
+    if message_referenced(connection, id)? {
+        return Ok(());
     }
+    delete_message_records(connection, leases, id)
+}
 
-    /// Persist sessions to disk (internal version that takes sessions map)
-    async fn persist_sessions(
-        sessions: &HashMap<String, SessionMeta>,
-        path: &Path,
-    ) -> Result<AtomicWriteOutcome> {
-        let content = serde_json::to_string_pretty(sessions)
-            .with_context(|| "Failed to serialize sessions")?;
-
-        Ok(atomic_replace_async(path, content.as_bytes()).await?)
+fn delete_message_records(connection: &Connection, leases: &LeaseTokens, id: &str) -> Result<()> {
+    if let Some(session) = crate::database::record_session(connection, "message", id)?
+        && read_session(connection, &session)?.is_some()
+    {
+        assert_owner(connection, leases, &session)?;
     }
-
-    async fn publish_sessions(
-        &self,
-        next_sessions: HashMap<String, SessionMeta>,
-        outcome: AtomicWriteOutcome,
-    ) -> Result<()> {
-        let previous = std::mem::replace(&mut *self.sessions.write().await, next_sessions);
-        drop(previous);
-        Ok(outcome.into_result()?)
-    }
-
-    /// Collect all message IDs in a session's tree (from tip to root)
-    async fn collect_tree_messages(&self, tip_id: &MessageId) -> Result<HashSet<MessageId>> {
-        self.collect_tree_messages_until(tip_id, &HashSet::new())
-            .await
-    }
-
-    async fn collect_tree_messages_until(
-        &self,
-        tip_id: &MessageId,
-        known: &HashSet<MessageId>,
-    ) -> Result<HashSet<MessageId>> {
-        let mut messages = HashSet::new();
-        let mut current = Some(tip_id.clone());
-
-        while let Some(id) = current {
-            if known.contains(&id) {
-                break;
-            }
-            if !messages.insert(id.clone()) {
-                return Err(eyre!(
-                    "Corrupt message parent graph: cycle repeats message {id}"
-                ));
-            }
-            current = self.message_store.read_parent_id(&id).await?;
-        }
-
-        Ok(messages)
-    }
-
-    /// Collect all message IDs referenced by all sessions
-    async fn collect_all_referenced_messages(&self) -> Result<HashSet<MessageId>> {
-        let session_tips: Vec<_> = self
-            .sessions
-            .read()
-            .await
-            .values()
-            .filter_map(|session| {
-                session
-                    .tip_id
-                    .as_ref()
-                    .map(|tip| (session.id.clone(), tip.clone()))
-            })
-            .collect();
-        let mut all_messages = HashSet::new();
-
-        for (session_id, tip_id) in session_tips {
-            let tree = self
-                .collect_tree_messages_until(&tip_id, &all_messages)
-                .await
-                .with_context(|| format!("Failed to traverse messages for session {session_id}"))?;
-            all_messages.extend(tree);
-        }
-
-        Ok(all_messages)
-    }
-
-    /// Garbage collect orphaned messages after deleting a session
-    async fn gc_orphaned_messages(
-        &self,
-        deleted_tree: HashSet<MessageId>,
-        message_store: &dyn MessageStore,
-    ) -> Result<()> {
-        let still_referenced = self.collect_all_referenced_messages().await?;
-
-        let mut deleted_messages: Vec<_> = deleted_tree.into_iter().collect();
-        deleted_messages.sort();
-
-        let mut errors = Vec::new();
-        for msg_id in deleted_messages {
-            if !still_referenced.contains(&msg_id)
-                && let Err(e) = self.delete_message(&msg_id, message_store).await
-            {
-                errors.push((msg_id, e));
-            }
-        }
-
-        if !errors.is_empty() {
-            for (id, e) in &errors {
-                tracing::error!("Failed to delete orphaned message {}: {}", id, e);
-            }
-            let detail = errors
-                .into_iter()
-                .map(|(id, error)| format!("{id}: {error}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(eyre!(
-                "Failed to delete orphaned messages after session removal: {detail}"
-            ));
-        }
-
-        Ok(())
-    }
+    connection.execute(
+        "DELETE FROM records WHERE kind IN ('message', 'compaction') AND id = ?1",
+        [id],
+    )?;
+    Ok(())
 }
 
 #[async_trait::async_trait]
-impl SessionStore for FileSessionStore {
+impl SessionStore for SqliteSessionStore {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
-        let deleting = self.state.deleting.read().await.clone();
-        let mut list: Vec<_> = self
-            .state
-            .sessions
-            .read()
-            .await
-            .values()
-            .filter(|session| !deleting.contains(&session.id))
-            .cloned()
-            .collect();
-        list.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        Ok(list)
-    }
-
-    async fn list_ids(&self) -> Result<HashSet<String>> {
-        let deleting = self.state.deleting.read().await.clone();
-        Ok(self
-            .state
-            .sessions
-            .read()
-            .await
-            .keys()
-            .filter(|id| !deleting.contains(*id))
-            .cloned()
-            .collect())
+        self.database.run(|connection, _| {
+            let mut statement = connection.prepare("SELECT data, metadata_revision FROM sessions ORDER BY json_extract(data, '$.updated_at') DESC, id")?;
+            let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+            rows.map(|row| {
+                let (json, revision) = row?;
+                let mut session: SessionMeta = serde_json::from_str(&json)?;
+                session.revision = revision;
+                Ok(session)
+            }).collect()
+        }).await
     }
 
     async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
-        if self.state.deleting.read().await.contains(id) {
-            return Ok(None);
-        }
-        let sessions = self.state.sessions.read().await;
-        Ok(sessions.get(id).cloned())
+        let id = id.to_string();
+        self.database
+            .run(move |connection, _| read_session(connection, &id))
+            .await
     }
 
     async fn save(&self, session: &SessionMeta) -> Result<()> {
-        let guard = self.write_guard.clone().lock_owned().await;
-        if self.state.deleting.read().await.contains(&session.id) {
-            return Err(eyre!("Session {} is being deleted", session.id));
-        }
-
-        let mut next_sessions = self.state.sessions.read().await.clone();
-        next_sessions.insert(session.id.clone(), session.clone());
-
-        self.commit_sessions(guard, next_sessions).await
+        self.update(session, None, false).await.map(|_| ())
     }
 
     async fn save_if_tip_matches(
@@ -382,7 +233,7 @@ impl SessionStore for FileSessionStore {
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
     ) -> Result<bool> {
-        self.update_if_tip_matches(session, expected_tip, None)
+        self.update(session, Some(expected_tip.cloned()), false)
             .await
     }
 
@@ -391,12 +242,34 @@ impl SessionStore for FileSessionStore {
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
     ) -> Result<bool> {
-        self.update_if_tip_matches(session, expected_tip, session.tip_id.as_ref())
+        self.update(session, Some(expected_tip.cloned()), true)
             .await
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        self.delete_session(id).await
+        let id = id.to_string();
+        self.database.transaction(move |transaction, leases| {
+            assert_owner(transaction, leases, &id)?;
+            let message_ids: Vec<String> = {
+                let mut statement = transaction.prepare("WITH RECURSIVE history(id) AS (
+                    SELECT tip_id FROM sessions WHERE id = ?1 AND tip_id IS NOT NULL
+                    UNION SELECT json_extract(records.data, '$.parent_id') FROM records JOIN history ON records.id = history.id
+                    WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
+                ), retained_history(id) AS (
+                    SELECT tip_id FROM sessions WHERE id != ?1 AND tip_id IS NOT NULL
+                    UNION SELECT json_extract(records.data, '$.parent_id') FROM records JOIN retained_history ON records.id = retained_history.id
+                    WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
+                ) SELECT id FROM history UNION SELECT id FROM records WHERE kind = 'message' AND session_id = ?1
+                EXCEPT SELECT id FROM retained_history")?;
+                statement.query_map([&id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
+            };
+            transaction.execute("DELETE FROM sessions WHERE id = ?1", [&id])?;
+            for message in message_ids { delete_message_records(transaction, leases, &message)?; }
+            transaction.execute("DELETE FROM execution_output WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
+            transaction.execute("DELETE FROM execution_sources WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
+            transaction.execute("DELETE FROM records WHERE session_id = ?1 AND kind NOT IN ('message', 'compaction')", [&id])?;
+            Ok(())
+        }).await
     }
 
     async fn lock_message_mutation(&self, id: &MessageId) -> OwnedMutexGuard<()> {
@@ -406,54 +279,11 @@ impl SessionStore for FileSessionStore {
     async fn delete_message_if_unreferenced(
         &self,
         id: &MessageId,
-        message_store: Arc<dyn MessageStore>,
+        _message_store: Arc<dyn MessageStore>,
     ) -> Result<()> {
-        let guard = self.write_guard.clone().lock_owned().await;
-        let state = self.state.clone();
-        let messages = HashSet::from([id.clone()]);
-        complete_commit(
-            guard,
-            async move {
-                state
-                    .gc_orphaned_messages(messages, message_store.as_ref())
-                    .await
-            },
-            "Message cleanup task failed",
-        )
-        .await
+        let id = id.to_string();
+        self.database
+            .transaction(move |transaction, leases| delete_unreferenced(transaction, leases, &id))
+            .await
     }
 }
-
-impl SessionState {
-    /// Clean up orphaned messages (messages on disk not referenced by any session)
-    async fn cleanup_orphans(&self) -> Result<usize> {
-        let on_disk = self.message_store.list_all_on_disk().await?;
-        let referenced = self.collect_all_referenced_messages().await?;
-
-        let mut deleted_count = 0;
-        for msg_id in on_disk.difference(&referenced) {
-            match self
-                .delete_message(msg_id, self.message_store.as_ref())
-                .await
-            {
-                Ok(()) => deleted_count += 1,
-                Err(e) => {
-                    tracing::error!("Failed to delete orphaned message {}: {}", msg_id, e);
-                }
-            }
-        }
-
-        if deleted_count > 0 {
-            tracing::info!("Cleaned up {} orphaned messages", deleted_count);
-        }
-
-        Ok(deleted_count)
-    }
-}
-
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "persistence tests use direct assertions for fixture and failure-path setup"
-)]
-mod tests;

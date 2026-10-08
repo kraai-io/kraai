@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, eyre};
+use kraai_persistence::SessionStore;
 use tokio::sync::oneshot;
 
 use super::config::canonicalize_workspace_dir;
@@ -18,8 +19,15 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 
 impl RuntimeCore {
     pub(super) async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
-        let usage_store = self.agent_manager.read().await.request_usage_store();
-        usage_store.refresh(session_id).await?;
+        let observation = self.session_store.observe(session_id).await?;
+        if let Some(observation) = observation {
+            self.observed_sessions
+                .lock()
+                .await
+                .insert(session_id.to_string(), observation);
+        }
+        let foreign_owner = observation.is_some_and(|observation| observation.lease_active)
+            && !self.session_store.owns_turn(session_id).await?;
         let snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;
@@ -33,25 +41,42 @@ impl RuntimeCore {
 
         let agent = self.agent_manager.read().await;
         let reader = agent.capture_session_snapshot(session_id).await?;
-        let is_running = agent.is_turn_active(session_id);
+        let is_running = agent.is_turn_active(session_id) || foreign_owner;
         drop(agent);
         // Capture the sequence alongside mutable state. History loading below follows the
         // captured tip and uses copied in-flight messages, never later stream contents.
         let (event_sequence, turn_timer) = self.event_tx.timer_snapshot(session_id);
         drop(snapshot_guard);
 
-        let data = reader.load().await?;
+        let mut data = reader.load().await?;
+        data.profiles.profile_locked |= foreign_owner;
         let context_usage = data.context_usage.map(|usage| SessionContextUsage {
             provider_id: usage.provider_id.to_string(),
             model_id: usage.model_id.to_string(),
             max_context: usage.max_context,
             usage: usage.usage,
         });
-        let streaming = active_stream || data.streaming;
+        let foreign_records = if foreign_owner {
+            self.execution_store.list_for_session(session_id).await?
+        } else {
+            Vec::new()
+        };
+        let foreign_approval = foreign_records
+            .iter()
+            .any(|record| record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval);
+        let foreign_script = foreign_records
+            .iter()
+            .any(|record| record.phase == kraai_types::ScriptExecutionPhase::Running);
+        let streaming = active_stream
+            || data.streaming
+            || (foreign_owner
+                && data.history.values().any(|message| {
+                    matches!(message.status, kraai_types::MessageStatus::Streaming { .. })
+                }));
 
-        let activity = if pending_script.is_some() {
+        let activity = if pending_script.is_some() || foreign_approval {
             SessionActivity::AwaitingApproval
-        } else if executing_script {
+        } else if executing_script || foreign_script {
             SessionActivity::ExecutingScript
         } else if streaming {
             SessionActivity::Streaming
@@ -59,8 +84,8 @@ impl RuntimeCore {
             SessionActivity::Idle
         };
         let session = Session {
-            profile_locked: data.profile_locked,
-            waiting_for_approval: pending_script.is_some(),
+            profile_locked: data.profile_locked || foreign_owner,
+            waiting_for_approval: pending_script.is_some() || foreign_approval,
             is_streaming: streaming,
             is_running,
             ..Session::from_session_meta(data.session)
@@ -234,6 +259,11 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
+                if let Some(observation) = self.session_store.observe(&session_id).await? {
+                    let mut watched = self.observed_sessions.lock().await;
+                    watched.clear();
+                    watched.insert(session_id.clone(), observation);
+                }
                 let loaded = self
                     .agent_manager
                     .write()
@@ -254,7 +284,7 @@ impl RuntimeCore {
                     let agent = self.agent_manager.read().await;
                     let sessions = agent.list_sessions().await?;
                     let streaming_sessions = agent.streaming_session_ids().await;
-                    let sessions = sessions
+                    let mut sessions: Vec<_> = sessions
                         .into_iter()
                         .map(|session| Session {
                             profile_locked: agent.is_profile_locked(&session.id),
@@ -265,6 +295,38 @@ impl RuntimeCore {
                         })
                         .collect();
                     drop(agent);
+                    for session in &mut sessions {
+                        if self
+                            .session_store
+                            .observe(&session.id)
+                            .await?
+                            .is_some_and(|state| state.lease_active)
+                            && !self.session_store.owns_turn(&session.id).await?
+                        {
+                            session.profile_locked = true;
+                            session.is_running = true;
+                            let records =
+                                self.execution_store.list_for_session(&session.id).await?;
+                            session.waiting_for_approval = records.iter().any(|record| {
+                                record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval
+                            });
+                            let meta = self.session_store.get(&session.id).await?;
+                            if let Some(tip) = meta.and_then(|meta| meta.tip_id) {
+                                session.is_streaming = self
+                                    .agent_manager
+                                    .read()
+                                    .await
+                                    .get_message(&tip)
+                                    .await?
+                                    .is_some_and(|message| {
+                                        matches!(
+                                            message.status,
+                                            kraai_types::MessageStatus::Streaming { .. }
+                                        )
+                                    });
+                            }
+                        }
+                    }
                     Ok(sessions)
                 }
                 .await;
@@ -310,6 +372,8 @@ impl RuntimeCore {
                     .delete_session(&session_id)
                     .await;
                 if result.is_ok() {
+                    self.release_turn(&session_id).await;
+                    self.observed_sessions.lock().await.remove(&session_id);
                     self.event_tx.remove_timer(&session_id);
                 }
                 respond(response, result);

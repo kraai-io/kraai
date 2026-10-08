@@ -25,7 +25,10 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
             .is_empty()
     );
     reopen_agent(&harness).await?;
-    harness.runtime.recover_script_executions().await?;
+    harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await?;
     let history = harness.handle.get_chat_history(session_id.clone()).await?;
     let restored = history
         .get(&completed.record.result_message_id)

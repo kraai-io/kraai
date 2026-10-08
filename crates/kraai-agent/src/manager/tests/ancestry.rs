@@ -14,17 +14,10 @@ async fn source_ancestry_queries_stop_after_finding_all_candidates() -> Result<(
     let second = manager
         .add_message(&session_id, ChatRole::Assistant, "second".into(), None)
         .await?;
-    let tip = manager
+    let _tip = manager
         .add_message(&session_id, ChatRole::User, "tip".into(), None)
         .await?;
-    for id in [&older, &first, &second, &tip] {
-        manager.message_store.unload(id).await;
-    }
-    tokio::fs::write(
-        data_dir.join("messages").join(format!("{older}.json")),
-        b"invalid older message",
-    )
-    .await?;
+    super::common::corrupt_message(&data_dir, &older, "{}")?;
 
     let candidates = HashSet::from([first, second]);
     assert_eq!(
@@ -33,12 +26,11 @@ async fn source_ancestry_queries_stop_after_finding_all_candidates() -> Result<(
             .await?,
         candidates
     );
-    assert!(manager.message_store.list_hot().await?.is_empty());
     let error = manager
         .reachable_message_ids(&session_id, HashSet::from([MessageId::new("missing")]))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("Failed to parse message file"));
+    assert!(error.to_string().contains("missing field"));
     cleanup_dir(data_dir).await;
     Ok(())
 }

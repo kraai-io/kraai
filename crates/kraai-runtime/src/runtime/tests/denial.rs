@@ -61,21 +61,15 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         .get(&execution_id)
         .await?
         .expect("execution record");
-    let blocked_path = if fail_history {
-        harness
-            .data_dir
-            .join("messages")
-            .join(format!("{}.json", record.result_message_id))
+    let connection = rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?;
+    let (kind, id) = if fail_history {
+        ("message", record.result_message_id.as_str())
     } else {
-        let path = harness
-            .data_dir
-            .join("executions")
-            .join(execution_id.as_str())
-            .join("stdout.bin");
-        tokio::fs::remove_file(&path).await?;
-        path
+        ("execution", execution_id.as_str())
     };
-    tokio::fs::create_dir(&blocked_path).await?;
+    connection.execute_batch(&format!(
+        "CREATE TRIGGER fail_denial BEFORE INSERT ON records WHEN NEW.kind = '{kind}' AND NEW.id = '{id}' BEGIN SELECT RAISE(FAIL, 'injected persistence failure'); END;"
+    ))?;
     assert!(matches!(
         harness
             .handle
@@ -96,11 +90,8 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         .deny_pending_script(session_id.clone(), execution_id)
         .await
         .expect_err("persistence must fail");
-    assert!(
-        error
-            .chain()
-            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
-    );
+    assert!(format!("{error:?}").contains("injected persistence failure"));
+    connection.execute_batch("DROP TRIGGER fail_denial")?;
     drop(guard);
     let snapshot = runtime.build_session_snapshot(&session_id).await?;
     assert!(!snapshot.session.is_running);

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use color_eyre::eyre::Result;
 use kraai_agent::AgentManager;
 use kraai_persistence::{
-    AppendMessageRequest, ConversationStore, FileMessageStore, FileSessionStore, MessageStore,
-    ScriptExecutionCompletion, SessionStore,
+    AppendMessageRequest, ConversationStore, MessageStore, ScriptExecutionCompletion, SessionStore,
+    SqliteMessageStore, SqliteSessionStore,
 };
 use kraai_types::{ConversationItem, MessageStatus, ScriptExecutionStatus};
 
@@ -23,10 +23,9 @@ async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> 
         return Ok(());
     };
     reopen_agent(&harness).await?;
-    let mut runtime = harness.runtime.clone();
-    Arc::make_mut(&mut runtime.config).resume_recovered_turns = false;
+    let runtime = harness.runtime.clone();
 
-    runtime.recover_script_executions().await?;
+    runtime.recover_session_executions(&session_id).await?;
 
     assert!(
         !runtime
@@ -143,12 +142,20 @@ pub(super) async fn completed_script_with_image(
 
 pub(super) async fn reopen_agent(
     harness: &RuntimeTestHarness,
-) -> Result<(Arc<FileMessageStore>, Arc<FileSessionStore>)> {
-    let messages = Arc::new(FileMessageStore::new(&harness.data_dir));
+) -> Result<(Arc<SqliteMessageStore>, Arc<SqliteSessionStore>)> {
+    let messages = Arc::new(SqliteMessageStore::with_database(
+        harness.runtime.session_store.sqlite_database(),
+    ));
     let persistence =
         kraai_persistence::Persistence::open_with_messages(&harness.data_dir, messages.clone())
             .await?;
     let sessions = persistence.sessions().clone();
+    let available = sessions.list().await?;
+    for session in available {
+        if !sessions.owns_turn(&session.id).await? {
+            sessions.claim_turn(&session.id).await?;
+        }
+    }
     let providers = harness
         .runtime
         .agent_manager
@@ -172,6 +179,7 @@ async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Res
         let (_, sessions) = reopen_agent(&harness).await?;
         let mut retained = sessions.get(&session_id).await?.unwrap();
         retained.id = String::from("retained");
+        retained.revision = 0;
         sessions.save(&retained).await?;
     }
     assert_eq!(
@@ -199,7 +207,10 @@ async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Res
         retained_by_other_session
     );
     assert!(sessions.get(&session_id).await?.unwrap().tip_id.is_none());
-    let recovered = harness.runtime.recover_script_executions().await;
+    let recovered = harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await;
     let history = harness.handle.get_chat_history(session_id).await?;
     assert!(history.is_empty(), "replayed an undone script result");
     recovered?;
@@ -220,7 +231,7 @@ async fn restart_ignores_undone_script_sources_retained_by_another_session() -> 
 async fn append_later_message(
     harness: &RuntimeTestHarness,
     session_id: &str,
-) -> Result<Arc<FileMessageStore>> {
+) -> Result<Arc<SqliteMessageStore>> {
     let (messages, sessions) = reopen_agent(harness).await?;
     ConversationStore::new(messages.clone(), sessions)
         .append_message(AppendMessageRequest {
@@ -248,7 +259,10 @@ async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Re
     assert!(before.contains_key(&completed.record.source_message_id));
     assert!(before.contains_key(&completed.record.result_message_id));
 
-    harness.runtime.recover_script_executions().await?;
+    harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await?;
 
     assert_eq!(
         serde_json::to_value(harness.handle.get_chat_history(session_id).await?)?,
@@ -266,14 +280,10 @@ async fn recovery_still_validates_previously_delivered_script_results() -> Resul
         };
         let messages = append_later_message(&harness, &session_id).await?;
         if corrupt_output {
-            tokio::fs::remove_file(
-                harness
-                    .data_dir
-                    .join("executions")
-                    .join(completed.record.id.as_str())
-                    .join("stdout.bin"),
-            )
-            .await?;
+            rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?.execute(
+                "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, 'corrupt', x'00')",
+                [completed.record.id.as_str()],
+            )?;
         } else {
             let mut message = messages
                 .get(&completed.record.result_message_id)
@@ -290,11 +300,11 @@ async fn recovery_still_validates_previously_delivered_script_results() -> Resul
         reopen_agent(&harness).await?;
         let error = harness
             .runtime
-            .recover_script_executions()
+            .recover_session_executions(&session_id)
             .await
             .expect_err("corrupt historical result");
         let expected = if corrupt_output {
-            "Failed to read script output"
+            "Invalid stored output stream"
         } else {
             "already exists with content that does not match"
         };

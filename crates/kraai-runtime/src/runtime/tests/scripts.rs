@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use kraai_persistence::{FileScriptExecutionStore, ScriptExecutionStore};
+use kraai_persistence::{ScriptExecutionStore, SqliteScriptExecutionStore};
 use kraai_types::{
     AssistantItem, AssistantPhase, ChatRole, ScriptExecutionPhase, ScriptExecutionStatus,
     TokenUsage,
@@ -146,7 +146,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         })
         .await;
 
-    let records = FileScriptExecutionStore::new(&harness.data_dir)
+    let records = SqliteScriptExecutionStore::new(&harness.data_dir)
         .list_for_session(&session_id)
         .await?;
     assert_eq!(records.len(), 1);
@@ -311,7 +311,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         .await?;
     assert!(snapshot.turn_timer.last_duration() >= Some(elapsed_after_delay));
 
-    let records = FileScriptExecutionStore::new(&harness.data_dir)
+    let records = SqliteScriptExecutionStore::new(&harness.data_dir)
         .list_for_session(&session_id)
         .await?;
     assert_eq!(records.len(), 1);
@@ -507,7 +507,7 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
             })
         })
         .await;
-    let records = FileScriptExecutionStore::new(&harness.data_dir)
+    let records = SqliteScriptExecutionStore::new(&harness.data_dir)
         .list_for_session(&session_id)
         .await?;
     assert_eq!(records.len(), 1);
@@ -568,7 +568,14 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         .await
         .remove(&session_id);
 
-    harness.runtime.recover_script_executions().await?;
+    harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await?;
+    harness
+        .handle
+        .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+        .await?;
     harness
         .events
         .wait_for("recovery continuation", |events| {
@@ -582,7 +589,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         })
         .await;
 
-    let records = FileScriptExecutionStore::new(&harness.data_dir)
+    let records = SqliteScriptExecutionStore::new(&harness.data_dir)
         .list_for_session(&session_id)
         .await?;
     assert_eq!(records.len(), 1);
@@ -594,7 +601,15 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             .is_some_and(|error| error.contains("awaiting approval") && error.contains("not run"))
     );
 
-    harness.runtime.recover_script_executions().await?;
+    harness
+        .runtime
+        .session_store
+        .claim_turn(&session_id)
+        .await?;
+    harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await?;
     let history = harness.handle.get_chat_history(session_id).await?;
     let result = history
         .values()

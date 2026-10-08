@@ -34,9 +34,7 @@ fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    let mut builder = RuntimeBuilder::new()
-        .use_current_executable_as_nushell_host()
-        .resume_recovered_turns(false);
+    let mut builder = RuntimeBuilder::new().use_current_executable_as_nushell_host();
     if let Some(path) = cli.provider_config {
         builder = builder.provider_config_path(path);
     }

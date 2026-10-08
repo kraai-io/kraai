@@ -1,4 +1,5 @@
 use color_eyre::eyre::{Result, eyre};
+use kraai_persistence::{Persistence, SessionStore};
 use kraai_types::{
     AssistantItem, AssistantPhase, ConversationItem, Message, MessageId, MessageStatus,
 };
@@ -15,8 +16,7 @@ async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()
     let session = harness.session().await?;
     harness.stop().await?;
     let state = harness.root.path().join("state/data");
-    let messages = state.join("messages");
-    tokio::fs::create_dir_all(&messages).await?;
+    let persistence = Persistence::open(&state).await?;
     let mut parent_id = None;
     for index in 0..MESSAGES {
         let text = format!("{index:03}:{}", "x".repeat(TEXT_BYTES));
@@ -40,19 +40,16 @@ async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()
             agent_profile_id: None,
             generation: None,
         };
-        tokio::fs::write(
-            messages.join(format!("{}.json", message.id)),
-            serde_json::to_vec(&message)?,
-        )
-        .await?;
+        persistence.messages().save(&message).await?;
         parent_id = Some(message.id);
     }
-    let path = state.join("sessions.json");
-    let mut sessions: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
-    sessions
-        .get_mut(&session)
-        .ok_or_else(|| eyre!("missing persisted session"))?["tip_id"] = json!(parent_id);
-    tokio::fs::write(path, serde_json::to_vec(&sessions)?).await?;
+    let mut metadata = persistence
+        .sessions()
+        .get(&session)
+        .await?
+        .ok_or_else(|| eyre!("missing persisted session"))?;
+    metadata.tip_id = parent_id;
+    persistence.sessions().save(&metadata).await?;
     harness.restart().await?;
     harness.initialize().await?;
     harness.send(json!({"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}})).await?;

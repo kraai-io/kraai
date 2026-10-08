@@ -49,10 +49,6 @@ impl RequestUsageStore for BlockedStore {
             .map(|request| (request.message_id.clone(), request.clone()))
             .collect())
     }
-
-    async fn refresh(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
 }
 
 #[tokio::test]

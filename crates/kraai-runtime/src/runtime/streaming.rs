@@ -79,6 +79,32 @@ impl RuntimeCore {
         loop {
             let queued_messages = self.take_queued_messages(&session_id).await;
             let intercepted = !queued_messages.is_empty();
+            let streaming = {
+                let agent = self.agent_manager.read().await;
+                agent.session_has_active_stream(&session_id).await
+            };
+            if streaming {
+                self.restore_queued_messages(&session_id, queued_messages)
+                    .await;
+                return Ok(ContinueSessionOutcome::NothingToContinue);
+            }
+            let ownership = async {
+                if !self.session_store.owns_turn(&session_id).await? {
+                    self.session_store.claim_turn(&session_id).await?;
+                    if let Err(error) = self.recover_session_executions(&session_id).await {
+                        self.release_turn(&session_id).await;
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = ownership {
+                self.restore_queued_messages(&session_id, queued_messages)
+                    .await;
+                return Err(RuntimeError::from_report(error));
+            }
+
             let continuation = {
                 let mut agent = self.agent_manager.write().await;
                 let selected_model = selection.clone().or_else(|| {
@@ -124,21 +150,18 @@ impl RuntimeCore {
                 Ok(None) => {
                     self.restore_queued_messages(&session_id, queued_messages)
                         .await;
+                    self.finish_turn(&session_id).await;
                     return Ok(ContinueSessionOutcome::NothingToContinue);
                 }
                 Err(error) => {
                     self.restore_queued_messages(&session_id, queued_messages)
                         .await;
-                    if intercepted {
-                        if !retried {
-                            retried = true;
-                            continue;
-                        }
-                    } else {
-                        let mut agent = self.agent_manager.write().await;
-                        agent.clear_active_turn(&session_id);
-                        drop(agent);
-                        self.event_tx.finish_timer(&session_id);
+                    if intercepted && !retried {
+                        retried = true;
+                        continue;
+                    }
+                    self.finish_turn(&session_id).await;
+                    if !intercepted {
                         self.schedule_queue_drain(&session_id);
                     }
                     emit_event(
@@ -207,7 +230,7 @@ impl RuntimeCore {
         let request_message_id = request.message_id.clone();
         let active_message_id = request_message_id.clone();
         let terminal_message_id = request_message_id.clone();
-        let auxiliary_usage_task = self.stream_tasks.session_token(&session_id);
+        let auxiliary_usage_task = self.stream_tasks.auxiliary_token(&session_id);
         let task = self.stream_tasks.spawn(&session_id, {
             let start_gate = start_gate.clone();
             async move {
@@ -227,6 +250,10 @@ impl RuntimeCore {
                     error: String::from("provider stream task panicked"),
                 });
 
+                task_runtime
+                    .stream_tasks
+                    .wait_auxiliary_session(&request_session_id)
+                    .await;
                 let _state_guard = task_runtime.session_state_barrier.read().await;
                 let _preparation = task_runtime
                     .session_preparations
@@ -470,6 +497,7 @@ impl RuntimeCore {
             if rollback_result.is_ok() {
                 agent.clear_active_turn(&session_id);
                 drop(agent);
+                self.release_turn(&session_id).await;
                 self.event_tx.finish_timer(&session_id);
             }
             rollback_result
@@ -495,6 +523,9 @@ impl RuntimeCore {
                 );
             }
             Err(rollback_error) => {
+                if matches!(self.session_store.owns_turn(&session_id).await, Ok(false)) {
+                    self.finish_turn(&session_id).await;
+                }
                 self.send_session_error(
                     &session_id,
                     format!(
@@ -531,10 +562,20 @@ impl RuntimeCore {
         message_id: &MessageId,
     ) -> Result<bool> {
         let mut agent = self.agent_manager.write().await;
-        let rollback_result = agent.abort_streaming_message(message_id).await?;
+        let rollback_result = agent.abort_streaming_message(message_id).await;
+        if rollback_result.is_err() {
+            drop(agent);
+            if !self.session_store.owns_turn(session_id).await? {
+                self.finish_turn(session_id).await;
+                return Ok(true);
+            }
+            return rollback_result.map(|_| false);
+        }
+        let rollback_result = rollback_result?;
         if rollback_result.is_some() {
             agent.clear_active_turn(session_id);
             drop(agent);
+            self.release_turn(session_id).await;
             self.event_tx.finish_timer(session_id);
             Ok(true)
         } else {
@@ -563,16 +604,38 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
-        self.cancel_session_work(session_id, false).await
+        self.cancel_session_work(session_id, false, None).await
     }
 
     pub(crate) async fn cancel_turn(&self, session_id: String) -> Result<bool> {
-        self.cancel_session_work(session_id, true).await
+        self.cancel_session_work(session_id, true, None).await
     }
 
-    async fn cancel_session_work(&self, session_id: String, discard_queued: bool) -> Result<bool> {
+    pub(crate) async fn cancel_turn_if_lease_matches(
+        &self,
+        session_id: String,
+        expected: i64,
+    ) -> Result<bool> {
+        self.cancel_session_work(session_id, true, Some(expected))
+            .await
+    }
+
+    async fn cancel_session_work(
+        &self,
+        session_id: String,
+        discard_queued: bool,
+        expected: Option<i64>,
+    ) -> Result<bool> {
         let state_guard = self.session_state_barrier.read().await;
         let preparation = self.session_preparations.begin(&session_id).await;
+        if let Some(expected) = expected
+            && !self
+                .session_store
+                .lease_token_matches(&session_id, expected)
+                .await?
+        {
+            return Ok(false);
+        }
         let discarded = discard_queued && !self.take_queued_messages(&session_id).await.is_empty();
         if self.cancel_pending_script(&session_id).await? {
             return Ok(true);
@@ -591,9 +654,12 @@ impl RuntimeCore {
                 agent.clear_active_turn(&session_id);
             }
             drop(agent);
+            let cancelled = active || completion.is_some() || discarded;
+            if completion.is_none() && cancelled {
+                self.release_turn(&session_id).await;
+            }
             drop(preparation);
             drop(state_guard);
-            let cancelled = active || completion.is_some() || discarded;
             if let Some(completion) = completion {
                 completion.cancelled().await;
             }
@@ -628,6 +694,12 @@ impl RuntimeCore {
                 Ok(cancelled) => cancelled,
                 Err(error) => {
                     drop(agent);
+                    if !self.session_store.owns_turn(&session_id).await? {
+                        self.stream_tasks.wait_session(&session_id).await;
+                        self.finish_turn(&session_id).await;
+                        self.send_session_error(&session_id, error);
+                        return Ok(true);
+                    }
                     self.active_streams
                         .lock()
                         .await
@@ -638,6 +710,10 @@ impl RuntimeCore {
             };
             agent.clear_active_turn(&session_id);
             drop(agent);
+            if cancelled.is_some() {
+                self.stream_tasks.wait_session(&session_id).await;
+            }
+            self.release_turn(&session_id).await;
             self.event_tx.finish_timer(&session_id);
             cancelled
         };

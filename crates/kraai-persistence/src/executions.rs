@@ -1,25 +1,14 @@
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use color_eyre::eyre::{Context, Result, eyre};
+use crate::database::{Database, assert_owner, list_records, read_record, write_record};
+use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{
     MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
     ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
 };
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
-
-use crate::commit::complete_commit;
-use crate::keyed_locks::KeyedLocks;
-use kraai_io::fs::{atomic_replace_async, sync_directory_async};
-
-const RECORD_FILE: &str = "record.json";
-const SOURCE_FILE: &str = "source.nu";
-const STDOUT_FILE: &str = "stdout.bin";
-const STDERR_FILE: &str = "stderr.bin";
-
 #[derive(Debug, Clone)]
 pub struct NewScriptExecution {
     pub id: ScriptExecutionId,
@@ -128,108 +117,77 @@ pub trait ScriptExecutionStore: Send + Sync {
     ) -> Result<ScriptExecutionRecord>;
 }
 
-pub struct FileScriptExecutionStore {
-    storage_root: PathBuf,
-    executions_dir: PathBuf,
-    execution_locks: KeyedLocks<ScriptExecutionId>,
+pub struct SqliteScriptExecutionStore {
+    database: Database,
 }
-
-impl FileScriptExecutionStore {
+impl SqliteScriptExecutionStore {
     pub fn new(data_dir: &Path) -> Self {
-        Self {
-            storage_root: data_dir.to_path_buf(),
-            executions_dir: data_dir.join("executions"),
-            execution_locks: KeyedLocks::default(),
-        }
+        Self::with_database(Database::new(data_dir))
+    }
+    pub(crate) fn with_database(database: Database) -> Self {
+        Self { database }
     }
 
-    fn execution_dir(&self, id: &ScriptExecutionId) -> Result<PathBuf> {
-        ScriptExecutionId::try_new(id.as_str()).map_err(|error| eyre!(error))?;
-        let path = self.executions_dir.join(id.as_str());
-        if path.parent() != Some(self.executions_dir.as_path()) {
-            return Err(eyre!("Execution path escaped storage directory: {path:?}"));
-        }
-        Ok(path)
-    }
-
-    async fn load_record(&self, id: &ScriptExecutionId) -> Result<ScriptExecutionRecord> {
-        let path = self.execution_dir(id)?.join(RECORD_FILE);
-        let bytes = fs::read(&path)
+    async fn update(
+        &self,
+        id: &ScriptExecutionId,
+        update: impl FnOnce(&Connection, &mut ScriptExecutionRecord) -> Result<()> + Send + 'static,
+    ) -> Result<ScriptExecutionRecord> {
+        let id = id.to_string();
+        self.database
+            .transaction(move |transaction, leases| {
+                let mut record =
+                    read_record::<ScriptExecutionRecord>(transaction, "execution", &id)?
+                        .ok_or_else(|| eyre!("Execution not found: {id}"))?;
+                assert_owner(transaction, leases, &record.session_id)?;
+                update(transaction, &mut record)?;
+                record.updated_at_millis = now_millis();
+                write_record(
+                    transaction,
+                    "execution",
+                    &id,
+                    Some(&record.session_id),
+                    &record,
+                )?;
+                Ok(record)
+            })
             .await
-            .with_context(|| format!("Failed to read script execution record: {path:?}"))?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("Failed to parse script execution record: {path:?}"))
-    }
-
-    async fn persist_record(execution_dir: &Path, record: &ScriptExecutionRecord) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(record)
-            .context("Failed to serialize script execution record")?;
-        atomic_replace_async(&execution_dir.join(RECORD_FILE), &bytes)
-            .await?
-            .into_result()
-            .map_err(color_eyre::Report::from)
     }
 
     async fn transition(
         &self,
         id: &ScriptExecutionId,
-        expected: &[ScriptExecutionPhase],
+        expected: Vec<ScriptExecutionPhase>,
         target: ScriptExecutionPhase,
     ) -> Result<ScriptExecutionRecord> {
-        let guard = self.execution_locks.lock(id).await;
-        let mut record = self.load_record(id).await?;
-        require_phase(&record, expected)?;
-        record.phase = target;
-        record.updated_at_millis = now_millis();
-        if target == ScriptExecutionPhase::Running {
-            record.started_at_millis = Some(record.updated_at_millis);
-        }
-        let execution_dir = self.execution_dir(id)?;
-        complete_commit(
-            guard,
-            async move {
-                Self::persist_record(&execution_dir, &record).await?;
-                Ok(record)
-            },
-            "Script execution commit task failed",
-        )
+        self.update(id, move |_, record| {
+            require_phase(record, &expected)?;
+            record.phase = target;
+            if target == ScriptExecutionPhase::Running {
+                record.started_at_millis = Some(now_millis());
+            }
+            Ok(())
+        })
         .await
     }
 }
 
 #[async_trait::async_trait]
-impl ScriptExecutionStore for FileScriptExecutionStore {
+impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn create(&self, execution: NewScriptExecution) -> Result<ScriptExecutionRecord> {
-        let guard = self.execution_locks.lock(&execution.id).await;
-        let executions_dir = self.executions_dir.clone();
-        let storage_root = self.storage_root.clone();
-        let execution_dir = self.execution_dir(&execution.id);
-        complete_commit(
-            guard,
-            async move {
-                kraai_io::fs::create_dir_all_in_async(&storage_root, &executions_dir)
-                    .await
-                    .with_context(|| {
-                        format!("Failed to create script executions directory: {executions_dir:?}")
-                    })?;
-                let execution_dir = execution_dir?;
-                fs::create_dir(&execution_dir).await.with_context(|| {
-                    format!("Failed to create unique script execution directory: {execution_dir:?}")
-                })?;
-                sync_directory_async(&executions_dir).await?;
-
-                atomic_replace_async(&execution_dir.join(SOURCE_FILE), &execution.source)
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)?;
-                atomic_replace_async(&execution_dir.join(STDOUT_FILE), &[])
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)?;
-                atomic_replace_async(&execution_dir.join(STDERR_FILE), &[])
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)?;
+        ScriptExecutionId::try_new(execution.id.as_str()).map_err(|error| eyre!(error))?;
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &execution.session_id)?;
+                ensure!(
+                    read_record::<ScriptExecutionRecord>(
+                        transaction,
+                        "execution",
+                        execution.id.as_str()
+                    )?
+                    .is_none(),
+                    "Script execution already exists"
+                );
                 let timestamp = now_millis();
                 let record = ScriptExecutionRecord {
                     id: execution.id,
@@ -251,87 +209,67 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
                     sandbox_denied: false,
                     error: None,
                 };
-                Self::persist_record(&execution_dir, &record).await?;
+                transaction.execute(
+                    "INSERT INTO execution_sources(execution_id, source) VALUES (?1, ?2)",
+                    params![record.id.as_str(), execution.source],
+                )?;
+                write_record(
+                    transaction,
+                    "execution",
+                    record.id.as_str(),
+                    Some(&record.session_id),
+                    &record,
+                )?;
                 Ok(record)
-            },
-            "Script execution commit task failed",
-        )
-        .await
-    }
-
-    async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>> {
-        let record_path = self.execution_dir(id)?.join(RECORD_FILE);
-        match fs::metadata(&record_path).await {
-            Ok(_) => self.load_record(id).await.map(Some),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| {
-                format!("Failed to inspect script execution record: {record_path:?}")
-            }),
-        }
-    }
-
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>> {
-        Ok(self
-            .list_all()
-            .await?
-            .into_iter()
-            .filter(|record| record.session_id == session_id)
-            .collect())
-    }
-
-    async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
-        let mut records = Vec::new();
-        let mut entries = match fs::read_dir(&self.executions_dir).await {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "Failed to list script executions directory: {:?}",
-                        self.executions_dir
-                    )
-                });
-            }
-        };
-        while let Some(entry) = entries.next_entry().await? {
-            if !entry.file_type().await?.is_dir() {
-                continue;
-            }
-            let id = match entry.file_name().into_string() {
-                Ok(id) => ScriptExecutionId::try_new(id),
-                Err(_) => continue,
-            };
-            let Ok(id) = id else {
-                continue;
-            };
-            let Some(record) = self.get(&id).await? else {
-                continue;
-            };
-            records.push(record);
-        }
-        records.sort_by(|left, right| {
-            (left.created_at_millis, &left.id).cmp(&(right.created_at_millis, &right.id))
-        });
-        Ok(records)
-    }
-
-    async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>> {
-        let path = self.execution_dir(id)?.join(SOURCE_FILE);
-        fs::read(&path)
+            })
             .await
-            .with_context(|| format!("Failed to read script source: {path:?}"))
     }
-
+    async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>> {
+        let id = id.to_string();
+        self.database
+            .run(move |connection, _| read_record(connection, "execution", &id))
+            .await
+    }
+    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>> {
+        let session = session_id.to_string();
+        self.database
+            .run(move |connection, _| list_records(connection, "execution", Some(&session)))
+            .await
+    }
+    async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
+        self.database
+            .run(|connection, _| list_records(connection, "execution", None))
+            .await
+    }
+    async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>> {
+        let id = id.to_string();
+        self.database
+            .run(move |connection, _| {
+                Ok(connection.query_row(
+                    "SELECT source FROM execution_sources WHERE execution_id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+    }
     async fn read_output(&self, id: &ScriptExecutionId) -> Result<PersistedScriptOutput> {
-        let _guard = self.execution_locks.lock(id).await;
-        let execution_dir = self.execution_dir(id)?;
-        let stdout_path = execution_dir.join(STDOUT_FILE);
-        let stderr_path = execution_dir.join(STDERR_FILE);
-        let (stdout, stderr) = tokio::try_join!(fs::read(&stdout_path), fs::read(&stderr_path))
-            .with_context(|| format!("Failed to read script output from: {execution_dir:?}"))?;
-        Ok(PersistedScriptOutput { stdout, stderr })
+        let id = id.to_string();
+        self.database.run(move |connection, _| {
+            ensure!(read_record::<ScriptExecutionRecord>(connection, "execution", &id)?.is_some(), "Execution not found: {id}");
+            let mut output = PersistedScriptOutput { stdout: Vec::new(), stderr: Vec::new() };
+            let mut statement = connection.prepare("SELECT stream, bytes FROM execution_output WHERE execution_id = ?1 ORDER BY sequence")?;
+            for row in statement.query_map([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))? {
+                let (stream, bytes) = row?;
+                match stream.as_str() {
+                    "stdout" => output.stdout.extend(bytes),
+                    "stderr" => output.stderr.extend(bytes),
+                    _ => return Err(eyre!("Invalid stored output stream")),
+                }
+            }
+            Ok(output)
+        }).await
     }
-
     async fn append_image(
         &self,
         id: &ScriptExecutionId,
@@ -339,57 +277,50 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         image: kraai_types::ImageAttachment,
     ) -> Result<()> {
         image.validate().map_err(|error| eyre!(error))?;
-        if sequence == 0 {
-            return Err(eyre!("Image attachment sequence must be positive"));
-        }
-        let guard = self.execution_locks.lock(id).await;
-        let mut record = self.load_record(id).await?;
-        if let Some(existing) = record.images.get(&sequence) {
-            if existing == &image {
+        ensure!(sequence > 0, "Image attachment sequence must be positive");
+        self.update(id, move |_, record| {
+            if let Some(existing) = record.images.get(&sequence) {
+                ensure!(
+                    existing == &image,
+                    "Image attachment sequence reused with different content"
+                );
                 return Ok(());
             }
-            return Err(eyre!(
-                "Image attachment sequence reused with different content"
-            ));
-        }
-        require_phase(&record, &[ScriptExecutionPhase::Running])?;
-        if record.images.len() >= kraai_types::image::MAX_IMAGE_ATTACHMENTS {
-            return Err(eyre!("Too many image attachments in one script execution"));
-        }
-        let total = record
-            .images
-            .values()
-            .map(|image| image.byte_length)
-            .try_fold(image.byte_length, u64::checked_add);
-        if total.is_none_or(|total| total > kraai_types::image::MAX_REQUEST_IMAGE_BYTES) {
-            return Err(eyre!("Image attachments exceed the execution byte limit"));
-        }
-        record.images.insert(sequence, image);
-        let execution_dir = self.execution_dir(id)?;
-        complete_commit(
-            guard,
-            async move { Self::persist_record(&execution_dir, &record).await },
-            "Image attachment commit task failed",
-        )
+            require_phase(record, &[ScriptExecutionPhase::Running])?;
+            ensure!(
+                record.images.len() < kraai_types::image::MAX_IMAGE_ATTACHMENTS,
+                "Too many image attachments in one script execution"
+            );
+            let total = record
+                .images
+                .values()
+                .map(|image| image.byte_length)
+                .try_fold(image.byte_length, u64::checked_add);
+            ensure!(
+                total.is_some_and(|total| total <= kraai_types::image::MAX_REQUEST_IMAGE_BYTES),
+                "Image attachments exceed the execution byte limit"
+            );
+            record.images.insert(sequence, image);
+            Ok(())
+        })
         .await
+        .map(|_| ())
     }
-
     async fn mark_awaiting_approval(
         &self,
         id: &ScriptExecutionId,
     ) -> Result<ScriptExecutionRecord> {
         self.transition(
             id,
-            &[ScriptExecutionPhase::Prepared],
+            vec![ScriptExecutionPhase::Prepared],
             ScriptExecutionPhase::AwaitingApproval,
         )
         .await
     }
-
     async fn mark_running(&self, id: &ScriptExecutionId) -> Result<ScriptExecutionRecord> {
         self.transition(
             id,
-            &[
+            vec![
                 ScriptExecutionPhase::Prepared,
                 ScriptExecutionPhase::AwaitingApproval,
             ],
@@ -397,7 +328,6 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         )
         .await
     }
-
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
@@ -407,80 +337,43 @@ impl ScriptExecutionStore for FileScriptExecutionStore {
         if bytes.is_empty() {
             return Ok(());
         }
-        let guard = self.execution_locks.lock(id).await;
-        let record = self.load_record(id).await?;
-        require_phase(&record, &[ScriptExecutionPhase::Running])?;
-        let file_name = match stream {
-            ScriptOutputStream::Stdout => STDOUT_FILE,
-            ScriptOutputStream::Stderr => STDERR_FILE,
+        let stream = match stream {
+            ScriptOutputStream::Stdout => "stdout",
+            ScriptOutputStream::Stderr => "stderr",
         };
-        let path = self.execution_dir(id)?.join(file_name);
-        complete_commit(
-            guard,
-            async move {
-                let mut output = fs::OpenOptions::new()
-                    .append(true)
-                    .open(&path)
-                    .await
-                    .with_context(|| {
-                        format!("Failed to open script output for append: {path:?}")
-                    })?;
-                output
-                    .write_all(&bytes)
-                    .await
-                    .with_context(|| format!("Failed to append script output: {path:?}"))?;
-                output
-                    .flush()
-                    .await
-                    .with_context(|| format!("Failed to flush script output: {path:?}"))?;
-                output
-                    .sync_data()
-                    .await
-                    .with_context(|| format!("Failed to sync script output: {path:?}"))?;
-                Ok(())
-            },
-            "Script execution commit task failed",
-        )
+        self.update(id, move |connection, record| {
+            require_phase(record, &[ScriptExecutionPhase::Running])?;
+            connection.execute(
+                "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)",
+                params![record.id.as_str(), stream, bytes],
+            )?;
+            Ok(())
+        })
         .await
+        .map(|_| ())
     }
-
     async fn finish(
         &self,
         id: &ScriptExecutionId,
         completion: ScriptExecutionCompletion,
     ) -> Result<ScriptExecutionRecord> {
-        let guard = self.execution_locks.lock(id).await;
-        let mut record = self.load_record(id).await?;
-        require_completion_transition(record.phase, completion.status, id)?;
-
-        let execution_dir = self.execution_dir(id)?;
-        complete_commit(
-            guard,
-            async move {
-                atomic_replace_async(&execution_dir.join(STDOUT_FILE), &completion.stdout)
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)?;
-                atomic_replace_async(&execution_dir.join(STDERR_FILE), &completion.stderr)
-                    .await?
-                    .into_result()
-                    .map_err(color_eyre::Report::from)?;
-
-                record.phase = ScriptExecutionPhase::Finished;
-                record.status = Some(completion.status);
-                record.exit_code = completion.exit_code;
-                record.sandbox_denied = completion.sandbox_denied;
-                record.error = completion.error;
-                record.updated_at_millis = now_millis();
-                Self::persist_record(&execution_dir, &record).await?;
-                Ok(record)
-            },
-            "Script execution commit task failed",
-        )
-        .await
+        self.update(id, move |connection, record| {
+            require_completion_transition(record.phase, completion.status, &record.id)?;
+            connection.execute("DELETE FROM execution_output WHERE execution_id = ?1", [record.id.as_str()])?;
+            for (stream, bytes) in [("stdout", completion.stdout), ("stderr", completion.stderr)] {
+                if !bytes.is_empty() {
+                    connection.execute("INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)", params![record.id.as_str(), stream, bytes])?;
+                }
+            }
+            record.phase = ScriptExecutionPhase::Finished;
+            record.status = Some(completion.status);
+            record.exit_code = completion.exit_code;
+            record.sandbox_denied = completion.sandbox_denied;
+            record.error = completion.error;
+            Ok(())
+        }).await
     }
 }
-
 fn require_phase(record: &ScriptExecutionRecord, expected: &[ScriptExecutionPhase]) -> Result<()> {
     if expected.contains(&record.phase) {
         return Ok(());
@@ -541,6 +434,6 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "persistence tests use direct assertions for fixture setup and stored artifacts"
+    reason = "execution persistence tests use direct fixture assertions"
 )]
 mod tests;

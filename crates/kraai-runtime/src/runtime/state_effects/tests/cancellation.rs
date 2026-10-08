@@ -1,11 +1,11 @@
 use super::*;
 
 use color_eyre::Result;
-use kraai_persistence::{ContextStateDocument, FileContextSnapshot, FileContextStateStore};
+use kraai_persistence::{ContextStateDocument, FileContextSnapshot, SqliteContextStateStore};
 use kraai_types::ContextStateEvent;
 
 struct PausedContextStore {
-    inner: FileContextStateStore,
+    inner: SqliteContextStateStore,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -72,7 +72,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     let directory = std::env::temp_dir().join(format!("kraai-state-effects-{}", Ulid::generate()));
     tokio::fs::create_dir_all(&directory).await.unwrap();
     let store = Arc::new(PausedContextStore {
-        inner: FileContextStateStore::new(&directory),
+        inner: SqliteContextStateStore::new(&directory),
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
     });
@@ -113,7 +113,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
         .unwrap();
     all.await;
     drop(barrier.write().await);
-    let reopened = FileContextStateStore::new(&directory);
+    let reopened = SqliteContextStateStore::new(&directory);
     let events = reopened.list("session").await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(

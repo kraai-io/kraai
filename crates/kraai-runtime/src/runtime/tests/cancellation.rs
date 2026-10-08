@@ -1,12 +1,12 @@
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::ScriptExecutionCompletion;
 use kraai_types::ScriptExecutionStatus;
 use tokio_util::sync::CancellationToken;
 
-use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
+use super::harness::{
+    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
+};
 use crate::Event;
 use crate::runtime::core::ActiveScriptTask;
 use crate::runtime::script_execution::CompletedScriptExecution;
@@ -111,9 +111,12 @@ async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_con
     assert!(cancellation.is_cancelled());
     assert!(!completion.is_cancelled());
     assert!(!runtime.agent_manager.read().await.is_turn_active(&session));
+    let observer = kraai_persistence::Persistence::open(&harness.data_dir).await?;
+    assert!(observer.sessions().claim_turn(&session).await.is_err());
     finish_tx.send(()).expect("release finalization");
-    assert!(tokio::time::timeout(Duration::from_secs(1), cancel).await??);
+    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await??);
     assert!(completion.is_cancelled());
+    assert!(!runtime.session_store.owns_turn(&session).await?);
     let snapshot = runtime.build_session_snapshot(&session).await?;
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.values().any(|message| matches!(
@@ -158,7 +161,7 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             if harness
                 .runtime
@@ -182,10 +185,10 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
     assert!(poll!(&mut cancel).is_pending());
     drop(streams);
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), continuation).await???,
+        tokio::time::timeout(TEST_TIMEOUT, continuation).await???,
         crate::ContinueSessionOutcome::Started
     );
-    tokio::time::timeout(Duration::from_secs(1), cancel).await??;
+    tokio::time::timeout(TEST_TIMEOUT, cancel).await??;
     assert!(runtime.active_streams.lock().await.is_empty());
     assert!(!runtime.agent_manager.read().await.is_turn_active(&session));
     harness.shutdown().await;
@@ -213,7 +216,7 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
     harness
         .runtime
         .spawn_continuation(session.clone(), completed.record.result_message_id);
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         while harness.runtime.session_state_barrier.try_write().is_ok() {
             tokio::task::yield_now().await;
         }
@@ -233,11 +236,8 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
     drop(agent);
     let sequence = harness.runtime.event_tx.latest_sequence();
     drop(preparation);
-    let state = tokio::time::timeout(
-        Duration::from_secs(1),
-        harness.runtime.session_state_barrier.write(),
-    )
-    .await?;
+    let state =
+        tokio::time::timeout(TEST_TIMEOUT, harness.runtime.session_state_barrier.write()).await?;
     assert_eq!(harness.runtime.event_tx.latest_sequence(), sequence);
     assert!(harness.runtime.active_streams.lock().await.is_empty());
     assert_eq!(
@@ -279,14 +279,14 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
     let handle = harness.handle.clone();
     let task_session = session.clone();
     let cancel = tokio::spawn(async move { handle.cancel_turn(task_session).await });
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         while harness.runtime.session_state_barrier.try_write().is_ok() {
             tokio::task::yield_now().await;
         }
     })
     .await?;
     drop(preparation);
-    assert!(tokio::time::timeout(Duration::from_secs(1), cancel).await???);
+    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
     harness
         .runtime
         .handle_start_queued_messages(session.clone())

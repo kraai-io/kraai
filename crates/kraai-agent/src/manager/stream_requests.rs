@@ -8,7 +8,6 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
     ) -> Result<PendingStreamRequest> {
-        self.finish_pending_message_rollback(session_id).await?;
         if self.is_turn_active(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot send a new message while the current turn is active"

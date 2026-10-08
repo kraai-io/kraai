@@ -7,11 +7,13 @@ use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use futures::{StreamExt, poll};
-use kraai_persistence::{FileMessageStore, MessageStore};
+use kraai_persistence::{MessageStore, SqliteMessageStore};
 use kraai_types::{Message, MessageId};
 use tokio_util::sync::CancellationToken;
 
-use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
+use super::harness::{
+    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
+};
 use crate::runtime::core::{ActiveScriptTask, ActiveStream};
 use crate::{ContinueSessionOutcome, Event, SessionActivity};
 
@@ -82,7 +84,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
         std::env::temp_dir().join(format!("kraai-script-handoff-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(true),
         fail_script_result_save: AtomicBool::new(false),
@@ -114,16 +116,16 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             String::from("mock"),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(1), received.recv())
+    tokio::time::timeout(TEST_TIMEOUT, received.recv())
         .await?
         .expect("initial provider request");
-    tokio::time::timeout(Duration::from_secs(1), store.entered.notified()).await?;
+    tokio::time::timeout(TEST_TIMEOUT, store.entered.notified()).await?;
 
     let handle = harness.handle.clone();
     let continuation =
         handle.continue_session(session_id.clone(), "mock-model".into(), "mock".into());
     tokio::pin!(continuation);
-    let early_result = tokio::time::timeout(Duration::from_secs(1), async {
+    let early_result = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             if let std::task::Poll::Ready(result) = poll!(&mut continuation) {
                 break Some(result);
@@ -138,11 +140,11 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
     store.release.notify_one();
     let outcome = match early_result {
         Some(result) => result?,
-        None => tokio::time::timeout(Duration::from_secs(1), &mut continuation).await??,
+        None => tokio::time::timeout(TEST_TIMEOUT, &mut continuation).await??,
     };
     let premature_request = if outcome == ContinueSessionOutcome::Started {
         Some(
-            tokio::time::timeout(Duration::from_secs(1), received.recv())
+            tokio::time::timeout(TEST_TIMEOUT, received.recv())
                 .await?
                 .expect("continued provider request"),
         )
@@ -167,7 +169,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             .handle
             .deny_script(session_id.clone(), pending.execution_id)
             .await?;
-        let request = tokio::time::timeout(Duration::from_secs(1), received.recv())
+        let request = tokio::time::timeout(TEST_TIMEOUT, received.recv())
             .await?
             .expect("automatic continuation after denial");
         assert!(request.messages.iter().any(|message| {
@@ -214,7 +216,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         std::env::temp_dir().join(format!("kraai-cancelled-script-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(false),
         fail_script_result_save: AtomicBool::new(fail_after_save.is_some()),
@@ -246,7 +248,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             "mock".into(),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(1), received.recv())
+    tokio::time::timeout(TEST_TIMEOUT, received.recv())
         .await?
         .expect("first provider request");
     harness
@@ -298,7 +300,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             "mock".into(),
         )
         .await?;
-    let request = tokio::time::timeout(Duration::from_secs(1), received.recv())
+    let request = tokio::time::timeout(TEST_TIMEOUT, received.recv())
         .await?
         .expect("provider request after cancellation");
     harness.shutdown().await;
@@ -341,7 +343,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
                 if *phase == kraai_types::AssistantPhase::Commentary && text == "I am partway through.")))
     }));
     let mut result_count = 0;
-    let mut on_disk: Vec<_> = store.list_all_on_disk().await?.into_iter().collect();
+    let mut on_disk: Vec<_> = store.list_ids().await?.into_iter().collect();
     on_disk.sort();
     for id in on_disk {
         if let Some(message) = store.get(&id).await?
@@ -384,7 +386,7 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
     ));
     let (_commands, mut receiver) = tokio::sync::mpsc::channel(1);
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
+        tokio::time::timeout(TEST_TIMEOUT, runtime.next_command(&mut receiver))
             .await?,
         Some(crate::handle::Command::StartQueuedMessages { session_id: id }) if id == session_id
     ));
@@ -393,7 +395,7 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
         .await;
     assert!(matches!(
         tokio::time::timeout(
-            Duration::from_secs(1),
+            TEST_TIMEOUT,
             harness.handle.send_message(
                 other_session,
                 "independent".into(),
@@ -406,7 +408,7 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
     ));
     drop(preparation);
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
+        tokio::time::timeout(TEST_TIMEOUT, runtime.next_command(&mut receiver))
             .await?,
         Some(crate::handle::Command::StartQueuedMessages { session_id: id }) if id == session_id
     ));
@@ -459,7 +461,7 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
     harness
         .runtime
         .spawn_continuation(session_id.clone(), request.message_id);
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         while harness.runtime.session_state_barrier.try_write().is_ok() {
             tokio::task::yield_now().await;
         }
@@ -499,7 +501,7 @@ async fn wait_for_snapshot_writer(
     barrier: &tokio::sync::RwLock<()>,
 ) -> Result<()> {
     tokio::pin!(snapshot);
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             assert!(poll!(&mut snapshot).is_pending());
             if barrier.try_read().is_err() {
@@ -626,7 +628,7 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
     );
     assert!(context.sequence < start.sequence);
     drop(mutation);
-    let snapshot = tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
+    let snapshot = tokio::time::timeout(TEST_TIMEOUT, snapshot).await??;
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
     assert_eq!(snapshot.turn_timer, timer);
@@ -688,9 +690,9 @@ async fn cancellation_finishes_with_a_queued_snapshot_and_stays_active_until_fin
     finish_tx.send(()).expect("finish task still running");
     tokio::task::yield_now().await;
     drop(mutation);
-    let snapshot = tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
+    let snapshot = tokio::time::timeout(TEST_TIMEOUT, snapshot).await??;
     assert_eq!(snapshot.activity, SessionActivity::ExecutingScript);
-    tokio::time::timeout(Duration::from_secs(1), &mut cancel).await??;
+    tokio::time::timeout(TEST_TIMEOUT, &mut cancel).await??;
     assert!(result.await??);
     assert!(completion.is_cancelled());
     assert!(harness.runtime.active_script_tasks.lock().await.is_empty());
@@ -774,7 +776,7 @@ async fn assert_shutdown_waits_for_synchronous_stream(cancel_before_shutdown: bo
             abort_handle: task.abort_handle(),
         },
     );
-    tokio::time::timeout(Duration::from_secs(1), entered.cancelled()).await?;
+    tokio::time::timeout(TEST_TIMEOUT, entered.cancelled()).await?;
     if cancel_before_shutdown {
         harness.runtime.cancel_stream(session_id).await?;
         assert!(harness.runtime.active_streams.lock().await.is_empty());
@@ -787,9 +789,9 @@ async fn assert_shutdown_waits_for_synchronous_stream(cancel_before_shutdown: bo
 
     release_tx.send(()).expect("stream poll is blocked");
     if shutdown_pending {
-        tokio::time::timeout(Duration::from_secs(1), shutdown).await?;
+        tokio::time::timeout(TEST_TIMEOUT, shutdown).await?;
     }
-    let _task_result = tokio::time::timeout(Duration::from_secs(1), task).await?;
+    let _task_result = tokio::time::timeout(TEST_TIMEOUT, task).await?;
     assert!(shutdown_pending);
     assert!(!stream_finished_early);
     assert!(harness.runtime.stream_tasks.is_empty());
@@ -834,7 +836,7 @@ async fn shutdown_waits_for_script_finalization_after_task_removal() -> Result<(
         },
     );
     start_tx.send(()).expect("registered task is waiting");
-    tokio::time::timeout(Duration::from_secs(1), removed_rx).await??;
+    tokio::time::timeout(TEST_TIMEOUT, removed_rx).await??;
     let mut events = harness.runtime.event_tx.subscribe();
     let shutdown_runtime = harness.runtime.clone();
     let shutdown = shutdown_runtime.stop_active_work();
@@ -843,7 +845,7 @@ async fn shutdown_waits_for_script_finalization_after_task_removal() -> Result<(
     assert!(!completion.is_cancelled());
 
     finish_tx.send(()).expect("finalization is waiting");
-    tokio::time::timeout(Duration::from_secs(1), shutdown).await?;
+    tokio::time::timeout(TEST_TIMEOUT, shutdown).await?;
     assert!(completion.is_cancelled());
     assert!(matches!(
         events.try_recv()?.event,
@@ -890,10 +892,8 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
     assert!(poll!(&mut continuation).is_pending());
     drop(mutation);
 
-    let ((), outcome) = tokio::time::timeout(Duration::from_secs(1), async {
-        tokio::join!(shutdown, continuation)
-    })
-    .await?;
+    let ((), outcome) =
+        tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(shutdown, continuation) }).await?;
     assert_eq!(outcome?, ContinueSessionOutcome::NothingToContinue);
     assert!(harness.runtime.active_streams.lock().await.is_empty());
     assert_eq!(harness.runtime.event_tx.latest_sequence(), event_sequence);
@@ -907,7 +907,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         std::env::temp_dir().join(format!("kraai-slow-history-{}", ulid::Ulid::generate()));
     tokio::fs::create_dir_all(&data_dir).await?;
     let store = Arc::new(PausedMessageStore {
-        inner: FileMessageStore::new(&data_dir),
+        inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
         pause_completed_script: AtomicBool::new(false),
         fail_script_result_save: AtomicBool::new(false),
@@ -946,24 +946,17 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         let session_id = session_id.clone();
         async move { handle.get_session_snapshot(session_id).await }
     });
-    tokio::time::timeout(Duration::from_secs(1), store.entered.notified()).await?;
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        harness.handle.list_provider_definitions(),
-    )
-    .await??;
-    let guard = tokio::time::timeout(
-        Duration::from_secs(1),
-        harness.runtime.session_state_barrier.read(),
-    )
-    .await?;
+    tokio::time::timeout(TEST_TIMEOUT, store.entered.notified()).await?;
+    tokio::time::timeout(TEST_TIMEOUT, harness.handle.list_provider_definitions()).await??;
+    let guard =
+        tokio::time::timeout(TEST_TIMEOUT, harness.runtime.session_state_barrier.read()).await?;
     harness
         .runtime
         .send_event(Event::HistoryUpdated { session_id });
     let later_sequence = harness.runtime.event_tx.latest_sequence();
     drop(guard);
     store.release.notify_one();
-    let snapshot = tokio::time::timeout(Duration::from_secs(1), snapshot_task).await???;
+    let snapshot = tokio::time::timeout(TEST_TIMEOUT, snapshot_task).await???;
     assert!(snapshot.event_sequence < later_sequence);
     assert_eq!(
         snapshot
@@ -986,7 +979,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
 }
 
 struct PausedMessageStore {
-    inner: FileMessageStore,
+    inner: SqliteMessageStore,
     pause: AtomicBool,
     pause_completed_script: AtomicBool,
     fail_script_result_save: AtomicBool,
@@ -997,6 +990,9 @@ struct PausedMessageStore {
 
 #[async_trait::async_trait]
 impl MessageStore for PausedMessageStore {
+    fn sqlite_database(&self) -> Option<kraai_persistence::SqliteDatabase> {
+        self.inner.sqlite_database()
+    }
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         if self.pause.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -1027,19 +1023,13 @@ impl MessageStore for PausedMessageStore {
         }
         self.inner.save(message).await
     }
-    async fn unload(&self, id: &MessageId) {
-        self.inner.unload(id).await;
-    }
     async fn delete(&self, id: &MessageId) -> Result<()> {
         self.inner.delete(id).await
     }
     async fn exists(&self, id: &MessageId) -> Result<bool> {
         self.inner.exists(id).await
     }
-    async fn list_all_on_disk(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_all_on_disk().await
-    }
-    async fn list_hot(&self) -> Result<HashSet<MessageId>> {
-        self.inner.list_hot().await
+    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
+        self.inner.list_ids().await
     }
 }

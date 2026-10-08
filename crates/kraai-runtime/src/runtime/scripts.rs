@@ -52,10 +52,7 @@ impl RuntimeCore {
         let call_id = match call_id {
             Some(call_id) => call_id,
             None if script.is_none() && protocol_error.is_none() => {
-                let mut agent = self.agent_manager.write().await;
-                agent.clear_active_turn(&completed_session);
-                drop(agent);
-                self.event_tx.finish_timer(&completed_session);
+                self.finish_turn(&completed_session).await;
                 emit_event(
                     &self.event_tx,
                     Event::TurnCompleted {
@@ -342,11 +339,10 @@ impl RuntimeCore {
         if status == ScriptExecutionStatus::HostUnavailable {
             self.fail_script_turn(session_id, &host_failure(&completed))
                 .await;
-        } else if status == ScriptExecutionStatus::Cancelled {
-            let mut agent = self.agent_manager.write().await;
-            agent.clear_active_turn(session_id);
-            drop(agent);
-            self.event_tx.finish_timer(session_id);
+        } else if status == ScriptExecutionStatus::Cancelled
+            || !self.agent_manager.read().await.is_turn_active(session_id)
+        {
+            self.finish_turn(session_id).await;
             self.schedule_queue_drain(session_id);
         } else if self.agent_manager.read().await.is_turn_active(session_id) {
             self.spawn_continuation(
@@ -364,12 +360,7 @@ impl RuntimeCore {
     }
 
     pub(super) async fn fail_script_turn(&self, session_id: &str, error: &color_eyre::Report) {
-        {
-            let mut agent = self.agent_manager.write().await;
-            agent.clear_active_turn(session_id);
-            drop(agent);
-            self.event_tx.finish_timer(session_id);
-        }
+        self.finish_turn(session_id).await;
         self.schedule_queue_drain(session_id);
         emit_event(
             &self.event_tx,

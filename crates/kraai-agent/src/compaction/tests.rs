@@ -162,8 +162,8 @@ fn fixture(
         Some(kraai_provider_core::ScriptToolDefinition::nushell()),
     );
     let context = ContextCompaction {
-        store: FileCompactionStore::new(&root),
-        usage_store: Arc::new(kraai_persistence::FileRequestUsageStore::new(&root)),
+        store: SqliteCompactionStore::new(&root),
+        usage_store: Arc::new(kraai_persistence::SqliteRequestUsageStore::new(&root)),
         session_id: "session".into(),
         original,
         prefix: "instructions".into(),
@@ -239,7 +239,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         drop(requests);
     }
     ensure!(outcome.requests.len() == 1 && outcome.requests.iter().all(|r| r.usage.is_some()));
-    let saved = FileCompactionStore::new(&root)
+    let saved = SqliteCompactionStore::new(&root)
         .get(&MessageId::new("result"))
         .await?
         .ok_or_else(|| eyre!("missing checkpoint"))?;
@@ -690,7 +690,7 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
                     .is_some_and(|request| request.messages.contains(&user))
             );
         }
-        let saved = FileCompactionStore::new(&root)
+        let saved = SqliteCompactionStore::new(&root)
             .get(&MessageId::new("result"))
             .await?
             .ok_or_else(|| eyre!("missing checkpoint"))?;

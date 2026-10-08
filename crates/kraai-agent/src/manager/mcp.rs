@@ -14,6 +14,10 @@ impl AgentManager {
         config: kraai_mcp::McpConfig,
     ) -> Result<Option<Arc<kraai_mcp::McpManager>>> {
         self.require_session(session_id).await?;
+        self.persistence
+            .sessions()
+            .ensure_writable(session_id)
+            .await?;
         if self.is_turn_active(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot change MCP servers while the current turn is active"

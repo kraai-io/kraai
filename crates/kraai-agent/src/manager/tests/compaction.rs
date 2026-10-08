@@ -1,7 +1,7 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::{CompactionCheckpoint, FileCompactionStore};
+use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 
 fn prompt(prefix: &str) -> prompts::TurnSystemPrompt {
     prompts::TurnSystemPrompt {
@@ -59,7 +59,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         .add_message(&session, ChatRole::User, "latest request".into(), None)
         .await?;
     let original = manager.get_chat_history(&session).await?;
-    let store = FileCompactionStore::new(&data_dir);
+    let store = SqliteCompactionStore::new(&data_dir);
     store
         .save(&checkpoint(first.clone(), None, "obsolete summary"))
         .await?;
@@ -133,7 +133,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
             None,
         )
         .await?;
-    let store = FileCompactionStore::new(&data_dir);
+    let store = SqliteCompactionStore::new(&data_dir);
     store
         .save(&checkpoint(shared.clone(), None, "shared summary"))
         .await?;
@@ -165,7 +165,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
     assert!(serialized.contains("shared summary"));
     assert!(serialized.contains("replacement request"));
     assert!(!serialized.contains("abandoned"));
-    assert!(store.get(&abandoned).await?.is_some());
+    assert!(store.get(&abandoned).await?.is_none());
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -181,7 +181,7 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
     let first = manager
         .add_message(&session, ChatRole::Assistant, "first work".into(), None)
         .await?;
-    let store = FileCompactionStore::new(&data_dir);
+    let store = SqliteCompactionStore::new(&data_dir);
     store
         .save(&checkpoint(first.clone(), None, "first summary"))
         .await?;
@@ -341,7 +341,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
         }),
     });
     manager.message_store.save(&message).await?;
-    let store = FileCompactionStore::new(&data_dir);
+    let store = SqliteCompactionStore::new(&data_dir);
     let mut saved = checkpoint(boundary, None, "summary");
     manager
         .add_message(&session, ChatRole::User, "abandoned request".into(), None)
@@ -423,7 +423,7 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
             payload: serde_json::json!({"type":"compaction","encrypted_content":"opaque"}),
         },
     ];
-    FileCompactionStore::new(&data_dir).save(&saved).await?;
+    SqliteCompactionStore::new(&data_dir).save(&saved).await?;
     manager
         .add_message(&session, ChatRole::User, "continue".into(), None)
         .await?;

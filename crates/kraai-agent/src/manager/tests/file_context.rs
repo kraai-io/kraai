@@ -1,6 +1,6 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
-use kraai_persistence::{CompactionCheckpoint, FileCompactionStore};
+use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 
 async fn open(manager: &AgentManager, session: &str, path: &Path) -> Result<()> {
@@ -190,7 +190,7 @@ async fn compaction_reanchors_snapshots_once_and_closed_files_do_not_return() ->
         prompt_version: 1,
         usage: None,
     };
-    FileCompactionStore::new(&root).save(&checkpoint).await?;
+    SqliteCompactionStore::new(&root).save(&checkpoint).await?;
     let compacted = request(&manager, &session).await?;
     assert_eq!(compacted.messages.len(), 4);
     assert!(texts(&compacted)[3].contains("exact snapshot"));

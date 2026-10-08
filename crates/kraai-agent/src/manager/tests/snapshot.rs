@@ -49,12 +49,8 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
             .await?;
         let mut message = manager.message_store.get(&newest).await?.unwrap();
         message.id = duplicate_id.clone();
-        manager.message_store.unload(&newest).await;
-        tokio::fs::write(
-            data_dir.join("messages").join(format!("{newest}.json")),
-            serde_json::to_vec(&message)?,
-        )
-        .await?;
+
+        super::common::corrupt_message(&data_dir, &newest, &serde_json::to_string(&message)?)?;
 
         let snapshot = manager
             .capture_session_snapshot(&session_id)
@@ -102,9 +98,11 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
     let mut parent = manager.message_store.get(&parent_id).await?.unwrap();
     parent.parent_id = Some(request.message_id.clone());
     manager.message_store.save(&parent).await?;
-    let reader = manager.capture_session_snapshot(&session_id).await?;
-
-    let error = reader.load().await.err().unwrap();
+    let error = manager
+        .capture_session_snapshot(&session_id)
+        .await
+        .err()
+        .unwrap();
 
     assert!(
         error
@@ -244,9 +242,8 @@ async fn snapshot_reports_missing_history_instead_of_returning_partial_state() -
         .await?;
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session_id);
-    let reader = manager.capture_session_snapshot(&session_id).await?;
-    manager.delete_session(&session_id).await?;
-    assert!(reader.load().await.is_err());
+    manager.message_store.delete(&request.message_id).await?;
+    assert!(manager.capture_session_snapshot(&session_id).await.is_err());
     cleanup_dir(data_dir).await;
     Ok(())
 }

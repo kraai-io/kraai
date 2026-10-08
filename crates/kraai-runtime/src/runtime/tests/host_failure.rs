@@ -60,29 +60,29 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
         .finalize_script_turn(&session_id, CompletedScriptExecution { record, output })
         .await?;
 
-    for expected_count in [1, 2] {
-        if expected_count == 2 {
-            harness.runtime.recover_script_executions().await?;
-        }
-        let events = harness.events.wait_for("host error in UI", |events| {
-            events.iter().filter(|event| matches!(event, Event::ContinuationFailed { session_id: id, error } if id == &session_id && error == message)).count() >= expected_count
-        }).await;
-        assert_eq!(events.iter().filter(|event| matches!(event, Event::StreamStart { session_id: id, .. } if id == &session_id)).count(), 1);
-        assert!(
-            !harness
-                .runtime
-                .agent_manager
-                .read()
-                .await
-                .is_turn_active(&session_id)
-        );
-    }
-    harness.handle.delete_session(session_id).await?;
-    assert_eq!(store.list_all().await?.len(), 1);
-    let sequence = harness.runtime.event_tx.latest_sequence();
-    harness.runtime.recover_script_executions().await?;
+    harness.events.wait_for("host error in UI", |events| {
+        events.iter().any(|event| matches!(event, Event::ContinuationFailed { session_id: id, error } if id == &session_id && error == message))
+    }).await;
+    harness
+        .runtime
+        .session_store
+        .claim_turn(&session_id)
+        .await?;
+    harness
+        .runtime
+        .recover_session_executions(&session_id)
+        .await?;
+    assert!(
+        !harness
+            .runtime
+            .agent_manager
+            .read()
+            .await
+            .is_turn_active(&session_id)
+    );
+    harness.handle.delete_session(session_id.clone()).await?;
+    assert!(store.list_all().await?.is_empty());
     assert!(harness.handle.list_sessions().await?.is_empty());
-    assert_eq!(harness.runtime.event_tx.latest_sequence(), sequence);
     harness.shutdown().await;
     Ok(())
 }

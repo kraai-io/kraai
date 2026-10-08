@@ -90,14 +90,25 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
     tokio::pin!(snapshot);
     assert!(poll!(&mut snapshot).is_pending());
 
+    runtime
+        .restore_queued_messages(
+            &session_id,
+            vec![crate::runtime::core::QueuedMessage {
+                message: "queued".into(),
+                model_id: kraai_types::ModelId::new("mock-model"),
+                provider_id: kraai_types::ProviderId::new("missing-provider"),
+            }],
+        )
+        .await;
+
     // A failed continuation clears turn state and schedules a drain under the
     // caller's barrier. It must finish even though no command slot can free up.
     let result = tokio::time::timeout(
         Duration::from_secs(1),
         runtime.start_continuation(
-            "missing-session".into(),
+            session_id.clone(),
             kraai_types::ModelId::new("mock-model"),
-            kraai_types::ProviderId::new("mock"),
+            kraai_types::ProviderId::new("missing-provider"),
         ),
     )
     .await?;
@@ -105,6 +116,8 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
     drop(guard);
     tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
 
+    runtime.schedule_queue_drain(&session_id);
+    let expected_session = session_id.clone();
     let mut drain_received = false;
     let mut command_received = false;
     for _ in 0..2 {
@@ -112,7 +125,7 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
             .await?
         {
             Some(Command::StartQueuedMessages { session_id }) => {
-                assert_eq!(session_id, "missing-session");
+                assert_eq!(session_id, expected_session);
                 drain_received = true;
             }
             Some(Command::LoadConfig) => command_received = true,
@@ -313,12 +326,12 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
 }
 
 #[tokio::test]
-async fn failed_interception_preserves_turn_and_pending_workspace() -> Result<()> {
+async fn failed_interception_releases_turn_and_preserves_pending_workspace() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut runtime = harness.runtime.clone();
     runtime.queue_drains = Arc::default();
-    let (tip, workspace, profile_id) = {
+    let (tip, workspace) = {
         let mut agent = runtime.agent_manager.write().await;
         let request = agent
             .prepare_start_stream(
@@ -341,7 +354,7 @@ async fn failed_interception_preserves_turn_and_pending_workspace() -> Result<()
             .set_workspace_dir(&session_id, pending_workspace)
             .await?;
         drop(agent);
-        (request.message_id, turn.workspace_dir, turn.profile.id)
+        (request.message_id, turn.workspace_dir.join("pending"))
     };
     runtime
         .restore_queued_messages(
@@ -366,15 +379,19 @@ async fn failed_interception_preserves_turn_and_pending_workspace() -> Result<()
         .is_err()
     );
     let agent = runtime.agent_manager.read().await;
-    assert!(agent.is_turn_active(&session_id));
-    let turn = agent.script_turn_context(&session_id)?;
-    assert_eq!(turn.workspace_dir, workspace);
-    assert_eq!(turn.profile.id, profile_id);
+    assert!(!agent.is_turn_active(&session_id));
+    assert!(!runtime.session_store.owns_turn(&session_id).await?);
     assert_eq!(agent.get_tip(&session_id).await?, Some(tip));
     drop(agent);
-    runtime
-        .handle_start_queued_messages(session_id.clone())
-        .await;
+    assert_eq!(
+        runtime
+            .agent_manager
+            .write()
+            .await
+            .get_workspace_dir_state(&session_id)
+            .await?,
+        Some((workspace, true))
+    );
     let queued = runtime.take_queued_messages(&session_id).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(

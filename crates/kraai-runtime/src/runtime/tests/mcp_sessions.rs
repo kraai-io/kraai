@@ -1,3 +1,4 @@
+use kraai_persistence::SessionStore;
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
@@ -89,7 +90,7 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
         servers(&harness, &first).await,
         vec![json!("configured"), json!("replacement")]
     );
-    let persisted = tokio::fs::read_to_string(harness.data_dir.join("sessions.json")).await?;
+    let persisted = serde_json::to_string(&harness.runtime.session_store.list().await?)?;
     assert!(!persisted.contains("ephemeral-secret"));
     assert!(!persisted.contains("replacement"));
     harness

@@ -145,6 +145,7 @@ impl AgentManager {
                 message: appended.message,
                 cancellation_result_id: None,
                 text_item_ids: HashMap::new(),
+                snapshot_dirty: true,
                 subscription,
                 unpriced_attempts: 0,
                 request_started_at: std::time::SystemTime::now()
@@ -158,11 +159,19 @@ impl AgentManager {
         Ok(message_id)
     }
 
-    pub(super) async fn session_has_active_stream(&self, session_id: &str) -> bool {
+    pub async fn session_has_active_stream(&self, session_id: &str) -> bool {
         let streaming = self.streaming_messages.read().await;
         streaming
             .values()
             .any(|state| state.session_id == session_id)
+    }
+
+    pub async fn discard_streaming_state(&self, session_id: &str) {
+        let _persistence = self.streaming_persistence.lock().await;
+        self.streaming_messages
+            .write()
+            .await
+            .retain(|_, state| state.session_id != session_id);
     }
 
     pub async fn append_text_chunk(
@@ -209,6 +218,7 @@ impl AgentManager {
         }
         text.push_str(chunk);
         visible.push_str(chunk);
+        state.snapshot_dirty = true;
         drop(streaming);
         Some(visible)
     }
@@ -228,6 +238,7 @@ impl AgentManager {
             provider_id,
             payload,
         });
+        state.snapshot_dirty = true;
         drop(streaming);
         Some(())
     }
@@ -255,11 +266,13 @@ impl AgentManager {
             name,
             input,
         });
+        state.snapshot_dirty = true;
         drop(streaming);
         Some(())
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
             return Ok(None);
@@ -277,6 +290,7 @@ impl AgentManager {
     }
 
     pub async fn abort_streaming_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(state) = state else {
             return Ok(None);
@@ -305,6 +319,7 @@ impl AgentManager {
         message_id: &MessageId,
         cancelled_script_output: &str,
     ) -> Result<Option<CancelledStreamResult>> {
+        let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
             return Ok(None);
@@ -448,14 +463,36 @@ impl AgentManager {
             )));
         }
 
-        let Some(mut cursor) = self.get_tip(session_id).await? else {
+        let mut session = self.require_session(session_id).await?;
+        let expected_tip = session.tip_id.clone();
+        let Some(mut cursor) = expected_tip.clone() else {
             return Ok(None);
         };
 
         let history = self.get_chat_history(session_id).await?;
+        let mut removed = Vec::new();
         while let Some(message) = history.get(&cursor) {
+            removed.push(cursor.clone());
             if message.role() == ChatRole::User {
-                self.set_tip(session_id, message.parent_id.clone()).await?;
+                session.tip_id = message.parent_id.clone();
+                if !self
+                    .session_store
+                    .save_if_tip_matches(&session, expected_tip.as_ref())
+                    .await?
+                {
+                    return Err(eyre!(kraai_types::DomainError::conflict(
+                        "Session changed while undoing a message"
+                    )));
+                }
+                for id in removed {
+                    if let Err(error) = self
+                        .session_store
+                        .delete_message_if_unreferenced(&id, self.message_store.clone())
+                        .await
+                    {
+                        tracing::warn!(%session_id, message_id = %id, %error, "Failed to clean up an undone message");
+                    }
+                }
                 return Ok(match &message.content {
                     ConversationItem::User { content } => Some(content.clone()),
                     _ => None,
@@ -469,5 +506,31 @@ impl AgentManager {
         }
 
         Ok(None)
+    }
+}
+
+impl AgentManager {
+    pub async fn publish_streaming_snapshots(&self) -> Result<()> {
+        let _persistence = self.streaming_persistence.lock().await;
+        let snapshots: Vec<_> = self
+            .streaming_messages
+            .read()
+            .await
+            .values()
+            .filter(|state| state.snapshot_dirty)
+            .map(|state| state.message.clone())
+            .collect();
+        for message in snapshots {
+            self.message_store.save(&message).await?;
+            let mut streaming = self.streaming_messages.write().await;
+            if let Some(state) = streaming.get_mut(&message.id)
+                && state.message.content == message.content
+                && state.message.generation == message.generation
+            {
+                state.snapshot_dirty = false;
+            }
+            drop(streaming);
+        }
+        Ok(())
     }
 }

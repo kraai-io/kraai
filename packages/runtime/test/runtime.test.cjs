@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, toNamespacedPath } = require('node:path');
 const { test } = require('node:test');
-const { localProvider, unwrap } = require('./fixtures.cjs');
+const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 const { createRuntime } = require('..');
 
 function fixture(t) {
@@ -134,7 +134,7 @@ test('streams a reply from a local provider and persists the conversation', { ti
   const snapshot = unwrap(await runtime.getSessionSnapshot(session));
   const request = Object.values(snapshot.requests).find(value => value.model_id === 'test-model');
   assert.ok(request);
-  const receipt = JSON.parse(readFileSync(join(directory, 'data', 'usage', session, `${request.message_id}.json`), 'utf8'));
+  const receipt = readRecord(directory, 'usage', request.message_id);
   assert.equal(receipt.model_id, 'test-model');
   events.close();
   unwrap(await runtime.shutdown());

@@ -107,9 +107,7 @@ impl App {
             return;
         }
 
-        if self.state.mode == UiMode::Chat
-            && self.state.script_phase == ScriptPhase::AwaitingApproval
-        {
+        if self.state.mode == UiMode::Chat && self.state.has_local_script_approval() {
             match mouse_event.kind {
                 MouseEventKind::ScrollUp => self
                     .state
@@ -143,9 +141,7 @@ impl App {
             return;
         }
 
-        if self.state.mode == UiMode::Chat
-            && self.state.script_phase == ScriptPhase::AwaitingApproval
-        {
+        if self.state.mode == UiMode::Chat && self.state.has_local_script_approval() {
             if matches!(key_event.code, KeyCode::Esc) {
                 return;
             }
@@ -306,7 +302,7 @@ impl App {
             return;
         }
         if self.state.mode != UiMode::Chat
-            || self.state.script_phase == ScriptPhase::AwaitingApproval
+            || self.state.has_local_script_approval()
             || text.is_empty()
         {
             return;

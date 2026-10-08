@@ -10,6 +10,7 @@ mod script_environment;
 mod script_execution;
 mod script_recovery;
 mod scripts;
+mod session_maintenance;
 mod state_effects;
 mod stream_driver;
 mod stream_tasks;

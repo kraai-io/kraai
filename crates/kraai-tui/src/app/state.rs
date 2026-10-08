@@ -248,6 +248,10 @@ impl AppState {
         }
     }
 
+    pub(super) fn has_local_script_approval(&self) -> bool {
+        self.script_phase == ScriptPhase::AwaitingApproval && self.pending_script.is_some()
+    }
+
     pub(super) fn runtime_is_active(&self) -> bool {
         self.is_streaming
             || self.retry_waiting

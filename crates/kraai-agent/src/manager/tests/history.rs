@@ -65,18 +65,14 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
             .to_string()
             .contains("disappeared while reading session history")
     );
-    tokio::fs::write(
-        data_dir.join("messages").join(format!("{oldest}.json")),
-        "{}",
-    )
-    .await?;
+    super::common::corrupt_message(&data_dir, &oldest, "{}")?;
     assert!(
         manager
             .get_session_context_usage(&session_id)
             .await
             .unwrap_err()
             .to_string()
-            .contains("Failed to parse message file")
+            .contains("missing field")
     );
     oldest_message.parent_id = manager.get_tip(&session_id).await?;
     manager.message_store.save(&oldest_message).await?;
@@ -93,7 +89,7 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
 }
 
 #[tokio::test]
-async fn limited_user_history_still_reads_and_caches_the_entire_session() -> Result<()> {
+async fn limited_user_history_reads_the_entire_session() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let oldest = manager
@@ -106,15 +102,11 @@ async fn limited_user_history_still_reads_and_caches_the_entire_session() -> Res
         .add_message(&session_id, ChatRole::User, "newest".into(), None)
         .await?;
     let ids = [oldest, assistant, newest];
-    for id in &ids {
-        manager.message_store.unload(id).await;
-    }
 
     assert_eq!(manager.list_user_input_history(1).await?, ["newest"]);
-    assert_eq!(
-        manager.message_store.list_hot().await?,
-        ids.into_iter().collect()
-    );
+    for id in ids {
+        assert!(manager.message_store.exists(&id).await?);
+    }
 
     cleanup_dir(data_dir).await;
     Ok(())
@@ -143,13 +135,8 @@ async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Res
                 "disappeared while reading session history"
             }
             _ => {
-                manager.message_store.unload(&oldest).await;
-                tokio::fs::write(
-                    data_dir.join("messages").join(format!("{oldest}.json")),
-                    "{}",
-                )
-                .await?;
-                "Failed to parse message file"
+                super::common::corrupt_message(&data_dir, &oldest, "{}")?;
+                "missing field"
             }
         };
 
