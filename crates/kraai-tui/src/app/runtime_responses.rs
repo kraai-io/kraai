@@ -364,6 +364,16 @@ impl App {
                         self.state.cost_recovery_sessions.remove(&session_id);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                             self.state.turn_timer = snapshot.turn_timer;
+                            if self.state.last_session_model != snapshot.session.selected_model {
+                                self.state.last_session_model =
+                                    snapshot.session.selected_model.clone();
+                                if let Some(selection) = &snapshot.session.selected_model {
+                                    self.state.selected_provider_id =
+                                        Some(selection.provider_id.to_string());
+                                    self.state.selected_model_id =
+                                        Some(selection.model_id.to_string());
+                                }
+                            }
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
                             self.state.chat_history = snapshot.history;
                             self.state.context_usage = snapshot.context_usage;
