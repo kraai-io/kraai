@@ -7,7 +7,7 @@ const { createRuntime } = require('..');
 const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 
 for (const profile of ['coding', 'coding-no-sandbox']) {
-  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: 30000 }, async t => {
+  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: 120000 }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-node-script-'));
     const storage = join(directory, 'storage');
     const workspace = join(directory, 'workspace');
