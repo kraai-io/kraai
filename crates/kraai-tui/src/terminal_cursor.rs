@@ -7,8 +7,11 @@ use ratatui::crossterm::{cursor::SetCursorStyle, execute};
 pub(crate) struct CursorStyle(u8);
 
 impl CursorStyle {
-    pub(crate) fn from_report(value: u8) -> Option<Self> {
-        (1..=6).contains(&value).then_some(Self(value))
+    pub(crate) const fn from_report(value: u8) -> Option<Self> {
+        match value {
+            1..=6 => Some(Self(value)),
+            _ => None,
+        }
     }
 
     pub(crate) fn custom_blink(style: Option<Self>) -> bool {
@@ -36,6 +39,8 @@ pub(crate) struct CursorOverride {
     original: AtomicU8,
 }
 
+const _: () = assert!(CursorStyle::from_report(CursorOverride::UNKNOWN_ORIGINAL).is_none());
+
 impl CursorOverride {
     const UNKNOWN_ORIGINAL: u8 = 7;
 
@@ -44,6 +49,8 @@ impl CursorOverride {
     }
 
     fn apply_with(&self, style: Option<CursorStyle>, output: &mut impl Write) -> Result<()> {
+        // Serialize state and output with restore; stdout's lock allows same-thread panic cleanup.
+        let _output_lock = std::io::stdout().lock();
         let original = self.original.load(Ordering::Relaxed);
         if original != 0 && original != Self::UNKNOWN_ORIGINAL {
             return Ok(());
@@ -59,6 +66,8 @@ impl CursorOverride {
         if original == next_original {
             return Ok(());
         }
+        // Retain the original before writing so callers can clean up after an error.
+        // Reapplying the same style does not retry a failed write.
         self.original.store(next_original, Ordering::Relaxed);
         execute!(output, style.unwrap_or(CursorStyle(5)).steady().command())
     }
@@ -68,6 +77,7 @@ impl CursorOverride {
     }
 
     fn restore_with(&self, output: &mut impl Write) -> Result<()> {
+        let _output_lock = std::io::stdout().lock();
         let command = match self.original.load(Ordering::Relaxed) {
             Self::UNKNOWN_ORIGINAL => SetCursorStyle::DefaultUserShape,
             value => match CursorStyle::from_report(value) {
@@ -84,6 +94,133 @@ impl CursorOverride {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "assert worker synchronization and results"
+    )]
+    fn concurrent_restore_waits_for_the_override_write() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct PausedWriter {
+            started: Option<mpsc::SyncSender<()>>,
+            resume: mpsc::Receiver<()>,
+            bytes: Vec<u8>,
+        }
+
+        impl Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> Result<usize> {
+                if let Some(started) = self.started.take() {
+                    started.send(()).map_err(std::io::Error::other)?;
+                    self.resume
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(std::io::Error::other)?;
+                }
+                self.bytes.write(bytes)
+            }
+
+            fn flush(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let cursor = CursorOverride::default();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let (restoring_tx, restoring_rx) = mpsc::sync_channel(1);
+        let (restored_tx, restored_rx) = mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            let applying = scope.spawn(|| {
+                let mut output = PausedWriter {
+                    started: Some(started_tx),
+                    resume: resume_rx,
+                    bytes: Vec::new(),
+                };
+                assert!(cursor.apply_with(None, &mut output).is_ok());
+                assert_eq!(output.bytes, b"\x1b[6 q");
+            });
+            started_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("apply started");
+            let restoring = scope.spawn(|| {
+                restoring_tx.send(()).expect("restore started");
+                let mut output = Vec::new();
+                assert!(cursor.restore_with(&mut output).is_ok());
+                restored_tx.send(()).expect("restore completed");
+                assert_eq!(output, b"\x1b[0 q");
+            });
+            restoring_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("restore worker started");
+            let early_restore = restored_rx.recv_timeout(Duration::from_millis(100));
+            resume_tx.send(()).expect("resume apply");
+            applying.join().expect("apply worker");
+            restoring.join().expect("restore worker");
+            assert_eq!(early_restore, Err(mpsc::RecvTimeoutError::Timeout));
+        });
+        let mut output = Vec::new();
+        assert!(cursor.restore_with(&mut output).is_ok());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    #[expect(
+        clippy::panic,
+        clippy::panic_in_result_fn,
+        reason = "subprocess exercises panic cleanup while apply holds the output lock"
+    )]
+    fn panic_during_apply_restores_without_deadlocking()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        const CHILD_ENV: &str = "KRAAI_CURSOR_WRITE_PANIC_TEST";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            struct Panics;
+            impl Write for Panics {
+                fn write(&mut self, _: &[u8]) -> Result<usize> {
+                    panic!("intentional cursor write panic");
+                }
+
+                fn flush(&mut self) -> Result<()> {
+                    Ok(())
+                }
+            }
+
+            let cursor = std::sync::Arc::new(CursorOverride::default());
+            let cleanup = cursor.clone();
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = cleanup.restore();
+                previous(info);
+            }));
+            cursor.apply_with(None, &mut Panics)?;
+            return Ok(());
+        }
+        let mut child = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "terminal_cursor::tests::panic_during_apply_restores_without_deadlocking",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while child.try_wait()?.is_none() {
+            if std::time::Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                return Err("cursor panic cleanup did not exit".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let output = child.wait_with_output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("\x1b[0 q"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("intentional cursor write panic"));
+        Ok(())
+    }
 
     #[test]
     fn preserves_every_reported_shape_and_blink_preference() {
