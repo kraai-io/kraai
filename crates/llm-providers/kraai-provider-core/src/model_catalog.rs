@@ -230,13 +230,23 @@ impl ModelCatalog {
         model: &str,
         protocol: Option<crate::ModelOptionsProtocol>,
     ) -> Option<CatalogModelMetadata> {
+        let (mut metadata, discovery) = self.metadata_with_discovery(provider, api, model).await?;
+        if let Some(protocol) = protocol {
+            metadata.options = discovery.definitions(protocol);
+        }
+        Some(metadata)
+    }
+
+    pub async fn metadata_with_discovery(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+    ) -> Option<(CatalogModelMetadata, crate::DiscoveredModelOptions)> {
         let snapshot = self.snapshot.read().await;
-        let options = protocol
-            .and_then(|protocol| {
-                snapshot
-                    .serving_model(provider, api, model)
-                    .map(|(_, _, model)| model.options.definitions(protocol))
-            })
+        let discovery = snapshot
+            .serving_model(provider, api, model)
+            .map(|(_, _, model)| model.options.clone())
             .unwrap_or_default();
         let (_, _, model) = snapshot.model(provider, api, model)?;
         let metadata = CatalogModelMetadata {
@@ -250,10 +260,10 @@ impl ModelCatalog {
                 .modalities
                 .as_ref()
                 .map(|modalities| modalities.input.iter().any(|input| input == "image")),
-            options,
+            options: Vec::new(),
         };
         drop(snapshot);
-        Some(metadata)
+        Some((metadata, discovery))
     }
 }
 

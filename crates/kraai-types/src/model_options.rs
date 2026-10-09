@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 mod validation;
-pub use validation::{validate_model_option_values, validate_model_options};
+pub use validation::{
+    reconcile_model_option_values, validate_model_option_values, validate_model_options,
+};
 
 pub type ModelOptionValues = BTreeMap<String, ModelOptionValue>;
 
@@ -148,7 +150,17 @@ pub fn parse_model_option_assignments(
             .iter()
             .find(|definition| definition.id == id)
             .ok_or_else(|| format!("Unknown model option: {id}"))?;
-        existing.insert(id.to_owned(), definition.parse_value(value)?);
+        if value.is_empty() {
+            if definition.required {
+                return Err(format!(
+                    "{} is required and cannot be cleared",
+                    definition.label
+                ));
+            }
+            existing.remove(id);
+        } else {
+            existing.insert(id.to_owned(), definition.parse_value(value)?);
+        }
     }
     loop {
         let selected = existing.clone();

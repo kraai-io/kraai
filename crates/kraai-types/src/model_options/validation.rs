@@ -12,6 +12,27 @@ pub fn validate_model_options(
     validate_model_option_values(definitions, values, true)
 }
 
+pub fn reconcile_model_option_values(
+    definitions: &[ModelOptionDefinition],
+    values: &mut ModelOptionValues,
+) {
+    let by_id: BTreeMap<_, _> = definitions
+        .iter()
+        .map(|definition| (definition.id.as_str(), definition))
+        .collect();
+    loop {
+        let selected = values.clone();
+        values.retain(|id, value| {
+            by_id.get(id.as_str()).is_some_and(|definition| {
+                value_error(definition, value).is_none() && definition.is_active(&selected)
+            })
+        });
+        if values.len() == selected.len() {
+            break;
+        }
+    }
+}
+
 pub fn validate_model_option_values(
     definitions: &[ModelOptionDefinition],
     values: &ModelOptionValues,

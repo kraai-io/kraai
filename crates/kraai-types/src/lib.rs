@@ -12,7 +12,8 @@ pub use model::ModelSelection;
 pub use model_options::{
     ModelOptionBinding, ModelOptionChoice, ModelOptionCondition, ModelOptionDefinition,
     ModelOptionError, ModelOptionKind, ModelOptionValue, ModelOptionValues, ModelRequestPatch,
-    parse_model_option_assignments, validate_model_option_values, validate_model_options,
+    parse_model_option_assignments, reconcile_model_option_values, validate_model_option_values,
+    validate_model_options,
 };
 mod error;
 pub mod image;

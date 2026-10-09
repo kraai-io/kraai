@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kraai_types::{
     ModelOptionCondition, ModelOptionDefinition, ModelOptionKind, ModelOptionValue,
@@ -58,12 +58,50 @@ impl DiscoveredModelOptions {
         protocol: ModelOptionsProtocol,
         levels: impl IntoIterator<Item = String>,
     ) -> Vec<ModelOptionDefinition> {
-        let mut options = BTreeMap::new();
+        self.definitions_with_fallback(protocol, levels, &Self::default())
+    }
+
+    pub fn definitions_with_fallback(
+        &self,
+        protocol: ModelOptionsProtocol,
+        levels: impl IntoIterator<Item = String>,
+        fallback: &Self,
+    ) -> Vec<ModelOptionDefinition> {
+        let mut options = fallback.generated_definitions(protocol);
         let levels = levels.into_iter().collect::<Vec<_>>();
         if !levels.is_empty() {
             let effort = crate::reasoning_effort_option(protocol, levels);
             options.insert(effort.id.clone(), effort);
         }
+        options.extend(self.generated_definitions(protocol));
+        let mut explicit = BTreeSet::new();
+        for definition in fallback.options.iter().chain(&self.options) {
+            explicit.insert(definition.id.as_str());
+            options.insert(definition.id.clone(), definition.clone());
+        }
+        if options
+            .get("reasoning_enabled")
+            .is_some_and(|definition| matches!(definition.kind, ModelOptionKind::Boolean { .. }))
+        {
+            for id in ["reasoning_effort", "reasoning_budget"] {
+                if !explicit.contains(id)
+                    && let Some(definition) = options.get_mut(id)
+                {
+                    definition.active_when = Some(ModelOptionCondition {
+                        option: "reasoning_enabled".into(),
+                        value: ModelOptionValue::Boolean(true),
+                    });
+                }
+            }
+        }
+        options.into_values().collect()
+    }
+
+    fn generated_definitions(
+        &self,
+        protocol: ModelOptionsProtocol,
+    ) -> BTreeMap<String, ModelOptionDefinition> {
+        let mut options = BTreeMap::new();
         for option in self.reasoning_options.iter().flatten() {
             let definition = match option {
                 ReasoningOption::Effort { values } => {
@@ -99,24 +137,6 @@ impl DiscoveredModelOptions {
             };
             options.insert(definition.id.clone(), definition);
         }
-        for definition in &self.options {
-            options.insert(definition.id.clone(), definition.clone());
-        }
-        if options
-            .get("reasoning_enabled")
-            .is_some_and(|definition| matches!(definition.kind, ModelOptionKind::Boolean { .. }))
-        {
-            for id in ["reasoning_effort", "reasoning_budget"] {
-                if !self.options.iter().any(|definition| definition.id == id)
-                    && let Some(definition) = options.get_mut(id)
-                {
-                    definition.active_when = Some(ModelOptionCondition {
-                        option: "reasoning_enabled".into(),
-                        value: ModelOptionValue::Boolean(true),
-                    });
-                }
-            }
-        }
-        options.into_values().collect()
+        options
     }
 }

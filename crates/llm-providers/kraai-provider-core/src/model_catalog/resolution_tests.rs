@@ -147,6 +147,70 @@ fn old_cache_retains_data_but_requires_refresh() -> color_eyre::Result<()> {
 }
 
 #[tokio::test]
+async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_gate()
+-> color_eyre::Result<()> {
+    let catalog = ModelCatalog::default();
+    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+        "version":CACHE_VERSION,"fetched_at":123,"providers":{
+            "router":{"api":"https://router.test/v1","models":{"model":{
+                "reasoning_options":[
+                    {"type":"toggle"},
+                    {"type":"effort","values":["catalog-effort"]},
+                    {"type":"budget_tokens","min":1024,"max":16384}
+                ]
+            }}}
+        }
+    }))?;
+    let (mut metadata, catalog_options) = catalog
+        .metadata_with_discovery(None, Some("https://router.test/v1"), "model")
+        .await
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing catalog model"))?;
+    metadata.options = crate::DiscoveredModelOptions::default().definitions_with_fallback(
+        crate::ModelOptionsProtocol::OpenRouterChatCompletions,
+        ["native-effort".into()],
+        &catalog_options,
+    );
+    let model = crate::ConfiguredModelMetadata::default()
+        .resolve(kraai_types::ModelId::new("model"), Some(metadata));
+    let mut body = serde_json::json!({});
+    crate::apply_model_options(
+        &model.options,
+        &kraai_types::ModelOptionValues::from([(
+            "reasoning_enabled".into(),
+            kraai_types::ModelOptionValue::Boolean(false),
+        )]),
+        &mut body,
+    )?;
+    assert_eq!(body, serde_json::json!({"reasoning":{"enabled":false}}));
+    let mut selected = kraai_types::ModelOptionValues::from([
+        (
+            "reasoning_enabled".into(),
+            kraai_types::ModelOptionValue::Boolean(true),
+        ),
+        (
+            "reasoning_budget".into(),
+            kraai_types::ModelOptionValue::Integer(4096),
+        ),
+    ]);
+    assert!(kraai_types::validate_model_options(&model.options, &selected).is_err());
+    selected.insert(
+        "reasoning_effort".into(),
+        kraai_types::ModelOptionValue::Choice("catalog-effort".into()),
+    );
+    assert!(kraai_types::validate_model_options(&model.options, &selected).is_err());
+    selected.insert(
+        "reasoning_effort".into(),
+        kraai_types::ModelOptionValue::Choice("native-effort".into()),
+    );
+    crate::apply_model_options(&model.options, &selected, &mut body)?;
+    assert_eq!(
+        body,
+        serde_json::json!({"reasoning":{"enabled":true,"effort":"native-effort","max_tokens":4096}})
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufacturer_fallback()
 -> color_eyre::Result<()> {
     let catalog = ModelCatalog::default();

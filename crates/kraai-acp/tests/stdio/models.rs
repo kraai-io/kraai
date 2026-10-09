@@ -4,16 +4,6 @@ use serde_json::{Value, json};
 
 use crate::support::{Harness, prompt};
 
-async fn load(harness: &mut Harness, session: &str, id: u64) -> Result<Vec<Value>> {
-    harness
-        .request(
-            id,
-            "session/load",
-            json!({"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}),
-        )
-        .await
-}
-
 fn selected(messages: &[Value]) -> Option<&str> {
     messages
         .last()?
@@ -36,11 +26,11 @@ async fn saved_model_survives_restart_before_a_prompt_and_cli_overrides_are_expl
         )
         .await?;
     assert_eq!(selected(&changed), Some("4:mock:mock-alternate"));
-    let same_process = load(&mut harness, &session, 3).await?;
+    let same_process = harness.load_session(&session, 3).await?;
     assert_eq!(selected(&same_process), Some("4:mock:mock-alternate"));
     harness.restart_with_selection(None, None).await?;
     harness.initialize().await?;
-    let restored = load(&mut harness, &session, 4).await?;
+    let restored = harness.load_session(&session, 4).await?;
     assert_eq!(selected(&restored), Some("4:mock:mock-alternate"));
     let response = harness
         .request(5, "session/prompt", prompt(&session))
@@ -55,7 +45,7 @@ async fn saved_model_survives_restart_before_a_prompt_and_cli_overrides_are_expl
         .restart_with_selection(Some("mock"), Some("mock-model"))
         .await?;
     harness.initialize().await?;
-    let overridden = load(&mut harness, &session, 6).await?;
+    let overridden = harness.load_session(&session, 6).await?;
     assert_eq!(selected(&overridden), Some("4:mock:mock-model"));
     harness
         .request(7, "session/prompt", prompt(&session))
@@ -94,7 +84,7 @@ async fn unavailable_saved_model_requires_explicit_replacement() -> Result<()> {
     tokio::fs::write(path, retained).await?;
     harness.restart_with_selection(None, None).await?;
     harness.initialize().await?;
-    let unavailable = load(&mut harness, &session, 3).await?;
+    let unavailable = harness.load_session(&session, 3).await?;
     assert_eq!(
         unavailable
             .last()
@@ -110,7 +100,7 @@ async fn unavailable_saved_model_requires_explicit_replacement() -> Result<()> {
         .restart_with_selection(Some("mock"), Some("mock-model"))
         .await?;
     harness.initialize().await?;
-    let overridden = load(&mut harness, &session, 4).await?;
+    let overridden = harness.load_session(&session, 4).await?;
     assert_eq!(selected(&overridden), Some("4:mock:mock-model"));
     harness.stop().await
 }
@@ -218,7 +208,7 @@ path = "/custom/token_budget"
     assert!(harness.provider_payloads.lock().await.is_empty());
     harness.restart_with_selection(None, None).await?;
     harness.initialize().await?;
-    let restored = load(&mut harness, &session, 15).await?;
+    let restored = harness.load_session(&session, 15).await?;
     assert_selected_options(&restored);
     assert!(harness.provider_payloads.lock().await.is_empty());
     harness

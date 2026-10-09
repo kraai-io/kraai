@@ -182,3 +182,162 @@ fn assignments_remove_inactive_descendants_and_reject_new_inactive_values() {
         .is_err()
     );
 }
+
+fn optional_controls() -> Vec<ModelOptionDefinition> {
+    let mut choice = effort(&["custom", "clear"]);
+    choice.required = false;
+    let mut toggle = choice.clone();
+    toggle.id = "toggle".into();
+    toggle.kind = ModelOptionKind::Boolean {
+        enabled: Default::default(),
+        disabled: Default::default(),
+    };
+    let mut budget = choice.clone();
+    budget.id = "budget".into();
+    budget.kind = ModelOptionKind::Integer {
+        min: Some(0),
+        max: Some(100),
+    };
+    vec![choice, toggle, budget]
+}
+
+#[test]
+fn optional_assignments_clear_values_and_required_controls_reject_clears() {
+    let definitions = optional_controls();
+    let existing = ModelOptionValues::from([
+        ("effort".into(), ModelOptionValue::Choice("custom".into())),
+        ("toggle".into(), ModelOptionValue::Boolean(false)),
+        ("budget".into(), ModelOptionValue::Integer(0)),
+    ]);
+    for definition in &definitions {
+        let mut expected = existing.clone();
+        expected.remove(&definition.id);
+        let input = vec![format!("{}=", definition.id)];
+        assert_eq!(
+            crate::parse_model_option_assignments(&definitions, &input, existing.clone()),
+            Ok(expected)
+        );
+        assert_eq!(
+            crate::parse_model_option_assignments(&definitions, &input, Default::default()),
+            Ok(Default::default())
+        );
+        let mut required = definition.clone();
+        required.required = true;
+        assert!(
+            crate::parse_model_option_assignments(&[required], &input, Default::default()).is_err()
+        );
+    }
+    assert!(
+        crate::parse_model_option_assignments(&definitions, &["unknown=".into()], existing)
+            .is_err()
+    );
+    assert_eq!(
+        crate::parse_model_option_assignments(
+            &definitions,
+            &["effort=clear".into()],
+            Default::default()
+        ),
+        Ok(ModelOptionValues::from([(
+            "effort".into(),
+            ModelOptionValue::Choice("clear".into())
+        )]))
+    );
+}
+
+#[test]
+fn clearing_optional_parent_removes_conditional_descendants() {
+    let mut definitions = optional_controls();
+    let mut child = effort(&["on"]);
+    child.id = "child".into();
+    child.active_when = Some(ModelOptionCondition {
+        option: "toggle".into(),
+        value: ModelOptionValue::Boolean(true),
+    });
+    let mut leaf = effort(&["deep"]);
+    leaf.id = "leaf".into();
+    leaf.active_when = Some(ModelOptionCondition {
+        option: "child".into(),
+        value: ModelOptionValue::Choice("on".into()),
+    });
+    definitions.extend([child, leaf]);
+    let existing = ModelOptionValues::from([
+        ("toggle".into(), ModelOptionValue::Boolean(true)),
+        ("child".into(), ModelOptionValue::Choice("on".into())),
+        ("leaf".into(), ModelOptionValue::Choice("deep".into())),
+    ]);
+    assert_eq!(
+        crate::parse_model_option_assignments(&definitions, &["toggle=".into()], existing.clone()),
+        Ok(Default::default())
+    );
+    assert!(
+        crate::parse_model_option_assignments(
+            &definitions,
+            &["toggle=".into(), "leaf=deep".into()],
+            existing
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn reconciliation_drops_incompatible_values_and_preserves_false_zero_and_custom_choices() {
+    let mut definitions = optional_controls();
+    let mut changed = effort(&["new"]);
+    changed.id = "changed".into();
+    let mut child = effort(&["on"]);
+    child.id = "child".into();
+    child.active_when = Some(ModelOptionCondition {
+        option: "changed".into(),
+        value: ModelOptionValue::Choice("new".into()),
+    });
+    let mut leaf = effort(&["deep"]);
+    leaf.id = "leaf".into();
+    leaf.active_when = Some(ModelOptionCondition {
+        option: "child".into(),
+        value: ModelOptionValue::Choice("on".into()),
+    });
+    let mut changed_type = effort(&["custom"]);
+    changed_type.id = "changed_type".into();
+    let mut outside_bounds = effort(&["custom"]);
+    outside_bounds.id = "outside_bounds".into();
+    outside_bounds.kind = ModelOptionKind::Integer {
+        min: Some(0),
+        max: Some(100),
+    };
+    definitions.extend([changed, child, leaf, changed_type, outside_bounds]);
+    let kept = ModelOptionValues::from([
+        ("effort".into(), ModelOptionValue::Choice("custom".into())),
+        ("toggle".into(), ModelOptionValue::Boolean(false)),
+        ("budget".into(), ModelOptionValue::Integer(0)),
+    ]);
+    let mut values = kept.clone();
+    values.extend([
+        ("changed".into(), ModelOptionValue::Choice("old".into())),
+        ("child".into(), ModelOptionValue::Choice("on".into())),
+        ("leaf".into(), ModelOptionValue::Choice("deep".into())),
+        ("changed_type".into(), ModelOptionValue::Boolean(true)),
+        ("outside_bounds".into(), ModelOptionValue::Integer(101)),
+        (
+            "removed".into(),
+            ModelOptionValue::Choice("anything".into()),
+        ),
+    ]);
+    reconcile_model_option_values(&definitions, &mut values);
+    assert_eq!(values, kept);
+    assert!(validate_model_option_values(&definitions, &values, false).is_ok());
+    assert!(validate_model_options(&definitions, &values).is_err());
+    assert!(
+        crate::parse_model_option_assignments(
+            &definitions,
+            &["changed=old".into()],
+            values.clone()
+        )
+        .is_err()
+    );
+    values.insert("changed".into(), ModelOptionValue::Choice("new".into()));
+    reconcile_model_option_values(&definitions, &mut values);
+    assert_eq!(
+        values.get("changed"),
+        Some(&ModelOptionValue::Choice("new".into()))
+    );
+}

@@ -78,6 +78,67 @@ fn native_reasoning_levels_preserve_explicit_option_descriptors() -> Result<()> 
 }
 
 #[test]
+fn explicit_descriptors_from_each_source_preserve_conditions_over_native_shorthand() -> Result<()> {
+    let catalog: DiscoveredModelOptions = serde_json::from_value(json!({
+        "reasoning_options":[
+            {"type":"toggle"},
+            {"type":"effort","values":["catalog-effort"]},
+            {"type":"budget_tokens","min":1024,"max":16384}
+        ]
+    }))?;
+    let explicit: DiscoveredModelOptions = serde_json::from_value(json!({
+        "options":[
+            {"id":"custom_gate","label":"Custom gate","type":"boolean","required":true},
+            {"id":"reasoning_effort","label":"Custom effort","type":"choice","required":true,
+                "binding":{"type":"body","path":"/custom/effort"},
+                "choices":[{"id":"custom-effort","label":"Custom effort"}]},
+            {"id":"reasoning_budget","label":"Custom budget","type":"integer","required":true,
+                "min":1,"max":10000,"binding":{"type":"body","path":"/custom/budget"},
+                "active_when":{"option":"custom_gate","value":true}}
+        ]
+    }))?;
+    for catalog_explicit in [false, true] {
+        let mut catalog = catalog.clone();
+        let mut native = DiscoveredModelOptions::default();
+        if catalog_explicit {
+            catalog.options.clone_from(&explicit.options);
+        } else {
+            native.options.clone_from(&explicit.options);
+        }
+        let definitions = native.definitions_with_fallback(
+            ModelOptionsProtocol::OpenRouterChatCompletions,
+            ["native-effort".into()],
+            &catalog,
+        );
+        for expected in &explicit.options {
+            assert_eq!(
+                definitions.iter().find(|option| option.id == expected.id),
+                Some(expected)
+            );
+        }
+        let mut body = json!({});
+        crate::apply_model_options(
+            &definitions,
+            &ModelOptionValues::from([
+                ("reasoning_enabled".into(), ModelOptionValue::Boolean(false)),
+                ("custom_gate".into(), ModelOptionValue::Boolean(true)),
+                (
+                    "reasoning_effort".into(),
+                    ModelOptionValue::Choice("custom-effort".into()),
+                ),
+                ("reasoning_budget".into(), ModelOptionValue::Integer(4096)),
+            ]),
+            &mut body,
+        )?;
+        assert_eq!(
+            body,
+            json!({"reasoning":{"enabled":false},"custom":{"effort":"custom-effort","budget":4096}})
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn independent_modes_allow_explicit_off_and_compose_body_and_header_effects() -> Result<()> {
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "experimental":{"modes":{

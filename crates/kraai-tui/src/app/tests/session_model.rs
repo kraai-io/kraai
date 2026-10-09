@@ -98,6 +98,24 @@ fn option_picker_saves_partial_choices_before_any_message() -> color_eyre::Resul
 }
 
 #[test]
+fn clearing_an_optional_parent_saves_the_map_without_its_dependents() -> color_eyre::Result<()> {
+    let mut harness = test_harness();
+    configure(&mut harness)?;
+    super::model_options::configure_optional(&mut harness)?;
+    harness
+        .app
+        .handle_option_command(vec!["thinking", "--clear"]);
+    let expected =
+        ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]);
+    assert_eq!(harness.app.state.selected_model_options, expected);
+    assert!(
+        matches!(saves(&harness).as_slice(), [(session, _, selection)]
+        if session == "session" && selection.options == expected)
+    );
+    Ok(())
+}
+
+#[test]
 fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure(&mut harness)?;

@@ -153,34 +153,28 @@ where
             if self.only_listed_models && configured.is_none() {
                 continue;
             }
-            let catalog = match &self.model_catalog {
-                Some(catalog) => {
-                    catalog
-                        .metadata_for_protocol(
-                            self.catalog_provider.as_deref(),
-                            Some(&self.base_url),
-                            &raw_id,
-                            self.options_protocol(),
-                        )
-                        .await
-                }
-                None => None,
+            let (mut catalog, catalog_options) = match &self.model_catalog {
+                Some(catalog) => catalog
+                    .metadata_with_discovery(
+                        self.catalog_provider.as_deref(),
+                        Some(&self.base_url),
+                        &raw_id,
+                    )
+                    .await
+                    .unwrap_or_default(),
+                None => Default::default(),
             };
 
             let configured = configured.cloned().unwrap_or_default();
-            let mut resolved = configured.resolve(id.clone(), catalog);
-            let discovered = model.options.definitions_with_reasoning_levels(
+            catalog.options = model.options.definitions_with_fallback(
                 self.options_protocol(),
                 model
                     .supported_reasoning_levels
                     .into_iter()
                     .map(|level| level.effort),
+                &catalog_options,
             );
-            let native = ConfiguredModelMetadata {
-                options: discovered,
-                ..Default::default()
-            };
-            resolved.options = configured.merge_options(native.merge_options(resolved.options));
+            let resolved = configured.resolve(id.clone(), Some(catalog));
             kraai_types::validate_model_option_values(
                 &resolved.options,
                 &Default::default(),

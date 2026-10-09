@@ -2,6 +2,24 @@ use kraai_types::{ModelOptionDefinition, ModelOptionKind};
 
 use super::*;
 
+pub(super) fn model_option_choices(option: &ModelOptionDefinition) -> Vec<(String, String)> {
+    let mut choices: Vec<_> = match &option.kind {
+        ModelOptionKind::Choice { choices } => choices
+            .iter()
+            .map(|choice| (choice.id.clone(), choice.label.clone()))
+            .collect(),
+        ModelOptionKind::Boolean { .. } => ["false", "true"]
+            .into_iter()
+            .map(|value| (value.to_owned(), value.to_owned()))
+            .collect(),
+        ModelOptionKind::Integer { .. } => return Vec::new(),
+    };
+    if !option.required {
+        choices.insert(0, (String::new(), String::from("Unset")));
+    }
+    choices
+}
+
 impl AppState {
     pub(super) fn selected_model(&self) -> Option<&Model> {
         self.models_by_provider
@@ -38,23 +56,24 @@ impl App {
     }
 
     pub(super) fn reconcile_model_options(&mut self) {
-        let Some(model) = self.state.selected_model() else {
+        let (Some(provider_id), Some(model_id)) = (
+            &self.state.selected_provider_id,
+            &self.state.selected_model_id,
+        ) else {
             return;
         };
-        let definitions = model.options.clone();
-        while let Err(errors) = kraai_types::validate_model_option_values(
-            &definitions,
-            &self.state.selected_model_options,
-            false,
-        ) {
-            let previous_len = self.state.selected_model_options.len();
-            for error in errors {
-                self.state.selected_model_options.remove(&error.option);
-            }
-            if previous_len == self.state.selected_model_options.len() {
-                break;
-            }
-        }
+        let Some(model) = self
+            .state
+            .models_by_provider
+            .get(provider_id)
+            .and_then(|models| models.iter().find(|model| &model.id == model_id))
+        else {
+            return;
+        };
+        kraai_types::reconcile_model_option_values(
+            &model.options,
+            &mut self.state.selected_model_options,
+        );
     }
 
     pub(super) fn set_model_option(&mut self, id: &str, input: &str) -> Result<(), String> {
@@ -68,7 +87,11 @@ impl App {
             self.state.selected_model_options.clone(),
         )?;
         self.state.selected_model_options = values;
-        self.state.status = format!("Selected {id}: {input}");
+        self.state.status = if input.is_empty() {
+            format!("Unset {id}")
+        } else {
+            format!("Selected {id}: {input}")
+        };
         self.save_model_selection();
         Ok(())
     }
@@ -84,13 +107,15 @@ impl App {
     pub(super) fn handle_option_command(&mut self, parts: Vec<&str>) {
         match parts.as_slice() {
             [] => self.open_model_options(),
-            [id, value] => match self.set_model_option(id, value) {
-                Ok(()) => {
-                    self.set_input_text(String::new());
+            [id, value] => {
+                match self.set_model_option(id, if *value == "--clear" { "" } else { value }) {
+                    Ok(()) => {
+                        self.set_input_text(String::new());
+                    }
+                    Err(error) => self.state.status = error,
                 }
-                Err(error) => self.state.status = error,
-            },
-            _ => self.state.status = String::from("Usage: /option [<id> <value>]"),
+            }
+            _ => self.state.status = String::from("Usage: /option [<id> <value|--clear>]"),
         }
     }
 
@@ -121,28 +146,16 @@ impl App {
                         .get(&option.id)
                         .map(ToString::to_string)
                         .unwrap_or_default();
-                    self.state.option_choice_index = match &option.kind {
-                        ModelOptionKind::Choice { choices } => choices
-                            .iter()
-                            .position(|choice| choice.id == self.state.option_editor_input)
-                            .unwrap_or(0),
-                        ModelOptionKind::Boolean { .. } => {
-                            usize::from(self.state.option_editor_input == "true")
-                        }
-                        ModelOptionKind::Integer { .. } => 0,
-                    };
+                    self.state.option_choice_index = model_option_choices(&option)
+                        .iter()
+                        .position(|(value, _)| value == &self.state.option_editor_input)
+                        .unwrap_or(0);
                 }
                 _ => {}
             }
             return;
         }
-        let choices: Vec<String> = match &option.kind {
-            ModelOptionKind::Choice { choices } => {
-                choices.iter().map(|choice| choice.id.clone()).collect()
-            }
-            ModelOptionKind::Boolean { .. } => vec![String::from("false"), String::from("true")],
-            ModelOptionKind::Integer { .. } => Vec::new(),
-        };
+        let choices = model_option_choices(&option);
         match key.code {
             KeyCode::Up if !choices.is_empty() => {
                 self.state.option_choice_index =
@@ -161,7 +174,7 @@ impl App {
             KeyCode::Enter => {
                 let input = choices
                     .get(self.state.option_choice_index)
-                    .cloned()
+                    .map(|(value, _)| value.clone())
                     .unwrap_or_else(|| self.state.option_editor_input.clone());
                 match self.set_model_option(&option.id, &input) {
                     Ok(()) => {

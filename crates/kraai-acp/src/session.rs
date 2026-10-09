@@ -135,10 +135,12 @@ pub(crate) async fn select_model(
                         .find(|model| model.id == saved.model_id.as_str())
                 })
             {
+                let mut saved_options = saved.options;
+                kraai_types::reconcile_model_option_values(&model.options, &mut saved_options);
                 let values = kraai_types::parse_model_option_assignments(
                     &model.options,
                     &options.options,
-                    saved.options,
+                    saved_options,
                 )
                 .map_err(error::invalid)?;
                 return Ok(Model {

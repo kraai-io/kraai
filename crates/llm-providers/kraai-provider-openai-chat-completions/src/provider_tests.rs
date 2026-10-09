@@ -539,6 +539,125 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
 }
 
 #[tokio::test]
+async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_after_discovery() {
+    let (address, server) = spawn_recording_server(vec![
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            body: r#"{"data":[{"id":"configured-model","supported_reasoning_levels":[{"effort":"native-effort"}],"options":[
+                {"id":"reasoning_enabled","label":"Thinking","type":"boolean","required":true,"binding":{"type":"body","path":"/thinking/enabled"}}
+            ]}]}"#,
+        },
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        },
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        },
+    ])
+    .await;
+    let Some(mut provider) = discovery_provider(address) else {
+        return;
+    };
+    let id = ModelId::new("configured-model");
+    let options = serde_json::from_value(serde_json::json!([
+        {"id":"custom_gate","label":"Custom gate","type":"boolean","required":true,
+            "binding":{"type":"body","path":"/custom/enabled"}},
+        {"id":"reasoning_effort","label":"Configured effort","type":"choice","required":true,
+            "binding":{"type":"body","path":"/custom/effort"},
+            "choices":[{"id":"configured-effort","label":"Configured effort"}]},
+        {"id":"reasoning_budget","label":"Configured budget","type":"integer","required":true,
+            "min":1,"max":10,"binding":{"type":"body","path":"/custom/budget"},
+            "active_when":{"option":"custom_gate","value":true}}
+    ]))
+    .unwrap();
+    provider
+        .register_model(ModelConfig {
+            id: id.clone(),
+            provider_id: provider.id.clone(),
+            config: DynamicConfig::new(),
+            options,
+            remove_options: Vec::new(),
+        })
+        .await
+        .unwrap();
+    provider.cache_models().await.unwrap();
+    let make_request = |options| ProviderRequest {
+        messages: Vec::new(),
+        script_tool: None,
+        cacheable_messages: None,
+        options,
+    };
+    for enabled in [true, false] {
+        let mut selected = kraai_types::ModelOptionValues::from([
+            (
+                "reasoning_enabled".into(),
+                kraai_types::ModelOptionValue::Boolean(false),
+            ),
+            (
+                "custom_gate".into(),
+                kraai_types::ModelOptionValue::Boolean(enabled),
+            ),
+        ]);
+        if enabled {
+            selected.insert(
+                "reasoning_budget".into(),
+                kraai_types::ModelOptionValue::Integer(7),
+            );
+        }
+        assert!(
+            provider
+                .generate_reply_stream(
+                    &id,
+                    make_request(selected.clone()),
+                    &ProviderRequestContext::default()
+                )
+                .await
+                .is_err()
+        );
+        selected.insert(
+            "reasoning_effort".into(),
+            kraai_types::ModelOptionValue::Choice("configured-effort".into()),
+        );
+        provider
+            .generate_reply_stream(
+                &id,
+                make_request(selected),
+                &ProviderRequestContext::default(),
+            )
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+    }
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    for (request, enabled) in requests.iter().skip(1).zip([true, false]) {
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            body.pointer("/thinking/enabled"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            body.pointer("/custom/enabled"),
+            Some(&serde_json::json!(enabled))
+        );
+        assert_eq!(
+            body.pointer("/custom/effort"),
+            Some(&serde_json::json!("configured-effort"))
+        );
+        assert_eq!(
+            body.pointer("/custom/budget"),
+            enabled.then_some(&serde_json::json!(7))
+        );
+        assert!(body.get("reasoning_effort").is_none());
+    }
+}
+
+#[tokio::test]
 async fn configured_custom_models_absent_from_discovery_apply_custom_settings() {
     let (address, server) = spawn_recording_server(vec![
         ScriptedResponse::Status {

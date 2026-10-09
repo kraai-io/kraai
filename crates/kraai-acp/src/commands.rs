@@ -16,18 +16,19 @@ pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
     let mut words = text.text.split_whitespace();
     let first = words.next();
     if first == Some("/option") {
-        let id = words
-            .next()
-            .ok_or_else(|| error::invalid("Usage: /option <id> <value>"))?;
-        let value = words
-            .next()
-            .ok_or_else(|| error::invalid("Usage: /option <id> <value>"))?;
+        let usage = "Usage: /option <id> <value|--clear>";
+        let id = words.next().ok_or_else(|| error::invalid(usage))?;
+        let value = words.next().ok_or_else(|| error::invalid(usage))?;
         if words.next().is_some() {
-            return Err(error::invalid("Usage: /option <id> <value>"));
+            return Err(error::invalid(usage));
         }
         return Ok(Some(Command::Option {
             id: id.to_owned(),
-            value: value.to_owned(),
+            value: if value == "--clear" {
+                String::new()
+            } else {
+                value.to_owned()
+            },
         }));
     }
     let (command, usage) = match first {
@@ -57,7 +58,10 @@ pub(crate) async fn advertise(
                     "undo",
                     "Remove the last user turn from conversation context; keep file changes",
                 ),
-                acp::AvailableCommand::new("option", "Set a model option: /option <id> <value>"),
+                acp::AvailableCommand::new(
+                    "option",
+                    "Set or clear a model option: /option <id> <value|--clear>",
+                ),
             ])),
         ))
         .await

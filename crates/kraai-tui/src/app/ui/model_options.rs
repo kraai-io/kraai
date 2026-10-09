@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use super::super::AppState;
+use super::super::model_options::model_option_choices;
 use super::{centered_rect, menu_block};
 
 pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
@@ -62,27 +63,23 @@ pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
         && let Some(option) = options.get(state.option_menu_index)
     {
         lines.push(Line::raw(""));
-        let choices: Vec<_> = match &option.kind {
-            ModelOptionKind::Choice { choices } => {
-                choices.iter().map(|choice| choice.label.clone()).collect()
+        if let ModelOptionKind::Integer { min, max } = &option.kind {
+            let bounds = match (min, max) {
+                (Some(min), Some(max)) => format!("  {min} to {max}"),
+                (Some(min), None) => format!("  at least {min}"),
+                (None, Some(max)) => format!("  at most {max}"),
+                (None, None) => String::new(),
+            };
+            if !option.required {
+                lines.push(Line::raw("Leave empty to unset"));
             }
-            ModelOptionKind::Boolean { .. } => vec![String::from("false"), String::from("true")],
-            ModelOptionKind::Integer { min, max } => {
-                selected_line = lines.len();
-                let bounds = match (min, max) {
-                    (Some(min), Some(max)) => format!("  {min} to {max}"),
-                    (Some(min), None) => format!("  at least {min}"),
-                    (None, Some(max)) => format!("  at most {max}"),
-                    (None, None) => String::new(),
-                };
-                lines.push(Line::raw(format!(
-                    "Enter an integer: {}{bounds}",
-                    state.option_editor_input
-                )));
-                Vec::new()
-            }
-        };
-        for (index, label) in choices.iter().enumerate() {
+            selected_line = lines.len();
+            lines.push(Line::raw(format!(
+                "Enter an integer: {}{bounds}",
+                state.option_editor_input
+            )));
+        }
+        for (index, (_, label)) in model_option_choices(option).iter().enumerate() {
             if index == state.option_choice_index {
                 selected_line = lines.len();
             }
@@ -108,7 +105,7 @@ pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
         .saturating_sub(usize::from(popup.height.saturating_sub(2)));
     Clear.render(popup, buf);
     Paragraph::new(lines)
-        .block(menu_block().title("Model options /option <id> <value>"))
+        .block(menu_block().title("Model options /option <id> <value|--clear>"))
         .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
         .render(popup, buf);
 }
