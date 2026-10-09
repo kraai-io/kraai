@@ -3455,6 +3455,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-perf"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "color-eyre",
+ "futures",
+ "kraai-agent",
+ "kraai-nushell-runtime",
+ "kraai-persistence",
+ "kraai-provider-core",
+ "kraai-sandbox",
+ "kraai-types",
+ "nix 0.31.3",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "signal-hook 0.4.4",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+]
+
+[[package]]
 name = "kraai-persistence"
 version = "0.1.0"
 dependencies = [

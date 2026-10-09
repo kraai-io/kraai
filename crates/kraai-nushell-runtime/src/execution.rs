@@ -27,6 +27,7 @@ pub struct ScriptExecutionPlan {
     pub runtime_roots: Vec<PathBuf>,
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
+    pub startup_timeout: Duration,
     pub active_commands: Vec<String>,
     pub nushell_startup: NushellStartup,
     pub output_events: Option<UnboundedSender<OutputEvent>>,
@@ -56,6 +57,7 @@ impl ScriptExecutionPlan {
             runtime_roots: Vec::new(),
             capabilities,
             timeout,
+            startup_timeout: Duration::from_secs(5),
             active_commands: Vec::new(),
             nushell_startup: NushellStartup::Clean,
             output_events: None,
@@ -86,6 +88,7 @@ pub async fn execute(
     })?;
     let execution_id = plan.execution_id.clone();
     let timeout = plan.timeout;
+    let startup_timeout = plan.startup_timeout;
     let secret = rand::random::<[u8; 32]>();
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
@@ -137,7 +140,7 @@ pub async fn execute(
     let execution_started = Arc::new(OnceLock::new());
     let started_for_task = execution_started.clone();
     let mut channel_task = AbortOnDropHandle::new(tokio::spawn(async move {
-        let transport = transport::accept(listener, spawned_rx)
+        let transport = transport::accept(listener, spawned_rx, startup_timeout)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
         let started = tokio::time::Instant::now();

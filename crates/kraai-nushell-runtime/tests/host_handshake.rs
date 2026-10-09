@@ -28,6 +28,9 @@ async fn rejected_host_with_timeout(
         .to_path_buf();
     let socket = fixture.socket;
     let plan = fixture.plan;
+    if plan.startup_timeout != Duration::from_secs(5) {
+        return Err("default startup timeout changed".into());
+    }
     let cancellation = CancellationToken::new();
     let _guard = cancellation.clone().drop_guard();
     let execution = execute(plan, cancellation);

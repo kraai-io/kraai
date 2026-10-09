@@ -54,6 +54,17 @@ build:
 build-acp:
     cargo build --locked -p kraai-acp --bin kraai-acp
 
+build-perf:
+    cargo build --locked --release -p kraai-perf
+
+[positional-arguments]
+perf *args:
+    cargo run --locked --release -p kraai-perf -- "$@"
+
+[positional-arguments]
+profile *args:
+    cargo run --locked --profile profiling -p kraai-perf -- profile "$@"
+
 [positional-arguments]
 run *args: build
     cargo run --locked -p kraai-tui -- "$@"

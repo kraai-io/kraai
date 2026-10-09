@@ -18,6 +18,7 @@ members = [
   "crates/kraai-script-protocol",
   "crates/kraai-eval",
   "crates/kraai-persistence",
+  "crates/kraai-perf",
   "crates/kraai-runtime",
   "crates/kraai-runtime-node",
   "crates/kraai-tui",
@@ -39,6 +40,11 @@ codegen-units = 1 # Allows compiler to perform better optimization.
 lto = true        # Enables Link-time Optimization.
 opt-level = "s"   # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true      # Ensures debug symbols are removed.
+
+[profile.profiling]
+debug = 1
+inherits = "release"
+strip = false
 
 [workspace.dependencies]
 agent-client-protocol = "2.2.0"

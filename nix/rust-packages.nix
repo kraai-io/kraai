@@ -155,6 +155,7 @@
 
     kraai = frontendPackage "kraai-tui" "kraai";
     kraai-acp = frontendPackage "kraai-acp" "kraai-acp";
+    kraai-perf = frontendPackage "kraai-perf" "kraai-perf";
 
     kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
       nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
@@ -243,7 +244,7 @@
   in {
     packages =
       {
-        inherit kraai kraai-acp;
+        inherit kraai kraai-acp kraai-perf;
         default = kraai;
       }
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {inherit kraai-eval;};
