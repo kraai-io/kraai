@@ -33,7 +33,23 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
         assert!(harness.app.state.composer_cursor_enabled());
         assert!(harness.app.state.runtime_is_active());
         harness.app.confirm_current_script_action();
-        assert_eq!(harness.drain_requests().len(), 1);
+        let requests = harness.drain_requests();
+        assert!(matches!(
+            (action, requests.as_slice()),
+            (
+                ScriptApprovalAction::Allow,
+                [super::RuntimeRequest::ApproveScript {
+                    session_id,
+                    execution_id,
+                }]
+            ) | (
+                ScriptApprovalAction::Reject,
+                [super::RuntimeRequest::DenyScript {
+                    session_id,
+                    execution_id,
+                }]
+            ) if session_id == "session" && execution_id == "execution"
+        ));
 
         harness
             .app
