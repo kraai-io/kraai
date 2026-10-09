@@ -58,6 +58,7 @@ fn snapshot_with_message(sequence: u64, complete: bool) -> SessionSnapshot {
             },
             agent_profile_id: None,
             generation: Some(MessageGeneration {
+                options: Default::default(),
                 provider_id: ProviderId::new("provider"),
                 model_id: ModelId::new("model"),
                 max_context: Some(4096),
@@ -91,6 +92,7 @@ fn snapshot_cannot_swallow_ci_stream_output() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot_with_message(3, false))),
         });
@@ -129,6 +131,7 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
@@ -153,6 +156,7 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
@@ -173,6 +177,7 @@ fn snapshot_cannot_swallow_a_ci_stream_failure() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot_at(4, None))),
         });
@@ -221,6 +226,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot.clone())),
         });
@@ -257,6 +263,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
             harness
                 .app
                 .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                    model_save_id: 0,
                     session_id: String::from("session"),
                     result: Box::new(Ok(snapshot.clone())),
                 });
@@ -304,6 +311,7 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
@@ -350,6 +358,7 @@ fn covered_stream_lifecycle_preserves_newer_approval_state() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot_at(10, Some(pending_script("current"))))),
         });
@@ -400,6 +409,7 @@ fn snapshot_cannot_swallow_a_ci_approval_failure() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: String::from("session"),
             result: Box::new(Ok(session_snapshot_at(4, Some(pending_script("current"))))),
         });
@@ -486,6 +496,7 @@ fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshot
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                model_save_id: 0,
                 session_id: "session".into(),
                 result: Box::new(Ok(stale.clone())),
             });
@@ -510,10 +521,15 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
     snapshot.session.selected_model = Some(kraai_types::ModelSelection {
         provider_id: ProviderId::new("saved-provider"),
         model_id: ModelId::new("saved-model"),
+        options: kraai_types::ModelOptionValues::from([(
+            "effort".into(),
+            kraai_types::ModelOptionValue::Choice("high".into()),
+        )]),
     });
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "session".into(),
             result: Box::new(Ok(snapshot.clone())),
         });
@@ -526,10 +542,16 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         Some("saved-model")
     );
     harness.app.state.selected_model_id = Some("new-model".into());
+    let draft_options = kraai_types::ModelOptionValues::from([(
+        "effort".into(),
+        kraai_types::ModelOptionValue::Choice("low".into()),
+    )]);
+    harness.app.state.selected_model_options = draft_options.clone();
     snapshot.event_sequence += 1;
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "session".into(),
             result: Box::new(Ok(snapshot)),
         });
@@ -537,6 +559,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         harness.app.state.selected_model_id.as_deref(),
         Some("new-model")
     );
+    assert_eq!(harness.app.state.selected_model_options, draft_options);
 }
 
 #[test]
@@ -547,30 +570,40 @@ fn observer_refreshes_model_when_saved_selection_changes() {
         .reset_chat_session(Some("session".into()), "Session loaded");
     for (sequence, selection) in [
         None,
-        Some(("first-provider", "first-model")),
-        Some(("second-provider", "second-model")),
+        Some(("first-provider", "first-model", "low")),
+        Some(("second-provider", "second-model", "low")),
+        Some(("second-provider", "second-model", "high")),
     ]
     .into_iter()
     .enumerate()
     {
         let mut snapshot = session_snapshot_at(sequence as u64, None);
         snapshot.session.selected_model =
-            selection.map(|(provider, model)| kraai_types::ModelSelection {
+            selection.map(|(provider, model, effort)| kraai_types::ModelSelection {
                 provider_id: ProviderId::new(provider),
                 model_id: ModelId::new(model),
+                options: kraai_types::ModelOptionValues::from([(
+                    "effort".into(),
+                    kraai_types::ModelOptionValue::Choice(effort.into()),
+                )]),
             });
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                model_save_id: 0,
                 session_id: "session".into(),
                 result: Box::new(Ok(snapshot)),
             });
-        if let Some((provider, model)) = selection {
+        if let Some((provider, model, effort)) = selection {
             assert_eq!(
                 harness.app.state.selected_provider_id.as_deref(),
                 Some(provider)
             );
             assert_eq!(harness.app.state.selected_model_id.as_deref(), Some(model));
+            assert_eq!(
+                harness.app.state.selected_model_options.get("effort"),
+                Some(&kraai_types::ModelOptionValue::Choice(effort.into()))
+            );
         }
     }
 }

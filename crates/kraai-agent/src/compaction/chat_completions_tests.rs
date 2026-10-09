@@ -69,6 +69,8 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         .register_model(kraai_provider_core::ModelConfig {
             id: ModelId::new("model"),
             provider_id: ProviderId::new("test"),
+            options: Default::default(),
+            remove_options: Default::default(),
             config: DynamicConfig::from([("supports_images".into(), DynamicValue::Bool(true))]),
         })
         .await?;

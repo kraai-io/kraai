@@ -11,6 +11,8 @@ mod images;
 mod lifecycle;
 #[path = "stdio/mcp.rs"]
 mod mcp;
+#[path = "stdio/model_options.rs"]
+mod model_options;
 #[path = "stdio/models.rs"]
 mod models;
 #[path = "stdio/profiles.rs"]

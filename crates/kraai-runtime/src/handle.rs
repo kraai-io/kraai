@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ProviderId, ScriptExecutionId};
+use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
@@ -216,8 +216,9 @@ impl RuntimeHandle {
         message: String,
         model_id: String,
         provider_id: String,
+        options: ModelOptionValues,
     ) -> RuntimeResult<SubmitMessageOutcome> {
-        self.send_content(session_id, message.into(), model_id, provider_id)
+        self.send_content(session_id, message.into(), model_id, provider_id, options)
             .await
     }
 
@@ -240,6 +241,7 @@ impl RuntimeHandle {
         message: kraai_types::MessageContent,
         model_id: String,
         provider_id: String,
+        options: ModelOptionValues,
     ) -> RuntimeResult<SubmitMessageOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
@@ -252,6 +254,7 @@ impl RuntimeHandle {
             message,
             model_id,
             provider_id,
+            options,
             response,
         })
         .await
@@ -422,8 +425,9 @@ impl RuntimeHandle {
         session_id: String,
         model_id: String,
         provider_id: String,
+        options: ModelOptionValues,
     ) -> RuntimeResult<ContinueSessionOutcome> {
-        self.request_continuation(session_id, model_id, provider_id, false)
+        self.request_continuation(session_id, model_id, provider_id, options, false)
             .await
     }
 
@@ -432,8 +436,9 @@ impl RuntimeHandle {
         session_id: String,
         model_id: String,
         provider_id: String,
+        options: ModelOptionValues,
     ) -> RuntimeResult<ContinueSessionOutcome> {
-        self.request_continuation(session_id, model_id, provider_id, true)
+        self.request_continuation(session_id, model_id, provider_id, options, true)
             .await
     }
 
@@ -442,6 +447,7 @@ impl RuntimeHandle {
         session_id: String,
         model_id: String,
         provider_id: String,
+        options: ModelOptionValues,
         wait_for_preparation: bool,
     ) -> RuntimeResult<ContinueSessionOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
@@ -454,6 +460,7 @@ impl RuntimeHandle {
             session_id,
             model_id,
             provider_id,
+            options,
             wait_for_preparation,
             response,
         })

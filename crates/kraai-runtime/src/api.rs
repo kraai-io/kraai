@@ -137,6 +137,8 @@ pub struct Model {
     pub id: String,
     pub name: String,
     pub max_context: Option<usize>,
+    #[serde(default)]
+    pub options: Vec<kraai_types::ModelOptionDefinition>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

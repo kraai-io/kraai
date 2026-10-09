@@ -132,6 +132,7 @@ impl RuntimeCore {
                                 id: model.id.to_string(),
                                 name: model.name,
                                 max_context: model.max_context,
+                                options: model.options,
                             })
                             .collect();
                         (provider_id.to_string(), models)
@@ -245,10 +246,11 @@ impl RuntimeCore {
                 message,
                 model_id,
                 provider_id,
+                options,
                 response,
             } => {
                 let result = self
-                    .handle_send_message(session_id, message, model_id, provider_id)
+                    .handle_send_message(session_id, message, model_id, provider_id, options)
                     .await;
                 let _ = response.send(result);
             }
@@ -557,6 +559,7 @@ impl RuntimeCore {
                 session_id,
                 model_id,
                 provider_id,
+                options,
                 wait_for_preparation,
                 response,
             } => {
@@ -565,13 +568,18 @@ impl RuntimeCore {
                     tokio::spawn(async move {
                         let _state_guard = runtime.session_state_barrier.read().await;
                         let result = runtime
-                            .start_continuation_when_ready(session_id, model_id, provider_id)
+                            .start_continuation_when_ready(
+                                session_id,
+                                model_id,
+                                provider_id,
+                                options,
+                            )
                             .await;
                         let _ = response.send(result);
                     });
                 } else {
                     let result = self
-                        .start_continuation(session_id, model_id, provider_id)
+                        .start_continuation(session_id, model_id, provider_id, options)
                         .await;
                     let _ = response.send(result);
                 }

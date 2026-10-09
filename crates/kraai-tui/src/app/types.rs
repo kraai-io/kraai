@@ -16,6 +16,7 @@ pub struct StartupOptions {
     pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub message: Option<String>,
+    pub options: Vec<String>,
 }
 
 pub(super) enum SubmissionSource {
@@ -29,6 +30,7 @@ pub(super) enum UiMode {
     Executions,
     AgentMenu,
     ModelMenu,
+    ModelOptionsMenu,
     ProvidersMenu,
     Mcp,
     SessionsMenu,
@@ -123,6 +125,7 @@ pub(super) struct PendingSubmit {
     pub(super) message: MessageContent,
     pub(super) model_id: String,
     pub(super) provider_id: String,
+    pub(super) options: kraai_types::ModelOptionValues,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -168,11 +171,17 @@ pub(super) enum RuntimeRequest {
         session_id: String,
         profile_id: String,
     },
+    SetSessionModel {
+        session_id: String,
+        save_id: u64,
+        selection: kraai_types::ModelSelection,
+    },
     SendMessage {
         session_id: String,
         message: MessageContent,
         model_id: String,
         provider_id: String,
+        options: kraai_types::ModelOptionValues,
     },
     PasteImage {
         request_id: u64,
@@ -218,6 +227,7 @@ pub(super) enum RuntimeRequest {
         session_id: String,
         model_id: String,
         provider_id: String,
+        options: kraai_types::ModelOptionValues,
     },
 }
 
@@ -248,6 +258,11 @@ pub(super) enum RuntimeResponse {
         profile_id: String,
         result: RuntimeResult<()>,
     },
+    SetSessionModel {
+        session_id: String,
+        save_id: u64,
+        result: RuntimeResult<()>,
+    },
     SendMessage {
         session_id: String,
         result: RuntimeResult<kraai_runtime::SubmitMessageOutcome>,
@@ -263,6 +278,7 @@ pub(super) enum RuntimeResponse {
     },
     SessionSnapshot {
         session_id: String,
+        model_save_id: u64,
         result: Box<RuntimeResult<SessionSnapshot>>,
     },
     CurrentTip {

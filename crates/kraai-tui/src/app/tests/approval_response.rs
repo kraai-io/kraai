@@ -171,6 +171,7 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "session".into(),
             result: Box::new(Ok(snapshot)),
         });
@@ -239,6 +240,7 @@ fn foreign_approval_keeps_the_execution_view_open() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
             session_id: "session".into(),
             result: Box::new(Ok(snapshot)),
         });

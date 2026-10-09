@@ -215,7 +215,16 @@ fn statusline_model_label(state: &AppState) -> String {
         .and_then(|models| models.iter().find(|model| model.id == model_id))
         .map(|model| model.name.as_str())
         .unwrap_or(model_id);
-    model_name.to_string()
+    if state.selected_model_options.is_empty() {
+        return model_name.to_owned();
+    }
+    let options = state
+        .selected_model_options
+        .iter()
+        .map(|(id, value)| format!("{id}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{model_name} ({options})")
 }
 
 fn statusline_agent_label(state: &AppState) -> String {

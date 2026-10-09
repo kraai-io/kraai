@@ -55,6 +55,7 @@ impl App {
                 message,
                 model_id,
                 provider_id,
+                self.state.selected_model_options.clone(),
                 types::SubmissionSource::Composer {
                     queued: is_queueing,
                 },
@@ -83,6 +84,7 @@ impl App {
             message,
             model_id,
             provider_id,
+            options: self.state.selected_model_options.clone(),
         });
         self.clear_message_draft();
         self.state.status = String::from("Creating session");
@@ -107,6 +109,21 @@ impl App {
             return None;
         }
 
+        if let Some(model) = self.state.selected_model()
+            && let Err(errors) = kraai_types::validate_model_options(
+                &model.options,
+                &self.state.selected_model_options,
+            )
+        {
+            let message = errors
+                .into_iter()
+                .map(|error| format!("{}: {}", error.option, error.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.state.status = format!("Choose model options using /option: {message}");
+            self.fail_ci(self.state.status.clone());
+            return None;
+        }
         Some((model_id, provider_id))
     }
 
@@ -127,6 +144,7 @@ impl App {
                 self.state.mode = UiMode::ModelMenu;
                 self.request(RuntimeRequest::ListModels);
             }
+            "option" => self.handle_option_command(parts.collect()),
             "agent" => {
                 if self.state.turn_blocks_user_commands() {
                     self.state.status =
@@ -190,6 +208,7 @@ impl App {
                     session_id,
                     model_id,
                     provider_id,
+                    options: self.state.selected_model_options.clone(),
                 });
             }
             "help" => {
@@ -320,6 +339,7 @@ impl App {
             provider_id: self.state.selected_provider_id.clone(),
             model_id: self.state.selected_model_id.clone(),
             agent_profile_id: self.state.selected_profile_id.clone(),
+            options: self.state.selected_model_options.clone(),
         };
 
         if let Err(error) = workspace_preferences::save_for_current_workspace(&preferences) {
@@ -336,7 +356,7 @@ impl App {
         if previous_provider_id != self.state.selected_provider_id
             || previous_model_id != self.state.selected_model_id
         {
-            self.save_workspace_preferences();
+            self.save_model_selection();
         }
     }
 

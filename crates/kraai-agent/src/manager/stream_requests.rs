@@ -7,13 +7,14 @@ impl AgentManager {
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
+        options: ModelOptionValues,
     ) -> Result<PendingStreamRequest> {
         if self.is_turn_active(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot send a new message while the current turn is active"
             )));
         }
-        self.prepare_messages_stream(session_id, vec![message], model_id, provider_id)
+        self.prepare_messages_stream(session_id, vec![message], model_id, provider_id, options)
             .await?
             .ok_or_else(|| eyre!("Failed to prepare a new message stream"))
     }
@@ -22,19 +23,26 @@ impl AgentManager {
         &mut self,
         session_id: &str,
     ) -> Result<Option<PendingStreamRequest>> {
+        let Some(state) = self.session_states.get(session_id) else {
+            return Ok(None);
+        };
+        let (Some(model_id), Some(provider_id)) = (&state.last_model, &state.last_provider) else {
+            return Ok(None);
+        };
+        let (model_id, provider_id, options) = (
+            model_id.clone(),
+            provider_id.clone(),
+            state.last_options.clone(),
+        );
+        self.validate_model_options(&provider_id, &model_id, &options, true)
+            .await?;
         self.finish_pending_message_rollback(session_id).await?;
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
         let selected_profile = self.resolve_selected_profile(&session)?;
-        let (model_id, provider_id, profile, workspace_dir) = {
+        let (profile, workspace_dir) = {
             let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-            let Some(model_id) = &state.last_model else {
-                return Ok(None);
-            };
-            let Some(provider_id) = &state.last_provider else {
-                return Ok(None);
-            };
             let profile = match state.active_turn_profile.clone() {
                 Some(profile) => profile,
                 None => {
@@ -43,12 +51,7 @@ impl AgentManager {
                     selected_profile
                 }
             };
-            (
-                model_id.clone(),
-                provider_id.clone(),
-                profile,
-                state.active_workspace_dir.clone(),
-            )
+            (profile, state.active_workspace_dir.clone())
         };
 
         if self.session_has_active_stream(session_id).await {
@@ -59,6 +62,12 @@ impl AgentManager {
             return Ok(None);
         };
 
+        let selection = kraai_types::ModelSelection {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            options: options.clone(),
+        };
+        self.persist_model_selection(session_id, &selection).await?;
         let context = self
             .get_model_history(&tip_id, (&provider_id, &model_id))
             .await?;
@@ -79,7 +88,7 @@ impl AgentManager {
                 &system_prompt,
                 Some(ScriptToolDefinition::nushell()),
                 max_context,
-                (&provider_id, &model_id),
+                &selection,
             )
             .await?;
 
@@ -88,6 +97,7 @@ impl AgentManager {
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
+            options,
             max_context,
             usage: None,
         });

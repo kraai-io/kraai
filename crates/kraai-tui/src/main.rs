@@ -68,6 +68,9 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     model: Option<String>,
 
+    #[arg(long = "option", value_name = "ID=VALUE")]
+    options: Vec<String>,
+
     #[arg(long = "agent-profile", value_name = "ID")]
     agent_profile: Option<String>,
 
@@ -130,6 +133,7 @@ fn main() -> Result<()> {
         model_id: cli.model,
         agent_profile_id: cli.agent_profile,
         message: cli.message,
+        options: cli.options,
     };
 
     let mut app = App::new(runtime, startup_options);

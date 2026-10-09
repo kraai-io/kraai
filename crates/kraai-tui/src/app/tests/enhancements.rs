@@ -331,6 +331,7 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
 fn model_search_preserves_order_unicode_and_cross_field_matches() {
     let mut harness = test_harness();
     let model = |id: &str, name: &str| kraai_runtime::Model {
+        options: Vec::new(),
         id: id.to_owned(),
         name: name.to_owned(),
         max_context: Some(1000),
@@ -395,6 +396,7 @@ fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
             String::from("provider"),
             ids.iter()
                 .map(|id| kraai_runtime::Model {
+                    options: Vec::new(),
                     id: (*id).to_owned(),
                     name: (*id).to_owned(),
                     max_context: None,
@@ -444,6 +446,7 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
     harness.app.state.models_by_provider.insert(
         String::from("provider"),
         vec![kraai_runtime::Model {
+            options: Vec::new(),
             id: String::from("model-id"),
             name: String::from("Display name"),
             max_context: Some(1000),

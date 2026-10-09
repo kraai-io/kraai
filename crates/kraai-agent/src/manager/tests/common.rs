@@ -16,12 +16,16 @@ impl Provider for MockProvider {
     }
 
     async fn list_models(&self) -> Vec<Model> {
-        vec![Model {
-            supports_images: true,
-            id: ModelId::new("mock-model"),
-            name: String::from("Mock Model"),
-            max_context: None,
-        }]
+        ["mock-model", "new-model"]
+            .into_iter()
+            .map(|id| Model {
+                options: Default::default(),
+                supports_images: true,
+                id: ModelId::new(id),
+                name: String::from("Mock Model"),
+                max_context: None,
+            })
+            .collect()
     }
 
     async fn cache_models(&self) -> Result<()> {

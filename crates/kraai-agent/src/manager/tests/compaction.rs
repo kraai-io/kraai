@@ -78,7 +78,11 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
                 &prompt(prefix),
                 None,
                 None,
-                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+                &kraai_types::ModelSelection {
+                    provider_id: ProviderId::new("mock"),
+                    model_id: ModelId::new("mock-model"),
+                    options: Default::default(),
+                },
             )
             .await?;
         assert!(pending.is_none());
@@ -158,7 +162,11 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
             &prompt("system"),
             None,
             None,
-            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            &kraai_types::ModelSelection {
+                provider_id: ProviderId::new("mock"),
+                model_id: ModelId::new("mock-model"),
+                options: Default::default(),
+            },
         )
         .await?;
     let serialized = serde_json::to_string(&request.messages)?;
@@ -193,7 +201,11 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
                 &prompt("system"),
                 None,
                 None,
-                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+                &kraai_types::ModelSelection {
+                    provider_id: ProviderId::new("mock"),
+                    model_id: ModelId::new("mock-model"),
+                    options: Default::default(),
+                },
             )
             .await?;
         assert_eq!(
@@ -259,6 +271,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
     for (input, expected) in [(6799, false), (6800, true), (8800, true), (3200, false)] {
         let mut message = manager.message_store.get(&assistant).await?.unwrap();
         message.generation = Some(MessageGeneration {
+            options: Default::default(),
             provider_id: ProviderId::new("mock"),
             model_id: ModelId::new("mock-model"),
             max_context: Some(10_000),
@@ -281,7 +294,11 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                 &system,
                 Some(tool.clone()),
                 Some(10_000),
-                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+                &kraai_types::ModelSelection {
+                    provider_id: ProviderId::new("mock"),
+                    model_id: ModelId::new("mock-model"),
+                    options: Default::default(),
+                },
             )
             .await?;
         assert_eq!(pending.is_some(), expected);
@@ -294,7 +311,11 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                 &system,
                 None,
                 limit,
-                (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+                &kraai_types::ModelSelection {
+                    provider_id: ProviderId::new("mock"),
+                    model_id: ModelId::new("mock-model"),
+                    options: Default::default(),
+                },
             )
             .await?;
         assert!(pending.is_none());
@@ -326,12 +347,17 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
-            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            &kraai_types::ModelSelection {
+                provider_id: ProviderId::new("mock"),
+                model_id: ModelId::new("mock-model"),
+                options: Default::default(),
+            },
         )
         .await?;
     assert!(pending.is_none());
     let mut message = manager.message_store.get(&assistant).await?.unwrap();
     message.generation = Some(MessageGeneration {
+        options: Default::default(),
         provider_id: ProviderId::new("mock"),
         model_id: ModelId::new("mock-model"),
         max_context: Some(10_000),
@@ -373,7 +399,11 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
-            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            &kraai_types::ModelSelection {
+                provider_id: ProviderId::new("mock"),
+                model_id: ModelId::new("mock-model"),
+                options: Default::default(),
+            },
         )
         .await?;
     assert!(pending.is_none());
@@ -390,7 +420,11 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             &system,
             None,
             Some(10_000),
-            (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            &kraai_types::ModelSelection {
+                provider_id: ProviderId::new("mock"),
+                model_id: ModelId::new("mock-model"),
+                options: Default::default(),
+            },
         )
         .await?;
     assert!(pending.is_some());
@@ -446,7 +480,11 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
                 &prompt("instructions"),
                 None,
                 None,
-                (&provider, &model),
+                &kraai_types::ModelSelection {
+                    provider_id: provider.clone(),
+                    model_id: model.clone(),
+                    options: Default::default(),
+                },
             )
             .await?;
         assert_eq!(

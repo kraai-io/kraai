@@ -150,12 +150,24 @@ supports_images = true
         provider: Option<&str>,
         model: Option<&str>,
     ) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+        Self::spawn_with_options(root, provider, model, &[])
+    }
+
+    fn spawn_with_options(
+        root: &std::path::Path,
+        provider: Option<&str>,
+        model: Option<&str>,
+        options: &[&str],
+    ) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-acp"));
         if let Some(provider) = provider {
             command.args(["--provider", provider]);
         }
         if let Some(model) = model {
             command.args(["--model", model]);
+        }
+        for option in options {
+            command.args(["--option", option]);
         }
         let mut child = command
             .arg("--storage-root")
@@ -248,6 +260,15 @@ supports_images = true
             .ok_or_else(|| eyre!("missing session ID: {values:?}"))
     }
 
+    pub async fn load_session(&mut self, session: &str, id: u64) -> Result<Vec<Value>> {
+        self.request(
+            id,
+            "session/load",
+            json!({"sessionId":session,"cwd":self.root.path(),"mcpServers":[]}),
+        )
+        .await
+    }
+
     pub async fn stop(&mut self) -> Result<()> {
         drop(self.input.take());
         let status = tokio::time::timeout(Duration::from_secs(20), self.child.wait()).await??;
@@ -267,8 +288,18 @@ supports_images = true
         provider: Option<&str>,
         model: Option<&str>,
     ) -> Result<()> {
+        self.restart_with_options(provider, model, &[]).await
+    }
+
+    pub async fn restart_with_options(
+        &mut self,
+        provider: Option<&str>,
+        model: Option<&str>,
+        options: &[&str],
+    ) -> Result<()> {
         self.stop().await?;
-        let (child, input, output) = Self::spawn_with_selection(self.root.path(), provider, model)?;
+        let (child, input, output) =
+            Self::spawn_with_options(self.root.path(), provider, model, options)?;
         self.child = child;
         self.input = Some(input);
         self.output = output;

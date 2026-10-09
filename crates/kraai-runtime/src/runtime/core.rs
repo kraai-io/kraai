@@ -73,6 +73,7 @@ pub(crate) struct QueuedMessage {
     pub(crate) message: kraai_types::MessageContent,
     pub(crate) model_id: ModelId,
     pub(crate) provider_id: ProviderId,
+    pub(crate) options: kraai_types::ModelOptionValues,
 }
 
 impl RuntimeCore {

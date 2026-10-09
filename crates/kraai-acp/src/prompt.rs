@@ -32,13 +32,25 @@ pub(crate) async fn run(
     let mut events = runtime.subscribe_session(id.0.as_ref());
     let model = crate::session::selected_model(runtime, &id).await?;
     match commands::parse(&request.prompt)? {
+        Some(commands::Command::Option {
+            id: option_id,
+            value,
+        }) => {
+            crate::config::set_model_option(runtime, id.0.as_ref(), &option_id, &value).await?;
+            crate::config::notify(
+                &connection,
+                id.clone(),
+                crate::config::options(runtime, id.0.as_ref()).await?,
+            )?;
+            return Ok(command_response());
+        }
         Some(commands::Command::Undo) => {
             commands::undo(runtime, &id, &connection).await?;
             return Ok(command_response());
         }
         Some(commands::Command::Continue) => {
             if runtime
-                .continue_turn(id.to_string(), model.model, model.provider)
+                .continue_turn(id.to_string(), model.model, model.provider, model.options)
                 .await
                 .map_err(error::runtime)?
                 == ContinueSessionOutcome::NothingToContinue
@@ -52,7 +64,13 @@ pub(crate) async fn run(
                 return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
             }
             runtime
-                .send_content(id.to_string(), message, model.model, model.provider)
+                .send_content(
+                    id.to_string(),
+                    message,
+                    model.model,
+                    model.provider,
+                    model.options,
+                )
                 .await
                 .map_err(error::runtime)?;
         }

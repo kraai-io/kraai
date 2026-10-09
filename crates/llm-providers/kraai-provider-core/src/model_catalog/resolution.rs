@@ -1,32 +1,23 @@
 use super::{CatalogModel, Snapshot};
 
 impl Snapshot {
+    pub(super) fn serving_model(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+    ) -> Option<(&str, &str, &CatalogModel)> {
+        self.exact_model(self.serving_provider(provider, api).ok()??, model)
+    }
+
     pub(super) fn model(
         &self,
         provider: Option<&str>,
         api: Option<&str>,
         model: &str,
     ) -> Option<(&str, &str, &CatalogModel)> {
-        if let Some(provider) = provider {
+        if let Some(provider) = self.serving_provider(provider, api).ok()? {
             return self.exact_model(provider, model);
-        }
-        if let Some(api) = api {
-            let api = api.trim_end_matches('/');
-            let mut matches = self.providers.iter().filter(|(_, provider)| {
-                provider
-                    .api
-                    .as_deref()
-                    .is_some_and(|url| url.trim_end_matches('/') == api)
-            });
-            if let Some((provider, _)) = matches.next() {
-                if matches.next().is_some() {
-                    return None;
-                }
-                return self.exact_model(provider, model);
-            }
-            if api == "https://api.groq.com/openai/v1" {
-                return self.exact_model("groq", model);
-            }
         }
         if let Some(resolved) = self.canonical_model(model) {
             return Some(resolved);
@@ -48,6 +39,43 @@ impl Snapshot {
             }
         }
         Some(resolved)
+    }
+
+    fn serving_provider(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+    ) -> Result<Option<&str>, ()> {
+        if let Some(provider) = provider {
+            return self
+                .providers
+                .get_key_value(provider)
+                .map(|(id, _)| Some(id.as_str()))
+                .ok_or(());
+        }
+        let Some(api) = api else { return Ok(None) };
+        let api = api.trim_end_matches('/');
+        let mut matches = self.providers.iter().filter(|(_, provider)| {
+            provider
+                .api
+                .as_deref()
+                .is_some_and(|url| url.trim_end_matches('/') == api)
+        });
+        if let Some((provider, _)) = matches.next() {
+            return if matches.next().is_none() {
+                Ok(Some(provider))
+            } else {
+                Err(())
+            };
+        }
+        if api == "https://api.groq.com/openai/v1" {
+            return self
+                .providers
+                .get_key_value("groq")
+                .map(|(id, _)| Some(id.as_str()))
+                .ok_or(());
+        }
+        Ok(None)
     }
 
     fn exact_model(&self, provider: &str, model: &str) -> Option<(&str, &str, &CatalogModel)> {

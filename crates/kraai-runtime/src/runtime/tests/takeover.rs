@@ -47,6 +47,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             "first request".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     first_sender.send(Ok(ProviderStreamEvent::TextDelta {
@@ -100,6 +101,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             "takeover request".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     assert!(
@@ -172,6 +174,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
                 "next request".into(),
                 "mock-model".into(),
                 "mock".into(),
+                Default::default(),
             )
             .await?,
         SubmitMessageOutcome::Started { .. }

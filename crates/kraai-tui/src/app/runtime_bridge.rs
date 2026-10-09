@@ -1,5 +1,6 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{CreateSessionRequest, RuntimeError, RuntimeEvent, RuntimeHandle};
+use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 use super::auth::map_openai_codex_auth_status;
@@ -125,7 +126,7 @@ pub(super) fn spawn_runtime_bridge(
     let clipboard =
         super::clipboard_worker::ClipboardWorker::spawn(runtime.clone(), res_tx.clone());
     std::thread::spawn(move || {
-        let bridge = RequestBridge::new(runtime);
+        let mut bridge = RequestBridge::new(runtime);
         while let Ok(request) = ordered_rx.recv() {
             let _ = res_tx.send(bridge.dispatch(request));
         }
@@ -154,6 +155,7 @@ pub(super) fn route_requests(
 struct RequestBridge {
     executor: kraai_runtime::RuntimeResult<tokio::runtime::Runtime>,
     runtime: RuntimeHandle,
+    model_save_ids: HashMap<String, u64>,
 }
 
 impl RequestBridge {
@@ -164,7 +166,11 @@ impl RequestBridge {
             .map_err(|error| {
                 RuntimeError::unavailable(format!("failed to create tokio runtime: {error}"))
             });
-        Self { runtime, executor }
+        Self {
+            runtime,
+            executor,
+            model_save_ids: HashMap::new(),
+        }
     }
 
     fn execute<'a, T, F>(
@@ -180,7 +186,7 @@ impl RequestBridge {
         }
     }
 
-    fn dispatch(&self, req: RuntimeRequest) -> RuntimeResponse {
+    fn dispatch(&mut self, req: RuntimeRequest) -> RuntimeResponse {
         match req {
             RuntimeRequest::FinishStartupSync => RuntimeResponse::StartupSyncComplete,
             RuntimeRequest::ListModels => {
@@ -271,6 +277,22 @@ impl RequestBridge {
                     result,
                 }
             }
+            RuntimeRequest::SetSessionModel {
+                session_id,
+                save_id,
+                selection,
+            } => {
+                let result = self
+                    .execute(|runtime| runtime.set_session_model(session_id.clone(), selection));
+                if result.is_ok() {
+                    self.model_save_ids.insert(session_id.clone(), save_id);
+                }
+                RuntimeResponse::SetSessionModel {
+                    session_id,
+                    save_id,
+                    result,
+                }
+            }
             RuntimeRequest::CreateSession {
                 creation_id,
                 profile_id,
@@ -291,9 +313,16 @@ impl RequestBridge {
                 message,
                 model_id,
                 provider_id,
+                options,
             } => {
                 let result = self.execute(|runtime| {
-                    runtime.send_content(session_id.clone(), message, model_id, provider_id)
+                    runtime.send_content(
+                        session_id.clone(),
+                        message,
+                        model_id,
+                        provider_id,
+                        options,
+                    )
                 });
                 RuntimeResponse::SendMessage { session_id, result }
             }
@@ -315,6 +344,7 @@ impl RequestBridge {
                 let result =
                     self.execute(|runtime| runtime.get_session_snapshot(session_id.clone()));
                 RuntimeResponse::SessionSnapshot {
+                    model_save_id: self.model_save_ids.get(&session_id).copied().unwrap_or(0),
                     session_id,
                     result: Box::new(result),
                 }
@@ -385,9 +415,11 @@ impl RequestBridge {
                 session_id,
                 model_id,
                 provider_id,
+                options,
             } => {
-                let result = self
-                    .execute(|runtime| runtime.continue_session(session_id, model_id, provider_id));
+                let result = self.execute(|runtime| {
+                    runtime.continue_session(session_id, model_id, provider_id, options)
+                });
                 RuntimeResponse::ContinueSession(result)
             }
         }

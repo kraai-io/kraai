@@ -31,7 +31,7 @@ impl kraai_provider_core::Provider for HandoffProvider {
     }
 
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
-        Vec::new()
+        vec![super::harness::mock_model()]
     }
 
     async fn cache_models(&self) -> Result<()> {
@@ -114,6 +114,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             String::from("change it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
     tokio::time::timeout(TEST_TIMEOUT, received.recv())
@@ -122,8 +123,12 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
     tokio::time::timeout(TEST_TIMEOUT, store.entered.notified()).await?;
 
     let handle = harness.handle.clone();
-    let continuation =
-        handle.continue_session(session_id.clone(), "mock-model".into(), "mock".into());
+    let continuation = handle.continue_session(
+        session_id.clone(),
+        "mock-model".into(),
+        "mock".into(),
+        Default::default(),
+    );
     tokio::pin!(continuation);
     let early_result = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
@@ -179,7 +184,12 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
         assert_eq!(
             harness
                 .handle
-                .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+                .continue_session(
+                    session_id.clone(),
+                    "mock-model".into(),
+                    "mock".into(),
+                    Default::default()
+                )
                 .await?,
             ContinueSessionOutcome::NothingToContinue
         );
@@ -246,6 +256,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             "change it".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     tokio::time::timeout(TEST_TIMEOUT, received.recv())
@@ -279,7 +290,12 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         assert_eq!(
             harness
                 .handle
-                .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+                .continue_session(
+                    session_id.clone(),
+                    "mock-model".into(),
+                    "mock".into(),
+                    Default::default()
+                )
                 .await?,
             ContinueSessionOutcome::NothingToContinue
         );
@@ -298,6 +314,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             "skip that, do something else".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     let request = tokio::time::timeout(TEST_TIMEOUT, received.recv())
@@ -380,6 +397,7 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
                 "queued".into(),
                 kraai_types::ModelId::new("mock-model"),
                 kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await?,
         crate::SubmitMessageOutcome::Queued { position: 1 }
@@ -401,6 +419,7 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
                 "independent".into(),
                 "mock-model".into(),
                 "mock".into(),
+                Default::default(),
             ),
         )
         .await??,
@@ -444,6 +463,7 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
             "hello".into(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     harness
@@ -470,7 +490,12 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
     assert_eq!(
         harness
             .handle
-            .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+            .continue_session(
+                session_id.clone(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default()
+            )
             .await?,
         ContinueSessionOutcome::NothingToContinue
     );
@@ -531,6 +556,7 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
             "hello".into(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -591,6 +617,7 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
             "hello".into(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let providers = agent.cloned_provider_manager();
@@ -868,6 +895,7 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
             "hello".into(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     agent.complete_message(&request.message_id).await?;
@@ -885,6 +913,7 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
                 session_id.clone(),
                 kraai_types::ModelId::new("mock-model"),
                 kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await
     };

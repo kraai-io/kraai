@@ -5,6 +5,10 @@ use kraai_runtime::RuntimeHandle;
 
 use crate::{error, session::Model};
 
+mod model_options;
+use model_options::model_option;
+pub(crate) use model_options::set_model_option;
+
 pub(crate) async fn options(
     runtime: &RuntimeHandle,
     session_id: &str,
@@ -17,6 +21,11 @@ pub(crate) async fn options(
         .map_err(error::runtime)?
         .into_iter()
         .collect();
+    let model_options = providers
+        .get(&selected.provider)
+        .and_then(|models| models.iter().find(|model| model.id == selected.model))
+        .map(|model| model.options.clone())
+        .unwrap_or_default();
     let mut choices = Vec::new();
     for (provider, mut models) in providers {
         models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -24,6 +33,7 @@ pub(crate) async fn options(
             let id = Model {
                 provider: provider.clone(),
                 model: model.id.clone(),
+                options: Default::default(),
             }
             .id();
             choices.push(acp::SessionConfigSelectOption::new(
@@ -47,7 +57,7 @@ pub(crate) async fn options(
                 .description(profile.description)
         })
         .collect::<Vec<_>>();
-    Ok(vec![
+    let mut config = vec![
         acp::SessionConfigOption::select("model", "Model", selected.id(), choices)
             .category(acp::SessionConfigOptionCategory::Model),
         acp::SessionConfigOption::select(
@@ -57,7 +67,14 @@ pub(crate) async fn options(
             profile_choices,
         )
         .category(acp::SessionConfigOptionCategory::Mode),
-    ])
+    ];
+    config.extend(
+        model_options
+            .iter()
+            .filter(|option| option.is_active(&selected.options))
+            .map(|option| model_option(option, selected.options.get(&option.id))),
+    );
+    Ok(config)
 }
 
 pub(crate) async fn set(
@@ -66,22 +83,37 @@ pub(crate) async fn set(
     config_id: &str,
     value: acp::SessionConfigOptionValue,
 ) -> Result<Vec<acp::SessionConfigOption>> {
+    if let Some(id) = config_id.strip_prefix("option:") {
+        let input = match value {
+            acp::SessionConfigOptionValue::ValueId { value } => value.0.to_string(),
+            acp::SessionConfigOptionValue::Boolean { value } => value.to_string(),
+            _ => return Err(error::invalid("Unsupported option value")),
+        };
+        set_model_option(runtime, session_id, id, &input).await?;
+        return options(runtime, session_id).await;
+    }
     let acp::SessionConfigOptionValue::ValueId { value } = value else {
         return Err(error::invalid("Configuration value must be a string"));
     };
     match config_id {
         "model" => {
             let providers = runtime.list_models().await.map_err(error::runtime)?;
-            let selected = providers
+            let mut selected = providers
                 .into_iter()
                 .flat_map(|(provider, models)| {
                     models.into_iter().map(move |model| Model {
                         provider: provider.clone(),
                         model: model.id,
+                        options: Default::default(),
                     })
                 })
                 .find(|model| model.id() == value.0.as_ref())
                 .ok_or_else(|| error::invalid("Unknown model"))?;
+            let current =
+                crate::session::selected_model(runtime, &acp::SessionId::new(session_id)).await?;
+            if current.provider == selected.provider && current.model == selected.model {
+                selected.options = current.options;
+            }
             runtime
                 .set_session_model(session_id.to_owned(), selected.selection()?)
                 .await

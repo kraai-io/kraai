@@ -104,6 +104,7 @@ async fn invalid_identifiers_fail_before_waiting_for_queue_capacity() {
         "message".into(),
         String::new(),
         "provider".into(),
+        Default::default(),
     ));
     let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut send) else {
         panic!("invalid model must fail before enqueueing");

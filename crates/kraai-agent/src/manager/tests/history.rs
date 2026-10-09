@@ -28,6 +28,7 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
         let mut message = manager.message_store.get(&id).await?.unwrap();
         message.status = status;
         message.generation = Some(MessageGeneration {
+            options: Default::default(),
             provider_id: ProviderId::new("mock"),
             model_id: ModelId::new("mock-model"),
             max_context: Some(100),

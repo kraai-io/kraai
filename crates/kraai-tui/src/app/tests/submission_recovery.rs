@@ -12,7 +12,7 @@ fn continue_submits_the_current_model_selection() {
     harness.app.handle_command("continue");
     assert!(matches!(
         harness.requests_rx.try_recv(),
-        Ok(RuntimeRequest::ContinueSession { session_id, model_id, provider_id })
+        Ok(RuntimeRequest::ContinueSession { session_id, model_id, provider_id, .. })
             if session_id == "session" && model_id == "new-model" && provider_id == "new-provider"
     ));
     assert!(harness.requests_rx.try_recv().is_err());
@@ -36,6 +36,7 @@ fn send(harness: &mut TestHarness, text: &str) -> MessageContent {
         message.clone(),
         "model".into(),
         "provider".into(),
+        Default::default(),
         crate::app::types::SubmissionSource::Pending,
     );
     message
@@ -75,6 +76,7 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
         "new message".into(),
         "model".into(),
         "provider".into(),
+        Default::default(),
         crate::app::types::SubmissionSource::Pending,
     );
     harness.app.set_input_text("next draft".into());

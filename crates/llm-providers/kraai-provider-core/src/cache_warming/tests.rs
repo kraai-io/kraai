@@ -28,6 +28,7 @@ fn request() -> ProviderRequest {
             description: "Execute scripts".into(),
         }),
         cacheable_messages: Some(2),
+        options: Default::default(),
     }
 }
 
@@ -59,9 +60,14 @@ fn warming_is_opt_in_and_requires_a_large_prefix_with_a_suffix() -> Result<()> {
 #[test]
 fn warming_preserves_tools_and_prefix_but_excludes_the_suffix() -> Result<()> {
     let manager = manager();
-    let request = request();
+    let mut request = request();
+    request.options.insert(
+        "reasoning_effort".into(),
+        kraai_types::ModelOptionValue::Choice("selected-effort".into()),
+    );
     let warmup = prepare(&manager, &request)?.ok_or_else(|| eyre!("missing warmup"))?;
     assert_eq!(warmup.request.script_tool, request.script_tool);
+    assert_eq!(warmup.request.options, request.options);
     assert_eq!(
         warmup.request.messages,
         request
@@ -74,6 +80,27 @@ fn warming_preserves_tools_and_prefix_but_excludes_the_suffix() -> Result<()> {
         input_tokens: 3000,
         ..Default::default()
     })?;
+    Ok(())
+}
+
+#[test]
+fn changing_selected_model_options_uses_separate_warming_state() -> Result<()> {
+    let cache = CacheWarming::default();
+    let provider = ProviderId::new("provider");
+    let model = ModelId::new("model");
+    let first = kraai_types::ModelOptionValues::from([(
+        "mode:fast".into(),
+        kraai_types::ModelOptionValue::Boolean(false),
+    )]);
+    let second = kraai_types::ModelOptionValues::from([(
+        "mode:fast".into(),
+        kraai_types::ModelOptionValue::Boolean(true),
+    )]);
+    let first_state = cache.state(&provider, &model, "session", &first)?;
+    let reused = cache.state(&provider, &model, "session", &first)?;
+    let second_state = cache.state(&provider, &model, "session", &second)?;
+    assert!(Arc::ptr_eq(&first_state, &reused));
+    assert!(!Arc::ptr_eq(&first_state, &second_state));
     Ok(())
 }
 
@@ -379,12 +406,12 @@ fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
     let cache = CacheWarming::default();
     let provider = ProviderId::new("mock");
     let model = ModelId::new("model");
-    let old = cache.state(&provider, &model, "old")?;
+    let old = cache.state(&provider, &model, "old", &Default::default())?;
     old.lock()
         .map_err(|error| eyre!("state: {error}"))?
         .last_used = Some(Instant::now() - Duration::from_secs(7200));
     drop(old);
-    let _current = cache.state(&provider, &model, "current")?;
+    let _current = cache.state(&provider, &model, "current", &Default::default())?;
     {
         let mut sessions = cache
             .sessions
@@ -393,7 +420,7 @@ fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
         assert_eq!(sessions.entries.len(), 2);
         sessions.next_cleanup = Some(Instant::now());
     }
-    let _next = cache.state(&provider, &model, "current")?;
+    let _next = cache.state(&provider, &model, "current", &Default::default())?;
     assert_eq!(
         cache
             .sessions

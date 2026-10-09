@@ -36,12 +36,14 @@ mod images;
 mod lifecycle;
 mod mcp_auth;
 mod menu_search;
+mod model_options;
 mod palette;
 mod providers_flow;
 mod runtime_bridge;
 mod runtime_events;
 mod runtime_responses;
 mod session_commands;
+mod session_model;
 mod settings;
 mod settings_flow;
 mod state;
@@ -74,11 +76,12 @@ use self::ui::{
 };
 use self::workspace_preferences::WorkspacePreferences;
 
-const SLASH_COMMANDS: [(&str, &str); 10] = [
+const SLASH_COMMANDS: [(&str, &str); 11] = [
     ("agent", "Open agent selector"),
     ("continue", "Reprompt the agent"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
+    ("option", "Configure selected model options"),
     ("new", "Start new chat"),
     ("providers", "Open providers"),
     ("mcp", "MCP servers and sign-in"),

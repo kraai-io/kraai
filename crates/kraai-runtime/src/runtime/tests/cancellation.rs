@@ -26,6 +26,7 @@ async fn finished_execution() -> Result<(RuntimeTestHarness, String, CompletedSc
             "change it".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     harness.events.wait_for("script approval", |events| {
@@ -158,6 +159,7 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
                 task_session,
                 kraai_types::ModelId::new("mock-model"),
                 kraai_types::ProviderId::new("mock"),
+                Default::default(),
             )
             .await
     });
@@ -230,6 +232,7 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
             "new turn".into(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     agent.complete_message(&request.message_id).await?;
@@ -270,6 +273,7 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
             "must not run".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     assert!(matches!(
@@ -313,6 +317,7 @@ async fn cancel_stream_preserves_queued_messages() -> Result<()> {
         .restore_queued_messages(
             &session,
             vec![crate::runtime::core::QueuedMessage {
+                options: Default::default(),
                 message: "keep queued".into(),
                 model_id: kraai_types::ModelId::new("mock-model"),
                 provider_id: kraai_types::ProviderId::new("mock"),

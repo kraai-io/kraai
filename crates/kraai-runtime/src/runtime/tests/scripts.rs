@@ -65,6 +65,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
             String::from("test it"),
             String::from("mock-model"),
             String::from("mock-native"),
+            Default::default(),
         )
         .await?;
 
@@ -198,6 +199,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
             String::from("test it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -355,6 +357,7 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
             String::from("test it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -410,6 +413,7 @@ async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
             String::from("test it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -451,6 +455,7 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
             String::from("test it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -496,6 +501,7 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
             String::from("fetch it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -550,6 +556,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             String::from("change it"),
             String::from("mock-model"),
             String::from("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -574,7 +581,12 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         .await?;
     harness
         .handle
-        .continue_session(session_id.clone(), "mock-model".into(), "mock".into())
+        .continue_session(
+            session_id.clone(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
         .await?;
     harness
         .events

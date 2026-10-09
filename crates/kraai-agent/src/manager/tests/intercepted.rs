@@ -24,6 +24,7 @@ async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()>
                     Vec::new(),
                     ModelId::new("mock-model"),
                     ProviderId::new("mock"),
+                    Default::default(),
                 )
                 .await?
                 .is_none()
@@ -62,6 +63,7 @@ async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()>
                 vec!["queued".into()],
                 ModelId::new("mock-model"),
                 ProviderId::new("mock"),
+                Default::default(),
             )
             .await
             .is_err()
@@ -78,6 +80,9 @@ async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()>
 async fn preparation_error_survives_lease_release_failure() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
+    let mut metadata = manager.session_store.get(&session).await?.expect("session");
+    metadata.selected_profile_id = Some("missing-profile".into());
+    manager.session_store.save(&metadata).await?;
     rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?.execute_batch(
         "CREATE TRIGGER fail_lease_release BEFORE UPDATE OF lease_active ON sessions
          WHEN NEW.lease_active = 0 BEGIN SELECT RAISE(FAIL, 'injected lease release failure'); END;",
@@ -87,11 +92,12 @@ async fn preparation_error_survives_lease_release_failure() -> Result<()> {
             &session,
             vec!["queued".into()],
             ModelId::new("mock-model"),
-            ProviderId::new("missing-provider"),
+            ProviderId::new("mock"),
+            Default::default(),
         )
         .await
         .expect_err("preparation fails");
-    assert!(format!("{error:?}").contains("missing-provider"));
+    assert!(format!("{error:?}").contains("missing-profile"));
     assert!(!format!("{error:?}").contains("injected lease release failure"));
     assert!(manager.get_chat_history(&session).await?.is_empty());
     assert!(
@@ -193,6 +199,7 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
             "first".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     for messages in [Vec::new(), vec!["queued".into()]] {
@@ -202,6 +209,7 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
                 messages,
                 ModelId::new("new-model"),
                 ProviderId::new("mock-alternate"),
+                Default::default(),
             )
             .await?;
         assert!(rejected.is_none());
@@ -234,10 +242,12 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
             "first".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.complete_message(&first.message_id).await?;
     manager.clear_active_turn(&session_id);
+    tokio::fs::write(data_dir.join(AGENTS_MD_FILE_NAME), [0xff]).await?;
     let store = Arc::new(LimitedWrites {
         inner: manager.session_store.clone(),
         messages: manager.message_store.clone(),
@@ -251,7 +261,8 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
             &session_id,
             messages.clone(),
             ModelId::new("new-model"),
-            ProviderId::new("missing"),
+            ProviderId::new("mock-alternate"),
+            Default::default(),
         )
         .await
         .expect_err("preparation and rollback fail");
@@ -278,7 +289,8 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
                 &session_id,
                 "new".into(),
                 ModelId::new("mock-model"),
-                ProviderId::new("mock")
+                ProviderId::new("mock"),
+                Default::default(),
             )
             .await
             .is_err()
@@ -289,7 +301,8 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
                 &session_id,
                 messages.clone(),
                 ModelId::new("mock-model"),
-                ProviderId::new("mock")
+                ProviderId::new("mock"),
+                Default::default(),
             )
             .await
             .is_err()
@@ -297,12 +310,14 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
     assert_eq!(manager.get_tip(&session_id).await?, partial_tip);
 
     store.remaining.store(usize::MAX, Ordering::SeqCst);
+    tokio::fs::remove_file(data_dir.join(AGENTS_MD_FILE_NAME)).await?;
     let retry = manager
         .prepare_messages_stream(
             &session_id,
             messages,
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?
         .expect("retry");

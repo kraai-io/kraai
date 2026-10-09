@@ -30,6 +30,12 @@ impl App {
                 } else {
                     self.ensure_selected_model();
                 }
+                self.reconcile_model_options();
+                if let Err(error) = self.apply_startup_model_options() {
+                    self.set_error(format!("Invalid --option: {error}"));
+                    self.fail_ci(format!("Invalid --option: {error}"));
+                    return;
+                }
                 self.maybe_send_startup_message();
             }
             RuntimeResponse::Models(Err(err)) => {
@@ -189,6 +195,7 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
+                        pending_submit.options,
                         types::SubmissionSource::Pending,
                     );
                 }
@@ -245,9 +252,17 @@ impl App {
                         pending_submit.message,
                         pending_submit.model_id,
                         pending_submit.provider_id,
+                        pending_submit.options,
                         types::SubmissionSource::Pending,
                     );
                 }
+            }
+            RuntimeResponse::SetSessionModel {
+                session_id,
+                save_id,
+                result,
+            } => {
+                self.handle_session_model_save(&session_id, save_id, result);
             }
             RuntimeResponse::SetSessionProfile {
                 session_id,
@@ -287,6 +302,9 @@ impl App {
                 };
                 if let Err(err) = result {
                     self.recover_session_message(Some(session_id.clone()), pending.message);
+                    self.request(RuntimeRequest::GetSessionSnapshot {
+                        session_id: session_id.clone(),
+                    });
                     if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
                         return;
                     }
@@ -340,7 +358,11 @@ impl App {
                     self.maybe_finish_ci_run();
                 }
             }
-            RuntimeResponse::SessionSnapshot { session_id, result } => {
+            RuntimeResponse::SessionSnapshot {
+                session_id,
+                model_save_id,
+                result,
+            } => {
                 match *result {
                     Ok(mut snapshot) => {
                         if self
@@ -360,20 +382,11 @@ impl App {
                             .insert(session_id.clone(), snapshot.event_sequence);
                         self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
+                        self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
                         self.update_costs(&session_id, snapshot.requests);
                         self.state.cost_recovery_sessions.remove(&session_id);
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                             self.state.turn_timer = snapshot.turn_timer;
-                            if self.state.last_session_model != snapshot.session.selected_model {
-                                self.state.last_session_model =
-                                    snapshot.session.selected_model.clone();
-                                if let Some(selection) = &snapshot.session.selected_model {
-                                    self.state.selected_provider_id =
-                                        Some(selection.provider_id.to_string());
-                                    self.state.selected_model_id =
-                                        Some(selection.model_id.to_string());
-                                }
-                            }
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
                             self.state.chat_history = snapshot.history;
                             self.state.context_usage = snapshot.context_usage;
@@ -424,6 +437,7 @@ impl App {
                             self.reconcile_optimistic_messages();
                             self.clamp_chat_scroll();
                         }
+                        self.flush_session_model_save(&session_id);
                     }
                     Err(error) => {
                         if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
@@ -522,6 +536,7 @@ impl App {
                     .sessions_menu_index
                     .min(self.state.filtered_sessions().len());
                 self.sync_current_session_profile_from_sessions();
+                self.refresh_session_model_saves();
                 if self.event_lag_session_resync_pending {
                     self.sync_current_session_streaming_from_sessions();
                     self.event_lag_session_resync_pending = false;
@@ -557,6 +572,7 @@ impl App {
                 self.state.status = String::from("Session deleted");
                 self.state.sessions.retain(|s| s.id != session_id);
                 self.state.failed_messages.remove(&Some(session_id.clone()));
+                self.state.session_model_saves.remove(&session_id);
                 if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
                     self.reset_chat_session(None, "Session deleted");
                 }

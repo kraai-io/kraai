@@ -216,6 +216,8 @@ mod tests {
             config: DynamicConfig::new(),
         };
         let model = |provider: &str, input: Option<&str>| ModelConfig {
+            options: Vec::new(),
+            remove_options: Vec::new(),
             id: ModelId::new("model"),
             provider_id: ProviderId::new(provider),
             config: input.map_or_else(DynamicConfig::new, |input| {
@@ -309,6 +311,8 @@ mod tests {
                 .to_vec(),
             models: [("a", "bad", "1"), ("b", "1", "bad"), ("b", "bad", "1")]
                 .map(|(provider, input, output)| ModelConfig {
+                    options: Vec::new(),
+                    remove_options: Vec::new(),
                     id: ModelId::new("model"),
                     provider_id: ProviderId::new(provider),
                     config: DynamicConfig::from([
@@ -398,6 +402,8 @@ mod tests {
                     config: DynamicConfig::new(),
                 }],
                 models: vec![ModelConfig {
+                    options: Vec::new(),
+                    remove_options: Vec::new(),
                     id: model.clone(),
                     provider_id: provider.clone(),
                     config: DynamicConfig::from([

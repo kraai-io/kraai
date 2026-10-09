@@ -107,6 +107,7 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
             content.clone(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     assert!(matches!(
@@ -129,6 +130,7 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
             content.clone(),
             kraai_types::ModelId::new("mock-model"),
             kraai_types::ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     {

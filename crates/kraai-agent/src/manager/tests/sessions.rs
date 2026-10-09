@@ -27,6 +27,7 @@ async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn(
             "hello".into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     assert_eq!(
@@ -103,6 +104,7 @@ async fn restored_session_supplies_script_workspace_independently_of_executable(
             String::from("probe").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let context = manager.script_turn_context(&session_id)?;
@@ -251,6 +253,7 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
             String::from("hello").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -473,6 +476,7 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
             String::from("build something").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     manager.abort_streaming_message(&pending.message_id).await?;
@@ -510,6 +514,7 @@ async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> 
             String::from("hello").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await
         .unwrap_err();
@@ -592,6 +597,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
             String::from("trigger failure").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
     let result = ProviderManager::new()
@@ -637,6 +643,7 @@ async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> 
             String::from("preserve this prompt").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 
@@ -689,6 +696,7 @@ async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
             String::from("still streaming").into(),
             ModelId::new("mock-model"),
             ProviderId::new("mock"),
+            Default::default(),
         )
         .await?;
 

@@ -145,6 +145,8 @@ impl App {
                         .filter(|model| model.provider_id == provider_id)
                         .count();
                     draft.models.push(ModelSettings {
+                        options: Vec::new(),
+                        remove_options: Vec::new(),
                         id: format!("model-{}", next_count + 1),
                         provider_id,
                         values: default_values(&model_fields),

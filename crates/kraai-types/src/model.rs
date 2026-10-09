@@ -8,4 +8,6 @@ use crate::{ModelId, ProviderId};
 pub struct ModelSelection {
     pub provider_id: ProviderId,
     pub model_id: ModelId,
+    #[serde(default)]
+    pub options: crate::ModelOptionValues,
 }

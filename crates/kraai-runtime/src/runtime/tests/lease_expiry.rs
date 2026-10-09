@@ -18,6 +18,7 @@ async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -
         .restore_queued_messages(
             &session,
             vec![super::super::core::QueuedMessage {
+                options: Default::default(),
                 message: "pending input".into(),
                 model_id: kraai_types::ModelId::new("mock-model"),
                 provider_id: kraai_types::ProviderId::new("mock"),
@@ -29,7 +30,12 @@ async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -
     assert!(
         observer
             .handle
-            .continue_session(session.clone(), "mock-model".into(), "mock".into())
+            .continue_session(
+                session.clone(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default()
+            )
             .await
             .is_err()
     );
@@ -102,6 +108,7 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
             "new turn".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     observer.events.wait_for("turn completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;

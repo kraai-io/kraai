@@ -64,6 +64,7 @@ pub(super) async fn completed_script_with_image(
             "change it".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     harness.events.wait_for("script approval", |events| {

@@ -217,8 +217,9 @@ impl kraai_provider_core::Provider for RetryNotifyingProvider {
     }
 }
 
-fn mock_model() -> kraai_provider_core::Model {
+pub(super) fn mock_model() -> kraai_provider_core::Model {
     kraai_provider_core::Model {
+        options: Default::default(),
         supports_images: true,
         id: ModelId::new("mock-model"),
         name: String::from("Mock Model"),

@@ -27,6 +27,7 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
             "change it".into(),
             "mock-model".into(),
             "mock".into(),
+            Default::default(),
         )
         .await?;
     harness.events.wait_for("script approval", |events| {
