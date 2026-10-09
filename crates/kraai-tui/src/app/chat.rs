@@ -221,6 +221,9 @@ impl App {
     }
 
     pub(super) fn submit_script_decision(&mut self, approved: bool) {
+        if self.state.script_decision_pending() {
+            return;
+        }
         let Some(execution_id) = self
             .state
             .pending_script
@@ -233,16 +236,24 @@ impl App {
             return;
         };
 
-        if approved {
-            self.request(RuntimeRequest::ApproveScript {
-                session_id,
-                execution_id,
-            });
+        let request = if approved {
+            RuntimeRequest::ApproveScript {
+                session_id: session_id.clone(),
+                execution_id: execution_id.clone(),
+            }
         } else {
-            self.request(RuntimeRequest::DenyScript {
-                session_id,
-                execution_id,
-            });
+            RuntimeRequest::DenyScript {
+                session_id: session_id.clone(),
+                execution_id: execution_id.clone(),
+            }
+        };
+        if self.request(request) == RuntimeRequestDelivery::Delivered {
+            self.state
+                .submitted_script_decisions
+                .entry(session_id)
+                .or_default()
+                .insert(execution_id);
+            self.state.status = String::from("Submitting script decision");
         }
     }
 
@@ -454,6 +465,7 @@ impl App {
     pub(super) fn handle_runtime_bridge_disconnect(&mut self) {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
+        self.state.submitted_script_decisions.clear();
         self.runtime_bridge_error.get_or_insert(message.clone());
         let mut messages: std::collections::BTreeMap<Option<String>, Vec<MessageContent>> =
             std::collections::BTreeMap::new();

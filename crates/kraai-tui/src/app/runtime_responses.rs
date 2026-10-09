@@ -2,6 +2,23 @@ use super::*;
 
 impl App {
     pub(super) fn handle_runtime_response(&mut self, response: RuntimeResponse) {
+        if let RuntimeResponse::ApproveScript {
+            session_id,
+            execution_id,
+            ..
+        }
+        | RuntimeResponse::DenyScript {
+            session_id,
+            execution_id,
+            ..
+        } = &response
+            && let Some(executions) = self.state.submitted_script_decisions.get_mut(session_id)
+        {
+            executions.remove(execution_id);
+            if executions.is_empty() {
+                self.state.submitted_script_decisions.remove(session_id);
+            }
+        }
         match response {
             RuntimeResponse::StartupSyncComplete => {
                 self.startup_sync = StartupSync::Complete;
