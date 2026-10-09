@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::{AppState, ScriptPhase, UiMode};
+use super::{AppState, UiMode};
 
 pub(super) struct CursorBlink {
     epoch: Instant,
@@ -34,7 +34,7 @@ impl AppState {
     pub(super) fn composer_cursor_enabled(&self) -> bool {
         self.mode == UiMode::Chat
             && !(self.error_open && self.last_error.is_some())
-            && self.script_phase != ScriptPhase::AwaitingApproval
+            && !self.has_local_script_approval()
     }
 }
 

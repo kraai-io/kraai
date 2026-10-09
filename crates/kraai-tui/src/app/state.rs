@@ -1,6 +1,6 @@
 use kraai_runtime::TurnTimer;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
@@ -84,6 +84,7 @@ pub(super) struct AppState {
     pub(super) option_editor_error: Option<String>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
+    pub(super) submitted_script_decisions: BTreeMap<String, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<String>,
     pub(super) current_tip_id: Option<String>,
@@ -200,6 +201,7 @@ impl Default for AppState {
             option_editor_error: None,
             context_usage: None,
             pending_script: None,
+            submitted_script_decisions: BTreeMap::new(),
             sessions: Vec::new(),
             current_session_id: None,
             current_tip_id: None,
@@ -276,12 +278,23 @@ impl AppState {
     }
 
     pub(super) fn has_local_script_approval(&self) -> bool {
-        self.script_phase == ScriptPhase::AwaitingApproval && self.pending_script.is_some()
+        self.script_phase == ScriptPhase::AwaitingApproval
+            && self.pending_script.is_some()
+            && !self.script_decision_pending()
+    }
+
+    pub(super) fn script_decision_pending(&self) -> bool {
+        self.current_session_id
+            .as_ref()
+            .and_then(|session_id| self.submitted_script_decisions.get(session_id))
+            .zip(self.pending_script.as_ref())
+            .is_some_and(|(executions, script)| executions.contains(&script.execution_id))
     }
 
     pub(super) fn runtime_is_active(&self) -> bool {
         self.is_streaming
             || self.retry_waiting
+            || self.script_decision_pending()
             || self.script_phase == ScriptPhase::Executing
             || (self.profile_locked
                 && !self.profile_lock_stale_after_terminal_event

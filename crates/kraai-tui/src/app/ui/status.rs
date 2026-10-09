@@ -131,6 +131,9 @@ fn fit(text: &str, width: usize) -> String {
 }
 
 fn statusline_activity_label(state: &AppState) -> String {
+    if state.script_decision_pending() {
+        return String::from("Submitting decision");
+    }
     if state.script_phase == ScriptPhase::AwaitingApproval {
         return String::from("Needs approval");
     }
