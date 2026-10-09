@@ -183,6 +183,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-perf" = rec {
+      packageId = "kraai-perf";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-perf";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-persistence" = rec {
       packageId = "kraai-persistence";
       build = internal.buildRustCrateWithFeatures {
@@ -10881,6 +10891,114 @@ rec {
           {
             name = "kraai-command-catalog";
             packageId = "kraai-command-catalog";
+          }
+        ];
+
+      };
+      "kraai-perf" = rec {
+        crateName = "kraai-perf";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "kraai-perf";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-perf; };
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" ];
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "kraai-agent";
+            packageId = "kraai-agent";
+          }
+          {
+            name = "kraai-nushell-runtime";
+            packageId = "kraai-nushell-runtime";
+          }
+          {
+            name = "kraai-persistence";
+            packageId = "kraai-persistence";
+          }
+          {
+            name = "kraai-provider-core";
+            packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-sandbox";
+            packageId = "kraai-sandbox";
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "nix";
+            packageId = "nix 0.31.3";
+            target = { target, features }: (target."unix" or false);
+            features = [ "process" "signal" "fs" "resource" ];
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            features = [ "fs" "net" "pipe" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.0";
+          }
+          {
+            name = "signal-hook";
+            packageId = "signal-hook 0.4.4";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "toml";
+            packageId = "toml";
           }
         ];
 
