@@ -16,8 +16,7 @@ impl CursorPreferences {
     }
 
     pub(super) fn custom_blink(&self) -> bool {
-        self.style
-            .is_some_and(CursorStyle::has_unambiguous_blinking_shape)
+        CursorStyle::custom_blink(self.style)
     }
 
     pub(super) fn filter(&mut self, event: CrosstermEvent) -> FilteredEvent {
@@ -84,7 +83,7 @@ mod tests {
     fn query_replies_preserve_shape_and_blink_preference_without_becoming_input() {
         for code in 1..=6 {
             let mut preferences = pending();
-            assert!(!preferences.custom_blink());
+            assert!(preferences.custom_blink());
             assert!(matches!(
                 preferences.filter(character('x')),
                 FilteredEvent::Pass(_)
@@ -117,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_and_ambiguous_replies_leave_native_cursor_untouched() {
+    fn unsupported_and_ambiguous_replies_use_custom_blink_fallback() {
         for response in ["0$r", "0$r q", "1$r0 q", "1$r99 q"] {
             let mut preferences = pending();
             preferences.filter(start());
@@ -132,8 +131,20 @@ mod tests {
                 FilteredEvent::Consumed
             ));
             assert_eq!(preferences.style, None);
-            assert!(!preferences.custom_blink());
+            assert!(preferences.custom_blink());
         }
+    }
+
+    #[test]
+    fn missing_reply_uses_custom_blink_fallback() {
+        assert!(CursorPreferences::default().custom_blink());
+        let mut preferences = pending();
+        assert!(matches!(
+            preferences.filter(character('x')),
+            FilteredEvent::Pass(_)
+        ));
+        assert_eq!(preferences.style, None);
+        assert!(preferences.custom_blink());
     }
 
     #[test]
