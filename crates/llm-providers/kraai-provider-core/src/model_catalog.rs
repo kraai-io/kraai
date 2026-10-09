@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kraai_types::{TokenRates, TokenUsage, Usd};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard, watch};
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 24 * 60 * 60;
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 mod resolution;
 
@@ -25,6 +25,8 @@ struct Snapshot {
 #[derive(Serialize, Deserialize)]
 struct CatalogProvider {
     api: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     models: BTreeMap<String, CatalogModel>,
 }
 
@@ -67,14 +69,46 @@ pub(crate) enum CatalogPricingSource {
     Provider,
 }
 
-#[derive(Default)]
 pub struct ModelCatalog {
     snapshot: RwLock<Snapshot>,
     attempted_at: AtomicU64,
     initialized: tokio::sync::OnceCell<()>,
+    revision: watch::Sender<u64>,
+}
+
+impl Default for ModelCatalog {
+    fn default() -> Self {
+        Self {
+            snapshot: RwLock::default(),
+            attempted_at: AtomicU64::default(),
+            initialized: tokio::sync::OnceCell::default(),
+            revision: watch::channel(0).0,
+        }
+    }
+}
+
+pub struct ModelCatalogView<'a> {
+    snapshot: RwLockReadGuard<'a, Snapshot>,
+    revision: u64,
 }
 
 impl ModelCatalog {
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
+    }
+
+    pub fn revision(&self) -> u64 {
+        *self.revision.borrow()
+    }
+
+    pub async fn view(&self) -> ModelCatalogView<'_> {
+        let snapshot = self.snapshot.read().await;
+        ModelCatalogView {
+            snapshot,
+            revision: self.revision(),
+        }
+    }
+
     pub async fn initialize(&self) {
         self.initialized
             .get_or_init(|| async {
@@ -167,6 +201,8 @@ impl ModelCatalog {
     async fn replace_snapshot(&self, snapshot: Snapshot) {
         let mut current = self.snapshot.write().await;
         let previous = std::mem::replace(&mut *current, snapshot);
+        self.revision
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
         drop(current);
         drop(previous);
     }
@@ -230,7 +266,9 @@ impl ModelCatalog {
         model: &str,
         protocol: Option<crate::ModelOptionsProtocol>,
     ) -> Option<CatalogModelMetadata> {
-        let (mut metadata, discovery) = self.metadata_with_discovery(provider, api, model).await?;
+        let (mut metadata, discovery) = self
+            .metadata_with_discovery(provider, api, model, None)
+            .await?;
         if let Some(protocol) = protocol {
             metadata.options = discovery.definitions(protocol);
         }
@@ -242,13 +280,36 @@ impl ModelCatalog {
         provider: Option<&str>,
         api: Option<&str>,
         model: &str,
+        owner: Option<&str>,
     ) -> Option<(CatalogModelMetadata, crate::DiscoveredModelOptions)> {
-        let snapshot = self.snapshot.read().await;
-        let discovery = snapshot
-            .serving_model(provider, api, model)
+        self.view()
+            .await
+            .metadata_with_discovery(provider, api, model, owner)
+    }
+}
+
+impl ModelCatalogView<'_> {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn metadata_with_discovery(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+        owner: Option<&str>,
+    ) -> Option<(CatalogModelMetadata, crate::DiscoveredModelOptions)> {
+        let snapshot = &*self.snapshot;
+        let serving = snapshot.serving_model(provider, api, model);
+        let owned = snapshot.owned_model(provider, api, model, owner);
+        let discovery = serving
             .map(|(_, _, model)| model.options.clone())
+            .or_else(|| owned.map(|(_, _, model)| model.options.reasoning_only()))
             .unwrap_or_default();
-        let (_, _, model) = snapshot.model(provider, api, model)?;
+        let (_, _, model) = serving
+            .or(owned)
+            .or_else(|| snapshot.model(provider, api, model))?;
         let metadata = CatalogModelMetadata {
             name: model.name.clone(),
             max_context: model
@@ -262,7 +323,6 @@ impl ModelCatalog {
                 .map(|modalities| modalities.input.iter().any(|input| input == "image")),
             options: Vec::new(),
         };
-        drop(snapshot);
         Some((metadata, discovery))
     }
 }

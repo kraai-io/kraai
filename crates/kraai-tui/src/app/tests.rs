@@ -647,6 +647,7 @@ mod mcp_auth;
 
 mod images;
 mod model_options;
+mod model_selection;
 mod responsiveness;
 mod session_model;
 #[path = "tests/startup.rs"]

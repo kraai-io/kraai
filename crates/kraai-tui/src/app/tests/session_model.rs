@@ -7,6 +7,9 @@ use kraai_types::{ModelOptionValue, ModelOptionValues, ModelSelection};
 
 use super::*;
 
+mod creation;
+mod metadata;
+
 fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
     super::model_options::configure(harness)?;
     harness.app.startup_options.ci = true;

@@ -49,6 +49,11 @@ impl App {
                     self.state.turn_timer = timer;
                 }
             }
+            Event::ModelsUpdated => {
+                if self.startup_sync != StartupSync::WaitingForRuntime {
+                    self.request(RuntimeRequest::ListModels);
+                }
+            }
             Event::ConfigLoaded => {
                 self.state.config_loaded = true;
                 self.state.status = String::from("Config loaded");

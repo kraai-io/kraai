@@ -24,34 +24,90 @@ impl App {
         let Some(session_id) = self.state.current_session_id.clone() else {
             return;
         };
-        let Some(provider) = self.state.selected_provider_id.clone() else {
+        let Some(selection) = self.current_model_selection() else {
             return;
         };
-        let Some(model) = self.state.selected_model_id.clone() else {
-            return;
-        };
-        let selection = match (ProviderId::try_new(provider), ModelId::try_new(model)) {
-            (Ok(provider_id), Ok(model_id)) => ModelSelection {
-                provider_id,
-                model_id,
-                options: self.state.selected_model_options.clone(),
-            },
-            _ => {
-                self.set_error(String::from("Cannot save an invalid model selection"));
-                return;
-            }
-        };
-        let save = self
-            .state
-            .session_model_saves
-            .entry(session_id.clone())
-            .or_default();
-        save.desired = Some(selection);
-        save.failed = false;
-        let needs_snapshot = save.is_running.is_none();
+        let needs_snapshot = self.defer_session_model_selection(&session_id, selection);
         self.flush_session_model_save(&session_id);
         if needs_snapshot {
             self.request(RuntimeRequest::GetSessionSnapshot { session_id });
+        }
+    }
+
+    fn current_model_selection(&mut self) -> Option<ModelSelection> {
+        let provider = self.state.selected_provider_id.clone()?;
+        let model = self.state.selected_model_id.clone()?;
+        match (ProviderId::try_new(provider), ModelId::try_new(model)) {
+            (Ok(provider_id), Ok(model_id)) => Some(ModelSelection {
+                provider_id,
+                model_id,
+                options: self.state.selected_model_options.clone(),
+            }),
+            _ => {
+                self.set_error(String::from("Cannot save an invalid model selection"));
+                None
+            }
+        }
+    }
+
+    fn defer_session_model_selection(
+        &mut self,
+        session_id: &str,
+        selection: ModelSelection,
+    ) -> bool {
+        let save = self
+            .state
+            .session_model_saves
+            .entry(session_id.to_owned())
+            .or_default();
+        save.desired = Some(selection);
+        save.failed = false;
+        save.is_running.is_none()
+    }
+
+    pub(super) fn preserve_model_selection_after_creation(&mut self, pending: &PendingSubmit) {
+        let Some(session_id) = pending.session_id.as_deref() else {
+            return;
+        };
+        let Some(selection) = self.current_model_selection() else {
+            return;
+        };
+        if selection.provider_id.as_str() != pending.provider_id
+            || selection.model_id.as_str() != pending.model_id
+            || selection.options != pending.options
+        {
+            self.defer_session_model_selection(session_id, selection);
+        }
+    }
+
+    pub(super) fn reconcile_pending_session_model_options(&mut self) {
+        let mut sessions: Vec<_> = self.state.session_model_saves.keys().cloned().collect();
+        sessions.sort_unstable();
+        for session_id in sessions {
+            let Some(save) = self.state.session_model_saves.get_mut(&session_id) else {
+                continue;
+            };
+            let Some(selection) = save.desired.as_mut() else {
+                continue;
+            };
+            let Some(model) = self
+                .state
+                .models_by_provider
+                .get(selection.provider_id.as_str())
+                .and_then(|models| {
+                    models
+                        .iter()
+                        .find(|model| model.id == selection.model_id.as_str())
+                })
+            else {
+                continue;
+            };
+            let previous_options = selection.options.clone();
+            kraai_types::reconcile_model_option_values(&model.options, &mut selection.options);
+            if selection.options != previous_options {
+                save.failed = false;
+                self.flush_session_model_save(&session_id);
+            }
         }
     }
 

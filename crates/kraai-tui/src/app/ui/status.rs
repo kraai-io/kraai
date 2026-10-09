@@ -240,28 +240,24 @@ fn statusline_agent_label(state: &AppState) -> String {
 }
 
 fn statusline_context_label(state: &AppState) -> String {
+    let max_context = match state.selected_model() {
+        Some(model) => model.max_context,
+        None => state
+            .context_usage
+            .as_ref()
+            .filter(|usage| {
+                state.selected_provider_id.as_deref() == Some(usage.provider_id.as_str())
+                    && state.selected_model_id.as_deref() == Some(usage.model_id.as_str())
+            })
+            .and_then(|usage| usage.max_context),
+    };
     format_context_label(
         state
             .context_usage
             .as_ref()
             .map(|usage| usage.used_context_tokens()),
-        state
-            .context_usage
-            .as_ref()
-            .and_then(|usage| usage.max_context)
-            .or_else(|| selected_model_max_context(state)),
+        max_context,
     )
-}
-
-fn selected_model_max_context(state: &AppState) -> Option<usize> {
-    let provider_id = state.selected_provider_id.as_deref()?;
-    let model_id = state.selected_model_id.as_deref()?;
-    state
-        .models_by_provider
-        .get(provider_id)?
-        .iter()
-        .find(|model| model.id == model_id)
-        .and_then(|model| model.max_context)
 }
 
 pub(crate) fn format_token_count(value: usize) -> String {
@@ -293,117 +289,4 @@ fn format_context_label(used_context_tokens: Option<usize>, max_context: Option<
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn footer_activity_has_one_space_left_inset() {
-        for is_streaming in [false, true] {
-            let state = AppState {
-                is_streaming,
-                ..AppState::default()
-            };
-            let area = Rect::new(3, 4, 80, 2);
-            let mut buffer = Buffer::empty(area);
-            render_status(&state, area, &mut buffer);
-            assert_eq!(
-                buffer[(area.x + 1, area.y + 1)].symbol(),
-                if is_streaming { "·" } else { "R" }
-            );
-            assert_eq!(buffer[(area.x, area.y + 1)].symbol(), " ");
-            assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), " ");
-        }
-    }
-
-    #[test]
-    fn footer_layout_leaves_a_blank_row_above_status() {
-        for last_error in [None, Some(String::from("error"))] {
-            let state = AppState {
-                last_error,
-                ..AppState::default()
-            };
-            let area = Rect::new(0, 0, 80, 24);
-            let [history, footer, input] = super::super::chat_layout(&state, area);
-            assert_eq!(history.bottom(), footer.y);
-            assert_eq!(footer.bottom(), input.y);
-            assert_eq!(footer.height, 2 + u16::from(state.last_error.is_some()));
-            let mut buffer = Buffer::empty(footer);
-            render_status(&state, footer, &mut buffer);
-            let rows: Vec<String> = buffer
-                .content()
-                .chunks(usize::from(footer.width))
-                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
-                .collect();
-            assert!(rows.first().is_some_and(|row| row.trim().is_empty()));
-            assert!(rows.last().is_some_and(|row| !row.trim().is_empty()));
-            if state.last_error.is_some() {
-                assert!(rows.get(1).is_some_and(|row| row.contains("F8 error")));
-            }
-        }
-    }
-
-    #[test]
-    fn footer_starts_with_activity_and_keeps_errors_accessible() {
-        let mut state = AppState {
-            selected_provider_id: Some(String::from("provider")),
-            selected_model_id: Some(String::from("Astra")),
-            ..AppState::default()
-        };
-        let area = Rect::new(0, 0, 100, 1);
-        let mut buffer = Buffer::empty(area);
-        render_status(&state, area, &mut buffer);
-        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-        assert_eq!(text.trim(), "Ready · Astra · 0 · $0.0000");
-        state.last_error = Some("A long error ".repeat(30));
-        for width in [28, 40, 80, 120] {
-            let area = Rect::new(0, 0, width, 2);
-            let mut buffer = Buffer::empty(area);
-            render_status(&state, area, &mut buffer);
-            let rows: Vec<String> = buffer
-                .content()
-                .chunks(usize::from(width))
-                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
-                .collect();
-            assert!(rows.first().is_some_and(|row| row.contains("F8 error")));
-            assert!(
-                rows.get(1)
-                    .is_some_and(|row| row.contains("Astra") && !row.contains("F8 error"))
-            );
-        }
-    }
-
-    #[test]
-    fn footer_compacts_context_on_narrow_terminals() {
-        let state = AppState {
-            selected_provider_id: Some(String::from("provider")),
-            selected_model_id: Some(String::from("Astra")),
-            context_usage: Some(kraai_runtime::SessionContextUsage {
-                provider_id: String::from("provider"),
-                model_id: String::from("model"),
-                max_context: Some(272_000),
-                usage: kraai_types::TokenUsage {
-                    input_tokens: 136_000,
-                    ..Default::default()
-                },
-            }),
-            ..AppState::default()
-        };
-        for (width, expected) in [
-            (40, "50% · $0.0000"),
-            (100, "136,000/272,000 (50%) · $0.0000"),
-        ] {
-            let mut buffer = Buffer::empty(Rect::new(0, 0, width, 1));
-            render_status(&state, buffer.area, &mut buffer);
-            let row: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-            assert!(row.trim_end().ends_with(expected), "{row}");
-        }
-    }
-
-    #[test]
-    fn footer_truncation_preserves_graphemes_and_terminal_width() {
-        assert_eq!(fit("你好 world", 4), "你…");
-        assert_eq!(fit("e\u{301} long", 2), "e\u{301}…");
-        assert_eq!(fit("anything", 0), "");
-        assert_eq!(fit("hello\nworld", 20), "hello world");
-    }
-}
+mod tests;

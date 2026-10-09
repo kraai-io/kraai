@@ -10,6 +10,33 @@ impl Snapshot {
         self.exact_model(self.serving_provider(provider, api).ok()??, model)
     }
 
+    pub(super) fn owned_model(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+        owner: Option<&str>,
+    ) -> Option<(&str, &str, &CatalogModel)> {
+        if self.serving_provider(provider, api).ok()?.is_some() {
+            return None;
+        }
+        let owner = owner?.trim();
+        if self.providers.contains_key(owner) {
+            return self.exact_model(owner, model);
+        }
+        let mut providers = self.providers.iter().filter(|(_, provider)| {
+            provider
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(owner))
+        });
+        let (provider, _) = providers.next()?;
+        if providers.next().is_some() {
+            return None;
+        }
+        self.exact_model(provider, model)
+    }
+
     pub(super) fn model(
         &self,
         provider: Option<&str>,

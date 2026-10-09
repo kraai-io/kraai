@@ -7,6 +7,9 @@ use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers};
 use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues};
 
+mod errors;
+mod refresh;
+
 pub(super) fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
     let options: Vec<ModelOptionDefinition> = serde_json::from_value(serde_json::json!([
         {"id":"effort","label":"Effort","type":"choice","required":true,"choices":[{"id":"low","label":"Low"},{"id":"high","label":"High"}]},
@@ -87,7 +90,7 @@ fn optional_choice_and_boolean_pickers_show_and_apply_unset() -> color_eyre::Res
         key(&mut harness, KeyCode::Up);
         key(&mut harness, KeyCode::Enter);
         assert!(!harness.app.state.selected_model_options.contains_key(id));
-        assert!(!harness.app.state.option_editing);
+        assert!(harness.app.state.option_editor.is_none());
         assert_eq!(harness.app.state.status, format!("Unset {id}"));
         if id == "thinking" {
             assert!(
@@ -118,7 +121,7 @@ fn optional_integer_editor_clears_empty_input() -> color_eyre::Result<()> {
             .selected_model_options
             .contains_key("budget")
     );
-    assert!(!harness.app.state.option_editing);
+    assert!(harness.app.state.option_editor.is_none());
     Ok(())
 }
 
@@ -166,7 +169,7 @@ fn required_controls_reject_clear_and_keep_concrete_picker_choices() -> color_ey
     key(&mut harness, KeyCode::Backspace);
     key(&mut harness, KeyCode::Backspace);
     key(&mut harness, KeyCode::Enter);
-    assert!(harness.app.state.option_editing);
+    assert!(harness.app.state.option_editor.is_some());
     assert!(harness.app.state.status.contains("cannot be cleared"));
     assert_eq!(harness.app.state.selected_model_options, values);
     Ok(())

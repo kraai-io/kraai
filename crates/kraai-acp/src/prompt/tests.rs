@@ -84,6 +84,7 @@ provider_id = "mock"
             profile: None,
         },
         acp::NewSessionRequest::new(root.path().to_path_buf()),
+        Arc::default(),
     )
     .await?;
     let sink = futures::sink::unfold((), async |(), _line: String| Ok::<_, std::io::Error>(()));

@@ -62,13 +62,13 @@ struct Cli {
     #[arg(long)]
     ci: bool,
 
-    #[arg(long, value_name = "ID")]
+    #[arg(long, value_name = "ID", requires = "ci")]
     provider: Option<String>,
 
-    #[arg(long, value_name = "ID")]
+    #[arg(long, value_name = "ID", requires = "ci")]
     model: Option<String>,
 
-    #[arg(long = "option", value_name = "ID=VALUE")]
+    #[arg(long = "option", value_name = "ID=VALUE", requires = "ci")]
     options: Vec<String>,
 
     #[arg(long = "agent-profile", value_name = "ID")]
@@ -209,6 +209,10 @@ mod tests {
             "coding",
             "--message",
             "hello world",
+            "--option",
+            "effort=high",
+            "--option",
+            "thinking=true",
         ])
         .and_then(Cli::validate)
         .expect("complete ci args should parse");
@@ -218,5 +222,44 @@ mod tests {
         assert_eq!(cli.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(cli.agent_profile.as_deref(), Some("coding"));
         assert_eq!(cli.message.as_deref(), Some("hello world"));
+        assert_eq!(cli.options, ["effort=high", "thinking=true"]);
+    }
+
+    #[test]
+    fn provider_model_and_options_require_ci_mode() {
+        for (flag, value) in [
+            ("--provider", "openai-chat-completions"),
+            ("--model", "gpt-4o-mini"),
+            ("--option", "effort=high"),
+        ] {
+            let error = Cli::try_parse_from(["kraai", flag, value])
+                .expect_err("model configuration flags are only available in CI mode");
+            assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+            assert!(error.to_string().contains("--ci"));
+        }
+    }
+
+    #[test]
+    fn interactive_mode_keeps_message_profile_and_provider_config_flags() {
+        for args in [
+            vec!["kraai"],
+            vec![
+                "kraai",
+                "--message",
+                "hello world",
+                "--agent-profile",
+                "coding",
+                "--provider-config",
+                "/tmp/providers.toml",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args)
+                .and_then(Cli::validate)
+                .expect("interactive arguments should parse");
+            assert!(!cli.ci);
+            assert!(cli.provider.is_none());
+            assert!(cli.model.is_none());
+            assert!(cli.options.is_empty());
+        }
     }
 }

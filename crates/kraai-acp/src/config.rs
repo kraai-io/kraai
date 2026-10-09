@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::RuntimeHandle;
@@ -9,29 +9,41 @@ mod model_options;
 use model_options::model_option;
 pub(crate) use model_options::set_model_option;
 
+#[cfg(test)]
+mod refresh_tests;
+
 pub(crate) async fn options(
     runtime: &RuntimeHandle,
     session_id: &str,
 ) -> Result<Vec<acp::SessionConfigOption>> {
-    let selected =
-        crate::session::selected_model(runtime, &acp::SessionId::new(session_id)).await?;
-    let providers: BTreeMap<_, _> = runtime
-        .list_models()
-        .await
-        .map_err(error::runtime)?
-        .into_iter()
-        .collect();
+    let providers = runtime.list_models().await.map_err(error::runtime)?;
+    options_with_models(runtime, session_id, &providers).await
+}
+
+pub(crate) async fn options_with_models(
+    runtime: &RuntimeHandle,
+    session_id: &str,
+    providers: &HashMap<String, Vec<kraai_runtime::Model>>,
+) -> Result<Vec<acp::SessionConfigOption>> {
+    let selected = crate::session::selected_model_with_models(
+        runtime,
+        &acp::SessionId::new(session_id),
+        providers,
+    )
+    .await?;
     let model_options = providers
         .get(&selected.provider)
         .and_then(|models| models.iter().find(|model| model.id == selected.model))
-        .map(|model| model.options.clone())
+        .map(|model| model.options.as_slice())
         .unwrap_or_default();
+    let providers: BTreeMap<_, _> = providers.iter().collect();
     let mut choices = Vec::new();
-    for (provider, mut models) in providers {
+    for (provider, models) in &providers {
+        let mut models: Vec<_> = models.iter().collect();
         models.sort_by(|a, b| a.id.cmp(&b.id));
         for model in models {
             let id = Model {
-                provider: provider.clone(),
+                provider: (*provider).clone(),
                 model: model.id.clone(),
                 options: Default::default(),
             }
@@ -98,6 +110,12 @@ pub(crate) async fn set(
     match config_id {
         "model" => {
             let providers = runtime.list_models().await.map_err(error::runtime)?;
+            let current = crate::session::selected_model_with_models(
+                runtime,
+                &acp::SessionId::new(session_id),
+                &providers,
+            )
+            .await?;
             let mut selected = providers
                 .into_iter()
                 .flat_map(|(provider, models)| {
@@ -109,8 +127,6 @@ pub(crate) async fn set(
                 })
                 .find(|model| model.id() == value.0.as_ref())
                 .ok_or_else(|| error::invalid("Unknown model"))?;
-            let current =
-                crate::session::selected_model(runtime, &acp::SessionId::new(session_id)).await?;
             if current.provider == selected.provider && current.model == selected.model {
                 selected.options = current.options;
             }

@@ -6,22 +6,23 @@ use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use kraai_provider_core::{
     ConfiguredModelMetadata, DEFAULT_HTTP_RETRY_POLICY, DynamicConfig, DynamicValue, Model,
-    ModelConfig, Provider, ProviderFactory, ProviderPricingPolicy, ProviderRequest,
-    ProviderRequestContext, ProviderStreamEvent, ResolvedImages, ScriptToolDefinition,
-    send_with_retry, stream_sse_data,
+    ModelConfig, ModelMetadataCache, Provider, ProviderFactory, ProviderPricingPolicy,
+    ProviderRequest, ProviderRequestContext, ProviderStreamEvent, ResolvedImages,
+    ScriptToolDefinition, send_with_retry, stream_sse_data,
 };
 use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
-use tokio::sync::RwLock;
 
 use crate::auth::ApiKeyAuth;
 use crate::messages::normalize_chat_messages;
+use crate::models::ModelResolver;
 use crate::profile::{
     ChatCompletionsProfile, GenericChatCompletionsProfile, OpenAiChatCompletionsProfile,
 };
 use crate::streaming::adapt_chat_completion_stream;
 use crate::wire::{
-    ChatCompletionRequest, ChatCompletionStreamOptions, ListModelsResponse, RequestMessage,
+    ChatCompletionRequest, ChatCompletionStreamOptions, ListModelEntry, ListModelsResponse,
+    RequestMessage,
 };
 
 pub struct ChatCompletionsProvider<P> {
@@ -30,7 +31,7 @@ pub struct ChatCompletionsProvider<P> {
     base_url: String,
     auth: ApiKeyAuth,
     only_listed_models: bool,
-    cached_models: RwLock<BTreeMap<ModelId, Model>>,
+    cached_models: ModelMetadataCache<Vec<ListModelEntry>>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     model_catalog: Option<std::sync::Arc<kraai_provider_core::ModelCatalog>>,
     catalog_provider: Option<String>,
@@ -43,6 +44,39 @@ where
 {
     fn build_endpoint(&self, path: &str) -> String {
         format!("{}/{}", self.base_url.trim_end_matches('/'), path)
+    }
+
+    fn model_resolver(&self) -> ModelResolver<'_> {
+        ModelResolver {
+            configs: &self.model_configs,
+            only_listed: self.only_listed_models,
+            provider: self.catalog_provider.as_deref(),
+            api: &self.base_url,
+            protocol: self.options_protocol(),
+        }
+    }
+
+    async fn discover_models(&self) -> Result<Vec<ListModelEntry>> {
+        let response = send_with_retry(
+            "list models",
+            &DEFAULT_HTTP_RETRY_POLICY,
+            &ProviderRequestContext::default(),
+            || {
+                finite_request(
+                    self.auth
+                        .apply(self.client.get(self.build_endpoint("models"))),
+                )
+                .send()
+            },
+        )
+        .await?;
+        let response = ensure_success_response("list models", response).await?;
+        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
+        let models: ListModelsResponse = serde_json::from_slice(&bytes)?;
+        if let Some(catalog) = &self.model_catalog {
+            catalog.initialize().await;
+        }
+        Ok(models.data)
     }
 
     async fn send_chat_completion_request(
@@ -112,112 +146,45 @@ where
     }
 
     async fn list_models(&self) -> Vec<Model> {
-        self.cached_models.read().await.values().cloned().collect()
+        self.cached_models
+            .models(self.model_catalog.as_deref(), |native, catalog| {
+                self.model_resolver().resolve(native, catalog)
+            })
+            .await
+            .values()
+            .cloned()
+            .collect()
     }
 
     async fn get_model(&self, model_id: &ModelId) -> Option<Model> {
-        self.cached_models.read().await.get(model_id).cloned()
+        self.cached_models
+            .models(self.model_catalog.as_deref(), |native, catalog| {
+                self.model_resolver().resolve(native, catalog)
+            })
+            .await
+            .get(model_id)
+            .cloned()
     }
 
     fn set_model_catalog(&mut self, catalog: std::sync::Arc<kraai_provider_core::ModelCatalog>) {
         self.model_catalog = Some(catalog);
+        self.cached_models.invalidate();
     }
 
     async fn cache_models(&self) -> Result<()> {
-        let response = send_with_retry(
-            "list models",
-            &DEFAULT_HTTP_RETRY_POLICY,
-            &ProviderRequestContext::default(),
-            || {
-                finite_request(
-                    self.auth
-                        .apply(self.client.get(self.build_endpoint("models"))),
-                )
-                .send()
-            },
-        )
-        .await?;
-        let response = ensure_success_response("list models", response).await?;
-        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
-        let models: ListModelsResponse = serde_json::from_slice(&bytes)?;
-
-        if let Some(catalog) = &self.model_catalog {
-            catalog.initialize().await;
-        }
-        let mut cache = BTreeMap::new();
-
-        for model in models.data {
-            let raw_id = model.id;
-            let id = ModelId::new(raw_id.clone());
-            let configured = self.model_configs.get(&id);
-            if self.only_listed_models && configured.is_none() {
-                continue;
-            }
-            let (mut catalog, catalog_options) = match &self.model_catalog {
-                Some(catalog) => catalog
-                    .metadata_with_discovery(
-                        self.catalog_provider.as_deref(),
-                        Some(&self.base_url),
-                        &raw_id,
-                    )
-                    .await
-                    .unwrap_or_default(),
-                None => Default::default(),
-            };
-
-            let configured = configured.cloned().unwrap_or_default();
-            catalog.options = model.options.definitions_with_fallback(
-                self.options_protocol(),
-                model
-                    .supported_reasoning_levels
-                    .into_iter()
-                    .map(|level| level.effort),
-                &catalog_options,
-            );
-            let resolved = configured.resolve(id.clone(), Some(catalog));
-            kraai_types::validate_model_option_values(
-                &resolved.options,
-                &Default::default(),
-                false,
+        self.cached_models
+            .refresh(
+                self.model_catalog.as_deref(),
+                self.discover_models(),
+                |native, catalog| self.model_resolver().resolve(native, catalog),
             )
-            .map_err(|errors| eyre!("Invalid discovered model options for {id}: {errors:?}"))?;
-            cache.insert(id, resolved);
-        }
-        for (id, configured) in &self.model_configs {
-            if cache.contains_key(id) {
-                continue;
-            }
-            let catalog = match &self.model_catalog {
-                Some(catalog) => {
-                    catalog
-                        .metadata_for_protocol(
-                            self.catalog_provider.as_deref(),
-                            Some(&self.base_url),
-                            id.as_str(),
-                            self.options_protocol(),
-                        )
-                        .await
-                }
-                None => None,
-            };
-            let model = configured.resolve(id.clone(), catalog);
-            kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
-                .map_err(|errors| eyre!("Invalid configured model options for {id}: {errors:?}"))?;
-            cache.insert(id.clone(), model);
-        }
-        let previous = std::mem::replace(&mut *self.cached_models.write().await, cache);
-        drop(previous);
-
-        Ok(())
+            .await
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {
         let metadata = ConfiguredModelMetadata::from_model_config(&model)?;
-        self.cached_models
-            .write()
-            .await
-            .insert(model.id.clone(), metadata.resolve(model.id.clone(), None));
         self.model_configs.insert(model.id, metadata);
+        self.cached_models.invalidate();
         Ok(())
     }
 
@@ -332,7 +299,7 @@ where
         base_url,
         auth,
         only_listed_models,
-        cached_models: RwLock::new(BTreeMap::new()),
+        cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         _profile: PhantomData,
     })

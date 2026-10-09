@@ -2,6 +2,7 @@
 
 mod auth;
 mod messages;
+mod models;
 mod profile;
 mod provider;
 mod reasoning;

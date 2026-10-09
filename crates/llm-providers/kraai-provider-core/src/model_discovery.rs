@@ -49,6 +49,13 @@ struct CatalogMode {
 }
 
 impl DiscoveredModelOptions {
+    pub(crate) fn reasoning_only(&self) -> Self {
+        Self {
+            reasoning_options: self.reasoning_options.clone(),
+            ..Self::default()
+        }
+    }
+
     pub fn definitions(&self, protocol: ModelOptionsProtocol) -> Vec<ModelOptionDefinition> {
         self.definitions_with_reasoning_levels(protocol, [])
     }

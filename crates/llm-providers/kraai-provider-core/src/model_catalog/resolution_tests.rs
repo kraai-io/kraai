@@ -162,7 +162,7 @@ async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_g
         }
     }))?;
     let (mut metadata, catalog_options) = catalog
-        .metadata_with_discovery(None, Some("https://router.test/v1"), "model")
+        .metadata_with_discovery(None, Some("https://router.test/v1"), "model", None)
         .await
         .ok_or_else(|| color_eyre::eyre::eyre!("missing catalog model"))?;
     metadata.options = crate::DiscoveredModelOptions::default().definitions_with_fallback(

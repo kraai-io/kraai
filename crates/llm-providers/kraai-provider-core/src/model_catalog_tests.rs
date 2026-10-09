@@ -305,3 +305,9 @@ mod resolution_tests;
 
 #[path = "model_catalog/pricing_tests.rs"]
 mod pricing_tests;
+
+#[path = "model_catalog/owner_tests.rs"]
+mod owner_tests;
+
+#[path = "model_catalog/refresh_tests.rs"]
+mod refresh_tests;

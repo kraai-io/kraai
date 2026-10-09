@@ -36,12 +36,11 @@ pub(crate) async fn run(
             id: option_id,
             value,
         }) => {
+            let mut publication = crate::config_updates::lock(&turn.session).await;
             crate::config::set_model_option(runtime, id.0.as_ref(), &option_id, &value).await?;
-            crate::config::notify(
-                &connection,
-                id.clone(),
-                crate::config::options(runtime, id.0.as_ref()).await?,
-            )?;
+            let config = crate::config::options(runtime, id.0.as_ref()).await?;
+            crate::config::notify(&connection, id.clone(), config.clone())?;
+            *publication.current = Some(config);
             return Ok(command_response());
         }
         Some(commands::Command::Undo) => {
