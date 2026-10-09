@@ -427,7 +427,9 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
             },
         )
         .await?;
-    assert!(pending.is_some());
+    let pending = pending.ok_or_else(|| eyre!("expected compaction after new usage"))?;
+    assert_eq!(pending.covered_through, Some(next));
+    assert_eq!(pending.previous_boundary, Some(saved.covered_through));
     cleanup_dir(data_dir).await;
     Ok(())
 }

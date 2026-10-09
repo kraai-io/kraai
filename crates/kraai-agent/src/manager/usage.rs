@@ -64,6 +64,7 @@ impl AgentManager {
             self.usage_store.save(&state.session_id, &request).await?;
             if let Some(generation) = state.message.generation.as_mut() {
                 generation.usage = Some(usage);
+                state.snapshot_dirty = true;
             }
             drop(streaming);
             return Ok(Some(request));

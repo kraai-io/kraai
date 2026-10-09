@@ -139,3 +139,105 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
     cleanup_dir(data_dir).await;
     Ok(())
 }
+
+#[tokio::test]
+async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session,
+            "start".into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    manager
+        .append_text_chunk(
+            &request.message_id,
+            "text",
+            AssistantPhase::FinalAnswer,
+            "response",
+        )
+        .await;
+    manager.publish_streaming_snapshots().await?;
+    let observer = AgentManager::new(
+        manager.cloned_provider_manager(),
+        data_dir.clone(),
+        kraai_persistence::Persistence::open(&data_dir).await?,
+        data_dir.clone(),
+    );
+    let usage = TokenUsage {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+        ..Default::default()
+    };
+    manager
+        .set_streaming_message_usage(&request.message_id, usage.clone())
+        .await?;
+    let before = observer
+        .capture_session_snapshot(&session)
+        .await?
+        .load()
+        .await?;
+    assert_eq!(
+        before.history[&request.message_id]
+            .generation
+            .as_ref()
+            .and_then(|generation| generation.usage.as_ref()),
+        None,
+    );
+    assert_eq!(
+        before.requests[&request.message_id].usage,
+        Some(usage.clone())
+    );
+    assert!(before.context_usage.is_none());
+
+    manager.publish_streaming_snapshots().await?;
+    let published = observer
+        .capture_session_snapshot(&session)
+        .await?
+        .load()
+        .await?;
+    let reopened = kraai_persistence::Persistence::open(&data_dir).await?;
+    let reopened = reopened
+        .messages()
+        .read_conversation(&session)
+        .await?
+        .ok_or_else(|| eyre!("reopened conversation missing"))?;
+    for history in [&published.history, &reopened.history] {
+        let message = &history[&request.message_id];
+        assert_eq!(
+            message
+                .generation
+                .as_ref()
+                .and_then(|generation| generation.usage.as_ref()),
+            Some(&usage),
+        );
+        assert!(matches!(message.status, MessageStatus::Streaming { .. }));
+        assert_eq!(message.display_text(), "response");
+    }
+    assert!(published.context_usage.is_none());
+    assert_eq!(published.requests, before.requests);
+    assert_eq!(reopened.requests, before.requests);
+
+    manager.complete_message(&request.message_id).await?;
+    let completed = observer
+        .capture_session_snapshot(&session)
+        .await?
+        .load()
+        .await?;
+    assert_eq!(
+        completed.history[&request.message_id].status,
+        MessageStatus::Complete
+    );
+    assert_eq!(
+        completed.context_usage.map(|context| context.usage),
+        Some(usage)
+    );
+    drop((manager, observer));
+    cleanup_dir(data_dir).await;
+    Ok(())
+}

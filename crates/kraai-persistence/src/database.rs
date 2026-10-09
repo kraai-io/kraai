@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, ensure, eyre};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::ValueRef,
+};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(crate) type LeaseTokens = BTreeMap<String, i64>;
@@ -143,15 +145,18 @@ pub(crate) fn read_record<T: DeserializeOwned>(
     kind: &str,
     id: &str,
 ) -> Result<Option<T>> {
-    let json: Option<String> = connection
-        .query_row(
-            "SELECT data FROM records WHERE kind = ?1 AND id = ?2",
-            params![kind, id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    json.map(|json| serde_json::from_str(&json).map_err(Into::into))
-        .transpose()
+    let mut statement =
+        connection.prepare_cached("SELECT data FROM records WHERE kind = ?1 AND id = ?2")?;
+    let mut rows = statement.query(params![kind, id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    let value = row.get_ref(0)?;
+    let ValueRef::Text(json) = value else {
+        return Err(rusqlite::Error::InvalidColumnType(0, "data".into(), value.data_type()).into());
+    };
+    let json = std::str::from_utf8(json).map_err(|error| rusqlite::Error::Utf8Error(0, error))?;
+    Ok(Some(serde_json::from_str(json)?))
 }
 
 pub(crate) fn record_session(
