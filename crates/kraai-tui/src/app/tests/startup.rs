@@ -43,6 +43,20 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
 }
 
 #[test]
+fn catalog_changes_refresh_models_without_reloading_session_state() {
+    let mut harness = test_harness();
+    harness.app.startup_sync = StartupSync::WaitingForRuntime;
+    harness.app.handle_runtime_event(Event::ModelsUpdated);
+    assert!(harness.drain_requests().is_empty());
+    harness.app.startup_sync = StartupSync::Complete;
+    harness.app.handle_runtime_event(Event::ModelsUpdated);
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::ListModels]
+    ));
+}
+
+#[test]
 fn missed_initial_config_and_failed_startup_still_finish_synchronizing() {
     for state in [
         RuntimeStartupState::Ready,

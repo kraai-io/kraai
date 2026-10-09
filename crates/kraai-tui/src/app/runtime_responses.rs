@@ -8,6 +8,7 @@ impl App {
             }
             RuntimeResponse::Models(Ok(models)) => {
                 self.state.config_loaded = true;
+                let previous_options = self.state.selected_model_options.clone();
                 let selected = self
                     .state
                     .filtered_models()
@@ -36,6 +37,10 @@ impl App {
                     self.fail_ci(format!("Invalid --option: {error}"));
                     return;
                 }
+                if self.state.selected_model_options != previous_options {
+                    self.save_model_selection();
+                }
+                self.reconcile_pending_session_model_options();
                 self.maybe_send_startup_message();
             }
             RuntimeResponse::Models(Err(err)) => {
@@ -184,6 +189,9 @@ impl App {
                     pending_submit.session_id = Some(session_id.clone());
                     pending_submit
                 });
+                if let Some(pending) = &pending_submit {
+                    self.preserve_model_selection_after_creation(pending);
+                }
                 self.reset_session_state(Some(session_id.clone()), "Session ready");
                 self.state.pending_submit = pending_submit;
                 self.state.selected_profile_id = draft_profile_id.clone();

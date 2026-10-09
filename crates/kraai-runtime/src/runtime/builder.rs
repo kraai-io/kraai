@@ -280,6 +280,8 @@ impl RuntimeBuilder {
         let image_store = persistence.images().clone();
 
         let providers = ProviderManager::new();
+        let (model_catalog_tx, _) =
+            tokio::sync::watch::channel(providers.subscribe_model_catalog());
         let default_workspace_dir = std::env::current_dir()
             .and_then(|path| path.canonicalize())
             .or_else(|_| std::env::current_dir())
@@ -343,6 +345,7 @@ impl RuntimeBuilder {
                     .use_current_executable_as_nushell_host,
             }),
             startup_tx,
+            model_catalog_tx,
         };
 
         runtime.run(command_rx, shutdown_rx).await;

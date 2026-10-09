@@ -384,6 +384,8 @@ path = \"inherit\"\n",
         let execution_store = persistence.executions().clone();
         let context_state_store = persistence.context().clone();
         let image_store = persistence.images().clone();
+        let (model_catalog_tx, _) =
+            tokio::sync::watch::channel(providers.subscribe_model_catalog());
         let agent_manager = Arc::new(tokio::sync::RwLock::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
@@ -442,6 +444,7 @@ path = \"inherit\"\n",
                 script_runtime_roots: None,
             }),
             startup_tx,
+            model_catalog_tx,
         };
 
         let events_for_task = events.clone();

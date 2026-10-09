@@ -2,6 +2,12 @@ use kraai_types::{ModelOptionDefinition, ModelOptionKind};
 
 use super::*;
 
+pub(super) struct ModelOptionEditor {
+    provider_id: String,
+    model_id: String,
+    definition: ModelOptionDefinition,
+}
+
 pub(super) fn model_option_choices(option: &ModelOptionDefinition) -> Vec<(String, String)> {
     let mut choices: Vec<_> = match &option.kind {
         ModelOptionKind::Choice { choices } => choices
@@ -56,24 +62,57 @@ impl App {
     }
 
     pub(super) fn reconcile_model_options(&mut self) {
-        let (Some(provider_id), Some(model_id)) = (
+        if let (Some(provider_id), Some(model_id)) = (
             &self.state.selected_provider_id,
             &self.state.selected_model_id,
-        ) else {
-            return;
-        };
-        let Some(model) = self
+        ) && let Some(model) = self
             .state
             .models_by_provider
             .get(provider_id)
             .and_then(|models| models.iter().find(|model| &model.id == model_id))
-        else {
+        {
+            kraai_types::reconcile_model_option_values(
+                &model.options,
+                &mut self.state.selected_model_options,
+            );
+        }
+        self.reconcile_model_option_editor();
+    }
+
+    fn reconcile_model_option_editor(&mut self) {
+        if self.state.mode != UiMode::ModelOptionsMenu {
+            self.state.option_editor = None;
+            self.state.option_editor_error = None;
+            return;
+        }
+        let definitions = self.state.active_model_options();
+        let len = definitions.len();
+        let Some(editor) = &self.state.option_editor else {
+            self.state.option_menu_index = self.state.option_menu_index.min(len.saturating_sub(1));
             return;
         };
-        kraai_types::reconcile_model_option_values(
-            &model.options,
-            &mut self.state.selected_model_options,
-        );
+        let index = definitions
+            .iter()
+            .position(|option| **option == editor.definition);
+        if self.state.selected_provider_id.as_ref() == Some(&editor.provider_id)
+            && self.state.selected_model_id.as_ref() == Some(&editor.model_id)
+            && let Some(index) = index
+        {
+            self.state.option_menu_index = index;
+            return;
+        }
+        self.state.option_menu_index = self.state.option_menu_index.min(len.saturating_sub(1));
+        self.state.option_editor = None;
+        self.state.option_editor_input.clear();
+        self.state.option_choice_index = 0;
+        self.show_model_option_error(String::from(
+            "Model options changed. Choose an option again.",
+        ));
+    }
+
+    fn show_model_option_error(&mut self, error: String) {
+        self.state.option_editor_error = Some(error.clone());
+        self.set_error(error);
     }
 
     pub(super) fn set_model_option(&mut self, id: &str, input: &str) -> Result<(), String> {
@@ -87,6 +126,7 @@ impl App {
             self.state.selected_model_options.clone(),
         )?;
         self.state.selected_model_options = values;
+        self.state.option_editor_error = None;
         self.state.status = if input.is_empty() {
             format!("Unset {id}")
         } else {
@@ -99,8 +139,9 @@ impl App {
     pub(super) fn open_model_options(&mut self) {
         self.state.option_menu_index = 0;
         self.state.option_choice_index = 0;
-        self.state.option_editing = false;
+        self.state.option_editor = None;
         self.state.option_editor_input.clear();
+        self.state.option_editor_error = None;
         self.state.mode = UiMode::ModelOptionsMenu;
     }
 
@@ -112,14 +153,19 @@ impl App {
                     Ok(()) => {
                         self.set_input_text(String::new());
                     }
-                    Err(error) => self.state.status = error,
+                    Err(error) => self.set_error(error),
                 }
             }
-            _ => self.state.status = String::from("Usage: /option [<id> <value|--clear>]"),
+            _ => self.set_error(String::from("Usage: /option [<id> <value|--clear>]")),
         }
     }
 
     pub(super) fn handle_model_options_key_event(&mut self, key: KeyEvent) {
+        let was_editing = self.state.option_editor.is_some();
+        self.reconcile_model_option_editor();
+        if was_editing && self.state.option_editor.is_none() {
+            return;
+        }
         let definitions = self.state.active_model_options();
         let len = definitions.len();
         let Some(option) = definitions
@@ -128,18 +174,31 @@ impl App {
         else {
             return;
         };
-        if !self.state.option_editing {
+        if self.state.option_editor.is_none() {
             match key.code {
                 KeyCode::Up => {
+                    self.state.option_editor_error = None;
                     self.state.option_menu_index =
                         model_menu_previous_index(self.state.option_menu_index, len)
                 }
                 KeyCode::Down => {
+                    self.state.option_editor_error = None;
                     self.state.option_menu_index =
                         model_menu_next_index(self.state.option_menu_index, len)
                 }
                 KeyCode::Enter => {
-                    self.state.option_editing = true;
+                    let (Some(provider_id), Some(model_id)) = (
+                        &self.state.selected_provider_id,
+                        &self.state.selected_model_id,
+                    ) else {
+                        return;
+                    };
+                    self.state.option_editor = Some(ModelOptionEditor {
+                        provider_id: provider_id.clone(),
+                        model_id: model_id.clone(),
+                        definition: option.clone(),
+                    });
+                    self.state.option_editor_error = None;
                     self.state.option_editor_input = self
                         .state
                         .selected_model_options
@@ -158,17 +217,21 @@ impl App {
         let choices = model_option_choices(&option);
         match key.code {
             KeyCode::Up if !choices.is_empty() => {
+                self.state.option_editor_error = None;
                 self.state.option_choice_index =
                     model_menu_previous_index(self.state.option_choice_index, choices.len())
             }
             KeyCode::Down if !choices.is_empty() => {
+                self.state.option_editor_error = None;
                 self.state.option_choice_index =
                     model_menu_next_index(self.state.option_choice_index, choices.len())
             }
             KeyCode::Char(ch) if choices.is_empty() && (ch.is_ascii_digit() || ch == '-') => {
+                self.state.option_editor_error = None;
                 self.state.option_editor_input.push(ch)
             }
             KeyCode::Backspace if choices.is_empty() => {
+                self.state.option_editor_error = None;
                 self.state.option_editor_input.pop();
             }
             KeyCode::Enter => {
@@ -178,10 +241,10 @@ impl App {
                     .unwrap_or_else(|| self.state.option_editor_input.clone());
                 match self.set_model_option(&option.id, &input) {
                     Ok(()) => {
-                        self.state.option_editing = false;
+                        self.state.option_editor = None;
                         self.state.option_menu_index = 0;
                     }
-                    Err(error) => self.state.status = error,
+                    Err(error) => self.show_model_option_error(error),
                 }
             }
             _ => {}

@@ -46,6 +46,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
+    pub(crate) model_catalog_tx: tokio::sync::watch::Sender<tokio::sync::watch::Receiver<u64>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +120,7 @@ impl RuntimeCore {
         let background_tasks = [
             self.spawn_config_watcher(),
             self.spawn_openai_auth_forwarder(),
+            self.spawn_model_catalog_forwarder(),
             self.spawn_mcp_auth_forwarder().await,
             self.spawn_lease_heartbeat(),
             self.spawn_session_observers(),
@@ -224,11 +226,21 @@ impl RuntimeCore {
         let config = self
             .read_and_validate_provider_config(&self.config.provider_config_path)
             .await?;
-        self.agent_manager
-            .write()
-            .await
+        let mut agent = self.agent_manager.write().await;
+        let result = agent
             .set_providers(config, self.provider_registry.clone())
-            .await?;
+            .await;
+        let updates = agent.cloned_provider_manager().subscribe_model_catalog();
+        drop(agent);
+        self.model_catalog_tx.send_if_modified(|current| {
+            if current.same_channel(&updates) {
+                false
+            } else {
+                *current = updates;
+                true
+            }
+        });
+        result?;
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
         Ok(())

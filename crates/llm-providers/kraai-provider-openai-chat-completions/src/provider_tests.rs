@@ -202,7 +202,7 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
         )]))
         .unwrap(),
         only_listed_models: false,
-        cached_models: RwLock::new(BTreeMap::new()),
+        cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         model_catalog: None,
         catalog_provider: None,
@@ -262,7 +262,7 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
         )]))
         .unwrap(),
         only_listed_models: false,
-        cached_models: RwLock::new(BTreeMap::new()),
+        cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         model_catalog: None,
         catalog_provider: None,
@@ -314,6 +314,22 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
         let Some(client) = test_client_or_skip() else {
             return;
         };
+        let cached_models = ModelMetadataCache::default();
+        cached_models
+            .refresh(None, async { Ok(Vec::new()) }, |_, _| {
+                BTreeMap::from([(
+                    ModelId::new("stale"),
+                    Model {
+                        supports_images: false,
+                        id: ModelId::new("stale"),
+                        name: String::from("Stale model"),
+                        max_context: None,
+                        options: Vec::new(),
+                    },
+                )])
+            })
+            .await
+            .unwrap();
         let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
             id: ProviderId::new("fixture"),
             client,
@@ -324,16 +340,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
             )]))
             .unwrap(),
             only_listed_models,
-            cached_models: RwLock::new(BTreeMap::from([(
-                ModelId::new("stale"),
-                Model {
-                    supports_images: false,
-                    id: ModelId::new("stale"),
-                    name: String::from("Stale model"),
-                    max_context: None,
-                    options: Vec::new(),
-                },
-            )])),
+            cached_models,
             model_configs: BTreeMap::from([(
                 ModelId::new("alpha"),
                 ConfiguredModelMetadata {

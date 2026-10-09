@@ -9,6 +9,8 @@ mod commands;
 mod images;
 #[path = "stdio/lifecycle.rs"]
 mod lifecycle;
+#[path = "stdio/live_model_options.rs"]
+mod live_model_options;
 #[path = "stdio/mcp.rs"]
 mod mcp;
 #[path = "stdio/model_options.rs"]

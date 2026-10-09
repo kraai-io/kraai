@@ -2,6 +2,7 @@
 
 mod commands;
 mod config;
+mod config_updates;
 mod content;
 mod error;
 mod history;
@@ -20,6 +21,7 @@ use agent_client_protocol::{
     Agent, Result,
     schema::{ProtocolVersion, v1 as acp},
 };
+use config_updates::{ConfigUpdates, PreparedSession};
 use kraai_runtime::RuntimeHandle;
 use tokio::sync::Mutex;
 
@@ -32,6 +34,7 @@ struct Server {
     options: Options,
     initialized: AtomicBool,
     sessions: Mutex<BTreeMap<String, Arc<session::Session>>>,
+    config_updated: Arc<ConfigUpdates>,
 }
 
 impl Server {
@@ -58,7 +61,7 @@ impl Server {
         &self,
         request: acp::LoadSessionRequest,
         connection: &transport::Connection,
-    ) -> Result<acp::LoadSessionResponse> {
+    ) -> Result<PreparedSession<acp::LoadSessionResponse>> {
         self.require_initialized()?;
         if !request.cwd.is_absolute() {
             return Err(error::invalid("Session cwd must be absolute"));
@@ -86,18 +89,13 @@ impl Server {
             .lock()
             .await
             .entry(id.clone())
-            .or_insert_with(|| {
-                Arc::new(session::Session {
-                    ready: AtomicBool::new(false),
-                    turn: Arc::default(),
-                    cancellation: Default::default(),
-                })
-            })
+            .or_insert_with(|| Arc::new(session::Session::new(self.config_updated.clone())))
             .clone();
         let _turn = session
             .turn
             .try_lock()
             .map_err(|_busy| error::invalid("Session has an active prompt"))?;
+        let mut publication = config_updates::lock(&session).await;
         self.runtime
             .load_session(id.clone())
             .await
@@ -129,8 +127,13 @@ impl Server {
             .map_err(error::runtime)?;
         history::replay(&self.runtime, &snapshot, connection).await?;
         commands::advertise(connection, request.session_id).await?;
-        session.ready.store(true, Ordering::Release);
-        Ok(acp::LoadSessionResponse::new().config_options(config))
+        *publication.current = Some(config.clone());
+        drop(_turn);
+        Ok(PreparedSession {
+            response: acp::LoadSessionResponse::new().config_options(config),
+            session,
+            _publication: publication,
+        })
     }
 }
 
@@ -141,6 +144,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
         options,
         initialized: AtomicBool::new(false),
         sessions: Mutex::new(BTreeMap::new()),
+        config_updated: Arc::default(),
     });
     let initialize = server.clone();
     let create = server.clone();
@@ -148,7 +152,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
     let load = server.clone();
     let configure = server.clone();
     let close = server.clone();
-    let cancel = server;
+    let cancel = server.clone();
     Agent
         .builder()
         .name("kraai")
@@ -159,11 +163,21 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
             close.runtime.shutdown().await.map_err(error::runtime)
         })
         .on_receive_request(
-            async move |_: acp::InitializeRequest, responder, _cx| {
+            async move |_: acp::InitializeRequest, responder, cx| {
                 if initialize.initialized.swap(true, Ordering::AcqRel) {
                     return responder
                         .respond_with_error(error::invalid("Connection is already initialized"));
                 }
+                let server = initialize.clone();
+                let connection = transport::Connection::new(cx.clone(), server.budget.clone());
+                let updates = server.runtime.subscribe();
+                cx.spawn(async move {
+                    tokio::select! {
+                        biased;
+                        () = connection.incoming_closed() => Ok(()),
+                        result = config_updates::run(&server, &connection, updates) => result,
+                    }
+                })?;
                 responder.respond(
                     acp::InitializeResponse::new(ProtocolVersion::V1)
                         .agent_info(acp::Implementation::new("kraai", env!("CARGO_PKG_VERSION")))
@@ -184,15 +198,33 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                 cx.spawn(async move {
                     let result = async {
                         server.require_initialized()?;
-                        let (id, session) =
-                            session::create(&server.runtime, &server.options, request).await?;
+                        let (id, session) = session::create(
+                            &server.runtime,
+                            &server.options,
+                            request,
+                            server.config_updated.clone(),
+                        )
+                        .await?;
+                        let mut publication = config_updates::lock(&session).await;
                         let config = config::options(&server.runtime, &id).await?;
                         commands::advertise(&connection, acp::SessionId::new(id.clone())).await?;
-                        server.sessions.lock().await.insert(id.clone(), session);
-                        Ok(acp::NewSessionResponse::new(id).config_options(config))
+                        *publication.current = Some(config.clone());
+                        server
+                            .sessions
+                            .lock()
+                            .await
+                            .insert(id.clone(), session.clone());
+                        Ok(PreparedSession {
+                            response: acp::NewSessionResponse::new(id).config_options(config),
+                            session,
+                            _publication: publication,
+                        })
                     }
                     .await;
-                    responder.respond_with_result(result)
+                    match result {
+                        Ok(prepared) => prepared.respond(|response| responder.respond(response)),
+                        Err(error) => responder.respond_with_error(error),
+                    }
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -202,7 +234,10 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                 let server = load.clone();
                 let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
-                    responder.respond_with_result(server.load(request, &connection).await)
+                    match server.load(request, &connection).await {
+                        Ok(prepared) => prepared.respond(|response| responder.respond(response)),
+                        Err(error) => responder.respond_with_error(error),
+                    }
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -212,11 +247,20 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                 let server = configure.clone();
                 let connection = transport::Connection::new(cx.clone(), server.budget.clone());
                 cx.spawn(async move {
+                    let session = match server.session(&request.session_id).await {
+                        Ok(session) => session,
+                        Err(error) => return responder.respond_with_error(error),
+                    };
+                    let _turn = match session.turn.try_lock() {
+                        Ok(turn) => turn,
+                        Err(_busy) => {
+                            return responder.respond_with_error(error::invalid(
+                                "Cannot change settings during a prompt",
+                            ));
+                        }
+                    };
+                    let mut publication = config_updates::lock(&session).await;
                     let result = async {
-                        let session = server.session(&request.session_id).await?;
-                        let _turn = session.turn.try_lock().map_err(|_busy| {
-                            error::invalid("Cannot change settings during a prompt")
-                        })?;
                         let config = config::set(
                             &server.runtime,
                             request.session_id.0.as_ref(),
@@ -225,6 +269,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                         )
                         .await?;
                         config::notify(&connection, request.session_id, config.clone())?;
+                        *publication.current = Some(config.clone());
                         Ok(acp::SetSessionConfigOptionResponse::new(config))
                     }
                     .await;

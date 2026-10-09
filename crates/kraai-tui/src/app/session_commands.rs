@@ -92,20 +92,20 @@ impl App {
 
     fn submission_model(&mut self) -> Option<(String, String)> {
         if !self.state.config_loaded {
-            self.state.status = String::from("Config not loaded yet");
+            self.set_error(String::from("Config not loaded yet"));
             return None;
         }
 
         let Some(provider_id) = self.state.selected_provider_id.clone() else {
-            self.state.status = String::from("No provider selected. Use /model");
+            self.set_error(String::from("No provider selected. Use /model"));
             return None;
         };
         let Some(model_id) = self.state.selected_model_id.clone() else {
-            self.state.status = String::from("No model selected. Use /model");
+            self.set_error(String::from("No model selected. Use /model"));
             return None;
         };
         if self.state.selected_profile_id.is_none() {
-            self.state.status = String::from("No agent selected. Use /agent");
+            self.set_error(String::from("No agent selected. Use /agent"));
             return None;
         }
 
@@ -120,7 +120,7 @@ impl App {
                 .map(|error| format!("{}: {}", error.option, error.message))
                 .collect::<Vec<_>>()
                 .join("; ");
-            self.state.status = format!("Choose model options using /option: {message}");
+            self.set_error(format!("Choose model options using /option: {message}"));
             self.fail_ci(self.state.status.clone());
             return None;
         }
@@ -249,7 +249,8 @@ impl App {
                 .state
                 .models_by_provider
                 .iter()
-                .find(|(_, models)| models.iter().any(|model| &model.id == model_id))
+                .filter(|(_, models)| models.iter().any(|model| &model.id == model_id))
+                .min_by(|(left, _), (right, _)| left.cmp(right))
         {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.save_workspace_preferences_if_model_changed(
@@ -259,8 +260,12 @@ impl App {
             return;
         }
 
-        if let Some((provider_id, models)) = self.state.models_by_provider.iter().next()
-            && let Some(model) = models.first()
+        if let Some((provider_id, model)) = self
+            .state
+            .models_by_provider
+            .iter()
+            .filter_map(|(provider, models)| models.first().map(|model| (provider, model)))
+            .min_by(|(left, _), (right, _)| left.cmp(right))
         {
             self.state.selected_provider_id = Some(provider_id.clone());
             self.state.selected_model_id = Some(model.id.clone());

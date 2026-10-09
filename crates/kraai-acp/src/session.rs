@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{CreateSessionRequest, RuntimeHandle};
@@ -34,9 +34,23 @@ pub(crate) struct Session {
     pub(crate) ready: AtomicBool,
     pub(crate) turn: Arc<Mutex<()>>,
     pub(crate) cancellation: std::sync::Mutex<Option<CancellationToken>>,
+    pub(crate) configuration: Arc<Mutex<crate::config_updates::PublishedConfig>>,
+    pub(crate) config_generation: Arc<AtomicU64>,
+    pub(crate) config_updated: Arc<crate::config_updates::ConfigUpdates>,
 }
 
 impl Session {
+    pub(crate) fn new(config_updated: Arc<crate::config_updates::ConfigUpdates>) -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            turn: Arc::default(),
+            cancellation: Default::default(),
+            configuration: Arc::default(),
+            config_generation: Arc::default(),
+            config_updated,
+        }
+    }
+
     pub(crate) fn begin_turn(self: &Arc<Self>) -> Result<ActiveTurn> {
         let permit = self
             .turn
@@ -83,11 +97,30 @@ impl Drop for ActiveTurn {
 }
 
 pub(crate) async fn selected_model(runtime: &RuntimeHandle, id: &acp::SessionId) -> Result<Model> {
-    let selected = runtime
+    let models = runtime.list_models().await.map_err(error::runtime)?;
+    selected_model_with_models(runtime, id, &models).await
+}
+
+pub(crate) async fn selected_model_with_models(
+    runtime: &RuntimeHandle,
+    id: &acp::SessionId,
+    models: &HashMap<String, Vec<kraai_runtime::Model>>,
+) -> Result<Model> {
+    let mut selected = runtime
         .get_session_model(id.to_string())
         .await
         .map_err(error::runtime)?
         .ok_or_else(|| error::internal("Session has no selected model"))?;
+    if let Some(model) = models
+        .get(selected.provider_id.as_str())
+        .and_then(|models| {
+            models
+                .iter()
+                .find(|model| model.id == selected.model_id.as_str())
+        })
+    {
+        kraai_types::reconcile_model_option_values(&model.options, &mut selected.options);
+    }
     Ok(Model {
         provider: selected.provider_id.to_string(),
         model: selected.model_id.to_string(),
@@ -194,6 +227,7 @@ pub(crate) async fn create(
     runtime: &RuntimeHandle,
     options: &Options,
     request: acp::NewSessionRequest,
+    config_updated: Arc<crate::config_updates::ConfigUpdates>,
 ) -> Result<(String, Arc<Session>)> {
     if !request.cwd.is_absolute() {
         return Err(error::invalid("Session cwd must be absolute"));
@@ -228,12 +262,5 @@ pub(crate) async fn create(
             .map_err(crate::error::runtime)?;
         return Err(error);
     }
-    Ok((
-        id,
-        Arc::new(Session {
-            ready: AtomicBool::new(true),
-            turn: Arc::default(),
-            cancellation: Default::default(),
-        }),
-    ))
+    Ok((id, Arc::new(Session::new(config_updated))))
 }

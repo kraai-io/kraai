@@ -1,19 +1,7 @@
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::RuntimeHandle;
 
-use crate::{error, session::Model};
-
-pub(super) async fn providers_for_model(
-    runtime: &RuntimeHandle,
-    selected: &Model,
-) -> Result<Option<kraai_runtime::Model>> {
-    Ok(runtime
-        .list_models()
-        .await
-        .map_err(error::runtime)?
-        .remove(&selected.provider)
-        .and_then(|models| models.into_iter().find(|model| model.id == selected.model)))
-}
+use crate::error;
 
 pub(super) fn model_option(
     option: &kraai_types::ModelOptionDefinition,
@@ -82,10 +70,16 @@ pub(crate) async fn set_model_option(
     id: &str,
     input: &str,
 ) -> Result<()> {
-    let mut selected =
-        crate::session::selected_model(runtime, &acp::SessionId::new(session_id)).await?;
-    let model = providers_for_model(runtime, &selected)
-        .await?
+    let models = runtime.list_models().await.map_err(error::runtime)?;
+    let mut selected = crate::session::selected_model_with_models(
+        runtime,
+        &acp::SessionId::new(session_id),
+        &models,
+    )
+    .await?;
+    let model = models
+        .get(&selected.provider)
+        .and_then(|models| models.iter().find(|model| model.id == selected.model))
         .ok_or_else(|| error::invalid("Selected model is unavailable"))?;
     selected.options = kraai_types::parse_model_option_assignments(
         &model.options,

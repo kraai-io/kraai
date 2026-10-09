@@ -32,6 +32,10 @@ impl ProviderManager {
         Self::default()
     }
 
+    pub fn subscribe_model_catalog(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.pricing.catalog.subscribe()
+    }
+
     pub fn register_provider(&mut self, id: ProviderId, mut provider: Box<dyn Provider>) {
         provider.set_model_catalog(self.pricing.catalog.clone());
         Arc::make_mut(&mut self.providers).insert(id, Arc::from(provider));

@@ -3,6 +3,7 @@ mod cache_warming;
 mod config;
 mod core;
 mod dispatch;
+mod model_catalog;
 mod nushell_host;
 mod queue;
 mod request_usage;

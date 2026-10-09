@@ -10,6 +10,7 @@ use ratatui::{
 use super::super::AppState;
 use super::super::model_options::model_option_choices;
 use super::{centered_rect, menu_block};
+use crate::components::{ChatHistory, normalize_terminal_text};
 
 pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup = centered_rect(
@@ -59,7 +60,7 @@ pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
             lines.push(Line::raw(format!("  {description}")));
         }
     }
-    if state.option_editing
+    if state.option_editor.is_some()
         && let Some(option) = options.get(state.option_menu_index)
     {
         lines.push(Line::raw(""));
@@ -99,6 +100,19 @@ pub(super) fn render(state: &AppState, area: Rect, buf: &mut Buffer) {
                 },
             ));
         }
+    }
+    if let Some(error) = &state.option_editor_error {
+        lines.extend(
+            ChatHistory::wrap_with_prefix(
+                &normalize_terminal_text(error),
+                usize::from(popup.width.saturating_sub(2)),
+                "",
+                "",
+            )
+            .into_iter()
+            .map(|line| Line::styled(line, Style::default().fg(Color::Red))),
+        );
+        selected_line = lines.len().saturating_sub(1);
     }
     let scroll = selected_line
         .saturating_add(1)

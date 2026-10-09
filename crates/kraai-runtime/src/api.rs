@@ -298,6 +298,7 @@ pub enum Event {
     },
     /// Configuration loaded successfully
     ConfigLoaded,
+    ModelsUpdated,
     /// Failure in runtime-wide background work or hosting.
     ServiceError {
         error: RuntimeError,
@@ -408,6 +409,7 @@ impl Event {
             | Self::ContinuationFailed { session_id, .. }
             | Self::HistoryUpdated { session_id } => Some(session_id),
             Self::ConfigLoaded
+            | Self::ModelsUpdated
             | Self::ServiceError { .. }
             | Self::McpAuthUpdated { .. }
             | Self::OpenAiCodexAuthUpdated { .. } => None,
