@@ -31,6 +31,31 @@ pub(super) struct Reply {
     lease_released: bool,
 }
 
+impl Fixture {
+    async fn new(mut manager: AgentManager, persistence: Persistence) -> Result<Self> {
+        let session = manager
+            .create_session_with(None, Some(agent::PROFILE.into()))
+            .await?;
+        let providers = manager.cloned_provider_manager();
+        let expected = expected_reply();
+        ensure!(
+            expected.len() == provider::CHUNKS * provider::CHUNK_BYTES,
+            "Fixture chunk size changed"
+        );
+        Ok(Self {
+            manager,
+            persistence,
+            providers,
+            session,
+            expected,
+        })
+    }
+}
+
+fn expected_reply() -> String {
+    (0..provider::CHUNKS).map(provider::chunk).collect()
+}
+
 impl Benchmark for Case {
     type Fixture = Fixture;
     type Output = Vec<Reply>;
@@ -42,23 +67,8 @@ impl Benchmark for Case {
 
     async fn setup(context: &Context) -> Result<Self::Fixture> {
         agent::prepare(&context.directory)?;
-        let (mut manager, persistence) = agent::create(&context.directory).await?;
-        let session = manager
-            .create_session_with(None, Some(agent::PROFILE.into()))
-            .await?;
-        let providers = manager.cloned_provider_manager();
-        let expected: String = (0..provider::CHUNKS).map(provider::chunk).collect();
-        ensure!(
-            expected.len() == provider::CHUNKS * provider::CHUNK_BYTES,
-            "Fixture chunk size changed"
-        );
-        Ok(Fixture {
-            manager,
-            persistence,
-            providers,
-            session,
-            expected,
-        })
+        let (manager, persistence) = agent::create(&context.directory).await?;
+        Fixture::new(manager, persistence).await
     }
 
     async fn run(_context: &Context, fixture: &mut Self::Fixture) -> Result<Self::Output> {
@@ -184,3 +194,7 @@ impl Benchmark for Case {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "streaming_tests.rs"]
+mod tests;

@@ -79,8 +79,8 @@ pub fn collect(work_dir: &Path, warmups: u32) -> Result<Metadata> {
             env!("KRAAI_PERF_CARGO_CFG_TARGET_FEATURE").into(),
         ),
         (
-            "workspace_profiles".into(),
-            env!("KRAAI_PERF_PROFILES").into(),
+            "declared_profile_settings".into(),
+            env!("KRAAI_PERF_PROFILE_SETTINGS").into(),
         ),
         (
             "profile_and_feature_overrides".into(),
@@ -92,6 +92,18 @@ pub fn collect(work_dir: &Path, warmups: u32) -> Result<Metadata> {
         ),
     ]);
     let mut provenance = BTreeMap::from([
+        (
+            "workspace_profiles".into(),
+            env!("KRAAI_PERF_PROFILES").into(),
+        ),
+        (
+            "selected_profile".into(),
+            env!("KRAAI_PERF_SELECTED_PROFILE").into(),
+        ),
+        (
+            "profile_and_feature_overrides".into(),
+            env!("KRAAI_PERF_ALL_BUILD_OVERRIDES").into(),
+        ),
         (
             "binary_sha256".into(),
             crate::fingerprint::file(&std::env::current_exe()?)?,

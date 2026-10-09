@@ -7,6 +7,9 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Context, Result, ensure};
 
 mod benchmark;
+#[cfg(test)]
+#[path = "../build_profile.rs"]
+mod build_profile;
 mod fingerprint;
 mod fixtures;
 mod measurement;
