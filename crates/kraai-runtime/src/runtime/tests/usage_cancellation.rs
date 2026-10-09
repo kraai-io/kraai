@@ -2,10 +2,10 @@ use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
 use kraai_types::{ModelId, ProviderId, TokenUsage};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
-use super::harness::{RuntimeTestHarness, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
 use crate::runtime::core::ActiveStream;
 
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     assert!(poll!(&mut all).is_pending());
     assert!(barrier.try_write().is_err());
     assert!(events.try_recv().is_err());
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(TEST_TIMEOUT, async {
         tokio::join!(session, all);
     })
     .await?;
@@ -147,10 +147,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
         assert!(poll!(&mut cancellation).is_pending());
         assert!(!task.is_finished());
         release_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(cancellation, saved_rx)
-        })
-        .await?
+        tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(cancellation, saved_rx) }).await?
     };
     assert!(cancelled?);
     let saved = saved?;

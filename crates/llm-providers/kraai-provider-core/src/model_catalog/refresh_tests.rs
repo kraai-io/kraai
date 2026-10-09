@@ -20,12 +20,25 @@ struct NativeModel {
 }
 
 fn snapshot(context: usize, efforts: &[&str]) -> Result<Snapshot> {
+    models_snapshot(&[("model", context, efforts)])
+}
+
+fn models_snapshot(models: &[(&str, usize, &[&str])]) -> Result<Snapshot> {
+    let models = models
+        .iter()
+        .map(|(id, context, efforts)| {
+            (
+                (*id).to_owned(),
+                json!({
+                    "limit":{"context":context},
+                    "reasoning_options":[{"type":"effort","values":efforts}]
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     Ok(serde_json::from_value(json!({
         "version": CACHE_VERSION, "fetched_at":123,
-        "providers":{"openai":{"models":{"model":{
-            "limit":{"context":context},
-            "reasoning_options":[{"type":"effort","values":efforts}]
-        }}}}
+        "providers":{"openai":{"models":models}}
     }))?)
 }
 
@@ -34,6 +47,24 @@ fn resolve(
     catalog: Option<&ModelCatalogView<'_>>,
 ) -> BTreeMap<ModelId, Model> {
     let id = ModelId::new("model");
+    BTreeMap::from([(id.clone(), resolve_model(id, native, catalog))])
+}
+
+fn resolve_models(
+    native: &BTreeMap<ModelId, NativeModel>,
+    catalog: Option<&ModelCatalogView<'_>>,
+) -> BTreeMap<ModelId, Model> {
+    native
+        .iter()
+        .map(|(id, native)| (id.clone(), resolve_model(id.clone(), native, catalog)))
+        .collect()
+}
+
+fn resolve_model(
+    id: ModelId,
+    native: &NativeModel,
+    catalog: Option<&ModelCatalogView<'_>>,
+) -> Model {
     let (mut metadata, options) = catalog
         .and_then(|catalog| {
             catalog.metadata_with_discovery(
@@ -49,7 +80,25 @@ fn resolve(
         [],
         &options,
     );
-    BTreeMap::from([(id.clone(), native.config.resolve(id, Some(metadata)))])
+    native.config.resolve(id, Some(metadata))
+}
+
+fn discovered_models(models: &[(&str, &[&str])]) -> Result<BTreeMap<ModelId, NativeModel>> {
+    models
+        .iter()
+        .map(|(id, efforts)| {
+            Ok((
+                ModelId::new(*id),
+                NativeModel {
+                    owner: "openai".into(),
+                    options: serde_json::from_value(json!({
+                        "reasoning_options":[{"type":"effort","values":efforts}]
+                    }))?,
+                    ..Default::default()
+                },
+            ))
+        })
+        .collect()
 }
 
 async fn cached_model(
@@ -231,46 +280,106 @@ async fn concurrent_readers_rebuild_each_revision_once_and_reads_continue_during
 }
 
 #[tokio::test]
-async fn invalid_catalog_updates_preserve_valid_models_and_recover_on_next_revision() -> Result<()>
-{
+async fn discovery_filters_invalid_models_and_accepts_later_corrected_metadata() -> Result<()> {
+    let cache = ModelMetadataCache::default();
+    cache
+        .refresh(
+            None,
+            async {
+                discovered_models(&[
+                    ("model", &["duplicate", "duplicate"]),
+                    ("healthy", &["low"]),
+                ])
+            },
+            resolve_models,
+        )
+        .await?;
+    let models = cache.models(None, resolve_models).await;
+    assert_eq!(models.len(), 1);
+    assert!(!models.contains_key(&ModelId::new("model")));
+    check_effort(
+        models
+            .get(&ModelId::new("healthy"))
+            .ok_or_else(|| eyre!("missing healthy model"))?,
+        "low",
+    )?;
+    drop(models);
+
+    cache
+        .refresh(
+            None,
+            async { discovered_models(&[("model", &["medium"]), ("healthy", &["high"])]) },
+            resolve_models,
+        )
+        .await?;
+    let models = cache.models(None, resolve_models).await;
+    assert_eq!(models.len(), 2);
+    check_effort(
+        models
+            .get(&ModelId::new("model"))
+            .ok_or_else(|| eyre!("missing recovered model"))?,
+        "medium",
+    )?;
+    check_effort(
+        models
+            .get(&ModelId::new("healthy"))
+            .ok_or_else(|| eyre!("missing updated healthy model"))?,
+        "high",
+    )?;
+    drop(models);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_revision()
+-> Result<()> {
     let catalog = ModelCatalog::default();
     let cache = ModelMetadataCache::default();
-    catalog.replace_snapshot(snapshot(4096, &["low"])?).await;
+    catalog
+        .replace_snapshot(models_snapshot(&[
+            ("model", 4096, &["low"]),
+            ("healthy", 2048, &["low"]),
+        ])?)
+        .await;
     cache
         .refresh(
             Some(&catalog),
-            async {
-                Ok(NativeModel {
-                    owner: "openai".into(),
-                    ..Default::default()
-                })
-            },
-            resolve,
+            async { discovered_models(&[("model", &[]), ("healthy", &[])]) },
+            resolve_models,
         )
         .await?;
     catalog
-        .replace_snapshot(snapshot(8192, &["duplicate", "duplicate"])?)
+        .replace_snapshot(models_snapshot(&[
+            ("model", 8192, &["duplicate", "duplicate"]),
+            ("healthy", 16384, &["high"]),
+        ])?)
         .await;
     let resolutions = AtomicUsize::new(0);
     for _ in 0..2 {
         let models = cache
             .models(Some(&catalog), |native, catalog| {
                 resolutions.fetch_add(1, Ordering::SeqCst);
-                resolve(native, catalog)
+                resolve_models(native, catalog)
             })
             .await;
-        let retained = models
-            .get(&ModelId::new("model"))
-            .ok_or_else(|| eyre!("missing retained model"))?;
-        assert_eq!(retained.max_context, Some(4096));
-        check_effort(retained, "low")?;
+        assert_eq!(models.len(), 1);
+        assert!(!models.contains_key(&ModelId::new("model")));
+        let healthy = models
+            .get(&ModelId::new("healthy"))
+            .ok_or_else(|| eyre!("missing healthy model"))?;
+        assert_eq!(healthy.max_context, Some(16384));
+        check_effort(healthy, "high")?;
         drop(models);
     }
     assert_eq!(resolutions.load(Ordering::SeqCst), 1);
     catalog.replace_snapshot(snapshot(16384, &["high"])?).await;
-    let recovered = cached_model(&cache, &catalog).await?;
+    let models = cache.models(Some(&catalog), resolve_models).await;
+    let recovered = models
+        .get(&ModelId::new("model"))
+        .ok_or_else(|| eyre!("missing recovered model"))?;
     assert_eq!(recovered.max_context, Some(16384));
-    check_effort(&recovered, "high")?;
+    check_effort(recovered, "high")?;
+    drop(models);
     Ok(())
 }
 

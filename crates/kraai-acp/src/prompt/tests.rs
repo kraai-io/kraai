@@ -4,13 +4,13 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use agent_client_protocol::{Agent, Lines};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Lines};
 use axum::{
     Router,
     body::{Body, Bytes},
     routing::{get, post},
 };
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, ensure, eyre};
 use futures::{StreamExt, stream};
 use kraai_runtime::{RuntimeBuilder, RuntimeEvent, RuntimeStartupState};
 use kraai_types::MessageStatus;
@@ -21,10 +21,6 @@ use super::*;
 
 #[tokio::test]
 async fn own_session_overflow_cancels_durably_and_accepts_next_prompt() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), check_overflow()).await?
-}
-
-async fn check_overflow() -> Result<()> {
     let root = tempfile::tempdir()?;
     let requests = Arc::new(AtomicUsize::new(0));
     let seen = requests.clone();
@@ -71,9 +67,10 @@ provider_id = "mock"
         .provider_config_path(root.path().join("providers.toml"))
         .mcp_config_path(root.path().join("mcp.toml"))
         .build_on(&tokio::runtime::Handle::current());
-    assert_eq!(
-        runtime.wait_for_startup().await?,
-        RuntimeStartupState::Ready
+    let startup = runtime.wait_for_startup().await?;
+    ensure!(
+        startup == RuntimeStartupState::Ready,
+        "Runtime fixture did not become ready: {startup:?}"
     );
     let (id, session) = crate::session::create(
         &runtime,
@@ -100,6 +97,20 @@ provider_id = "mock"
         },
     )));
     let inner = connection_rx.await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        check_overflow(runtime, id, session, inner, requests),
+    )
+    .await?
+}
+
+async fn check_overflow(
+    runtime: kraai_runtime::RuntimeHandle,
+    id: String,
+    session: Arc<crate::session::Session>,
+    inner: ConnectionTo<Client>,
+    requests: Arc<AtomicUsize>,
+) -> Result<()> {
     let connection = Connection::new(inner.clone(), crate::Stdio::new().budget);
     let turn = session.begin_turn()?;
     let mut actual_events = runtime.subscribe_session(&id);

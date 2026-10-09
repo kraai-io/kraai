@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::Result;
 use kraai_types::ModelId;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
@@ -48,8 +48,8 @@ impl<T: Send + Sync> ModelMetadataCache<T> {
             Some(catalog) => Some(catalog.view().await),
             None => None,
         };
-        let models = resolve(&native, view.as_ref());
-        validate_models(&models)?;
+        let mut models = resolve(&native, view.as_ref());
+        retain_valid_models(&mut models);
         let revision = Some(view.as_ref().map_or(0, ModelCatalogView::revision));
         drop(view);
         let previous = std::mem::replace(
@@ -84,15 +84,10 @@ impl<T: Send + Sync> ModelMetadataCache<T> {
         };
         let revision = Some(view.as_ref().map_or(0, ModelCatalogView::revision));
         let previous = if state.revision != revision {
-            let models = resolve(&state.native, view.as_ref());
+            let mut models = resolve(&state.native, view.as_ref());
             state.revision = revision;
-            match validate_models(&models) {
-                Ok(()) => Some(std::mem::replace(&mut state.models, models)),
-                Err(error) => {
-                    tracing::warn!(%error, "Could not update model metadata; retaining cached models");
-                    None
-                }
-            }
+            retain_valid_models(&mut models);
+            Some(std::mem::replace(&mut state.models, models))
         } else {
             None
         };
@@ -103,10 +98,14 @@ impl<T: Send + Sync> ModelMetadataCache<T> {
     }
 }
 
-fn validate_models(models: &BTreeMap<ModelId, Model>) -> Result<()> {
-    for (id, model) in models {
-        kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
-            .map_err(|errors| eyre!("Invalid model options for {id}: {errors:?}"))?;
-    }
-    Ok(())
+fn retain_valid_models(models: &mut BTreeMap<ModelId, Model>) {
+    models.retain(|id, model| {
+        match kraai_types::validate_model_option_values(&model.options, &Default::default(), false) {
+            Ok(()) => true,
+            Err(errors) => {
+                tracing::warn!(model_id = %id, ?errors, "Skipping model with invalid option metadata");
+                false
+            }
+        }
+    });
 }
