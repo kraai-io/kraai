@@ -1,4 +1,5 @@
 use super::*;
+use color_eyre::eyre::OptionExt;
 
 #[tokio::test]
 async fn message_ids_do_not_load_message_payloads() -> Result<()> {
@@ -173,5 +174,121 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
                 )]),
             })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_message_reads_observe_changes_from_another_connection() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let reader = Persistence::open(directory.path()).await?;
+    let writer = Persistence::open(directory.path()).await?;
+    let mut message = kraai_types::Message {
+        id: MessageId::new("message"),
+        parent_id: None,
+        content: ConversationItem::User {
+            content: "original".into(),
+        },
+        status: MessageStatus::Complete,
+        agent_profile_id: None,
+        generation: None,
+    };
+    writer.messages().save(&message).await?;
+    let original = reader
+        .messages()
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("Missing original message")?;
+    ensure!(
+        reader
+            .messages()
+            .get(&MessageId::new("missing"))
+            .await?
+            .is_none()
+    );
+    message.content = ConversationItem::User {
+        content: "updated\n\"hello\" 🦀".into(),
+    };
+    writer.messages().save(&message).await?;
+    let updated = reader
+        .messages()
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("Missing updated message")?;
+    ensure!(updated.content == message.content);
+    ensure!(original.content.text() == Some("original"));
+    writer.messages().delete(&message.id).await?;
+    ensure!(reader.messages().get(&message.id).await?.is_none());
+    writer.messages().save(&message).await?;
+    ensure!(
+        reader
+            .messages()
+            .get(&message.id)
+            .await?
+            .is_some_and(|stored| stored.content == message.content)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = Persistence::open(directory.path()).await?;
+    let message = kraai_types::Message {
+        id: MessageId::new("message"),
+        parent_id: None,
+        content: ConversationItem::User {
+            content: "valid".into(),
+        },
+        status: MessageStatus::Complete,
+        agent_profile_id: None,
+        generation: None,
+    };
+    persistence.messages().save(&message).await?;
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    let valid = serde_json::to_string(&message)?;
+    for corrupt in ["'invalid JSON'", "'{}'", "X'00'", "CAST(X'FF' AS TEXT)"] {
+        connection.execute(
+            &format!(
+                "UPDATE records SET data = {corrupt} WHERE kind = 'message' AND id = 'message'"
+            ),
+            [],
+        )?;
+        let actual = persistence
+            .messages()
+            .get(&message.id)
+            .await
+            .err()
+            .ok_or_eyre("Corrupt message was accepted")?;
+        match connection.query_row(
+            "SELECT data FROM records WHERE kind = 'message' AND id = 'message'",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(json) => {
+                let expected = serde_json::from_str::<kraai_types::Message>(&json)
+                    .err()
+                    .ok_or_eyre("Expected invalid message JSON")?;
+                ensure!(
+                    actual
+                        .downcast_ref::<serde_json::Error>()
+                        .is_some_and(|actual| actual.to_string() == expected.to_string())
+                );
+            }
+            Err(expected) => {
+                ensure!(actual.downcast_ref::<rusqlite::Error>() == Some(&expected));
+            }
+        }
+        connection.execute(
+            "UPDATE records SET data = ?1 WHERE kind = 'message' AND id = 'message'",
+            [&valid],
+        )?;
+        ensure!(
+            persistence
+                .messages()
+                .get(&message.id)
+                .await?
+                .is_some_and(|stored| stored.content == message.content)
+        );
+    }
     Ok(())
 }

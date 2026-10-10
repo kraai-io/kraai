@@ -6,7 +6,7 @@ use kraai_persistence::{
     CompactionCheckpoint, FileContextSnapshot, RequestUsageStore, SqliteCompactionStore,
 };
 use kraai_provider_core::{ProviderManager, ProviderRequest};
-use kraai_types::{ConversationItem, Message, ModelId, ProviderId, RequestUsage};
+use kraai_types::{ConversationItem, Message, MessageId, ModelId, ProviderId, RequestUsage};
 
 mod summary;
 #[cfg(test)]
@@ -21,8 +21,8 @@ pub struct ContextCompaction {
     pub(crate) prefix: String,
     pub(crate) snapshots: Vec<FileContextSnapshot>,
     pub(crate) file_notifications: Vec<String>,
-    pub(crate) history: Vec<Message>,
-    pub(crate) previous: Option<CompactionCheckpoint>,
+    pub(crate) covered_through: Option<MessageId>,
+    pub(crate) previous_boundary: Option<MessageId>,
     pub(crate) on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
     pub(crate) image_resolver: Option<Arc<dyn kraai_provider_core::ImageResolver>>,
     pub(crate) usage_barrier: Option<Arc<tokio::sync::RwLock<()>>>,
@@ -46,7 +46,7 @@ pub(crate) fn assemble(
     prefix: &str,
     snapshots: &[FileContextSnapshot],
     previous: Option<&CompactionCheckpoint>,
-    history: &[Message],
+    history: Vec<Message>,
     tool: Option<kraai_provider_core::ScriptToolDefinition>,
     options: &kraai_types::ModelOptionValues,
 ) -> ProviderRequest {
@@ -68,8 +68,9 @@ pub(crate) fn assemble(
             messages.push(item);
         }
     }
+    drop(retained);
     for message in history {
-        messages.push(message.content.clone());
+        messages.push(message.content);
         if let Some(files) = anchored.remove(&message.id) {
             messages.extend(files);
         }
@@ -110,8 +111,8 @@ impl ContextCompaction {
         model_id: &ModelId,
     ) -> Result<CompactionOutcome> {
         let covered = self
-            .history
-            .last()
+            .covered_through
+            .as_ref()
             .ok_or_else(|| eyre!("Missing compaction boundary"))?;
         let native = providers.supports_native_compaction(provider_id, model_id)?;
         let mut requests = Vec::new();
@@ -124,12 +125,9 @@ impl ContextCompaction {
         );
         replacement.push(summary);
         let checkpoint = CompactionCheckpoint {
-            covered_through: covered.id.clone(),
+            covered_through: covered.clone(),
             superseded_usage: Vec::new(),
-            previous_boundary: self
-                .previous
-                .as_ref()
-                .map(|checkpoint| checkpoint.covered_through.clone()),
+            previous_boundary: self.previous_boundary.clone(),
             replacement,
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
@@ -147,7 +145,7 @@ impl ContextCompaction {
             &self.prefix,
             &self.snapshots,
             Some(&checkpoint),
-            &[],
+            Vec::new(),
             self.original.script_tool.clone(),
             &self.original.options,
         );

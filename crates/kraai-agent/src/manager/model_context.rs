@@ -101,11 +101,12 @@ impl AgentManager {
             .filter(|message| !superseded_usage.contains(&message.id))
             .find_map(snapshot::message_context_usage)
             .map(|context| context.usage.used_context_tokens());
+        let covered_through = history.last().map(|message| message.id.clone());
         let mut request = assemble(
             &prompt.prefix,
             &files.snapshots,
             previous.as_ref(),
-            &history,
+            history,
             script_tool,
             &selection.options,
         );
@@ -133,8 +134,8 @@ impl AgentManager {
                 prefix: prompt.prefix.clone(),
                 snapshots: files.snapshots,
                 file_notifications: files.notifications.clone(),
-                history,
-                previous,
+                covered_through,
+                previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
                 on_usage: None,
                 usage_barrier: None,
                 image_resolver: None,

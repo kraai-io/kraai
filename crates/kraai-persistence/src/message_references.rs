@@ -9,7 +9,7 @@ fn message_sessions(
     id: &str,
     associated_session: Option<&str>,
 ) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(
+    let mut statement = connection.prepare_cached(
         "WITH RECURSIVE descendants(id) AS (
                 SELECT ?1
                 UNION SELECT records.id FROM descendants CROSS JOIN records

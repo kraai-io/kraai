@@ -154,11 +154,12 @@ fn fixture(
             },
         ),
     ];
+    let covered_through = history.last().map(|message| message.id.clone());
     let original = assemble(
         "instructions",
         &snapshots("pinned files"),
         None,
-        &history,
+        history,
         Some(kraai_provider_core::ScriptToolDefinition::nushell()),
         &Default::default(),
     );
@@ -170,8 +171,8 @@ fn fixture(
         prefix: "instructions".into(),
         snapshots: snapshots("pinned files"),
         file_notifications: vec![],
-        history,
-        previous: None,
+        covered_through,
+        previous_boundary: None,
         on_usage: None,
         usage_barrier: None,
         image_resolver: None,
@@ -263,7 +264,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         "new instructions",
         &snapshots("updated files"),
         Some(&saved),
-        &[],
+        Vec::new(),
         context.original.script_tool.clone(),
         &Default::default(),
     );
@@ -794,3 +795,6 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
 
 #[path = "chat_completions_tests.rs"]
 mod chat_completions;
+
+#[path = "assembly_tests.rs"]
+mod assembly;
