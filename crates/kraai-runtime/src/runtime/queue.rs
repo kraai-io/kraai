@@ -264,9 +264,6 @@ impl RuntimeCore {
                 .await;
             let providers = agent.cloned_provider_manager();
             drop(agent);
-            if result.is_err() {
-                self.release_turn(&session_id).await;
-            }
             match result {
                 Ok(request) => (providers, request),
                 Err(error) => {

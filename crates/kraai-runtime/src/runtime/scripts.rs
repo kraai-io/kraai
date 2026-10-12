@@ -336,15 +336,14 @@ impl RuntimeCore {
                 outcome,
             },
         );
+        let turn_active = self.agent_manager.read().await.is_turn_active(session_id);
         if status == ScriptExecutionStatus::HostUnavailable {
             self.fail_script_turn(session_id, &host_failure(&completed))
                 .await;
-        } else if status == ScriptExecutionStatus::Cancelled
-            || !self.agent_manager.read().await.is_turn_active(session_id)
-        {
+        } else if status == ScriptExecutionStatus::Cancelled || !turn_active {
             self.finish_turn(session_id).await;
             self.schedule_queue_drain(session_id);
-        } else if self.agent_manager.read().await.is_turn_active(session_id) {
+        } else {
             self.spawn_continuation(
                 session_id.clone(),
                 completed.record.result_message_id.clone(),
