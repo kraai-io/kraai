@@ -189,6 +189,12 @@ impl Output {
             } => {
                 self.text(&message_id, chunk)?;
             }
+            Event::StreamRestarted { message_id, .. } => {
+                self.text(
+                    &message_id,
+                    String::from("\n\n[Provider stream failed; retrying the response.]\n\n"),
+                )?;
+            }
             Event::ScriptPrepared {
                 execution_id,
                 call_id,

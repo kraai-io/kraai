@@ -23,6 +23,8 @@ pub enum StreamDelta {
     Usage {
         usage: TokenUsage,
     },
+    /// Discards the partial response before the request is issued again.
+    Reset,
 }
 
 impl StreamDelta {
@@ -40,6 +42,7 @@ impl StreamDelta {
             ));
         };
         match self {
+            Self::Reset => items.clear(),
             Self::Text { index, phase, text } if *index == items.len() => {
                 items.push(AssistantItem::Text {
                     phase: *phase,

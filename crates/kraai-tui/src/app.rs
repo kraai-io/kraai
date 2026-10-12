@@ -221,6 +221,19 @@ impl App {
         }
     }
 
+    pub(super) fn discard_streamed_content(&mut self, message_id: &str) {
+        let message_id = MessageId::new(message_id);
+        self.stream_event_content
+            .insert(message_id.clone(), StreamEventContent::default());
+        if let Some(message) = self.state.chat_history.get_mut(&message_id)
+            && matches!(message.status, MessageStatus::Streaming { .. })
+        {
+            message.content = kraai_types::ConversationItem::Assistant { items: Vec::new() };
+            self.invalidate_chat_cache();
+            self.clamp_chat_scroll();
+        }
+    }
+
     pub(super) fn append_stream_chunk_to_cached_message(
         &mut self,
         message_id: &str,

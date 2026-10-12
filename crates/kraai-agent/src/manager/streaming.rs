@@ -168,6 +168,7 @@ impl AgentManager {
                 sealed_deltas: 0,
                 subscription,
                 unpriced_attempts: 0,
+                reissued_attempts: 0,
                 request_started_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

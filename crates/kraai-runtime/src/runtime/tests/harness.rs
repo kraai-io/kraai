@@ -43,6 +43,7 @@ enum ScriptedChunkKind {
     Usage(TokenUsage),
     Error(String),
     ErrorWithSource(String, String),
+    Interrupted(String),
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +100,12 @@ impl ScriptedChunk {
     pub(super) fn error_with_source(error: &str, source: &str) -> Self {
         Self {
             kind: ScriptedChunkKind::ErrorWithSource(error.into(), source.into()),
+        }
+    }
+
+    pub(super) fn interrupted(reason: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptedChunkKind::Interrupted(reason.into()),
         }
     }
 }
@@ -172,6 +179,9 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                 ScriptedChunkKind::Error(error) => Err(eyre!(error)),
                 ScriptedChunkKind::ErrorWithSource(error, source) => {
                     Err(eyre!(source).wrap_err(error))
+                }
+                ScriptedChunkKind::Interrupted(reason) => {
+                    Err(kraai_provider_core::ProviderError::StreamInterrupted(reason).into())
                 }
             },
         ))))

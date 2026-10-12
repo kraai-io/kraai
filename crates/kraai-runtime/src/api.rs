@@ -352,6 +352,13 @@ pub enum Event {
         delay_seconds: u64,
         reason: String,
     },
+    /// A response failed transiently before committing a script call. Its partial content was
+    /// discarded and the same request is being issued again.
+    StreamRestarted {
+        session_id: SessionId,
+        message_id: String,
+        reason: String,
+    },
 
     ScriptApprovalRequested {
         session_id: SessionId,
@@ -403,6 +410,7 @@ impl Event {
             | Self::StreamError { session_id, .. }
             | Self::StreamCancelled { session_id, .. }
             | Self::ProviderRetryScheduled { session_id, .. }
+            | Self::StreamRestarted { session_id, .. }
             | Self::ScriptApprovalRequested { session_id, .. }
             | Self::ScriptResultReady { session_id, .. }
             | Self::ContextStateChanged { session_id, .. }

@@ -42,6 +42,7 @@ impl AgentManager {
         let state = streaming
             .get_mut(message_id)
             .ok_or_else(|| eyre!("Missing streaming message"))?;
+        let unpriced_attempts = state.reissued_attempts.saturating_add(unpriced_attempts);
         let mut request = Self::request_usage(state, None);
         if let Some(request) = &mut request {
             request.unpriced_attempts = unpriced_attempts;
@@ -50,6 +51,28 @@ impl AgentManager {
         }
         drop(streaming);
         Ok(request)
+    }
+
+    /// Discards a stream's partial response before its request is issued again, counting the
+    /// failed attempt as unpriced. Returns `None` when the stream is no longer active.
+    pub async fn reset_streaming_message(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<Option<kraai_types::RequestUsage>>> {
+        let mut streaming = self.streaming_messages.write().await;
+        let Some(state) = streaming.get_mut(message_id) else {
+            return Ok(None);
+        };
+        state.record(kraai_persistence::StreamDelta::Reset)?;
+        state.text_item_ids.clear();
+        state.reissued_attempts = state.unpriced_attempts.saturating_add(1);
+        state.unpriced_attempts = state.reissued_attempts;
+        let request = Self::request_usage(state, None);
+        if let Some(request) = &request {
+            self.usage_store.save(&state.session_id, request).await?;
+        }
+        drop(streaming);
+        Ok(Some(request))
     }
 
     pub async fn set_streaming_message_usage(

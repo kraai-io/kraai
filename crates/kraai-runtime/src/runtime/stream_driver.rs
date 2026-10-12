@@ -15,6 +15,7 @@ use crate::api::Event;
 use crate::handle::RuntimeEventSender;
 
 const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_STREAM_REISSUES: u32 = 2;
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
 struct CompletedProtocolBoundary {
@@ -204,216 +205,260 @@ impl RuntimeCore {
                 }
             }
         }
-        let request_started = Instant::now();
-        let mut stream = match providers
-            .generate_reply_stream(
-                provider_id.clone(),
-                &model_id,
-                provider_request,
-                request_context,
-            )
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                let error = format!(
-                    "Provider request {message_id} failed to start after {} ms: {error:#}",
-                    request_started.elapsed().as_millis()
-                );
-                tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
-                    elapsed_ms = request_started.elapsed().as_millis(), error = %error,
-                    "Provider request failed to start");
-                return StreamDriveResult::FailedToStart { error };
-            }
-        };
-
         let mut completed_boundary = None;
-        let mut post_boundary_deadline = None;
         let mut post_boundary_events = 0_usize;
-
-        loop {
-            let next_event = if let Some(deadline) = post_boundary_deadline {
-                match tokio::time::timeout_at(deadline, stream.next()).await {
-                    Ok(event) => event,
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
-                            "Stopping provider stream drain after timeout"
-                        );
-                        break;
-                    }
-                }
-            } else {
-                stream.next().await
-            };
-            let Some(chunk_result) = next_event else {
-                break;
-            };
-            let draining_after_boundary = completed_boundary.is_some();
-            if draining_after_boundary {
-                post_boundary_events = post_boundary_events.saturating_add(1);
-                if post_boundary_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
-                    tokio::task::yield_now().await;
-                }
-            }
-            match chunk_result {
-                Ok(ProviderStreamEvent::Compaction { .. }) => {
-                    return StreamDriveResult::FailedDuringStream {
-                        error: "Unexpected compaction item in a conversation response".into(),
-                    };
-                }
-                Ok(ProviderStreamEvent::Reasoning { payload }) => {
-                    let _state_guard = session_state_barrier.read().await;
-                    if agent_manager
-                        .read()
-                        .await
-                        .append_reasoning(&message_id, provider_id.clone(), payload)
-                        .await
-                        .is_none()
-                    {
-                        return StreamDriveResult::Stopped;
-                    }
-                }
-                Ok(ProviderStreamEvent::TextDelta {
-                    item_id,
-                    phase,
-                    delta,
-                }) => {
-                    if completed_boundary.is_some() {
-                        tracing::trace!(
-                            discarded_bytes = delta.len(),
-                            "Discarding text after script protocol boundary"
-                        );
-                        continue;
-                    }
-                    let _state_guard = session_state_barrier.read().await;
-                    let visible = {
-                        let agent = agent_manager.read().await;
-                        agent
-                            .append_text_chunk(&message_id, &item_id, phase, &delta)
-                            .await
-                    };
-                    let Some(visible) = visible else {
-                        return StreamDriveResult::Stopped;
-                    };
-                    if !visible.is_empty() {
-                        emit_event(
-                            &event_tx,
-                            Event::StreamChunk {
-                                session_id: session_id.clone(),
-                                message_id: message_id.to_string(),
-                                chunk: visible,
-                            },
-                        );
-                    }
-                }
-                Ok(ProviderStreamEvent::ScriptCall {
-                    call_id,
-                    name,
-                    input,
-                }) => {
-                    if completed_boundary.is_some() {
-                        return StreamDriveResult::FailedDuringStream {
-                            error: String::from(
-                                "provider emitted more than one script call in one response",
-                            ),
-                        };
-                    }
-                    if name != ScriptToolDefinition::NAME {
-                        return StreamDriveResult::FailedDuringStream {
-                            error: format!("provider called unexpected tool '{name}'"),
-                        };
-                    }
-
-                    let (script, invalid_script, protocol_error) = match parse_script_input(&input)
-                    {
-                        Ok(script) => (Some(script), None, None),
-                        Err(error) => (
-                            None,
-                            Some(InvalidScriptBlock {
-                                input: input.clone(),
-                                source: input.as_bytes().to_vec(),
-                                timeout: None,
-                                requested_capabilities: SandboxCapabilities::default(),
-                            }),
-                            Some(error),
-                        ),
-                    };
-                    let _state_guard = session_state_barrier.read().await;
-                    let appended = {
-                        let agent = agent_manager.read().await;
-                        agent
-                            .append_script_call(
-                                &message_id,
-                                call_id.clone(),
-                                name.clone(),
-                                input.clone(),
-                            )
-                            .await
-                    };
-                    if appended.is_none() {
-                        return StreamDriveResult::Stopped;
-                    }
-                    emit_event(
-                        &event_tx,
-                        Event::ScriptCall {
-                            session_id: session_id.clone(),
-                            message_id: message_id.to_string(),
-                            call_id: call_id.clone(),
-                            name,
-                            input,
-                        },
-                    );
-                    completed_boundary = Some(CompletedProtocolBoundary {
-                        call_id,
-                        script,
-                        invalid_script,
-                        protocol_error,
-                    });
-                    post_boundary_deadline =
-                        Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
-                }
-                Ok(ProviderStreamEvent::Usage(usage)) => {
-                    let _state_guard = session_state_barrier.read().await;
-                    let agent = agent_manager.read().await;
-                    match agent.set_streaming_message_usage(&message_id, usage).await {
-                        Ok(Some(request)) => emit_event(
-                            &event_tx,
-                            Event::RequestUsageUpdated {
-                                session_id: session_id.clone(),
-                                request: Box::new(request),
-                            },
-                        ),
-                        Ok(None) => return StreamDriveResult::Stopped,
-                        Err(error) => {
-                            return StreamDriveResult::FailedDuringStream {
-                                error: format!("{error:#}"),
-                            };
-                        }
-                    }
-                    drop(agent);
-                    if draining_after_boundary {
-                        tracing::debug!(
-                            drained_events = post_boundary_events,
-                            "Provider usage received after script protocol boundary"
-                        );
-                        break;
-                    }
-                }
+        let mut reissues = 0_u32;
+        'request: loop {
+            let request_started = Instant::now();
+            let mut stream = match providers
+                .generate_reply_stream(
+                    provider_id.clone(),
+                    &model_id,
+                    provider_request.clone(),
+                    request_context.clone(),
+                )
+                .await
+            {
+                Ok(stream) => stream,
                 Err(error) => {
                     let error = format!(
-                        "Provider request {message_id} stream failed after {} ms: {error:#}",
+                        "Provider request {message_id} failed to start after {} ms: {error:#}",
                         request_started.elapsed().as_millis()
                     );
-                    tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                    tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                    elapsed_ms = request_started.elapsed().as_millis(), error = %error,
+                    "Provider request failed to start");
+                    return StreamDriveResult::FailedToStart { error };
+                }
+            };
+
+            let mut post_boundary_deadline = None;
+
+            loop {
+                let next_event = if let Some(deadline) = post_boundary_deadline {
+                    match tokio::time::timeout_at(deadline, stream.next()).await {
+                        Ok(event) => event,
+                        Err(_) => {
+                            tracing::warn!(
+                                timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
+                                "Stopping provider stream drain after timeout"
+                            );
+                            break;
+                        }
+                    }
+                } else {
+                    stream.next().await
+                };
+                let Some(chunk_result) = next_event else {
+                    break;
+                };
+                let draining_after_boundary = completed_boundary.is_some();
+                if draining_after_boundary {
+                    post_boundary_events = post_boundary_events.saturating_add(1);
+                    if post_boundary_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
+                        tokio::task::yield_now().await;
+                    }
+                }
+                match chunk_result {
+                    Ok(ProviderStreamEvent::Compaction { .. }) => {
+                        return StreamDriveResult::FailedDuringStream {
+                            error: "Unexpected compaction item in a conversation response".into(),
+                        };
+                    }
+                    Ok(ProviderStreamEvent::Reasoning { payload }) => {
+                        let _state_guard = session_state_barrier.read().await;
+                        if agent_manager
+                            .read()
+                            .await
+                            .append_reasoning(&message_id, provider_id.clone(), payload)
+                            .await
+                            .is_none()
+                        {
+                            return StreamDriveResult::Stopped;
+                        }
+                    }
+                    Ok(ProviderStreamEvent::TextDelta {
+                        item_id,
+                        phase,
+                        delta,
+                    }) => {
+                        if completed_boundary.is_some() {
+                            tracing::trace!(
+                                discarded_bytes = delta.len(),
+                                "Discarding text after script protocol boundary"
+                            );
+                            continue;
+                        }
+                        let _state_guard = session_state_barrier.read().await;
+                        let visible = {
+                            let agent = agent_manager.read().await;
+                            agent
+                                .append_text_chunk(&message_id, &item_id, phase, &delta)
+                                .await
+                        };
+                        let Some(visible) = visible else {
+                            return StreamDriveResult::Stopped;
+                        };
+                        if !visible.is_empty() {
+                            emit_event(
+                                &event_tx,
+                                Event::StreamChunk {
+                                    session_id: session_id.clone(),
+                                    message_id: message_id.to_string(),
+                                    chunk: visible,
+                                },
+                            );
+                        }
+                    }
+                    Ok(ProviderStreamEvent::ScriptCall {
+                        call_id,
+                        name,
+                        input,
+                    }) => {
+                        if completed_boundary.is_some() {
+                            return StreamDriveResult::FailedDuringStream {
+                                error: String::from(
+                                    "provider emitted more than one script call in one response",
+                                ),
+                            };
+                        }
+                        if name != ScriptToolDefinition::NAME {
+                            return StreamDriveResult::FailedDuringStream {
+                                error: format!("provider called unexpected tool '{name}'"),
+                            };
+                        }
+
+                        let (script, invalid_script, protocol_error) =
+                            match parse_script_input(&input) {
+                                Ok(script) => (Some(script), None, None),
+                                Err(error) => (
+                                    None,
+                                    Some(InvalidScriptBlock {
+                                        input: input.clone(),
+                                        source: input.as_bytes().to_vec(),
+                                        timeout: None,
+                                        requested_capabilities: SandboxCapabilities::default(),
+                                    }),
+                                    Some(error),
+                                ),
+                            };
+                        let _state_guard = session_state_barrier.read().await;
+                        let appended = {
+                            let agent = agent_manager.read().await;
+                            agent
+                                .append_script_call(
+                                    &message_id,
+                                    call_id.clone(),
+                                    name.clone(),
+                                    input.clone(),
+                                )
+                                .await
+                        };
+                        if appended.is_none() {
+                            return StreamDriveResult::Stopped;
+                        }
+                        emit_event(
+                            &event_tx,
+                            Event::ScriptCall {
+                                session_id: session_id.clone(),
+                                message_id: message_id.to_string(),
+                                call_id: call_id.clone(),
+                                name,
+                                input,
+                            },
+                        );
+                        completed_boundary = Some(CompletedProtocolBoundary {
+                            call_id,
+                            script,
+                            invalid_script,
+                            protocol_error,
+                        });
+                        post_boundary_deadline =
+                            Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
+                    }
+                    Ok(ProviderStreamEvent::Usage(usage)) => {
+                        let _state_guard = session_state_barrier.read().await;
+                        let agent = agent_manager.read().await;
+                        match agent.set_streaming_message_usage(&message_id, usage).await {
+                            Ok(Some(request)) => emit_event(
+                                &event_tx,
+                                Event::RequestUsageUpdated {
+                                    session_id: session_id.clone(),
+                                    request: Box::new(request),
+                                },
+                            ),
+                            Ok(None) => return StreamDriveResult::Stopped,
+                            Err(error) => {
+                                return StreamDriveResult::FailedDuringStream {
+                                    error: format!("{error:#}"),
+                                };
+                            }
+                        }
+                        drop(agent);
+                        if draining_after_boundary {
+                            tracing::debug!(
+                                drained_events = post_boundary_events,
+                                "Provider usage received after script protocol boundary"
+                            );
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let transient = kraai_provider_core::is_transient_error(&error);
+                        let error = format!(
+                            "Provider request {message_id} stream failed after {} ms: {error:#}",
+                            request_started.elapsed().as_millis()
+                        );
+                        tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
                         elapsed_ms = request_started.elapsed().as_millis(), error = %error,
                         completed_script = completed_boundary.is_some(), "Provider stream failed");
-                    if completed_boundary.is_some() {
-                        break;
+                        if completed_boundary.is_some() {
+                            break;
+                        }
+                        if transient && reissues < MAX_STREAM_REISSUES {
+                            reissues += 1;
+                            let _state_guard = session_state_barrier.read().await;
+                            let reset = agent_manager
+                                .read()
+                                .await
+                                .reset_streaming_message(&message_id)
+                                .await;
+                            match reset {
+                                Ok(Some(request)) => {
+                                    if let Some(request) = request {
+                                        emit_event(
+                                            &event_tx,
+                                            Event::RequestUsageUpdated {
+                                                session_id: session_id.clone(),
+                                                request: Box::new(request),
+                                            },
+                                        );
+                                    }
+                                }
+                                Ok(None) => return StreamDriveResult::Stopped,
+                                Err(reset_error) => {
+                                    return StreamDriveResult::FailedDuringStream {
+                                        error: format!(
+                                            "{error}; discarding the partial response failed: {reset_error:#}"
+                                        ),
+                                    };
+                                }
+                            }
+                            emit_event(
+                                &event_tx,
+                                Event::StreamRestarted {
+                                    session_id: session_id.clone(),
+                                    message_id: message_id.to_string(),
+                                    reason: error,
+                                },
+                            );
+                            continue 'request;
+                        }
+                        return StreamDriveResult::FailedDuringStream { error };
                     }
-                    return StreamDriveResult::FailedDuringStream { error };
                 }
             }
+            break;
         }
 
         if let Some(boundary) = completed_boundary {

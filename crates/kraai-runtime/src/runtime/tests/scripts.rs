@@ -639,3 +639,53 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
     harness.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn transient_pre_boundary_failure_reissues_the_request() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::plain("partial answer"),
+            ScriptedChunk::interrupted("connection reset"),
+        ],
+        vec![ScriptedChunk::plain("complete answer")],
+    ])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("answer"),
+            String::from("mock-model"),
+            String::from("mock"),
+            Default::default(),
+        )
+        .await?;
+    let events = harness
+        .events
+        .wait_for("reissued stream completion", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamComplete { session_id: id, .. } if id == &session_id)
+                    || matches!(event, Event::StreamError { session_id: id, .. } if id == &session_id)
+            })
+        })
+        .await;
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::StreamRestarted { session_id: id, .. } if id == &session_id)
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(event, Event::StreamError { session_id: id, .. } if id == &session_id)
+    }));
+    let history = harness.handle.get_chat_history(session_id.clone()).await?;
+    let replies: Vec<_> = history
+        .values()
+        .filter(|message| message.role() == kraai_types::ChatRole::Assistant)
+        .map(|message| message.display_text().into_owned())
+        .collect();
+    assert_eq!(replies, vec![String::from("complete answer")]);
+    harness.shutdown().await;
+    Ok(())
+}

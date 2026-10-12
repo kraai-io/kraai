@@ -12,6 +12,7 @@ impl App {
                 Event::SessionError { .. }
                     | Event::StreamStart { .. }
                     | Event::StreamChunk { .. }
+                    | Event::StreamRestarted { .. }
                     | Event::ScriptCall { .. }
                     | Event::StreamComplete { .. }
                     | Event::StreamError { .. }
@@ -233,6 +234,24 @@ impl App {
                     self.request_sync_for_session(&session_id);
                 }
                 self.request(RuntimeRequest::ListSessions);
+            }
+            Event::StreamRestarted {
+                session_id,
+                message_id,
+                ..
+            } => {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
+                    return;
+                }
+                if self.is_ci_mode() {
+                    self.write_ci_output("\n\n[provider stream failed; retrying the response]\n\n");
+                }
+                if apply_state {
+                    self.discard_streamed_content(&message_id);
+                    self.state.status =
+                        String::from("Provider stream failed, retrying the response");
+                    self.request_stream_history_sync(&session_id, Instant::now());
+                }
             }
             Event::ProviderRetryScheduled {
                 session_id,

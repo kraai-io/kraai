@@ -145,6 +145,7 @@ struct StreamingMessageState {
     sealed_deltas: usize,
     request_started_at: u64,
     unpriced_attempts: u32,
+    reissued_attempts: u32,
     subscription: bool,
 }
 
