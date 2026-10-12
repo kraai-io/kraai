@@ -51,7 +51,7 @@ pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition};
 pub use registry::{ProviderFactory, ProviderRegistry};
 pub use request_context::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
 pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};
-pub use stream::{ProviderStreamEvent, StreamStatus, adapt_provider_stream};
+pub use stream::{ProviderStreamEvent, StopReason, StreamStatus, adapt_provider_stream};
 
 mod model_catalog;
 pub use model_catalog::{CatalogModelMetadata, ModelCatalog, ModelCatalogView};

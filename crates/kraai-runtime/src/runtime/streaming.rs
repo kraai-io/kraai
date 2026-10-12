@@ -350,6 +350,7 @@ impl RuntimeCore {
                     script,
                     invalid_script,
                     protocol_error,
+                    reached_output_limit,
                 } = *completed;
                 let completed_session = {
                     let agent = self.agent_manager.read().await;
@@ -377,6 +378,17 @@ impl RuntimeCore {
                         message_id: message_id.to_string(),
                     },
                 );
+                if reached_output_limit {
+                    emit_event(
+                        &self.event_tx,
+                        Event::ContextStateChanged {
+                            session_id: completed_session.clone(),
+                            notifications: vec![String::from(
+                                "The response stopped at the model's output token limit.",
+                            )],
+                        },
+                    );
+                }
                 emit_event(
                     &self.event_tx,
                     Event::HistoryUpdated {

@@ -40,6 +40,7 @@ pub(super) struct CompletedStreamOutput {
     pub(super) script: Option<ScriptBlock>,
     pub(super) invalid_script: Option<InvalidScriptBlock>,
     pub(super) protocol_error: Option<ProtocolError>,
+    pub(super) reached_output_limit: bool,
 }
 
 pub(super) fn auxiliary_usage_observer(
@@ -207,6 +208,7 @@ impl RuntimeCore {
         }
         let mut completed_boundary = None;
         let mut post_boundary_events = 0_usize;
+        let mut reached_output_limit = false;
         let mut reissues = 0_u32;
         'request: loop {
             let request_started = Instant::now();
@@ -376,6 +378,10 @@ impl RuntimeCore {
                         post_boundary_deadline =
                             Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                     }
+                    Ok(ProviderStreamEvent::Finished { stop_reason }) => {
+                        reached_output_limit =
+                            stop_reason == kraai_provider_core::StopReason::MaxOutputTokens;
+                    }
                     Ok(ProviderStreamEvent::Usage(usage)) => {
                         let _state_guard = session_state_barrier.read().await;
                         let agent = agent_manager.read().await;
@@ -472,6 +478,7 @@ impl RuntimeCore {
                 script: boundary.script,
                 invalid_script: boundary.invalid_script,
                 protocol_error: boundary.protocol_error,
+                reached_output_limit,
             }));
         }
 
@@ -481,6 +488,7 @@ impl RuntimeCore {
             script: None,
             invalid_script: None,
             protocol_error: None,
+            reached_output_limit,
         }))
     }
 }

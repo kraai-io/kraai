@@ -76,6 +76,11 @@ impl ContextCompaction {
                         ProviderStreamEvent::ScriptCall { .. } => {
                             return Err(eyre!("Compaction returned an unexpected tool call"));
                         }
+                        ProviderStreamEvent::Finished {
+                            stop_reason: kraai_provider_core::StopReason::MaxOutputTokens,
+                        } => {
+                            return Err(eyre!("Compaction stopped at the output token limit"));
+                        }
                         _ => {}
                     }
                 }

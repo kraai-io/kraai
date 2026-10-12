@@ -69,6 +69,18 @@ pub enum ProviderStreamEvent {
         input: String,
     },
     Usage(TokenUsage),
+    /// Why the provider ended the response; sent once, after its content.
+    Finished {
+        stop_reason: StopReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    ToolCall,
+    /// The response reached the output token limit; its content is complete as far as it goes.
+    MaxOutputTokens,
 }
 
 #[cfg(test)]

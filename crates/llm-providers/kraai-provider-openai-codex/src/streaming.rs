@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::stream::BoxStream;
 use kraai_provider_core::{
-    ProviderError, ProviderStreamEvent, SseEvent, StreamStatus, adapt_provider_stream,
+    ProviderError, ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
 };
 use kraai_types::{AssistantPhase, ToolCallId};
 
@@ -44,6 +44,7 @@ pub(crate) fn adapt_responses_stream(
 #[derive(Default)]
 struct Completion {
     phases: HashMap<String, AssistantPhase>,
+    called_tool: bool,
 }
 
 impl Completion {
@@ -125,6 +126,7 @@ impl Completion {
                                 .ok_or_else(|| eyre!("OpenAI custom tool call omitted input"))?;
                             let call_id =
                                 ToolCallId::try_new(call_id).map_err(|error| eyre!(error))?;
+                            self.called_tool = true;
                             pending.push_back(ProviderStreamEvent::ScriptCall {
                                 call_id,
                                 name,
@@ -142,6 +144,34 @@ impl Completion {
                     .and_then(normalize_usage)
                     .ok_or_else(|| eyre!("OpenAI response.completed event omitted usage"))?;
                 pending.push_back(ProviderStreamEvent::Usage(usage));
+                pending.push_back(ProviderStreamEvent::Finished {
+                    stop_reason: if self.called_tool {
+                        StopReason::ToolCall
+                    } else {
+                        StopReason::EndTurn
+                    },
+                });
+                return Ok(StreamStatus::Complete);
+            }
+            "response.incomplete"
+                if event
+                    .response
+                    .as_ref()
+                    .and_then(|response| response.incomplete_details.as_ref())
+                    .and_then(|details| details.get("reason"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("max_output_tokens") =>
+            {
+                if let Some(usage) = event
+                    .response
+                    .and_then(|response| response.usage)
+                    .and_then(normalize_usage)
+                {
+                    pending.push_back(ProviderStreamEvent::Usage(usage));
+                }
+                pending.push_back(ProviderStreamEvent::Finished {
+                    stop_reason: StopReason::MaxOutputTokens,
+                });
                 return Ok(StreamStatus::Complete);
             }
             "response.failed" | "response.incomplete" => {
@@ -234,7 +264,7 @@ mod tests {
             Ok(SseEvent::Data(r#"{"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":15}}}}"#.into())),
         ]).boxed();
         let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
         assert!(
             matches!(events.first(), Some(Ok(ProviderStreamEvent::Reasoning { payload: actual })) if actual == &payload)
         );
@@ -244,6 +274,34 @@ mod tests {
         ));
         assert!(
             matches!(events.get(2), Some(Ok(ProviderStreamEvent::Usage(usage))) if usage.reasoning_tokens == 15 && usage.input_tokens == 100)
+        );
+        assert!(matches!(
+            events.get(3),
+            Some(Ok(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::ToolCall
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn max_output_token_incomplete_responses_finish_instead_of_failing() {
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg-1","phase":"final_answer"}}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.output_text.delta","item_id":"msg-1","delta":"partial"}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":5}}}"#.into())),
+        ]).boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        assert!(events.iter().all(Result::is_ok), "{events:?}");
+        assert!(matches!(
+            events.last(),
+            Some(Ok(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::MaxOutputTokens
+            }))
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::TextDelta { delta, .. }) if delta == "partial"))
         );
     }
 

@@ -224,6 +224,9 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
                     cache_read_tokens: 40,
                     ..TokenUsage::default()
                 }),
+                ProviderStreamEvent::Finished {
+                    stop_reason: kraai_provider_core::StopReason::EndTurn,
+                },
             ]
         );
     }

@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::stream::BoxStream;
-use kraai_provider_core::{ProviderStreamEvent, SseEvent, StreamStatus, adapt_provider_stream};
+use kraai_provider_core::{
+    ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
+};
 use kraai_types::{AssistantPhase, ToolCallId};
 
 use crate::usage::normalize_usage;
@@ -123,12 +125,21 @@ impl Completion {
                 self.append_call(delta, tool_name)?;
             }
             if let Some(reason) = choice.finish_reason {
+                let stop_reason = match reason.as_str() {
+                    "stop" => StopReason::EndTurn,
+                    "tool_calls" => StopReason::ToolCall,
+                    "length" => StopReason::MaxOutputTokens,
+                    _ => {
+                        return Err(eyre!(
+                            "Chat completions response did not complete successfully: {reason}"
+                        ));
+                    }
+                };
+                if stop_reason == StopReason::MaxOutputTokens {
+                    self.call = None;
+                }
                 ensure!(
-                    matches!(reason.as_str(), "stop" | "tool_calls"),
-                    "Chat completions response did not complete successfully: {reason}"
-                );
-                ensure!(
-                    (reason == "tool_calls") == self.call.is_some(),
+                    (stop_reason == StopReason::ToolCall) == self.call.is_some(),
                     "Completion finish reason does not match its tool calls"
                 );
                 self.finish_reason = Some(reason);
@@ -142,6 +153,7 @@ impl Completion {
                 if let Some(call) = call {
                     pending.push_back(call);
                 }
+                pending.push_back(ProviderStreamEvent::Finished { stop_reason });
             }
         }
         if let Some(usage) = chunk
