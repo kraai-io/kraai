@@ -1,15 +1,14 @@
+use crate::SessionMeta;
 use crate::database::{Database, assert_owner, list_records, record_session};
 use crate::history::read_history_chain;
 use crate::message_references::{
     assert_message_owners, delete_message_record, write_message_record,
 };
 use crate::stream_deltas::read_message;
-use crate::{SessionMeta, SessionStore};
 use color_eyre::eyre::{Result, ensure};
 use kraai_types::{Message, MessageId, SessionId};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 pub struct ConversationSnapshot {
     pub session: SessionMeta,
     pub history: BTreeMap<MessageId, Message>,
@@ -68,26 +67,10 @@ pub trait MessageStore: Send + Sync {
         self.save(message).await
     }
 
-    async fn save_linked(
-        &self,
-        request: LinkRequest<'_>,
-        sessions: Arc<dyn SessionStore>,
-    ) -> Result<bool> {
-        for message in request.messages {
-            self.save(message).await?;
-        }
-        if !sessions
-            .save_if_tip_matches(request.session, request.expected_tip)
-            .await?
-        {
-            return Ok(false);
-        }
-        if let Some(through) = request.consumed_queue_through {
-            sessions
-                .remove_queued_messages(&request.session.id, through)
-                .await?;
-        }
-        Ok(true)
+    /// Links messages atomically, or returns `None` when this store cannot, in which case
+    /// the caller saves them individually.
+    async fn save_linked(&self, _request: LinkRequest<'_>) -> Result<Option<bool>> {
+        Ok(None)
     }
 
     /// Delete a message
@@ -217,11 +200,7 @@ impl MessageStore for SqliteMessageStore {
             .await
     }
 
-    async fn save_linked(
-        &self,
-        request: LinkRequest<'_>,
-        _sessions: Arc<dyn SessionStore>,
-    ) -> Result<bool> {
+    async fn save_linked(&self, request: LinkRequest<'_>) -> Result<Option<bool>> {
         let messages = request.messages.to_vec();
         let session = request.session.clone();
         let expected = request.expected_tip.cloned();
@@ -260,6 +239,7 @@ impl MessageStore for SqliteMessageStore {
                 Ok(true)
             })
             .await
+            .map(Some)
     }
 
     async fn delete(&self, id: &MessageId) -> Result<()> {

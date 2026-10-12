@@ -127,19 +127,28 @@ impl ConversationStore {
         }
         session.updated_at = current_unix_timestamp();
 
-        if !self
+        let linked = match self
             .message_store
-            .save_linked(
-                crate::LinkRequest {
-                    messages: &messages,
-                    session: &session,
-                    expected_tip: previous_tip.as_ref(),
-                    consumed_queue_through,
-                },
-                self.session_store.clone(),
-            )
+            .save_linked(crate::LinkRequest {
+                messages: &messages,
+                session: &session,
+                expected_tip: previous_tip.as_ref(),
+                consumed_queue_through,
+            })
             .await?
         {
+            Some(linked) => linked,
+            None => {
+                self.link_individually(
+                    &messages,
+                    &session,
+                    previous_tip.as_ref(),
+                    consumed_queue_through,
+                )
+                .await?
+            }
+        };
+        if !linked {
             for message in &messages {
                 self.delete_unreferenced_message(&message.id).await;
             }
@@ -155,6 +164,31 @@ impl ConversationStore {
             previous_title,
             title: session.title,
         })
+    }
+
+    async fn link_individually(
+        &self,
+        messages: &[Message],
+        session: &crate::SessionMeta,
+        expected_tip: Option<&MessageId>,
+        consumed_queue_through: Option<i64>,
+    ) -> Result<bool> {
+        for message in messages {
+            self.message_store.save(message).await?;
+        }
+        if !self
+            .session_store
+            .save_if_tip_matches(session, expected_tip)
+            .await?
+        {
+            return Ok(false);
+        }
+        if let Some(through) = consumed_queue_through {
+            self.session_store
+                .remove_queued_messages(&session.id, through)
+                .await?;
+        }
+        Ok(true)
     }
 
     /// Append a message with a stable ID, or finish linking the same durable message after a

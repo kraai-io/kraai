@@ -337,6 +337,11 @@ impl RuntimeCore {
         message_id: MessageId,
         result: StreamDriveResult,
     ) {
+        let recovery_target = if kind.is_continuation() {
+            "continuation stream"
+        } else {
+            "stream"
+        };
         match result {
             StreamDriveResult::Completed(completed) => {
                 let CompletedStreamOutput {
@@ -405,11 +410,6 @@ impl RuntimeCore {
                         }
                     }
                     Ok(false) => {
-                        let recovery_target = if kind.is_continuation() {
-                            "continuation stream"
-                        } else {
-                            "stream"
-                        };
                         self.send_session_error(
                             &session_id,
                             format!(
@@ -419,11 +419,6 @@ impl RuntimeCore {
                         );
                     }
                     Err(rollback_error) => {
-                        let recovery_target = if kind.is_continuation() {
-                            "continuation stream"
-                        } else {
-                            "stream"
-                        };
                         self.send_session_error(
                             &session_id,
                             format!(
@@ -459,11 +454,6 @@ impl RuntimeCore {
                         self.schedule_queue_drain(&session_id);
                     }
                     Ok(false) => {
-                        let recovery_target = if kind.is_continuation() {
-                            "continuation stream"
-                        } else {
-                            "stream"
-                        };
                         self.send_session_error(
                             &session_id,
                             format!(
@@ -473,11 +463,6 @@ impl RuntimeCore {
                         );
                     }
                     Err(rollback_error) => {
-                        let recovery_target = if kind.is_continuation() {
-                            "continuation stream"
-                        } else {
-                            "stream"
-                        };
                         self.send_session_error(
                             &session_id,
                             format!(

@@ -2,7 +2,6 @@ use kraai_types::SessionId;
 use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::SessionStore;
 use tokio::sync::oneshot;
 
 use super::config::canonicalize_workspace_dir;
@@ -296,36 +295,13 @@ impl RuntimeCore {
                         })
                         .collect();
                     drop(agent);
+                    let foreign = self.session_store.foreign_session_activity().await?;
                     for session in &mut sessions {
-                        if self
-                            .session_store
-                            .observe(&session.id)
-                            .await?
-                            .is_some_and(|state| state.lease_active)
-                            && !self.session_store.owns_turn(&session.id).await?
-                        {
+                        if let Some(activity) = foreign.get(&session.id) {
                             session.profile_locked = true;
                             session.is_running = true;
-                            let records =
-                                self.execution_store.list_for_session(&session.id).await?;
-                            session.waiting_for_approval = records.iter().any(|record| {
-                                record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval
-                            });
-                            let meta = self.session_store.get(&session.id).await?;
-                            if let Some(tip) = meta.and_then(|meta| meta.tip_id) {
-                                session.is_streaming = self
-                                    .agent_manager
-                                    .read()
-                                    .await
-                                    .get_message(&tip)
-                                    .await?
-                                    .is_some_and(|message| {
-                                        matches!(
-                                            message.status,
-                                            kraai_types::MessageStatus::Streaming { .. }
-                                        )
-                                    });
-                            }
+                            session.waiting_for_approval = activity.awaiting_approval;
+                            session.is_streaming = activity.streaming;
                         }
                     }
                     Ok(sessions)

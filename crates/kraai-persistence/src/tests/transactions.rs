@@ -90,17 +90,14 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
     metadata.tip_id = Some(message.id.clone());
     let linked = persistence
         .messages()
-        .save_linked(
-            LinkRequest {
-                messages: std::slice::from_ref(&message),
-                session: &metadata,
-                expected_tip: Some(&root.message.id),
-                consumed_queue_through: None,
-            },
-            persistence.sessions().clone(),
-        )
+        .save_linked(LinkRequest {
+            messages: std::slice::from_ref(&message),
+            session: &metadata,
+            expected_tip: Some(&root.message.id),
+            consumed_queue_through: None,
+        })
         .await?;
-    ensure!(linked);
+    ensure!(linked == Some(true));
     let saved = persistence
         .sessions()
         .get(&SessionId::new("session"))
@@ -214,15 +211,12 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
     stale.tip_id = Some(message.id.clone());
     let result = a
         .messages()
-        .save_linked(
-            LinkRequest {
-                messages: std::slice::from_ref(&message),
-                session: &stale,
-                expected_tip: Some(&root.message.id),
-                consumed_queue_through: None,
-            },
-            a.sessions().clone(),
-        )
+        .save_linked(LinkRequest {
+            messages: std::slice::from_ref(&message),
+            session: &stale,
+            expected_tip: Some(&root.message.id),
+            consumed_queue_through: None,
+        })
         .await;
     ensure!(result.is_err());
     let saved = b

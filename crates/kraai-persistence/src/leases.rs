@@ -199,3 +199,68 @@ impl SqliteSessionStore {
             .await
     }
 }
+
+/// What a session leased by another runtime is doing, as far as this runtime can observe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForeignSessionActivity {
+    pub awaiting_approval: bool,
+    pub streaming: bool,
+}
+
+impl SqliteSessionStore {
+    pub async fn foreign_session_activity(
+        &self,
+    ) -> Result<std::collections::HashMap<SessionId, ForeignSessionActivity>> {
+        self.database
+            .read(|connection, leases| {
+                let mut statement = connection.prepare(
+                    "SELECT id, lease_token, tip_id FROM sessions
+                     WHERE lease_active = 1 AND lease_expires_at >= ?1",
+                )?;
+                let rows = statement
+                    .query_map([now_nanos()?], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut activity = std::collections::HashMap::new();
+                for (id, token, tip) in rows {
+                    let session = crate::database::parse_session_id(id)?;
+                    if leases.get(&session) == Some(token) {
+                        continue;
+                    }
+                    let awaiting_approval = crate::database::list_records::<
+                        crate::ScriptExecutionRecord,
+                    >(
+                        connection, "execution", Some(&session)
+                    )?
+                    .iter()
+                    .any(|record| {
+                        record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval
+                    });
+                    let streaming = match tip {
+                        Some(tip) => crate::stream_deltas::read_message(connection, &tip)?
+                            .is_some_and(|message| {
+                                matches!(
+                                    message.status,
+                                    kraai_types::MessageStatus::Streaming { .. }
+                                )
+                            }),
+                        None => false,
+                    };
+                    activity.insert(
+                        session,
+                        ForeignSessionActivity {
+                            awaiting_approval,
+                            streaming,
+                        },
+                    );
+                }
+                Ok(activity)
+            })
+            .await
+    }
+}
