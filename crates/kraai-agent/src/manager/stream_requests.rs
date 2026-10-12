@@ -1,5 +1,12 @@
 use super::*;
 
+/// User messages that are linked together with the assistant message of the turn they start.
+pub(super) struct TurnInput {
+    pub(super) tip: Option<MessageId>,
+    pub(super) users: Vec<kraai_persistence::NewMessage>,
+    pub(super) title: Option<String>,
+}
+
 impl AgentManager {
     pub async fn prepare_start_stream(
         &mut self,
@@ -23,6 +30,14 @@ impl AgentManager {
         &mut self,
         session_id: &SessionId,
     ) -> Result<Option<PendingStreamRequest>> {
+        self.prepare_turn_stream(session_id, Vec::new()).await
+    }
+
+    pub(super) async fn prepare_turn_stream(
+        &mut self,
+        session_id: &SessionId,
+        users: Vec<kraai_types::MessageContent>,
+    ) -> Result<Option<PendingStreamRequest>> {
         let Some(state) = self.session_states.get(session_id) else {
             return Ok(None);
         };
@@ -36,7 +51,6 @@ impl AgentManager {
         );
         self.validate_model_options(&provider_id, &model_id, &options, true)
             .await?;
-        self.finish_pending_message_rollback(session_id).await?;
         let session = self
             .recover_interrupted_stream(self.require_session(session_id).await?)
             .await?;
@@ -58,9 +72,39 @@ impl AgentManager {
             return Ok(None);
         }
 
-        let Some(tip_id) = self.get_tip(session_id).await? else {
-            return Ok(None);
+        let tip = self.get_tip(session_id).await?;
+        let input = TurnInput {
+            title: users
+                .first()
+                .and_then(|content| title_from_user_prompt(&content.display_text())),
+            users: users
+                .into_iter()
+                .map(|content| kraai_persistence::NewMessage {
+                    id: MessageId::new(Ulid::generate()),
+                    content: ConversationItem::User { content },
+                    status: MessageStatus::Complete,
+                    agent_profile_id: Some(profile.id.clone()),
+                    generation: None,
+                })
+                .collect(),
+            tip,
         };
+        let mut parent_id = input.tip.clone();
+        let pending_users: Vec<_> = input
+            .users
+            .iter()
+            .map(|message| Message {
+                parent_id: parent_id.replace(message.id.clone()),
+                id: message.id.clone(),
+                content: message.content.clone(),
+                status: message.status.clone(),
+                agent_profile_id: message.agent_profile_id.clone(),
+                generation: None,
+            })
+            .collect();
+        if parent_id.is_none() {
+            return Ok(None);
+        }
 
         let selection = kraai_types::ModelSelection {
             provider_id: provider_id.clone(),
@@ -68,9 +112,14 @@ impl AgentManager {
             options: options.clone(),
         };
         self.persist_model_selection(session_id, &selection).await?;
-        let context = self
-            .get_model_history(&tip_id, (&provider_id, &model_id))
-            .await?;
+        let mut context = match &input.tip {
+            Some(tip) => {
+                self.get_model_history(tip, (&provider_id, &model_id), !pending_users.is_empty())
+                    .await?
+            }
+            None => Vec::new(),
+        };
+        context.extend(pending_users);
         self.providers.get_provider(&provider_id).ok_or_else(|| {
             kraai_provider_core::ProviderError::ProviderNotFound(provider_id.clone())
         })?;
@@ -104,7 +153,7 @@ impl AgentManager {
         let assistant_msg_id = self
             .start_streaming_message(
                 session_id,
-                ChatRole::Assistant,
+                input,
                 stream_id,
                 Some(profile.id.clone()),
                 generation,

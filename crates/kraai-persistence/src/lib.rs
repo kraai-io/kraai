@@ -41,7 +41,8 @@ pub use executions::{
     ScriptExecutionStore, SqliteScriptExecutionStore,
 };
 pub use turns::{
-    AppendMessageRequest, AppendedMessage, ConversationStore, IdempotentAppendOutcome,
+    AppendMessageRequest, AppendedMessage, AppendedMessages, ConversationStore,
+    IdempotentAppendOutcome, NewMessage,
 };
 
 /// Get the data directory for the application

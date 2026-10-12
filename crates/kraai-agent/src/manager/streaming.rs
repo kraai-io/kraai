@@ -47,13 +47,14 @@ impl AgentManager {
         Ok(append.linked_now)
     }
 
+    #[cfg(test)]
     pub(super) async fn append_message(
         &mut self,
         session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
-    ) -> Result<AppendedMessage> {
+    ) -> Result<kraai_persistence::AppendedMessage> {
         let title_if_first_message = if role == ChatRole::User {
             title_from_user_prompt(&content.display_text())
         } else {
@@ -103,16 +104,12 @@ impl AgentManager {
     pub(super) async fn start_streaming_message(
         &mut self,
         session_id: &SessionId,
-        role: ChatRole,
+        input: stream_requests::TurnInput,
         stream_id: StreamId,
         agent_profile_id: Option<String>,
         generation: Option<MessageGeneration>,
     ) -> Result<MessageId> {
         self.require_session(session_id).await?;
-
-        if role != ChatRole::Assistant {
-            return Err(eyre!("only assistant messages can stream"));
-        }
 
         if self.session_has_active_stream(session_id).await {
             return Err(eyre!(kraai_types::DomainError::conflict(format!(
@@ -123,26 +120,41 @@ impl AgentManager {
         let subscription = generation
             .as_ref()
             .is_some_and(|generation| self.providers.is_subscription(&generation.provider_id));
-        let appended = self
+        let stream_tip = input
+            .users
+            .last()
+            .map(|message| message.id.clone())
+            .or_else(|| input.tip.clone());
+        let started_users = !input.users.is_empty();
+        let mut messages = input.users;
+        messages.push(kraai_persistence::NewMessage {
+            id: MessageId::new(Ulid::generate()),
+            content: ConversationItem::Assistant { items: Vec::new() },
+            status: MessageStatus::Streaming { stream_id },
+            agent_profile_id,
+            generation,
+        });
+        let mut appended = self
             .conversation_store
-            .append_message(AppendMessageRequest {
-                session_id: session_id.clone(),
-                content: ConversationItem::Assistant { items: Vec::new() },
-                status: MessageStatus::Streaming { stream_id },
-                agent_profile_id,
-                generation,
-                title_if_first_message: None,
-            })
+            .append_messages(session_id, input.tip.as_ref(), messages, input.title)
             .await?;
-        let message_id = appended.message.id.clone();
+        let message = appended
+            .messages
+            .pop()
+            .ok_or_else(|| eyre!("Starting a stream linked no assistant message"))?;
+        let message_id = message.id.clone();
 
         self.streaming_messages.write().await.insert(
             message_id.clone(),
             StreamingMessageState {
                 session_id: session_id.clone(),
-                previous_tip: appended.previous_tip,
-                previous_title: appended.previous_title,
-                message: appended.message,
+                previous_tip: stream_tip,
+                previous_title: if started_users {
+                    appended.title
+                } else {
+                    appended.previous_title
+                },
+                message,
                 cancellation_result_id: None,
                 text_item_ids: HashMap::new(),
                 pending_deltas: Vec::new(),
@@ -447,11 +459,6 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<kraai_types::MessageContent>> {
-        if self.pending_message_rollbacks.contains_key(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot undo while queued message rollback is incomplete"
-            )));
-        }
         if self.is_turn_active(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(
                 "Cannot undo while the current turn is active"

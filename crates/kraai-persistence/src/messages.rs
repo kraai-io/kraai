@@ -70,12 +70,14 @@ pub trait MessageStore: Send + Sync {
 
     async fn save_linked(
         &self,
-        message: &Message,
+        messages: &[Message],
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
         sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
-        self.save(message).await?;
+        for message in messages {
+            self.save(message).await?;
+        }
         sessions.save_if_tip_matches(session, expected_tip).await
     }
 
@@ -208,12 +210,12 @@ impl MessageStore for SqliteMessageStore {
 
     async fn save_linked(
         &self,
-        message: &Message,
+        messages: &[Message],
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
         _sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
-        let message = message.clone();
+        let messages = messages.to_vec();
         let session = session.clone();
         let expected = expected_tip.cloned();
         self.database
@@ -227,20 +229,22 @@ impl MessageStore for SqliteMessageStore {
                     return Ok(false);
                 }
                 crate::sessions::assert_session_revision(current.as_ref(), &session)?;
-                if let Some(existing) = read_message(transaction, message.id.as_str())? {
-                    ensure!(
-                        serde_json::to_value(&existing)? == serde_json::to_value(&message)?,
-                        "Message ID reused with different content"
-                    );
+                for message in &messages {
+                    if let Some(existing) = read_message(transaction, message.id.as_str())? {
+                        ensure!(
+                            serde_json::to_value(&existing)? == serde_json::to_value(message)?,
+                            "Message ID reused with different content"
+                        );
+                    }
+                    write_message_record(
+                        transaction,
+                        leases,
+                        "message",
+                        message.id.as_str(),
+                        Some(&session.id),
+                        message,
+                    )?;
                 }
-                write_message_record(
-                    transaction,
-                    leases,
-                    "message",
-                    message.id.as_str(),
-                    Some(&session.id),
-                    &message,
-                )?;
                 crate::sessions::save_session(transaction, &session)?;
                 Ok(true)
             })

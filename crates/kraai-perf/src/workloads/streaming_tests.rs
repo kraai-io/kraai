@@ -63,13 +63,13 @@ impl MessageStore for ObservedSnapshots {
 
     async fn save_linked(
         &self,
-        message: &Message,
+        messages: &[Message],
         session: &SessionMeta,
         expected_tip: Option<&MessageId>,
         sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
         self.inner
-            .save_linked(message, session, expected_tip, sessions)
+            .save_linked(messages, session, expected_tip, sessions)
             .await
     }
 

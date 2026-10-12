@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
-    AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, HistoryCursor,
-    MessageStore, SessionMeta, SessionStore,
+    AppendMessageRequest, ContextStateStore, ConversationStore, HistoryCursor, MessageStore,
+    SessionMeta, SessionStore,
 };
 use kraai_provider_core::{
     Model, ProviderManager, ProviderManagerConfig, ProviderRegistry, ProviderRequest,
@@ -179,7 +179,6 @@ pub struct AgentManager {
     session_store: Arc<dyn SessionStore>,
     context_state_store: Arc<dyn ContextStateStore>,
     session_states: HashMap<SessionId, SessionRuntimeState>,
-    pending_message_rollbacks: HashMap<SessionId, Vec<AppendedMessage>>,
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,

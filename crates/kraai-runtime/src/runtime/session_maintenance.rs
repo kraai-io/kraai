@@ -17,7 +17,7 @@ impl RuntimeCore {
                 .agent_manager
                 .write()
                 .await
-                .discard_turn_state(session_id),
+                .clear_active_turn(session_id),
             Ok(true) => {}
             Err(error) => self.send_session_error(session_id, error),
         }

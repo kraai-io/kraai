@@ -1,11 +1,6 @@
 use super::*;
 
 impl AgentManager {
-    pub fn discard_turn_state(&mut self, session_id: &SessionId) {
-        self.clear_active_turn(session_id);
-        self.pending_message_rollbacks.remove(session_id);
-    }
-
     pub fn clear_active_turn(&mut self, session_id: &SessionId) {
         if let Some(state) = self.session_states.get_mut(session_id) {
             state.active_turn_profile = None;
@@ -60,7 +55,6 @@ impl AgentManager {
             usage_store: persistence.usage().clone(),
             persistence,
             session_states: HashMap::new(),
-            pending_message_rollbacks: HashMap::new(),
             last_used_profile_id: None,
             streaming_messages: RwLock::new(BTreeMap::new()),
             streaming_persistence: Mutex::new(()),
@@ -294,7 +288,6 @@ impl AgentManager {
             mcp.shutdown().await;
         }
         self.session_states.remove(session_id);
-        self.pending_message_rollbacks.remove(session_id);
         self.persistence.delete_session(session_id).await
     }
 

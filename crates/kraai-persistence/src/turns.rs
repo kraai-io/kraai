@@ -40,24 +40,77 @@ impl ConversationStore {
         message_id: MessageId,
         request: AppendMessageRequest,
     ) -> Result<AppendedMessage> {
-        let mut session = self
+        let session = self
             .session_store
             .get(&request.session_id)
             .await?
             .ok_or_else(|| eyre!("Session not found: {}", request.session_id))?;
+        let appended = self
+            .append_messages(
+                &request.session_id,
+                session.tip_id.as_ref(),
+                vec![NewMessage {
+                    id: message_id,
+                    content: request.content,
+                    status: request.status,
+                    agent_profile_id: request.agent_profile_id,
+                    generation: request.generation,
+                }],
+                request.title_if_first_message,
+            )
+            .await?;
+        Ok(AppendedMessage {
+            message: appended
+                .messages
+                .into_iter()
+                .next()
+                .ok_or_else(|| eyre!("Appending a message linked nothing"))?,
+            previous_tip: appended.previous_tip,
+            previous_title: appended.previous_title,
+        })
+    }
+
+    /// Links `messages` after `expected_tip` in one durable step, or links none of them.
+    pub async fn append_messages(
+        &self,
+        session_id: &SessionId,
+        expected_tip: Option<&MessageId>,
+        messages: Vec<NewMessage>,
+        title_if_first_message: Option<String>,
+    ) -> Result<AppendedMessages> {
+        let mut session = self
+            .session_store
+            .get(session_id)
+            .await?
+            .ok_or_else(|| eyre!("Session not found: {session_id}"))?;
         let previous_tip = session.tip_id.clone();
         let previous_title = session.title.clone();
-        let message = Message {
-            id: message_id.clone(),
-            parent_id: previous_tip.clone(),
-            content: request.content,
-            status: request.status,
-            agent_profile_id: request.agent_profile_id,
-            generation: request.generation,
+        if previous_tip.as_ref() != expected_tip {
+            return Err(eyre!(
+                "Session {session_id} changed before its messages could be appended"
+            ));
+        }
+        let mut parent_id = previous_tip.clone();
+        let messages: Vec<_> = messages
+            .into_iter()
+            .map(|message| Message {
+                parent_id: parent_id.replace(message.id.clone()),
+                id: message.id,
+                content: message.content,
+                status: message.status,
+                agent_profile_id: message.agent_profile_id,
+                generation: message.generation,
+            })
+            .collect();
+        let Some(last) = messages.last() else {
+            return Err(eyre!("No messages to append to session {session_id}"));
         };
-
-        session.tip_id = Some(message_id.clone());
-        if let Some(generation) = &message.generation {
+        session.tip_id = Some(last.id.clone());
+        if let Some(generation) = messages
+            .iter()
+            .rev()
+            .find_map(|message| message.generation.as_ref())
+        {
             session.selected_model = Some(kraai_types::ModelSelection {
                 model_id: generation.model_id.clone(),
                 provider_id: generation.provider_id.clone(),
@@ -66,37 +119,36 @@ impl ConversationStore {
         }
         if previous_tip.is_none()
             && session.title.is_none()
-            && let Some(title) = request.title_if_first_message
+            && let Some(title) = title_if_first_message
         {
             session.title = Some(title);
         }
         session.updated_at = current_unix_timestamp();
 
-        match self
+        if !self
             .message_store
             .save_linked(
-                &message,
+                &messages,
                 &session,
                 previous_tip.as_ref(),
                 self.session_store.clone(),
             )
-            .await
+            .await?
         {
-            Ok(true) => {}
-            Ok(false) => {
-                self.delete_unreferenced_message(&message_id).await;
-                return Err(eyre!(
-                    "Session {} changed while appending message {message_id}",
-                    request.session_id
-                ));
+            for message in &messages {
+                self.delete_unreferenced_message(&message.id).await;
             }
-            Err(error) => return Err(error),
+            return Err(eyre!(
+                "Session {session_id} changed while appending {} message(s)",
+                messages.len()
+            ));
         }
 
-        Ok(AppendedMessage {
-            message,
+        Ok(AppendedMessages {
+            messages,
             previous_tip,
             previous_title,
+            title: session.title,
         })
     }
 
@@ -317,4 +369,21 @@ fn validate_idempotent_message(existing: &Message, request: &AppendMessageReques
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct NewMessage {
+    pub id: MessageId,
+    pub content: ConversationItem,
+    pub status: MessageStatus,
+    pub agent_profile_id: Option<String>,
+    pub generation: Option<MessageGeneration>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppendedMessages {
+    pub messages: Vec<Message>,
+    pub previous_tip: Option<MessageId>,
+    pub previous_title: Option<String>,
+    pub title: Option<String>,
 }

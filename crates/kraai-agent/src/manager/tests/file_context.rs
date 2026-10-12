@@ -40,7 +40,9 @@ async fn request(manager: &AgentManager, session: &SessionId) -> Result<Provider
         .ok_or_else(|| eyre!("missing tip"))?;
     let provider = ProviderId::new("mock");
     let model = ModelId::new("mock-model");
-    let history = manager.get_model_history(&tip, (&provider, &model)).await?;
+    let history = manager
+        .get_model_history(&tip, (&provider, &model), false)
+        .await?;
     let (request, _, _) = manager
         .build_model_context(
             session,

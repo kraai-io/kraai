@@ -409,7 +409,11 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
     let streaming_id = manager
         .start_streaming_message(
             &session_id,
-            ChatRole::Assistant,
+            super::super::stream_requests::TurnInput {
+                tip: Some(stable_tip.clone()),
+                users: Vec::new(),
+                title: None,
+            },
             StreamId::new("call-1"),
             None,
             None,

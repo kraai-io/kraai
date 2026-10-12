@@ -1,12 +1,5 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct LimitedWrites {
-    inner: Arc<dyn SessionStore>,
-    messages: Arc<dyn MessageStore>,
-    remaining: AtomicUsize,
-}
 
 #[tokio::test]
 async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()> {
@@ -113,82 +106,6 @@ async fn preparation_error_survives_lease_release_failure() -> Result<()> {
     Ok(())
 }
 
-impl LimitedWrites {
-    fn consume_write(&self) -> Result<()> {
-        self.remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .map(|_| ())
-            .map_err(|_remaining| eyre!("injected session write failure"))
-    }
-}
-
-#[async_trait::async_trait]
-impl SessionStore for LimitedWrites {
-    async fn link_message_if_tip_matches(
-        &self,
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-    ) -> Result<bool> {
-        self.consume_write()?;
-        self.inner
-            .link_message_if_tip_matches(session, expected_tip)
-            .await
-    }
-    async fn lock_message_mutation(&self, id: &MessageId) -> tokio::sync::OwnedMutexGuard<()> {
-        self.inner.lock_message_mutation(id).await
-    }
-    async fn delete_message_if_unreferenced(
-        &self,
-        id: &MessageId,
-        message_store: Arc<dyn MessageStore>,
-    ) -> Result<()> {
-        self.inner
-            .delete_message_if_unreferenced(id, message_store)
-            .await
-    }
-    async fn list(&self) -> Result<Vec<SessionMeta>> {
-        self.inner.list().await
-    }
-    async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>> {
-        self.inner.get(id).await
-    }
-    async fn save(&self, session: &SessionMeta) -> Result<()> {
-        self.inner.save(session).await
-    }
-    async fn delete(&self, id: &SessionId) -> Result<()> {
-        self.inner.delete(id).await
-    }
-    async fn save_if_tip_matches(
-        &self,
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-    ) -> Result<bool> {
-        self.consume_write()?;
-        self.inner.save_if_tip_matches(session, expected_tip).await
-    }
-}
-
-#[async_trait::async_trait]
-impl MessageStore for LimitedWrites {
-    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
-        self.messages.get(id).await
-    }
-    async fn save(&self, message: &Message) -> Result<()> {
-        self.messages.save(message).await
-    }
-    async fn delete(&self, id: &MessageId) -> Result<()> {
-        self.messages.delete(id).await
-    }
-    async fn exists(&self, id: &MessageId) -> Result<bool> {
-        self.messages.exists(id).await
-    }
-    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
-        self.messages.list_ids().await
-    }
-}
-
 #[tokio::test]
 async fn rejected_interception_preserves_active_model_and_provider() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
@@ -233,7 +150,7 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
 }
 
 #[tokio::test]
-async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Result<()> {
+async fn failed_preparation_appends_no_history() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let first = manager
@@ -248,15 +165,8 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
     manager.complete_message(&first.message_id).await?;
     manager.clear_active_turn(&session_id);
     tokio::fs::write(data_dir.join(AGENTS_MD_FILE_NAME), [0xff]).await?;
-    let store = Arc::new(LimitedWrites {
-        inner: manager.session_store.clone(),
-        messages: manager.message_store.clone(),
-        // Append three messages, restore the last, then fail the remaining rollback.
-        remaining: AtomicUsize::new(4),
-    });
-    manager.conversation_store = ConversationStore::new(store.clone(), store.clone());
     let messages = vec!["one".into(), "two".into(), "three".into()];
-    let error = manager
+    let _error = manager
         .prepare_messages_stream(
             &session_id,
             messages.clone(),
@@ -265,8 +175,7 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
             Default::default(),
         )
         .await
-        .expect_err("preparation and rollback fail");
-    assert!(format!("{error:?}").contains("rollback is incomplete"));
+        .expect_err("preparation fails");
     assert!(!manager.is_turn_active(&session_id));
     let state = manager
         .session_states
@@ -274,42 +183,11 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
         .expect("session state");
     assert_eq!(state.last_model, Some(ModelId::new("mock-model")));
     assert_eq!(state.last_provider, Some(ProviderId::new("mock")));
-    let partial_tip = manager.get_tip(&session_id).await?;
-    assert_ne!(partial_tip, Some(first.message_id.clone()));
-    assert!(manager.undo_last_user_message(&session_id).await.is_err());
-    assert!(
-        manager
-            .prepare_continuation_stream(&session_id)
-            .await
-            .is_err()
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(first.message_id.clone())
     );
-    assert!(
-        manager
-            .prepare_start_stream(
-                &session_id,
-                "new".into(),
-                ModelId::new("mock-model"),
-                ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        manager
-            .prepare_messages_stream(
-                &session_id,
-                messages.clone(),
-                ModelId::new("mock-model"),
-                ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(manager.get_tip(&session_id).await?, partial_tip);
 
-    store.remaining.store(usize::MAX, Ordering::SeqCst);
     tokio::fs::remove_file(data_dir.join(AGENTS_MD_FILE_NAME)).await?;
     let retry = manager
         .prepare_messages_stream(
@@ -331,7 +209,20 @@ async fn partial_rollback_blocks_preparation_until_history_is_restored() -> Resu
         })
         .collect();
     assert_eq!(users, vec!["first", "one", "two", "three"]);
-    assert!(!manager.pending_message_rollbacks.contains_key(&session_id));
+    let history = manager.history_context(&retry.message_id).await?;
+    let persisted_users: Vec<_> = history
+        .iter()
+        .rev()
+        .filter_map(|message| match &message.content {
+            ConversationItem::User { content } => Some(content.as_text().unwrap_or("")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(persisted_users, vec!["first", "one", "two", "three"]);
+    assert_eq!(
+        manager.get_tip(&session_id).await?,
+        Some(retry.message_id.clone())
+    );
     cleanup_dir(data_dir).await;
     Ok(())
 }

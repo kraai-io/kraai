@@ -41,6 +41,7 @@ async fn context(manager: &AgentManager, session: &SessionId) -> Result<Vec<Mess
         .get_model_history(
             &tip,
             (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            false,
         )
         .await
 }
@@ -474,7 +475,9 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
     ] {
         let provider = ProviderId::new(provider);
         let model = ModelId::new(model);
-        let history = manager.get_model_history(&tip, (&provider, &model)).await?;
+        let history = manager
+            .get_model_history(&tip, (&provider, &model), false)
+            .await?;
         let (request, _, _) = manager
             .build_model_context(
                 &session,

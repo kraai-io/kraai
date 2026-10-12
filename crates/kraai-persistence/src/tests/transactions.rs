@@ -91,7 +91,7 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
     let linked = persistence
         .messages()
         .save_linked(
-            &message,
+            std::slice::from_ref(&message),
             &metadata,
             Some(&root.message.id),
             persistence.sessions().clone(),
@@ -212,7 +212,7 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
     let result = a
         .messages()
         .save_linked(
-            &message,
+            std::slice::from_ref(&message),
             &stale,
             Some(&root.message.id),
             a.sessions().clone(),

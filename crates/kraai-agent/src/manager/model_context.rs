@@ -6,12 +6,13 @@ impl AgentManager {
         &self,
         from: &MessageId,
         identity: (&ProviderId, &ModelId),
+        latest_user_pending: bool,
     ) -> Result<Vec<Message>> {
         let store = self.persistence.compactions().clone();
         let mut cursor = HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()));
         let mut history = Vec::new();
         let mut covered = false;
-        let mut found_user = false;
+        let mut found_user = latest_user_pending;
         'walk: while let Some(page) = cursor.next_page().await? {
             let boundaries = if covered {
                 HashMap::new()
