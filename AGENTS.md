@@ -2,7 +2,9 @@
 
 ## Task Completion Requirements
 
-1. Run `just check` before committing to format, lint, and test
+1. Run `just check` before pushing or opening a pull request.
+2. While iterating, run the narrower checks for what you touched
+   (for example `just lint` or `cargo nextest run -p <crate>`).
 
 ## Project Overview
 
