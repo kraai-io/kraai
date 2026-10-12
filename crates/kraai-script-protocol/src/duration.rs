@@ -10,7 +10,7 @@ pub(crate) fn parse_duration(input: &str) -> Result<Duration, ProtocolError> {
     let (number, unit) = input.split_at(unit_start);
     if number.is_empty() || unit.is_empty() {
         return Err(ProtocolError::InvalidTimeout(String::from(
-            "expected a positive number followed by ns, us, ms, sec, min, hr, day, or wk",
+            "expected a positive number followed by ns, us, ms, sec (s), min (m), hr (h), day, or wk",
         )));
     }
     let (whole, fraction) = match number.split_once('.') {
@@ -34,9 +34,9 @@ pub(crate) fn parse_duration(input: &str) -> Result<Duration, ProtocolError> {
         "ns" => 1_u128,
         "us" | "µs" => 1_000,
         "ms" => 1_000_000,
-        "sec" => 1_000_000_000,
-        "min" => 60 * 1_000_000_000,
-        "hr" => 60 * 60 * 1_000_000_000,
+        "sec" | "s" => 1_000_000_000,
+        "min" | "m" => 60 * 1_000_000_000,
+        "hr" | "h" => 60 * 60 * 1_000_000_000,
         "day" => 24 * 60 * 60 * 1_000_000_000,
         "wk" => 7 * 24 * 60 * 60 * 1_000_000_000,
         _ => {
@@ -99,12 +99,15 @@ mod tests {
         assert_eq!(parse_duration("10min"), Ok(Duration::from_secs(600)));
         assert_eq!(parse_duration("1.5sec"), Ok(Duration::from_millis(1500)));
         assert_eq!(parse_duration("250ms"), Ok(Duration::from_millis(250)));
+        assert_eq!(parse_duration("10s"), Ok(Duration::from_secs(10)));
+        assert_eq!(parse_duration("2m"), Ok(Duration::from_secs(120)));
+        assert_eq!(parse_duration("1h"), Ok(Duration::from_secs(3600)));
     }
 
     #[test]
     fn rejects_zero_unknown_and_sub_nanosecond_durations() {
         assert!(parse_duration("0sec").is_err());
-        assert!(parse_duration("10s").is_err());
+        assert!(parse_duration("10secs").is_err());
         assert!(parse_duration("0.1ns").is_err());
         assert!(parse_duration("-1sec").is_err());
     }

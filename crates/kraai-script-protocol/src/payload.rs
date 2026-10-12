@@ -180,8 +180,8 @@ mod tests {
                 ProtocolError::DuplicateAttribute(String::from("permissions")),
             ),
             (
-                "# permissions=invalid timeout=10s\necho hi",
-                ProtocolError::InvalidTimeout(String::from("unknown Nushell duration unit 's'")),
+                "# permissions=invalid timeout=10secs\necho hi",
+                ProtocolError::InvalidTimeout(String::from("unknown Nushell duration unit 'secs'")),
             ),
             (
                 "# permissions=invalid\necho hi",
