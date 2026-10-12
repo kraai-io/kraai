@@ -28,24 +28,21 @@ pub struct ProviderRequestContext {
     prompt_cache_key: Option<String>,
     max_attempts: Option<u32>,
     image_resolver: Option<Arc<dyn crate::ImageResolver>>,
+    cooldown: Option<Arc<crate::http_retry::ProviderCooldown>>,
 }
 
 impl ProviderRequestContext {
     pub fn new(retry_observer: Option<Arc<dyn ProviderRetryObserver>>) -> Self {
         Self {
             retry_observer,
-            prompt_cache_key: None,
-            max_attempts: None,
-            image_resolver: None,
+            ..Self::default()
         }
     }
 
     pub fn with_retry_observer(retry_observer: Arc<dyn ProviderRetryObserver>) -> Self {
         Self {
             retry_observer: Some(retry_observer),
-            prompt_cache_key: None,
-            max_attempts: None,
-            image_resolver: None,
+            ..Self::default()
         }
     }
 
@@ -53,8 +50,7 @@ impl ProviderRequestContext {
         Self {
             retry_observer: None,
             prompt_cache_key: Some(prompt_cache_key),
-            max_attempts: None,
-            image_resolver: None,
+            ..Self::default()
         }
     }
 
@@ -65,8 +61,7 @@ impl ProviderRequestContext {
         Self {
             retry_observer: Some(retry_observer),
             prompt_cache_key: Some(prompt_cache_key),
-            max_attempts: None,
-            image_resolver: None,
+            ..Self::default()
         }
     }
 
@@ -94,5 +89,17 @@ impl ProviderRequestContext {
 
     pub fn prompt_cache_key(&self) -> Option<&str> {
         self.prompt_cache_key.as_deref()
+    }
+
+    pub(crate) fn with_cooldown(
+        mut self,
+        cooldown: Arc<crate::http_retry::ProviderCooldown>,
+    ) -> Self {
+        self.cooldown = Some(cooldown);
+        self
+    }
+
+    pub(crate) fn cooldown(&self) -> Option<&crate::http_retry::ProviderCooldown> {
+        self.cooldown.as_deref()
     }
 }

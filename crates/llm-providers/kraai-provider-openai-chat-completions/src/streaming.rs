@@ -72,7 +72,23 @@ impl Completion {
         pending: &mut VecDeque<ProviderStreamEvent>,
     ) -> Result<()> {
         if let Some(error) = chunk.error {
-            return Err(eyre!("Chat completions stream failed: {}", error.message));
+            let code = match &error.code {
+                Some(serde_json::Value::String(code)) => Some(code.clone()),
+                Some(serde_json::Value::Number(code)) if code.as_u64() == Some(429) => {
+                    Some(String::from("rate_limit_exceeded"))
+                }
+                Some(serde_json::Value::Number(code))
+                    if code.as_u64().is_some_and(|code| code >= 500) =>
+                {
+                    Some(String::from("server_error"))
+                }
+                _ => None,
+            };
+            return Err(kraai_provider_core::ProviderError::from_stream_error(
+                code.as_deref(),
+                format!("Chat completions stream failed: {}", error.message),
+            )
+            .into());
         }
         ensure!(
             chunk.choices.len() <= 1,

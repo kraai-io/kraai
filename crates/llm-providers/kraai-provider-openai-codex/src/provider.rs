@@ -656,6 +656,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
 
     let url = response.url().to_string();
+    let retry_after = kraai_provider_core::parse_retry_after(&response);
     let body = kraai_provider_core::read_error_body(response).await;
     error!(
         operation,
@@ -674,12 +675,13 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     {
         return Err(InvalidEncryptedContent(body).into());
     }
-    if let Some(error) = kraai_provider_core::ProviderError::from_api_error(&body) {
-        return Err(error.into());
-    }
-    Err(eyre!(
-        "OpenAI Codex {operation} failed with status {status} at {url}: {body}"
-    ))
+    Err(kraai_provider_core::ProviderError::from_body(
+        status,
+        retry_after,
+        &body,
+        format!("OpenAI Codex {operation} failed with status {status} at {url}: {body}"),
+    )
+    .into())
 }
 
 #[cfg(test)]

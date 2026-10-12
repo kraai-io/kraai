@@ -268,15 +268,11 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
         return Ok(response);
     }
 
-    let url = response.url().to_string();
-    let body = kraai_provider_core::read_error_body(response).await;
-
-    if let Some(error) = kraai_provider_core::ProviderError::from_api_error(&body) {
-        return Err(error.into());
-    }
-    Err(eyre!(
-        "Chat completions {operation} failed with status {status} at {url}: {body}"
-    ))
+    Err(
+        kraai_provider_core::ProviderError::from_response("Chat completions", operation, response)
+            .await
+            .into(),
+    )
 }
 
 fn create_provider<P>(id: ProviderId, config: DynamicConfig) -> Result<ChatCompletionsProvider<P>>

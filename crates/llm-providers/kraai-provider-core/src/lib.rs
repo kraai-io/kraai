@@ -33,9 +33,12 @@ mod test_support;
 
 pub use config::{DynamicConfig, DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
 pub use definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
-pub use error::{ProviderError, ProviderModelCacheRefreshError};
+pub use error::{ProviderError, ProviderModelCacheRefreshError, is_transient_error};
 
-pub use http_retry::{DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, send_with_retry};
+pub use http_retry::{
+    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderCooldown, parse_retry_after,
+    send_with_retry,
+};
 pub use manager::ProviderManager;
 pub use model_discovery::DiscoveredModelOptions;
 pub use model_metadata::ConfiguredModelMetadata;

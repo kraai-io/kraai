@@ -26,10 +26,15 @@ pub(crate) fn adapt_responses_stream(
             let event: ResponsesStreamEvent = serde_json::from_str(&payload)?;
             if event.kind == "error" {
                 let error: ResponsesError = serde_json::from_str(&payload)?;
-                return Err(eyre!(
-                    "OpenAI response stream failed: {}",
-                    format_response_error(error)
-                ));
+                let code = error.code.clone();
+                return Err(ProviderError::from_stream_error(
+                    code.as_deref(),
+                    format!(
+                        "OpenAI response stream failed: {}",
+                        format_response_error(error)
+                    ),
+                )
+                .into());
             }
             completion.ingest(event, pending)
         },

@@ -126,6 +126,8 @@ pub struct ChatCompletionChunk {
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionError {
     pub message: String,
+    #[serde(default)]
+    pub code: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
