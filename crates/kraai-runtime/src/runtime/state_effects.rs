@@ -7,12 +7,12 @@ use kraai_nushell_runtime::StateEffectHandler;
 use kraai_persistence::ContextStateStore;
 use kraai_types::{
     ContextStateMutation, OpenedFilesOperation, PinnedFileScope, SandboxCapabilities,
-    SandboxCapability, ScriptExecutionId, StateEffectRequest,
+    SandboxCapability, ScriptExecutionId, SessionId, StateEffectRequest,
 };
 
 pub(super) struct DurableStateEffects {
     pub(super) execution_id: ScriptExecutionId,
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) workspace_root: PathBuf,
     pub(super) effective_capabilities: SandboxCapabilities,
     pub(super) store: Arc<dyn ContextStateStore>,

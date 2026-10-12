@@ -33,7 +33,13 @@ async fn database_creation_records_the_schema_version() -> Result<()> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     ensure!(version == 1);
     let reopened = Persistence::open(directory.path()).await?;
-    ensure!(reopened.sessions().get("session").await?.is_some());
+    ensure!(
+        reopened
+            .sessions()
+            .get(&SessionId::new("session"))
+            .await?
+            .is_some()
+    );
     Ok(())
 }
 
@@ -88,7 +94,10 @@ async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> 
     unlinked.id = MessageId::new("unlinked-original-message");
     unlinked.parent_id = original_ids.last().cloned();
     persistence.messages().save(&unlinked).await?;
-    persistence.sessions().delete("original").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("original"))
+        .await?;
     let retained = persistence.messages().list_ids().await?;
     ensure!(retained.len() == original_ids.len() + 1);
     ensure!(retained.contains(&fork_message_id));
@@ -96,12 +105,18 @@ async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> 
         ensure!(retained.contains(id));
     }
     ensure!(!retained.contains(&unlinked.id));
-    persistence.sessions().delete("fork").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("fork"))
+        .await?;
     ensure!(
         persistence.messages().list_ids().await?
             == original_ids.first().cloned().into_iter().collect()
     );
-    persistence.sessions().delete("other-fork").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("other-fork"))
+        .await?;
     ensure!(persistence.messages().list_ids().await?.is_empty());
     Ok(())
 }
@@ -120,15 +135,30 @@ async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Resu
     owner.sessions().save(&fork).await?;
     let mut metadata = owner
         .sessions()
-        .get("owner")
+        .get(&SessionId::new("owner"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     metadata.tip_id = None;
     owner.sessions().save(&metadata).await?;
-    owner.sessions().claim_turn("owner").await?;
+    owner
+        .sessions()
+        .claim_turn(&SessionId::new("owner"))
+        .await?;
     let observer = Persistence::open(directory.path()).await?;
-    ensure!(observer.sessions().delete("fork").await.is_err());
-    ensure!(observer.sessions().get("fork").await?.is_some());
+    ensure!(
+        observer
+            .sessions()
+            .delete(&SessionId::new("fork"))
+            .await
+            .is_err()
+    );
+    ensure!(
+        observer
+            .sessions()
+            .get(&SessionId::new("fork"))
+            .await?
+            .is_some()
+    );
     ensure!(observer.messages().get(&root.message.id).await?.is_some());
     Ok(())
 }
@@ -160,7 +190,7 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
     let reopened = Persistence::open(directory.path()).await?;
     let saved = reopened
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(

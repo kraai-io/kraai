@@ -9,7 +9,9 @@ use kraai_provider_core::{
     CacheWarmingPolicy, Model, ModelConfig, Provider, ProviderManager, ProviderRequest,
     ProviderRequestContext, ProviderStreamEvent,
 };
-use kraai_types::{AssistantPhase, ConversationItem, ModelId, ProviderId, TokenUsage, ToolCallId};
+use kraai_types::{
+    AssistantPhase, ConversationItem, ModelId, ProviderId, SessionId, TokenUsage, ToolCallId,
+};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -135,7 +137,7 @@ async fn fixture(
     result: WarmResult,
 ) -> Result<(
     RuntimeTestHarness,
-    String,
+    SessionId,
     kraai_agent::PendingStreamRequest,
     CapturedRequests,
     CancellationToken,

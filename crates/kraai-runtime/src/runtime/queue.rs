@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, mpsc};
 
-use kraai_types::{ModelId, ProviderId};
+use kraai_types::{ModelId, ProviderId, SessionId};
 
 use super::core::{QueuedMessage, RuntimeCore};
 use super::streaming::StreamJobKind;
@@ -13,30 +13,33 @@ use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 /// Coalesce overlapping preparations without blocking the command loop.
 #[derive(Default)]
 pub(crate) struct SessionPreparations {
-    active: Mutex<HashMap<String, Option<Arc<QueueDrains>>>>,
+    active: Mutex<HashMap<SessionId, Option<Arc<QueueDrains>>>>,
     ready: Notify,
 }
 
 pub(crate) struct SessionPreparation {
     preparations: Arc<SessionPreparations>,
-    session_id: String,
+    session_id: SessionId,
 }
 
 impl SessionPreparations {
-    pub(crate) fn try_begin(self: &Arc<Self>, session_id: &str) -> Option<SessionPreparation> {
+    pub(crate) fn try_begin(
+        self: &Arc<Self>,
+        session_id: &SessionId,
+    ) -> Option<SessionPreparation> {
         self.try_begin_with_drain(session_id, None)
     }
 
     fn try_begin_with_drain(
         self: &Arc<Self>,
-        session_id: &str,
+        session_id: &SessionId,
         drain: Option<&Arc<QueueDrains>>,
     ) -> Option<SessionPreparation> {
         let mut active = self
             .active
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        match active.entry(session_id.to_string()) {
+        match active.entry(session_id.clone()) {
             Entry::Vacant(entry) => {
                 entry.insert(None);
             }
@@ -50,11 +53,11 @@ impl SessionPreparations {
         drop(active);
         Some(SessionPreparation {
             preparations: self.clone(),
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
         })
     }
 
-    pub(crate) async fn begin(self: &Arc<Self>, session_id: &str) -> SessionPreparation {
+    pub(crate) async fn begin(self: &Arc<Self>, session_id: &SessionId) -> SessionPreparation {
         loop {
             let ready = self.ready.notified();
             tokio::pin!(ready);
@@ -66,7 +69,7 @@ impl SessionPreparations {
         }
     }
 
-    pub(crate) fn is_active(&self, session_id: &str) -> bool {
+    pub(crate) fn is_active(&self, session_id: &SessionId) -> bool {
         self.active
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -91,8 +94,8 @@ impl Drop for SessionPreparation {
 
 #[derive(Default)]
 struct PendingDrains {
-    sessions: VecDeque<String>,
-    scheduled: HashSet<String>,
+    sessions: VecDeque<SessionId>,
+    scheduled: HashSet<SessionId>,
 }
 
 /// Internal wakeups must never wait for space in the channel consumed by the
@@ -104,19 +107,19 @@ pub(crate) struct QueueDrains {
 }
 
 impl QueueDrains {
-    fn schedule(&self, session_id: &str) {
+    fn schedule(&self, session_id: &SessionId) {
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if pending.scheduled.insert(session_id.to_string()) {
-            pending.sessions.push_back(session_id.to_string());
+        if pending.scheduled.insert(session_id.clone()) {
+            pending.sessions.push_back(session_id.clone());
         }
         drop(pending);
         self.ready.notify_one();
     }
 
-    async fn next(&self) -> String {
+    async fn next(&self) -> SessionId {
         loop {
             self.ready.notified().await;
             let mut pending = self
@@ -140,7 +143,7 @@ impl QueueDrains {
 }
 
 impl RuntimeCore {
-    pub(crate) fn schedule_queue_drain(&self, session_id: &str) {
+    pub(crate) fn schedule_queue_drain(&self, session_id: &SessionId) {
         self.queue_drains.schedule(session_id);
     }
 
@@ -158,7 +161,7 @@ impl RuntimeCore {
 impl RuntimeCore {
     pub(crate) async fn handle_send_message(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -276,7 +279,7 @@ impl RuntimeCore {
         Ok(SubmitMessageOutcome::Started { message_id })
     }
 
-    async fn has_pending_messages(&self, session_id: &str) -> bool {
+    async fn has_pending_messages(&self, session_id: &SessionId) -> bool {
         let queued = self.queued_messages.lock().await;
         queued
             .get(session_id)
@@ -286,18 +289,18 @@ impl RuntimeCore {
 
     pub(super) async fn enqueue_message(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         queued_message: QueuedMessage,
     ) -> usize {
         let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.to_string()).or_default();
+        let queue = queued.entry(session_id.clone()).or_default();
         queue.push_back(queued_message);
         let position = queue.len();
         drop(queued);
         position
     }
 
-    pub(crate) async fn handle_start_queued_messages(&self, session_id: String) {
+    pub(crate) async fn handle_start_queued_messages(&self, session_id: SessionId) {
         let Some(preparation) = self
             .session_preparations
             .try_begin_with_drain(&session_id, Some(&self.queue_drains))
@@ -361,18 +364,18 @@ impl RuntimeCore {
         drop(preparation);
     }
 
-    pub(crate) async fn take_queued_messages(&self, session_id: &str) -> Vec<QueuedMessage> {
+    pub(crate) async fn take_queued_messages(&self, session_id: &SessionId) -> Vec<QueuedMessage> {
         let messages = self.queued_messages.lock().await.remove(session_id);
         messages.map(Vec::from).unwrap_or_default()
     }
 
     pub(crate) async fn restore_queued_messages(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         messages: Vec<QueuedMessage>,
     ) {
         let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.to_string()).or_default();
+        let queue = queued.entry(session_id.clone()).or_default();
         for message in messages.into_iter().rev() {
             queue.push_front(message);
         }

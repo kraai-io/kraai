@@ -115,7 +115,7 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
 
 async fn persist_open_effect(
     manager: &mut AgentManager,
-    session_id: &str,
+    session_id: &SessionId,
     path: &Path,
 ) -> Result<()> {
     let session = manager.require_session(session_id).await?;

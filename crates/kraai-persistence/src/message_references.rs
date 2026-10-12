@@ -1,5 +1,8 @@
-use crate::database::{LeaseTokens, assert_owner, bump_revision, record_session, write_record};
+use crate::database::{
+    LeaseTokens, assert_owner, bump_revision, parse_session_id, record_session, write_record,
+};
 use color_eyre::eyre::{Result, ensure};
+use kraai_types::SessionId;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -7,8 +10,8 @@ use std::collections::HashSet;
 fn message_sessions(
     connection: &Connection,
     id: &str,
-    associated_session: Option<&str>,
-) -> Result<Vec<String>> {
+    associated_session: Option<&SessionId>,
+) -> Result<Vec<SessionId>> {
     let mut statement = connection.prepare_cached(
         "WITH RECURSIVE descendants(id) AS (
                 SELECT ?1
@@ -21,17 +24,21 @@ fn message_sessions(
                 WHERE records.kind = 'message' AND records.id = ?1
             ORDER BY 1",
     )?;
-    Ok(statement
-        .query_map(params![id, associated_session], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?)
+    statement
+        .query_map(
+            params![id, associated_session.map(SessionId::as_str)],
+            |row| row.get::<_, String>(0),
+        )?
+        .map(|session| parse_session_id(session?))
+        .collect()
 }
 
 pub(crate) fn assert_message_owners(
     connection: &Connection,
     leases: &LeaseTokens,
     id: &str,
-    associated_session: Option<&str>,
-) -> Result<Vec<String>> {
+    associated_session: Option<&SessionId>,
+) -> Result<Vec<SessionId>> {
     let mut cursor = id.to_string();
     let mut associated_session = associated_session;
     let mut visited = HashSet::new();
@@ -44,7 +51,7 @@ pub(crate) fn assert_message_owners(
             assert_owner(connection, leases, session)?;
         }
         if let Some(session) = record_session(connection, "message", &cursor)?
-            && Some(session.as_str()) != associated_session
+            && Some(&session) != associated_session
         {
             assert_owner(connection, leases, &session)?;
         }
@@ -75,13 +82,13 @@ pub(crate) fn write_message_record(
     leases: &LeaseTokens,
     kind: &str,
     id: &str,
-    associated_session: Option<&str>,
+    associated_session: Option<&SessionId>,
     value: &impl Serialize,
 ) -> Result<()> {
     let sessions = assert_message_owners(connection, leases, id, associated_session)?;
     write_record(connection, kind, id, associated_session, value)?;
     for session in sessions {
-        if Some(session.as_str()) != associated_session {
+        if Some(&session) != associated_session {
             bump_revision(connection, &session)?;
         }
     }
@@ -103,7 +110,7 @@ pub(crate) fn delete_message_record(
         return Ok(());
     }
     let associated_session = record_session(connection, kind, id)?;
-    let sessions = assert_message_owners(connection, leases, id, associated_session.as_deref())?;
+    let sessions = assert_message_owners(connection, leases, id, associated_session.as_ref())?;
     connection.execute(
         "DELETE FROM records WHERE kind = ?1 AND id = ?2",
         params![kind, id],

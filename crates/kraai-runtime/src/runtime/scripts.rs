@@ -3,7 +3,7 @@ use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
 use kraai_types::{
     PermissionResolution, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
-    ScriptExecutionStatus,
+    ScriptExecutionStatus, SessionId,
 };
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
@@ -28,7 +28,7 @@ pub(super) fn host_failure(completed: &CompletedScriptExecution) -> color_eyre::
 }
 
 impl RuntimeCore {
-    pub(crate) async fn has_active_script_tasks(&self, session_id: &str) -> bool {
+    pub(crate) async fn has_active_script_tasks(&self, session_id: &SessionId) -> bool {
         let mut active_tasks = self.active_script_tasks.lock().await;
         let Some(task) = active_tasks.get(session_id) else {
             return false;
@@ -42,7 +42,7 @@ impl RuntimeCore {
 
     pub(crate) async fn process_completed_stream_output(
         &self,
-        completed_session: String,
+        completed_session: SessionId,
         source_message_id: kraai_types::MessageId,
         call_id: Option<kraai_types::ToolCallId>,
         script: Option<ScriptBlock>,
@@ -118,7 +118,7 @@ impl RuntimeCore {
 impl RuntimeCore {
     async fn prepare_or_execute_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         source_message_id: kraai_types::MessageId,
         call_id: kraai_types::ToolCallId,
         script: ScriptBlock,
@@ -233,7 +233,7 @@ impl RuntimeCore {
 
     async fn finish_invalid_script(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         source_message_id: kraai_types::MessageId,
         call_id: kraai_types::ToolCallId,
         invalid: InvalidScriptBlock,
@@ -249,7 +249,7 @@ impl RuntimeCore {
         self.execution_store
             .create(NewScriptExecution {
                 id: id.clone(),
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 source_message_id,
                 call_id: call_id.clone(),
                 profile: turn.profile,
@@ -262,7 +262,7 @@ impl RuntimeCore {
         emit_event(
             &self.event_tx,
             Event::ScriptPrepared {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 execution_id: id.to_string(),
                 call_id: call_id.to_string(),
                 source: invalid.input,
@@ -304,7 +304,7 @@ impl RuntimeCore {
 
     pub(super) async fn finalize_script_turn(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         completed: CompletedScriptExecution,
     ) -> Result<()> {
         let outcome = completed.record.outcome()?;
@@ -329,7 +329,7 @@ impl RuntimeCore {
         emit_event(
             &self.event_tx,
             Event::ScriptResultReady {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 execution_id,
                 call_id: completed.record.call_id.to_string(),
                 output: result,
@@ -346,32 +346,39 @@ impl RuntimeCore {
             self.schedule_queue_drain(session_id);
         } else if self.agent_manager.read().await.is_turn_active(session_id) {
             self.spawn_continuation(
-                session_id.to_string(),
+                session_id.clone(),
                 completed.record.result_message_id.clone(),
             );
         }
         emit_event(
             &self.event_tx,
             Event::HistoryUpdated {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
             },
         );
         Ok(())
     }
 
-    pub(super) async fn fail_script_turn(&self, session_id: &str, error: &color_eyre::Report) {
+    pub(super) async fn fail_script_turn(
+        &self,
+        session_id: &SessionId,
+        error: &color_eyre::Report,
+    ) {
         self.finish_turn(session_id).await;
         self.schedule_queue_drain(session_id);
         emit_event(
             &self.event_tx,
             Event::ContinuationFailed {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 error: error.to_string(),
             },
         );
     }
 
-    pub(crate) async fn get_pending_script(&self, session_id: &str) -> Option<PendingScriptInfo> {
+    pub(crate) async fn get_pending_script(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<PendingScriptInfo> {
         self.pending_script_approvals
             .lock()
             .await
@@ -381,7 +388,7 @@ impl RuntimeCore {
 
     pub(crate) async fn approve_pending_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         execution_id: ScriptExecutionId,
     ) -> Result<()> {
         let _preparation = self.session_preparations.begin(&session_id).await;
@@ -392,7 +399,7 @@ impl RuntimeCore {
 
     async fn start_prepared_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         request: EffectiveScriptRequest,
     ) -> Result<()> {
         if self.has_active_script_tasks(&session_id).await {
@@ -470,7 +477,7 @@ impl RuntimeCore {
 
     pub(crate) async fn deny_pending_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         execution_id: ScriptExecutionId,
     ) -> Result<()> {
         let _preparation = self.session_preparations.begin(&session_id).await;
@@ -493,7 +500,7 @@ impl RuntimeCore {
         result
     }
 
-    pub(super) async fn cancel_pending_script(&self, session_id: &str) -> Result<bool> {
+    pub(super) async fn cancel_pending_script(&self, session_id: &SessionId) -> Result<bool> {
         let pending = self
             .pending_script_approvals
             .lock()
@@ -521,7 +528,7 @@ impl RuntimeCore {
 
     async fn take_pending_script(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         execution_id: &ScriptExecutionId,
     ) -> Result<PendingScriptApproval> {
         let mut pending = self.pending_script_approvals.lock().await;

@@ -5,7 +5,9 @@
 
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers};
-use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues};
+use kraai_types::{
+    ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues, SessionId,
+};
 
 mod errors;
 mod refresh;
@@ -323,7 +325,7 @@ fn deferred_submission_retains_options_after_local_selection_changes() -> color_
         .app
         .handle_runtime_response(RuntimeResponse::CreateSession {
             creation_id,
-            result: Ok("session".into()),
+            result: Ok(SessionId::new("session")),
         });
     assert!(harness.drain_requests().into_iter().any(|request| matches!(request, RuntimeRequest::SendMessage { options, .. } if options == selected)));
     Ok(())
@@ -335,7 +337,7 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
     configure(&mut harness)?;
     harness
         .app
-        .reset_chat_session(Some("session".into()), "loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "loaded");
     let mut snapshot = session_snapshot(None);
     let selected = std::collections::BTreeMap::from([(
         "effort".into(),
@@ -350,7 +352,7 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot.clone())),
         });
     assert_eq!(harness.app.state.selected_model_options, selected);
@@ -363,7 +365,7 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(

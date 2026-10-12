@@ -14,7 +14,7 @@ use kraai_provider_core::{
 use kraai_types::{
     AgentProfilesState, AssistantItem, AssistantPhase, ChatRole, ConversationItem, Message,
     MessageGeneration, MessageId, MessageStatus, ModelId, ModelOptionValues, ProviderId,
-    ScriptProfileSnapshot, StreamId, TokenUsage, ToolCallId,
+    ScriptProfileSnapshot, SessionId, StreamId, TokenUsage, ToolCallId,
 };
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
@@ -83,7 +83,7 @@ pub struct ScriptTurnContext {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CancelledStreamResult {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub message_id: MessageId,
     pub persisted: bool,
 }
@@ -134,7 +134,7 @@ impl SessionRuntimeState {
 
 #[derive(Debug)]
 struct StreamingMessageState {
-    session_id: String,
+    session_id: SessionId,
     previous_tip: Option<MessageId>,
     previous_title: Option<String>,
     message: Message,
@@ -148,7 +148,7 @@ struct StreamingMessageState {
 
 pub struct AgentManager {
     mcp: Arc<kraai_mcp::McpManager>,
-    session_mcp: BTreeMap<String, Arc<kraai_mcp::McpManager>>,
+    session_mcp: BTreeMap<SessionId, Arc<kraai_mcp::McpManager>>,
     usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
     providers: ProviderManager,
     default_workspace_dir: PathBuf,
@@ -159,8 +159,8 @@ pub struct AgentManager {
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     context_state_store: Arc<dyn ContextStateStore>,
-    session_states: HashMap<String, SessionRuntimeState>,
-    pending_message_rollbacks: HashMap<String, Vec<AppendedMessage>>,
+    session_states: HashMap<SessionId, SessionRuntimeState>,
+    pending_message_rollbacks: HashMap<SessionId, Vec<AppendedMessage>>,
     last_used_profile_id: Option<String>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,

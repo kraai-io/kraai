@@ -29,7 +29,7 @@ pub(crate) async fn replay(
         messages.push(message);
         tip = message.parent_id.clone();
     }
-    let session_id = acp::SessionId::new(snapshot.session.id.clone());
+    let session_id = acp::SessionId::new(snapshot.session.id.to_string());
     for message in messages.into_iter().rev() {
         for update in updates(runtime, message).await? {
             connection

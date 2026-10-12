@@ -5,7 +5,7 @@ use kraai_persistence::{
     ConversationSnapshot, MessageStore, SessionMeta, SessionStore, SqliteDatabase,
     SqliteMessageStore,
 };
-use kraai_types::Message;
+use kraai_types::{Message, SessionId};
 use tokio::sync::Mutex;
 
 use super::*;
@@ -22,7 +22,7 @@ impl MessageStore for ObservedSnapshots {
         self.inner.sqlite_database()
     }
 
-    async fn read_conversation(&self, session: &str) -> Result<Option<ConversationSnapshot>> {
+    async fn read_conversation(&self, session: &SessionId) -> Result<Option<ConversationSnapshot>> {
         self.inner.read_conversation(session).await
     }
 

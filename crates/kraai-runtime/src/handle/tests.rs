@@ -81,7 +81,7 @@ async fn cancellation_preserves_the_enqueue_boundary() {
         Err(mpsc::error::TryRecvError::Empty)
     ));
 
-    let mut enqueued = Box::pin(client.get_tip("session".into()));
+    let mut enqueued = Box::pin(client.get_tip(SessionId::new("session")));
     assert!(futures::poll!(&mut enqueued).is_pending());
     drop(enqueued);
     let Some(Command::GetTip {
@@ -91,7 +91,7 @@ async fn cancellation_preserves_the_enqueue_boundary() {
     else {
         panic!("expected tip request");
     };
-    assert_eq!(session_id, "session");
+    assert_eq!(session_id, SessionId::new("session"));
     assert!(response.is_closed());
 }
 
@@ -100,7 +100,7 @@ async fn invalid_identifiers_fail_before_waiting_for_queue_capacity() {
     let (client, mut commands) = handle();
     client.command_tx.try_send(Command::LoadConfig).unwrap();
     let mut send = Box::pin(client.send_message(
-        "session".into(),
+        SessionId::new("session"),
         "message".into(),
         String::new(),
         "provider".into(),
@@ -112,7 +112,7 @@ async fn invalid_identifiers_fail_before_waiting_for_queue_capacity() {
     assert_eq!(error.kind, crate::RuntimeErrorKind::InvalidArgument);
     assert!(error.message.starts_with("invalid model_id: "));
 
-    let mut approve = Box::pin(client.approve_script("session".into(), String::new()));
+    let mut approve = Box::pin(client.approve_script(SessionId::new("session"), String::new()));
     let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut approve) else {
         panic!("invalid execution must fail before enqueueing");
     };

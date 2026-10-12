@@ -166,7 +166,7 @@ fn fixture(
     let context = ContextCompaction {
         store: SqliteCompactionStore::new(&root),
         usage_store: Arc::new(kraai_persistence::SqliteRequestUsageStore::new(&root)),
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         original,
         prefix: "instructions".into(),
         snapshots: snapshots("pinned files"),
@@ -374,7 +374,14 @@ async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_te
                 .await?
                 .is_none()
         );
-        ensure!(context.usage_store.load("session").await?.len() == 1);
+        ensure!(
+            context
+                .usage_store
+                .load(&SessionId::new("session"))
+                .await?
+                .len()
+                == 1
+        );
         tokio::fs::remove_dir_all(root).await?;
     }
     Ok(())
@@ -461,7 +468,7 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
             .is_err()
     );
     ensure!(requests.lock().map_err(|e| eyre!("{e}"))?.len() == 3);
-    let usage = context.usage_store.load("session").await?;
+    let usage = context.usage_store.load(&SessionId::new("session")).await?;
     ensure!(usage.len() == 3);
     ensure!(
         context
@@ -557,7 +564,14 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
         })
         .collect();
     ensure!(checkpoints == vec![&payload]);
-    ensure!(context.usage_store.load("session").await?.len() == 2);
+    ensure!(
+        context
+            .usage_store
+            .load(&SessionId::new("session"))
+            .await?
+            .len()
+            == 2
+    );
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }

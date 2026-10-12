@@ -1,5 +1,5 @@
 use kraai_persistence::{FileImageStore, ScriptExecutionStore};
-use kraai_types::{ImageAttachment, ScriptExecutionId};
+use kraai_types::{ImageAttachment, ScriptExecutionId, SessionId};
 use std::sync::Arc;
 
 pub(super) struct StoredImageResolver(pub(super) FileImageStore);
@@ -13,7 +13,7 @@ impl kraai_provider_core::ImageResolver for StoredImageResolver {
 
 pub(super) struct DurableImageAttachments {
     pub(super) execution_id: ScriptExecutionId,
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) agent: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
     pub(super) images: Arc<FileImageStore>,
     pub(super) executions: Arc<dyn ScriptExecutionStore>,

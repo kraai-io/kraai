@@ -6,14 +6,14 @@ use kraai_persistence::{
     AppendMessageRequest, ConversationStore, MessageStore, ScriptExecutionCompletion, SessionStore,
     SqliteMessageStore, SqliteSessionStore,
 };
-use kraai_types::{ConversationItem, MessageStatus, ScriptExecutionStatus};
+use kraai_types::{ConversationItem, MessageStatus, ScriptExecutionStatus, SessionId};
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
-async fn completed_script() -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>>
-{
+async fn completed_script()
+-> Result<Option<(RuntimeTestHarness, SessionId, CompletedScriptExecution)>> {
     completed_script_with_image(false).await
 }
 
@@ -47,7 +47,7 @@ async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> 
 
 pub(super) async fn completed_script_with_image(
     include_image: bool,
-) -> Result<Option<(RuntimeTestHarness, String, CompletedScriptExecution)>> {
+) -> Result<Option<(RuntimeTestHarness, SessionId, CompletedScriptExecution)>> {
     let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call-1",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
@@ -179,7 +179,7 @@ async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Res
     if retained_by_other_session {
         let (_, sessions) = reopen_agent(&harness).await?;
         let mut retained = sessions.get(&session_id).await?.unwrap();
-        retained.id = String::from("retained");
+        retained.id = SessionId::new("retained");
         retained.revision = 0;
         sessions.save(&retained).await?;
     }
@@ -231,7 +231,7 @@ async fn restart_ignores_undone_script_sources_retained_by_another_session() -> 
 
 async fn append_later_message(
     harness: &RuntimeTestHarness,
-    session_id: &str,
+    session_id: &SessionId,
 ) -> Result<Arc<SqliteMessageStore>> {
     let (messages, sessions) = reopen_agent(harness).await?;
     ConversationStore::new(messages.clone(), sessions)

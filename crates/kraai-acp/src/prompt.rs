@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
+use kraai_types::SessionId;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -28,8 +29,8 @@ pub(crate) async fn run(
             acp::StopReason::EndTurn
         })
     };
-    let id = request.session_id;
-    let mut events = runtime.subscribe_session(id.0.as_ref());
+    let id = crate::session::runtime_id(&request.session_id)?;
+    let mut events = runtime.subscribe_session(&id);
     let model = crate::session::selected_model(runtime, &id).await?;
     match commands::parse(&request.prompt)? {
         Some(commands::Command::Option {
@@ -37,9 +38,9 @@ pub(crate) async fn run(
             value,
         }) => {
             let mut publication = crate::config_updates::lock(&turn.session).await;
-            crate::config::set_model_option(runtime, id.0.as_ref(), &option_id, &value).await?;
-            let config = crate::config::options(runtime, id.0.as_ref()).await?;
-            crate::config::notify(&connection, id.clone(), config.clone())?;
+            crate::config::set_model_option(runtime, &id, &option_id, &value).await?;
+            let config = crate::config::options(runtime, &id).await?;
+            crate::config::notify(&connection, request.session_id, config.clone())?;
             *publication.current = Some(config);
             return Ok(command_response());
         }
@@ -49,7 +50,7 @@ pub(crate) async fn run(
         }
         Some(commands::Command::Continue) => {
             if runtime
-                .continue_turn(id.to_string(), model.model, model.provider, model.options)
+                .continue_turn(id.clone(), model.model, model.provider, model.options)
                 .await
                 .map_err(error::runtime)?
                 == ContinueSessionOutcome::NothingToContinue
@@ -64,7 +65,7 @@ pub(crate) async fn run(
             }
             runtime
                 .send_content(
-                    id.to_string(),
+                    id.clone(),
                     message,
                     model.model,
                     model.provider,
@@ -86,7 +87,7 @@ async fn finish_prompt(
     let result = drive(runtime, events, &mut output, cancelled).await;
     if cancelled.is_cancelled() || result.is_err() {
         runtime
-            .cancel_turn(output.id.to_string())
+            .cancel_turn(output.session_id.clone())
             .await
             .map_err(error::runtime)?;
         loop {
@@ -99,7 +100,7 @@ async fn finish_prompt(
                     )));
                 }
             };
-            if event.event.session_id() == Some(output.id.0.as_ref()) {
+            if event.event.session_id() == Some(&output.session_id) {
                 output.event(runtime, event.event).await?;
             }
         }
@@ -123,7 +124,7 @@ async fn drive(
         if let Event::ServiceError { error } = event {
             return Err(crate::error::runtime(error));
         }
-        if event.session_id() != Some(output.id.0.as_ref()) {
+        if event.session_id() != Some(&output.session_id) {
             continue;
         }
         match event {
@@ -152,14 +153,16 @@ async fn drive(
 
 struct Output {
     id: acp::SessionId,
+    session_id: SessionId,
     connection: Connection,
     executions: HashMap<String, String>,
 }
 
 impl Output {
-    fn new(id: acp::SessionId, connection: Connection) -> Self {
+    fn new(session_id: SessionId, connection: Connection) -> Self {
         Self {
-            id,
+            id: acp::SessionId::new(session_id.to_string()),
+            session_id,
             connection,
             executions: HashMap::new(),
         }
@@ -256,7 +259,7 @@ impl Output {
                 if selected.option_id.0.as_ref() == "allow" =>
             {
                 runtime
-                    .approve_script(self.id.to_string(), script.execution_id)
+                    .approve_script(self.session_id.clone(), script.execution_id)
                     .await
                     .map_err(error::runtime)?;
             }
@@ -264,7 +267,7 @@ impl Output {
                 if selected.option_id.0.as_ref() == "deny" =>
             {
                 runtime
-                    .deny_script(self.id.to_string(), script.execution_id)
+                    .deny_script(self.session_id.clone(), script.execution_id)
                     .await
                     .map_err(error::runtime)?;
             }

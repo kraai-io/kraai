@@ -5,7 +5,7 @@ use futures::StreamExt;
 use kraai_agent::AgentManager;
 use kraai_persistence::Persistence;
 use kraai_provider_core::{ProviderManager, ProviderRequestContext, ProviderStreamEvent};
-use kraai_types::{MessageId, MessageStatus};
+use kraai_types::{MessageId, MessageStatus, SessionId};
 
 use crate::benchmark::{Benchmark, Context};
 use crate::fixtures::{agent, provider};
@@ -19,7 +19,7 @@ pub(super) struct Fixture {
     manager: AgentManager,
     persistence: Persistence,
     providers: ProviderManager,
-    session: String,
+    session: SessionId,
     expected: String,
 }
 
@@ -27,7 +27,7 @@ pub(super) struct Reply {
     id: MessageId,
     chunks: usize,
     visible_text_matches: bool,
-    completed_session: Option<String>,
+    completed_session: Option<SessionId>,
     lease_released: bool,
 }
 
@@ -157,7 +157,7 @@ impl Benchmark for Case {
             );
             ensure!(reply.visible_text_matches, "Streamed text changed");
             ensure!(
-                reply.completed_session.as_deref() == Some(session.as_str()),
+                reply.completed_session.as_ref() == Some(&session),
                 "Stream completion lost its session"
             );
             ensure!(reply.lease_released, "Turn lease was not released");

@@ -12,13 +12,13 @@ struct PausedContextStore {
 
 #[async_trait::async_trait]
 impl ContextStateStore for PausedContextStore {
-    async fn load(&self, session_id: &str) -> Result<ContextStateDocument> {
+    async fn load(&self, session_id: &SessionId) -> Result<ContextStateDocument> {
         self.inner.load(session_id).await
     }
 
     async fn append_command(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         execution_id: &ScriptExecutionId,
         sequence: u64,
         invocation_id: &CommandInvocationId,
@@ -41,7 +41,7 @@ impl ContextStateStore for PausedContextStore {
 
     async fn append_runtime(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         component: &str,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent> {
@@ -52,7 +52,7 @@ impl ContextStateStore for PausedContextStore {
 
     async fn save_snapshots(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         through_event: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
@@ -62,7 +62,7 @@ impl ContextStateStore for PausedContextStore {
             .await
     }
 
-    async fn delete(&self, session_id: &str) -> Result<()> {
+    async fn delete(&self, session_id: &SessionId) -> Result<()> {
         self.inner.delete(session_id).await
     }
 }
@@ -78,14 +78,15 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     });
     let tasks = super::super::super::stream_tasks::StreamTasks::default();
     let barrier = Arc::new(tokio::sync::RwLock::new(()));
+    let session = SessionId::new("session");
     let handler = DurableStateEffects {
         execution_id: ScriptExecutionId::new(Ulid::generate()),
-        session_id: "session".into(),
+        session_id: session.clone(),
         workspace_root: PathBuf::from("/workspace"),
         effective_capabilities: SandboxCapabilities::workspace_read(),
         store: store.clone(),
         barrier: barrier.clone(),
-        session_task: Arc::new(tasks.session_token("session")),
+        session_task: Arc::new(tasks.session_token(&session)),
     };
     let request = open_request("/workspace/source.rs");
     {
@@ -96,7 +97,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     let entered = store.entered.notified();
     tokio::pin!(entered);
     assert!(futures::poll!(&mut entered).is_pending());
-    let drain = tasks.wait_session("session");
+    let drain = tasks.wait_session(&session);
     tokio::pin!(drain);
     assert!(futures::poll!(&mut drain).is_pending());
     tasks.close();
@@ -114,7 +115,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     all.await;
     drop(barrier.write().await);
     let reopened = SqliteContextStateStore::new(&directory);
-    let events = reopened.list("session").await.unwrap();
+    let events = reopened.list(&SessionId::new("session")).await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(
         events.first().unwrap().mutations,
@@ -125,7 +126,13 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
             },
         }]
     );
-    reopened.delete("session").await.unwrap();
-    assert!(reopened.list("session").await.unwrap().is_empty());
+    reopened.delete(&SessionId::new("session")).await.unwrap();
+    assert!(
+        reopened
+            .list(&SessionId::new("session"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     tokio::fs::remove_dir_all(directory).await.unwrap();
 }

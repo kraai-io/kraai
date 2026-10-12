@@ -1,11 +1,12 @@
 use super::core::RuntimeCore;
 use crate::Event;
+use kraai_types::SessionId;
 use std::collections::BTreeSet;
 use std::time::Duration;
 use tokio::task::{JoinHandle, JoinSet};
 
 impl RuntimeCore {
-    pub(crate) async fn release_turn(&self, session_id: &str) {
+    pub(crate) async fn release_turn(&self, session_id: &SessionId) {
         self.agent_manager
             .read()
             .await
@@ -22,7 +23,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(crate) async fn finish_turn(&self, session_id: &str) {
+    pub(crate) async fn finish_turn(&self, session_id: &SessionId) {
         self.agent_manager
             .write()
             .await
@@ -37,7 +38,7 @@ impl RuntimeCore {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut cancelling = BTreeSet::new();
-            let mut cancellations: JoinSet<(String, color_eyre::Result<bool>)> = JoinSet::new();
+            let mut cancellations: JoinSet<(SessionId, color_eyre::Result<bool>)> = JoinSet::new();
             loop {
                 tokio::select! {
                     _ = interval.tick() => {},

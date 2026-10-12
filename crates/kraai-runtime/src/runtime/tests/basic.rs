@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManager;
-use kraai_types::{ChatRole, ProviderId, TokenUsage};
+use kraai_types::{ChatRole, ProviderId, SessionId, TokenUsage};
 use tokio::sync::broadcast;
 
 use super::harness::{
@@ -242,7 +242,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
 
     async fn collect_events(
         receiver: &mut broadcast::Receiver<RuntimeEvent>,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<Vec<RuntimeEvent>> {
         let mut events = Vec::new();
         loop {
@@ -429,7 +429,7 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
     let model_error = harness
         .handle
         .send_message(
-            String::from("session"),
+            SessionId::new("session"),
             String::from("message"),
             String::new(),
             String::from("provider"),
@@ -442,7 +442,7 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
     let provider_error = harness
         .handle
         .send_message(
-            String::from("session"),
+            SessionId::new("session"),
             String::from("message"),
             String::from("model"),
             String::new(),
@@ -454,13 +454,13 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
 
     let approve_error = harness
         .handle
-        .approve_script(String::from("session"), String::new())
+        .approve_script(SessionId::new("session"), String::new())
         .await
         .unwrap_err();
     assert!(approve_error.to_string().contains("execution_id"));
     let deny_error = harness
         .handle
-        .deny_script(String::from("session"), String::new())
+        .deny_script(SessionId::new("session"), String::new())
         .await
         .unwrap_err();
     assert!(deny_error.to_string().contains("execution_id"));
@@ -478,7 +478,7 @@ async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
 
     let missing_session = harness
         .handle
-        .get_session_snapshot(String::from("missing-session"))
+        .get_session_snapshot(SessionId::new("missing-session"))
         .await
         .unwrap_err();
     assert_eq!(missing_session.kind, RuntimeErrorKind::NotFound);

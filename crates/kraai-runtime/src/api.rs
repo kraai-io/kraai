@@ -7,7 +7,7 @@ pub use kraai_provider_openai_codex::{
 };
 use kraai_types::{
     AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
-    TokenUsage,
+    SessionId, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -162,7 +162,7 @@ impl SessionContextUsage {
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
-    pub id: String,
+    pub id: SessionId,
     pub tip_id: Option<String>,
     pub workspace_dir: String,
     pub created_at: u64,
@@ -276,24 +276,24 @@ pub struct RuntimeEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
     TurnCompleted {
-        session_id: String,
+        session_id: SessionId,
     },
     ScriptPrepared {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         call_id: String,
         source: String,
     },
     ScriptStarted {
-        session_id: String,
+        session_id: SessionId,
         call_id: String,
     },
     RequestUsageUpdated {
-        session_id: String,
+        session_id: SessionId,
         request: Box<kraai_types::RequestUsage>,
     },
     TurnTimingChanged {
-        session_id: String,
+        session_id: SessionId,
         timer: crate::TurnTimer,
     },
     /// Configuration loaded successfully
@@ -305,23 +305,23 @@ pub enum Event {
     },
     /// Failure in background work scoped to one session.
     SessionError {
-        session_id: String,
+        session_id: SessionId,
         error: RuntimeError,
     },
     // Streaming events
     /// Stream started for a message
     StreamStart {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
     /// Chunk received for a streaming message
     StreamChunk {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
         chunk: String,
     },
     ScriptCall {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
         call_id: kraai_types::ToolCallId,
         name: String,
@@ -329,22 +329,22 @@ pub enum Event {
     },
     /// Stream completed for a message
     StreamComplete {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
     /// Stream error for a message
     StreamError {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
         error: String,
     },
     /// Stream cancelled by the user
     StreamCancelled {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
     ProviderRetryScheduled {
-        session_id: String,
+        session_id: SessionId,
         provider_id: String,
         model_id: String,
         operation: String,
@@ -354,29 +354,29 @@ pub enum Event {
     },
 
     ScriptApprovalRequested {
-        session_id: String,
+        session_id: SessionId,
         script: PendingScriptInfo,
     },
     ScriptResultReady {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         call_id: String,
         output: kraai_types::MessageContent,
         outcome: kraai_types::ScriptExecutionOutcome,
     },
     ContextStateChanged {
-        session_id: String,
+        session_id: SessionId,
         notifications: Vec<String>,
     },
     ContinuationFailed {
-        session_id: String,
+        session_id: SessionId,
         error: String,
     },
 
     // History events
     /// Chat history was updated
     HistoryUpdated {
-        session_id: String,
+        session_id: SessionId,
     },
     OpenAiCodexAuthUpdated {
         status: OpenAiCodexAuthStatus,
@@ -388,7 +388,7 @@ pub enum Event {
 
 impl Event {
     /// Returns the session this event concerns, if any.
-    pub fn session_id(&self) -> Option<&str> {
+    pub fn session_id(&self) -> Option<&SessionId> {
         match self {
             Self::TurnCompleted { session_id }
             | Self::ScriptPrepared { session_id, .. }

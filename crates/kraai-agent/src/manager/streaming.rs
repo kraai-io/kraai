@@ -4,7 +4,7 @@ impl AgentManager {
     #[cfg(test)]
     pub(super) async fn add_message(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
@@ -18,7 +18,7 @@ impl AgentManager {
 
     pub async fn add_script_result_to_history(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         message_id: MessageId,
         profile_id: String,
         call_id: ToolCallId,
@@ -31,7 +31,7 @@ impl AgentManager {
             .append_message_idempotent(
                 message_id,
                 AppendMessageRequest {
-                    session_id: session_id.to_string(),
+                    session_id: session_id.clone(),
                     content: ConversationItem::ScriptResult {
                         call_id,
                         output: content,
@@ -49,7 +49,7 @@ impl AgentManager {
 
     pub(super) async fn append_message(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
@@ -80,7 +80,7 @@ impl AgentManager {
         let appended = self
             .conversation_store
             .append_message(AppendMessageRequest {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 content,
                 status: MessageStatus::Complete,
                 agent_profile_id,
@@ -102,7 +102,7 @@ impl AgentManager {
 
     pub(super) async fn start_streaming_message(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         role: ChatRole,
         stream_id: StreamId,
         agent_profile_id: Option<String>,
@@ -126,7 +126,7 @@ impl AgentManager {
         let appended = self
             .conversation_store
             .append_message(AppendMessageRequest {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 content: ConversationItem::Assistant { items: Vec::new() },
                 status: MessageStatus::Streaming { stream_id },
                 agent_profile_id,
@@ -139,7 +139,7 @@ impl AgentManager {
         self.streaming_messages.write().await.insert(
             message_id.clone(),
             StreamingMessageState {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 previous_tip: appended.previous_tip,
                 previous_title: appended.previous_title,
                 message: appended.message,
@@ -159,19 +159,19 @@ impl AgentManager {
         Ok(message_id)
     }
 
-    pub async fn session_has_active_stream(&self, session_id: &str) -> bool {
+    pub async fn session_has_active_stream(&self, session_id: &SessionId) -> bool {
         let streaming = self.streaming_messages.read().await;
         streaming
             .values()
-            .any(|state| state.session_id == session_id)
+            .any(|state| state.session_id == *session_id)
     }
 
-    pub async fn discard_streaming_state(&self, session_id: &str) {
+    pub async fn discard_streaming_state(&self, session_id: &SessionId) {
         let _persistence = self.streaming_persistence.lock().await;
         self.streaming_messages
             .write()
             .await
-            .retain(|_, state| state.session_id != session_id);
+            .retain(|_, state| state.session_id != *session_id);
     }
 
     pub async fn append_text_chunk(
@@ -271,7 +271,7 @@ impl AgentManager {
         Some(())
     }
 
-    pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+    pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -289,7 +289,10 @@ impl AgentManager {
         Ok(Some(state.session_id))
     }
 
-    pub async fn abort_streaming_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+    pub async fn abort_streaming_message(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(state) = state else {
@@ -402,14 +405,14 @@ impl AgentManager {
 
     pub(super) async fn abort_streaming_messages_for_session(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<()> {
         let to_abort: Vec<MessageId> = {
             let streaming = self.streaming_messages.read().await;
             streaming
                 .iter()
                 .filter_map(|(message_id, state)| {
-                    (state.session_id == session_id).then_some(message_id.clone())
+                    (state.session_id == *session_id).then_some(message_id.clone())
                 })
                 .collect()
         };
@@ -421,7 +424,10 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
+    pub async fn get_chat_history(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<BTreeMap<MessageId, Message>> {
         let mut result = BTreeMap::new();
 
         let Some(tip_id) = self.get_tip(session_id).await? else {
@@ -438,7 +444,7 @@ impl AgentManager {
         let streaming = self.streaming_messages.read().await;
         let mut streaming_messages: Vec<_> = streaming
             .iter()
-            .filter(|(_, state)| state.session_id == session_id)
+            .filter(|(_, state)| state.session_id == *session_id)
             .map(|(message_id, state)| (message_id.clone(), state.message.clone()))
             .collect();
         drop(streaming);
@@ -450,7 +456,7 @@ impl AgentManager {
 
     pub async fn undo_last_user_message(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<Option<kraai_types::MessageContent>> {
         if self.pending_message_rollbacks.contains_key(session_id) {
             return Err(eyre!(kraai_types::DomainError::conflict(

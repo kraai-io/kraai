@@ -13,7 +13,7 @@ use axum::{
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::{StreamExt, stream};
 use kraai_runtime::{RuntimeBuilder, RuntimeEvent, RuntimeStartupState};
-use kraai_types::MessageStatus;
+use kraai_types::{MessageStatus, SessionId};
 use serde_json::json;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -106,7 +106,7 @@ provider_id = "mock"
 
 async fn check_overflow(
     runtime: kraai_runtime::RuntimeHandle,
-    id: String,
+    id: SessionId,
     session: Arc<crate::session::Session>,
     inner: ConnectionTo<Client>,
     requests: Arc<AtomicUsize>,
@@ -144,7 +144,7 @@ async fn check_overflow(
     let failure = finish_prompt(
         &runtime,
         &mut lagged,
-        Output::new(acp::SessionId::new(id.clone()), connection),
+        Output::new(id.clone(), connection),
         &turn.token,
     )
     .await;
@@ -177,7 +177,7 @@ async fn check_overflow(
     let response = run(
         &runtime,
         session.begin_turn()?,
-        acp::PromptRequest::new(id.clone(), vec![content::text("second")]),
+        acp::PromptRequest::new(id.to_string(), vec![content::text("second")]),
         Connection::new(inner, crate::Stdio::new().budget),
     )
     .await?;

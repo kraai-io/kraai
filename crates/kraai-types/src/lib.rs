@@ -59,8 +59,7 @@ fn validate_message_id(value: &str) -> Result<(), String> {
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(
-            "message id may contain only ASCII letters, digits, hyphens, and underscores"
-                .to_string(),
+            "id may contain only ASCII letters, digits, hyphens, and underscores".to_string(),
         );
     }
     Ok(())
@@ -267,7 +266,7 @@ macro_rules! define_id {
 }
 
 define_id!(MessageId, validate_message_id);
-define_id!(SessionId, validate_id);
+define_id!(SessionId, validate_message_id);
 define_id!(StreamId, validate_id);
 define_id!(ScriptExecutionId, validate_message_id);
 define_id!(CommandInvocationId, validate_message_id);

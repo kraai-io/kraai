@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
+use kraai_types::{McpRequest, SessionId};
 use serde_json::{Value, json};
 
 use super::harness::RuntimeTestHarness;
@@ -31,7 +31,7 @@ fn config(name: &str) -> McpConfig {
     }
 }
 
-async fn servers(harness: &RuntimeTestHarness, session: &str) -> Vec<Value> {
+async fn servers(harness: &RuntimeTestHarness, session: &SessionId) -> Vec<Value> {
     let mcp = harness
         .runtime
         .agent_manager

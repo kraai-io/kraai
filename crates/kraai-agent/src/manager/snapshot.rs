@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{MessageStore, SessionMeta};
-use kraai_types::{AgentProfilesState, ChatRole, Message, MessageId, MessageStatus};
+use kraai_types::{AgentProfilesState, ChatRole, Message, MessageId, MessageStatus, SessionId};
 
 use super::{AgentManager, SessionContextUsage};
 
@@ -39,7 +39,7 @@ impl AgentManager {
 
     pub async fn capture_session_snapshot(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<SessionSnapshotReader> {
         let persisted = self.message_store.read_conversation(session_id).await?;
         let (session, persisted_history, requests) = match persisted {
@@ -65,12 +65,12 @@ impl AgentManager {
 
     async fn capture_in_flight_messages(
         &self,
-        session_id: Option<&str>,
+        session_id: Option<&SessionId>,
     ) -> HashMap<MessageId, Message> {
         let streaming = self.streaming_messages.read().await;
         let in_flight: HashMap<_, _> = streaming
             .iter()
-            .filter(|(_, state)| session_id.is_none_or(|id| state.session_id == id))
+            .filter(|(_, state)| session_id.is_none_or(|id| state.session_id == *id))
             .map(|(id, state)| (id.clone(), state.message.clone()))
             .collect();
         drop(streaming);
@@ -94,7 +94,7 @@ impl AgentManager {
 
     pub async fn get_session_context_usage(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<Option<SessionContextUsage>> {
         let Some(tip_id) = self.get_tip(session_id).await? else {
             return Ok(None);

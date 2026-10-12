@@ -1,3 +1,4 @@
+use kraai_types::SessionId;
 use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, eyre};
@@ -18,13 +19,16 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 }
 
 impl RuntimeCore {
-    pub(super) async fn build_session_snapshot(&self, session_id: &str) -> Result<SessionSnapshot> {
+    pub(super) async fn build_session_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionSnapshot> {
         let observation = self.session_store.observe(session_id).await?;
         if let Some(observation) = observation {
             self.observed_sessions
                 .lock()
                 .await
-                .insert(session_id.to_string(), observation);
+                .insert(session_id.clone(), observation);
         }
         let foreign_owner = observation.is_some_and(|observation| observation.lease_active)
             && !self.session_store.owns_turn(session_id).await?;

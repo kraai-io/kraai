@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{CreateSessionRequest, RuntimeHandle};
+use kraai_types::SessionId;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -96,18 +97,22 @@ impl Drop for ActiveTurn {
     }
 }
 
-pub(crate) async fn selected_model(runtime: &RuntimeHandle, id: &acp::SessionId) -> Result<Model> {
+pub(crate) fn runtime_id(id: &acp::SessionId) -> Result<SessionId> {
+    SessionId::try_new(id.0.as_ref()).map_err(error::invalid)
+}
+
+pub(crate) async fn selected_model(runtime: &RuntimeHandle, id: &SessionId) -> Result<Model> {
     let models = runtime.list_models().await.map_err(error::runtime)?;
     selected_model_with_models(runtime, id, &models).await
 }
 
 pub(crate) async fn selected_model_with_models(
     runtime: &RuntimeHandle,
-    id: &acp::SessionId,
+    id: &SessionId,
     models: &HashMap<String, Vec<kraai_runtime::Model>>,
 ) -> Result<Model> {
     let mut selected = runtime
-        .get_session_model(id.to_string())
+        .get_session_model(id.clone())
         .await
         .map_err(error::runtime)?
         .ok_or_else(|| error::internal("Session has no selected model"))?;
@@ -228,7 +233,7 @@ pub(crate) async fn create(
     options: &Options,
     request: acp::NewSessionRequest,
     config_updated: Arc<crate::config_updates::ConfigUpdates>,
-) -> Result<(String, Arc<Session>)> {
+) -> Result<(SessionId, Arc<Session>)> {
     if !request.cwd.is_absolute() {
         return Err(error::invalid("Session cwd must be absolute"));
     }

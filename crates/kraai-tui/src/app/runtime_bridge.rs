@@ -1,5 +1,6 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{CreateSessionRequest, RuntimeError, RuntimeEvent, RuntimeHandle};
+use kraai_types::SessionId;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
@@ -155,7 +156,7 @@ pub(super) fn route_requests(
 struct RequestBridge {
     executor: kraai_runtime::RuntimeResult<tokio::runtime::Runtime>,
     runtime: RuntimeHandle,
-    model_save_ids: HashMap<String, u64>,
+    model_save_ids: HashMap<SessionId, u64>,
 }
 
 impl RequestBridge {

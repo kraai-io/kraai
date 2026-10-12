@@ -14,7 +14,7 @@ fn test_dir(name: &str) -> PathBuf {
 fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
     NewScriptExecution {
         id: id.clone(),
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         source_message_id: MessageId::new("message"),
         call_id: ToolCallId::new("call-1"),
         profile: ScriptProfileSnapshot {

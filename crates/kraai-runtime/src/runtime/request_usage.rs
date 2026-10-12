@@ -2,12 +2,12 @@ use super::core::emit_event;
 use crate::{api::Event, handle::RuntimeEventSender};
 use kraai_agent::AgentManager;
 use kraai_provider_core::{ProviderRetryEvent, ProviderRetryObserver};
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId};
 use std::{pin::Pin, sync::Arc};
 use tokio::sync::RwLock;
 
 pub(super) struct RuntimeRetryObserver {
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) provider_id: ProviderId,
     pub(super) model_id: ModelId,
     pub(super) event_tx: RuntimeEventSender,

@@ -4,7 +4,7 @@ use color_eyre::eyre::{OptionExt, Result, ensure};
 use kraai_persistence::{
     AppendMessageRequest, ConversationSnapshot, Persistence, SessionMeta, SessionStore,
 };
-use kraai_types::{ConversationItem, MessageId, MessageStatus};
+use kraai_types::{ConversationItem, MessageId, MessageStatus, SessionId};
 
 use crate::benchmark::{Benchmark, Context};
 
@@ -40,7 +40,7 @@ impl Benchmark for Case {
             .sessions()
             .save(&SessionMeta {
                 revision: 0,
-                id: SESSION.into(),
+                id: SessionId::new(SESSION),
                 tip_id: None,
                 workspace_dir: context.directory.clone(),
                 created_at: 1,
@@ -61,13 +61,14 @@ impl Benchmark for Case {
             .persistence
             .as_ref()
             .ok_or_eyre("Persistence fixture was already consumed")?;
+        let session = SessionId::new(SESSION);
         let mut ids = Vec::new();
         let mut previous_tips_match = true;
         for _ in 0..MESSAGES {
             let appended = persistence
                 .conversations()
                 .append_message(AppendMessageRequest {
-                    session_id: SESSION.into(),
+                    session_id: session.clone(),
                     content: ConversationItem::User {
                         content: fixture.payload.clone().into(),
                     },
@@ -87,7 +88,7 @@ impl Benchmark for Case {
             let snapshot = black_box(
                 reopened
                     .messages()
-                    .read_conversation(SESSION)
+                    .read_conversation(&session)
                     .await?
                     .ok_or_eyre("Persisted conversation disappeared")?,
             );
@@ -118,7 +119,10 @@ impl Benchmark for Case {
             snapshot.history.len() as u64 == MESSAGES,
             "History lost messages"
         );
-        ensure!(snapshot.session.id == SESSION, "History session changed");
+        ensure!(
+            snapshot.session.id.as_str() == SESSION,
+            "History session changed"
+        );
         ensure!(
             snapshot.session.tip_id.as_ref() == ids.last(),
             "History tip changed"

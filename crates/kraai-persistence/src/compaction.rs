@@ -84,7 +84,7 @@ impl SqliteCompactionStore {
                     leases,
                     "compaction",
                     boundary,
-                    session.as_deref(),
+                    session.as_ref(),
                     &checkpoint,
                 )
             })

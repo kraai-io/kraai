@@ -4,7 +4,7 @@ use crate::message_references::{
 };
 use crate::{SessionMeta, SessionStore};
 use color_eyre::eyre::{Result, ensure};
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageId, SessionId};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -16,7 +16,10 @@ pub struct ConversationSnapshot {
 
 #[async_trait::async_trait]
 pub trait MessageStore: Send + Sync {
-    async fn read_conversation(&self, _session_id: &str) -> Result<Option<ConversationSnapshot>> {
+    async fn read_conversation(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<Option<ConversationSnapshot>> {
         Ok(None)
     }
 
@@ -70,8 +73,11 @@ impl SqliteMessageStore {
 
 #[async_trait::async_trait]
 impl MessageStore for SqliteMessageStore {
-    async fn read_conversation(&self, session_id: &str) -> Result<Option<ConversationSnapshot>> {
-        let session_id = session_id.to_string();
+    async fn read_conversation(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<ConversationSnapshot>> {
+        let session_id = session_id.clone();
         self.database
             .run(move |connection, _| {
                 let transaction = connection.transaction()?;
@@ -130,7 +136,7 @@ impl MessageStore for SqliteMessageStore {
                 let mut session = record_session(transaction, "message", message.id.as_str())?;
                 let associated_session_exists: bool = transaction.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
-                    [session.as_deref()],
+                    [session.as_ref().map(SessionId::as_str)],
                     |row| row.get(0),
                 )?;
                 if !associated_session_exists && let Some(parent) = &message.parent_id {
@@ -144,7 +150,7 @@ impl MessageStore for SqliteMessageStore {
                     leases,
                     "message",
                     message.id.as_str(),
-                    session.as_deref(),
+                    session.as_ref(),
                     &message,
                 )
             })

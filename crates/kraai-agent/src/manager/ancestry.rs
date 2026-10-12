@@ -3,7 +3,7 @@ use super::*;
 impl AgentManager {
     pub async fn reachable_message_ids(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         mut candidates: HashSet<MessageId>,
     ) -> Result<HashSet<MessageId>> {
         let mut reachable = HashSet::new();

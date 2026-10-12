@@ -10,7 +10,7 @@ use kraai_runtime::{
 };
 use kraai_types::{
     AssistantItem, AssistantPhase, ChatRole, ConversationItem, ImageAttachment, MessageContent,
-    MessageId, MessageStatus,
+    MessageId, MessageStatus, SessionId,
 };
 use ratatui::crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -122,8 +122,8 @@ pub struct App {
     last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
-    last_session_event_sequences: HashMap<String, u64>,
-    session_snapshot_sequences: HashMap<String, u64>,
+    last_session_event_sequences: HashMap<SessionId, u64>,
+    session_snapshot_sequences: HashMap<SessionId, u64>,
     event_lag_session_resync_pending: bool,
     event_lag_script_resync_pending: bool,
     runtime_bridge_connected: bool,
@@ -257,7 +257,7 @@ impl App {
         true
     }
 
-    pub(super) fn request_stream_history_sync(&mut self, session_id: &str, now: Instant) {
+    pub(super) fn request_stream_history_sync(&mut self, session_id: &SessionId, now: Instant) {
         let should_request = self
             .last_stream_history_request
             .is_none_or(|last| now.duration_since(last) >= STREAM_HISTORY_SYNC_FALLBACK_INTERVAL);
@@ -267,10 +267,10 @@ impl App {
 
         self.last_stream_history_request = Some(now);
         self.request(RuntimeRequest::GetCurrentTip {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
         });
         self.request(RuntimeRequest::GetChatHistory {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
         });
     }
 

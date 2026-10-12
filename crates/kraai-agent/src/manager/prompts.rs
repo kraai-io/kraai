@@ -19,7 +19,7 @@ pub(super) struct TurnSystemPrompt {
 impl AgentManager {
     pub(super) async fn build_turn_system_prompt(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         profile: &AgentProfile,
         workspace_dir: &Path,
     ) -> Result<TurnSystemPrompt> {
@@ -77,7 +77,7 @@ impl AgentManager {
 
         let prefix = sections.join("\n\n");
         #[cfg(debug_assertions)]
-        tracing::info!(session_id, profile_id = %profile.id,
+        tracing::info!(session_id = %session_id, profile_id = %profile.id,
             "Compiled system instructions:\n{}", prefix);
         Ok(TurnSystemPrompt {
             prefix,

@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_types::{ConversationItem, Message, MessageGeneration, MessageId, MessageStatus};
+use kraai_types::{
+    ConversationItem, Message, MessageGeneration, MessageId, MessageStatus, SessionId,
+};
 use ulid::Ulid;
 
 use crate::commit::complete_commit;
@@ -198,7 +200,7 @@ impl ConversationStore {
 
     pub async fn restore_appended_message(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         appended: &AppendedMessage,
     ) -> Result<()> {
         self.restore_tip_title_and_delete_message(
@@ -212,14 +214,14 @@ impl ConversationStore {
 
     pub async fn restore_tip_title_and_delete_message(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         message_id: &MessageId,
         tip_id: Option<MessageId>,
         title: Option<String>,
     ) -> Result<()> {
         let guard = self.session_store.lock_message_mutation(message_id).await;
         let store = self.clone();
-        let session_id = session_id.to_string();
+        let session_id = session_id.clone();
         let message_id = message_id.clone();
         complete_commit(
             guard,
@@ -235,7 +237,7 @@ impl ConversationStore {
 
     async fn restore_message(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         message_id: &MessageId,
         tip_id: Option<MessageId>,
         title: Option<String>,
@@ -292,7 +294,7 @@ impl ConversationStore {
 
 #[derive(Clone)]
 pub struct AppendMessageRequest {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub content: ConversationItem,
     pub status: MessageStatus,
     pub agent_profile_id: Option<String>,

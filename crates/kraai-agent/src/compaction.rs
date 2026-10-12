@@ -6,7 +6,9 @@ use kraai_persistence::{
     CompactionCheckpoint, FileContextSnapshot, RequestUsageStore, SqliteCompactionStore,
 };
 use kraai_provider_core::{ProviderManager, ProviderRequest};
-use kraai_types::{ConversationItem, Message, MessageId, ModelId, ProviderId, RequestUsage};
+use kraai_types::{
+    ConversationItem, Message, MessageId, ModelId, ProviderId, RequestUsage, SessionId,
+};
 
 mod summary;
 #[cfg(test)]
@@ -16,7 +18,7 @@ mod tests;
 pub struct ContextCompaction {
     pub(crate) store: SqliteCompactionStore,
     pub(crate) usage_store: Arc<dyn RequestUsageStore>,
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
     pub(crate) original: ProviderRequest,
     pub(crate) prefix: String,
     pub(crate) snapshots: Vec<FileContextSnapshot>,

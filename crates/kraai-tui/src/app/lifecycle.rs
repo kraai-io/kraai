@@ -330,7 +330,7 @@ impl App {
                 self.last_runtime_event_sequence = event.sequence;
                 let covered_by_snapshot = if let Some(session_id) = event.event.session_id() {
                     self.last_session_event_sequences
-                        .insert(session_id.to_string(), event.sequence);
+                        .insert(session_id.clone(), event.sequence);
                     self.session_snapshot_sequences
                         .get(session_id)
                         .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)

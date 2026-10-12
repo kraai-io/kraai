@@ -44,7 +44,7 @@ impl AgentManager {
 
     pub(super) async fn build_model_context(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         history: Vec<Message>,
         prompt: &prompts::TurnSystemPrompt,
         script_tool: Option<ScriptToolDefinition>,
@@ -129,7 +129,7 @@ impl AgentManager {
             .map(|_| ContextCompaction {
                 store,
                 usage_store: self.usage_store.clone(),
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 original: request.clone(),
                 prefix: prompt.prefix.clone(),
                 snapshots: files.snapshots,

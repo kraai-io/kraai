@@ -13,7 +13,8 @@ use axum::{
 use color_eyre::eyre::{Result, eyre};
 use kraai_runtime::{Event, RuntimeBuilder, RuntimeHandle, RuntimeStartupState};
 use kraai_types::{
-    ModelId, ModelOptionDefinition, ModelOptionValue, ModelOptionValues, ModelSelection, ProviderId,
+    ModelId, ModelOptionDefinition, ModelOptionValue, ModelOptionValues, ModelSelection,
+    ProviderId, SessionId,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -23,7 +24,7 @@ use super::*;
 
 struct Fixture {
     runtime: RuntimeHandle,
-    session: String,
+    session: SessionId,
     payloads: Arc<Mutex<Vec<Value>>>,
     _server: AbortOnDropHandle<()>,
     _root: tempfile::TempDir,
@@ -151,11 +152,7 @@ async fn active_session_metadata_changes_reconcile_controls_and_allow_individual
             Some(&json!(""))
         );
     }
-    let selected = crate::session::selected_model(
-        &fixture.runtime,
-        &acp::SessionId::new(fixture.session.clone()),
-    )
-    .await?;
+    let selected = crate::session::selected_model(&fixture.runtime, &fixture.session).await?;
     assert_eq!(
         selected.options,
         ModelOptionValues::from([("retained".into(), ModelOptionValue::Boolean(false))])
@@ -236,11 +233,7 @@ async fn removing_the_final_optional_setting_does_not_block_the_next_prompt() ->
     )
     .await?;
     fixture.update(Vec::new()).await?;
-    let selected = crate::session::selected_model(
-        &fixture.runtime,
-        &acp::SessionId::new(fixture.session.clone()),
-    )
-    .await?;
+    let selected = crate::session::selected_model(&fixture.runtime, &fixture.session).await?;
     assert!(selected.options.is_empty());
     let mut events = fixture.runtime.subscribe_session(&fixture.session);
     fixture

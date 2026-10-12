@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use color_eyre::eyre::Result;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus};
+use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus, SessionId};
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
 
 impl RuntimeCore {
-    pub(crate) async fn recover_session_executions(&self, session_id: &str) -> Result<()> {
+    pub(crate) async fn recover_session_executions(&self, session_id: &SessionId) -> Result<()> {
         if !self.session_store.owns_turn(session_id).await? {
             return Err(color_eyre::eyre::eyre!(
                 "Session recovery requires turn ownership"
@@ -19,7 +19,7 @@ impl RuntimeCore {
             return Ok(());
         }
         let sessions = self.agent_manager.read().await.list_session_ids().await?;
-        let mut sources: HashMap<String, HashSet<MessageId>> = HashMap::new();
+        let mut sources: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
         for record in &records {
             if sessions.contains(&record.session_id) {
                 sources
@@ -28,7 +28,7 @@ impl RuntimeCore {
                     .insert(record.source_message_id.clone());
             }
         }
-        let mut histories: HashMap<String, HashSet<MessageId>> = HashMap::new();
+        let mut histories: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
         for record in records {
             if !sessions.contains(&record.session_id) {
                 continue;

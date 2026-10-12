@@ -53,7 +53,10 @@ async fn restart_after_pending_approval_waits_for_the_next_prompt() -> Result<()
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 2);
     let persistence =
         kraai_persistence::Persistence::open(&harness.root.path().join("state/data")).await?;
-    let executions = persistence.executions().list_for_session(&session).await?;
+    let executions = persistence
+        .executions()
+        .list_for_session(&kraai_types::SessionId::new(session.as_str()))
+        .await?;
     assert_eq!(executions.len(), 1);
     assert_eq!(
         executions.first().and_then(|execution| execution.status),

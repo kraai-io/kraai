@@ -6,7 +6,7 @@ use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageContent, MessageId};
+use kraai_types::{Message, MessageContent, MessageId, SessionId};
 
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
@@ -18,11 +18,12 @@ use super::types::{
 
 pub(super) struct AppState {
     pub(super) session_cost: kraai_types::CostSummary,
-    pub(super) session_requests: BTreeMap<String, BTreeMap<MessageId, kraai_types::RequestUsage>>,
+    pub(super) session_requests:
+        BTreeMap<SessionId, BTreeMap<MessageId, kraai_types::RequestUsage>>,
     pub(super) launch_requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub(super) launched_at: u64,
     pub(super) cost_recovery_list_pending: bool,
-    pub(super) cost_recovery_sessions: std::collections::BTreeSet<String>,
+    pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
     pub(super) editor_requested: bool,
     pub(super) menu_search: String,
@@ -35,7 +36,7 @@ pub(super) struct AppState {
     pub(super) draft_images: super::draft_images::DraftImages,
     pub(super) next_image_request_id: u64,
     pub(super) pending_messages: VecDeque<super::types::PendingMessage>,
-    pub(super) failed_messages: HashMap<Option<String>, Vec<MessageContent>>,
+    pub(super) failed_messages: HashMap<Option<SessionId>, Vec<MessageContent>>,
     pub(super) input_cursor: usize,
     pub(super) input_width: u16,
     pub(super) input_history: Vec<String>,
@@ -73,7 +74,7 @@ pub(super) struct AppState {
     pub(super) selected_provider_id: Option<String>,
     pub(super) selected_model_id: Option<String>,
     pub(super) last_session_model: Option<kraai_types::ModelSelection>,
-    pub(super) session_model_saves: HashMap<String, super::session_model::SessionModelSave>,
+    pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
     pub(super) startup_model_options_applied: bool,
@@ -84,9 +85,9 @@ pub(super) struct AppState {
     pub(super) option_editor_error: Option<String>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
-    pub(super) submitted_script_decisions: BTreeMap<String, BTreeSet<String>>,
+    pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
-    pub(super) current_session_id: Option<String>,
+    pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
     pub(super) agent_menu_index: usize,
     pub(super) model_menu_index: usize,

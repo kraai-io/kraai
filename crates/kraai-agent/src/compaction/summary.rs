@@ -42,7 +42,7 @@ impl ContextCompaction {
             requests.push(observer.snapshot().await);
             let mut context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
                 observer.clone(),
-                self.session_id.clone(),
+                self.session_id.to_string(),
             );
             if let Some(resolver) = &self.image_resolver {
                 context = context.with_image_resolver(resolver.clone());

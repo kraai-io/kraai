@@ -2,7 +2,7 @@ use crate::MessageStore;
 use crate::database::{Database, LeaseTokens, assert_owner};
 use crate::keyed_locks::KeyedLocks;
 use color_eyre::eyre::{Result, ensure};
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageId, SessionId};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -14,7 +14,7 @@ use tokio::sync::OwnedMutexGuard;
 pub struct SessionMeta {
     #[serde(skip)]
     pub revision: i64,
-    pub id: String,
+    pub id: SessionId,
     pub tip_id: Option<MessageId>,
     pub workspace_dir: PathBuf,
     pub created_at: u64,
@@ -32,7 +32,7 @@ pub trait SessionStore: Send + Sync {
     /// List all sessions
     async fn list(&self) -> Result<Vec<SessionMeta>>;
 
-    async fn list_ids(&self) -> Result<HashSet<String>> {
+    async fn list_ids(&self) -> Result<HashSet<SessionId>> {
         Ok(self
             .list()
             .await?
@@ -42,7 +42,7 @@ pub trait SessionStore: Send + Sync {
     }
 
     /// Get a session by ID
-    async fn get(&self, id: &str) -> Result<Option<SessionMeta>>;
+    async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>>;
 
     /// Save a session
     async fn save(&self, session: &SessionMeta) -> Result<()>;
@@ -69,7 +69,7 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<()>;
 
     /// Delete a session
-    async fn delete(&self, id: &str) -> Result<()>;
+    async fn delete(&self, id: &SessionId) -> Result<()>;
 }
 
 pub struct SqliteSessionStore {
@@ -123,7 +123,7 @@ impl SqliteSessionStore {
             save_session(transaction, &session)?;
             if let Some(tip) = &session.tip_id {
                 transaction.execute("UPDATE records SET session_id = COALESCE(session_id, ?1) WHERE kind = 'message' AND id = ?2",
-                    params![session.id, tip.as_str()])?;
+                    params![session.id.as_str(), tip.as_str()])?;
             }
             Ok(true)
         }).await
@@ -147,11 +147,11 @@ pub(crate) fn assert_session_revision(
     Ok(())
 }
 
-pub(crate) fn read_session(connection: &Connection, id: &str) -> Result<Option<SessionMeta>> {
+pub(crate) fn read_session(connection: &Connection, id: &SessionId) -> Result<Option<SessionMeta>> {
     let row: Option<(String, i64)> = connection
         .query_row(
             "SELECT data, metadata_revision FROM sessions WHERE id = ?1",
-            [id],
+            [id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
@@ -166,7 +166,7 @@ pub(crate) fn read_session(connection: &Connection, id: &str) -> Result<Option<S
 pub(crate) fn save_session(connection: &Connection, session: &SessionMeta) -> Result<()> {
     connection.execute("INSERT INTO sessions(id, data, tip_id, revision, metadata_revision) VALUES (?1, ?2, ?3, 1, 1)
         ON CONFLICT(id) DO UPDATE SET data = excluded.data, tip_id = excluded.tip_id, revision = sessions.revision + 1, metadata_revision = sessions.metadata_revision + 1",
-        params![session.id, serde_json::to_string(session)?, session.tip_id.as_ref().map(MessageId::as_str)])?;
+        params![session.id.as_str(), serde_json::to_string(session)?, session.tip_id.as_ref().map(MessageId::as_str)])?;
     Ok(())
 }
 
@@ -217,8 +217,8 @@ impl SessionStore for SqliteSessionStore {
         }).await
     }
 
-    async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
-        let id = id.to_string();
+    async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>> {
+        let id = id.clone();
         self.database
             .run(move |connection, _| read_session(connection, &id))
             .await
@@ -246,10 +246,11 @@ impl SessionStore for SqliteSessionStore {
             .await
     }
 
-    async fn delete(&self, id: &str) -> Result<()> {
-        let id = id.to_string();
+    async fn delete(&self, id: &SessionId) -> Result<()> {
+        let id = id.clone();
         self.database.transaction(move |transaction, leases| {
             assert_owner(transaction, leases, &id)?;
+            let id = id.as_str();
             let message_ids: Vec<String> = {
                 let mut statement = transaction.prepare("WITH RECURSIVE history(id) AS (
                     SELECT tip_id FROM sessions WHERE id = ?1 AND tip_id IS NOT NULL
@@ -261,13 +262,13 @@ impl SessionStore for SqliteSessionStore {
                     WHERE records.kind = 'message' AND json_extract(records.data, '$.parent_id') IS NOT NULL
                 ) SELECT id FROM history UNION SELECT id FROM records WHERE kind = 'message' AND session_id = ?1
                 EXCEPT SELECT id FROM retained_history")?;
-                statement.query_map([&id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
+                statement.query_map([id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
             };
-            transaction.execute("DELETE FROM sessions WHERE id = ?1", [&id])?;
+            transaction.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
             for message in message_ids { delete_message_records(transaction, leases, &message)?; }
-            transaction.execute("DELETE FROM execution_output WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
-            transaction.execute("DELETE FROM execution_sources WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [&id])?;
-            transaction.execute("DELETE FROM records WHERE session_id = ?1 AND kind NOT IN ('message', 'compaction')", [&id])?;
+            transaction.execute("DELETE FROM execution_output WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [id])?;
+            transaction.execute("DELETE FROM execution_sources WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [id])?;
+            transaction.execute("DELETE FROM records WHERE session_id = ?1 AND kind NOT IN ('message', 'compaction')", [id])?;
             Ok(())
         }).await
     }

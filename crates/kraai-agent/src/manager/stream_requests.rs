@@ -3,7 +3,7 @@ use super::*;
 impl AgentManager {
     pub async fn prepare_start_stream(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -21,7 +21,7 @@ impl AgentManager {
 
     pub async fn prepare_continuation_stream(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<Option<PendingStreamRequest>> {
         let Some(state) = self.session_states.get(session_id) else {
             return Ok(None);

@@ -9,7 +9,7 @@ use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
 use kraai_persistence::SqliteMessageStore;
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
-use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, SessionId, TokenUsage};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use super::super::builder::build_provider_registry;
@@ -509,7 +509,7 @@ path = \"inherit\"\n",
 pub(super) async fn create_session_with_profile(
     handle: &RuntimeHandle,
     profile_id: &str,
-) -> Result<String> {
+) -> Result<SessionId> {
     let session_id = handle.create_session().await?;
     handle
         .set_session_profile(session_id.clone(), profile_id.to_string())

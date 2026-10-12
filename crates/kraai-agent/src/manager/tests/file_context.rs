@@ -3,7 +3,7 @@ use super::common::{cleanup_dir, test_manager};
 use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 
-async fn open(manager: &AgentManager, session: &str, path: &Path) -> Result<()> {
+async fn open(manager: &AgentManager, session: &SessionId, path: &Path) -> Result<()> {
     manager
         .context_state_store
         .append_runtime(
@@ -18,7 +18,7 @@ async fn open(manager: &AgentManager, session: &str, path: &Path) -> Result<()> 
     Ok(())
 }
 
-async fn close(manager: &AgentManager, session: &str, path: &Path) -> Result<()> {
+async fn close(manager: &AgentManager, session: &SessionId, path: &Path) -> Result<()> {
     manager
         .context_state_store
         .append_runtime(
@@ -33,7 +33,7 @@ async fn close(manager: &AgentManager, session: &str, path: &Path) -> Result<()>
     Ok(())
 }
 
-async fn request(manager: &AgentManager, session: &str) -> Result<ProviderRequest> {
+async fn request(manager: &AgentManager, session: &SessionId) -> Result<ProviderRequest> {
     let tip = manager
         .get_tip(session)
         .await?

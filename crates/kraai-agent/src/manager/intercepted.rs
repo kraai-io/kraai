@@ -3,7 +3,7 @@ use super::*;
 impl AgentManager {
     pub async fn prepare_messages_stream(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         messages: Vec<kraai_types::MessageContent>,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -32,7 +32,7 @@ impl AgentManager {
 
     async fn prepare_claimed_messages_stream(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         messages: Vec<kraai_types::MessageContent>,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -91,9 +91,9 @@ impl AgentManager {
 
         if !matches!(result, Ok(Some(_))) {
             self.session_states
-                .insert(session_id.to_string(), previous_state);
+                .insert(session_id.clone(), previous_state);
             self.pending_message_rollbacks
-                .insert(session_id.to_string(), appended);
+                .insert(session_id.clone(), appended);
             if let Err(rollback_error) = self.finish_pending_message_rollback(session_id).await {
                 return Err(match result {
                     Err(error) => {
@@ -111,7 +111,10 @@ impl AgentManager {
 
     /// Resume an unfinished rollback before any stream preparation can append history.
     /// Keep each entry until its persisted tip has been restored successfully.
-    pub(super) async fn finish_pending_message_rollback(&mut self, session_id: &str) -> Result<()> {
+    pub(super) async fn finish_pending_message_rollback(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<()> {
         if let Some(messages) = self.pending_message_rollbacks.get_mut(session_id) {
             while let Some(message) = messages.last() {
                 self.conversation_store

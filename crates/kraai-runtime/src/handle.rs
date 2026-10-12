@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId};
+use kraai_types::{
+    MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId, SessionId,
+};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
@@ -71,7 +73,7 @@ impl RuntimeHandle {
         self.event_tx.subscribe()
     }
 
-    pub fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+    pub fn subscribe_session(&self, session_id: &SessionId) -> broadcast::Receiver<RuntimeEvent> {
         self.event_tx.subscribe_session(session_id)
     }
 
@@ -120,7 +122,7 @@ impl RuntimeHandle {
 
     pub async fn list_agent_profiles(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<AgentProfilesState> {
         self.request(|response| Command::ListAgentProfiles {
             session_id,
@@ -142,7 +144,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_profile(
         &self,
-        session_id: String,
+        session_id: SessionId,
         profile_id: String,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionProfile {
@@ -155,7 +157,7 @@ impl RuntimeHandle {
 
     pub async fn get_session_model(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<kraai_types::ModelSelection>> {
         self.request(|response| Command::GetSessionModel {
             session_id,
@@ -166,7 +168,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_model(
         &self,
-        session_id: String,
+        session_id: SessionId,
         selection: kraai_types::ModelSelection,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionModel {
@@ -179,7 +181,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_mcp_servers(
         &self,
-        session_id: String,
+        session_id: SessionId,
         config: kraai_mcp::McpConfig,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionMcpServers {
@@ -196,7 +198,7 @@ impl RuntimeHandle {
             .await
     }
 
-    pub async fn create_session(&self) -> RuntimeResult<String> {
+    pub async fn create_session(&self) -> RuntimeResult<SessionId> {
         self.create_session_with(CreateSessionRequest::default())
             .await
     }
@@ -204,7 +206,7 @@ impl RuntimeHandle {
     pub async fn create_session_with(
         &self,
         request: CreateSessionRequest,
-    ) -> RuntimeResult<String> {
+    ) -> RuntimeResult<SessionId> {
         self.request(|response| Command::CreateSession { request, response })
             .await
     }
@@ -212,7 +214,7 @@ impl RuntimeHandle {
     /// Send a message to the agent
     pub async fn send_message(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message: String,
         model_id: String,
         provider_id: String,
@@ -237,7 +239,7 @@ impl RuntimeHandle {
 
     pub async fn send_content(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message: kraai_types::MessageContent,
         model_id: String,
         provider_id: String,
@@ -263,7 +265,7 @@ impl RuntimeHandle {
     /// Get the chat history as a tree
     pub async fn get_chat_history(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<BTreeMap<MessageId, kraai_types::Message>> {
         self.request(|response| Command::GetChatHistory {
             session_id,
@@ -272,7 +274,10 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn get_session_snapshot(&self, session_id: String) -> RuntimeResult<SessionSnapshot> {
+    pub async fn get_session_snapshot(
+        &self,
+        session_id: SessionId,
+    ) -> RuntimeResult<SessionSnapshot> {
         self.request(|response| Command::GetSessionSnapshot {
             session_id,
             response,
@@ -282,7 +287,7 @@ impl RuntimeHandle {
 
     pub async fn get_session_context_usage(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<SessionContextUsage>> {
         self.request(|response| Command::GetSessionContextUsage {
             session_id,
@@ -292,7 +297,7 @@ impl RuntimeHandle {
     }
 
     /// Load a session by ID
-    pub async fn load_session(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn load_session(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::LoadSession {
             session_id,
             response,
@@ -312,7 +317,7 @@ impl RuntimeHandle {
     }
 
     /// Delete a session by ID
-    pub async fn delete_session(&self, session_id: String) -> RuntimeResult<()> {
+    pub async fn delete_session(&self, session_id: SessionId) -> RuntimeResult<()> {
         self.request(|response| Command::DeleteSession {
             session_id,
             response,
@@ -322,7 +327,7 @@ impl RuntimeHandle {
 
     pub async fn get_workspace_state(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<WorkspaceState>> {
         self.request(|response| Command::GetWorkspaceState {
             session_id,
@@ -333,7 +338,7 @@ impl RuntimeHandle {
 
     pub async fn set_workspace_dir(
         &self,
-        session_id: String,
+        session_id: SessionId,
         workspace_dir: String,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetWorkspaceDir {
@@ -345,7 +350,7 @@ impl RuntimeHandle {
     }
 
     /// Get the current tip message ID for a session.
-    pub async fn get_tip(&self, session_id: String) -> RuntimeResult<Option<String>> {
+    pub async fn get_tip(&self, session_id: SessionId) -> RuntimeResult<Option<String>> {
         self.request(|response| Command::GetTip {
             session_id,
             response,
@@ -355,7 +360,7 @@ impl RuntimeHandle {
 
     pub async fn undo_last_user_message(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<kraai_types::MessageContent>> {
         self.request(|response| Command::UndoLastUserMessage {
             session_id,
@@ -366,7 +371,7 @@ impl RuntimeHandle {
 
     pub async fn get_pending_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<crate::PendingScriptInfo>> {
         self.request(|response| Command::GetPendingScript {
             session_id,
@@ -377,7 +382,7 @@ impl RuntimeHandle {
 
     pub async fn approve_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
     ) -> RuntimeResult<()> {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
@@ -391,7 +396,11 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn deny_script(&self, session_id: String, execution_id: String) -> RuntimeResult<()> {
+    pub async fn deny_script(
+        &self,
+        session_id: SessionId,
+        execution_id: String,
+    ) -> RuntimeResult<()> {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid execution_id: {error}"))
         })?;
@@ -404,7 +413,7 @@ impl RuntimeHandle {
     }
 
     /// Cancel the active stream for a session.
-    pub async fn cancel_stream(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn cancel_stream(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelStream {
             session_id,
             response,
@@ -412,7 +421,7 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn cancel_turn(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn cancel_turn(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelTurn {
             session_id,
             response,
@@ -422,7 +431,7 @@ impl RuntimeHandle {
 
     pub async fn continue_session(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,
@@ -433,7 +442,7 @@ impl RuntimeHandle {
 
     pub async fn continue_turn(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,
@@ -444,7 +453,7 @@ impl RuntimeHandle {
 
     async fn request_continuation(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,

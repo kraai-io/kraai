@@ -6,6 +6,7 @@
 use super::super::{RuntimeRequest, runtime_bridge::route_requests};
 use super::*;
 use crossbeam_channel::unbounded;
+use kraai_types::SessionId;
 
 #[test]
 fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
@@ -36,7 +37,7 @@ fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
     started.recv_timeout(Duration::from_secs(2))?;
     requests.send(RuntimeRequest::PasteImage { request_id: 2 })?;
     requests.send(RuntimeRequest::CancelStream {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
     })?;
     assert!(matches!(
         ordinary.recv_timeout(Duration::from_secs(2))?,

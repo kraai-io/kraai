@@ -3,7 +3,7 @@ use color_eyre::eyre::{Result, ensure};
 use kraai_types::{
     ContextStateMutation, ConversationItem, MessageId, MessageStatus, PinnedFileScope,
     SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
+    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use std::time::Duration;
 fn session(id: &str) -> SessionMeta {
     SessionMeta {
         revision: 0,
-        id: id.into(),
+        id: SessionId::new(id),
         tip_id: None,
         workspace_dir: PathBuf::from("/workspace"),
         created_at: 1,
@@ -23,7 +23,7 @@ fn session(id: &str) -> SessionMeta {
 }
 fn request(session: &str, text: &str) -> AppendMessageRequest {
     AppendMessageRequest {
-        session_id: session.into(),
+        session_id: SessionId::new(session),
         content: ConversationItem::User {
             content: text.into(),
         },
@@ -36,7 +36,7 @@ fn request(session: &str, text: &str) -> AppendMessageRequest {
 fn execution(session: &str) -> NewScriptExecution {
     NewScriptExecution {
         id: ScriptExecutionId::new("execution"),
-        session_id: session.into(),
+        session_id: SessionId::new(session),
         source_message_id: MessageId::new("source"),
         call_id: ToolCallId::new("call"),
         profile: ScriptProfileSnapshot {
@@ -90,10 +90,8 @@ async fn only_one_simultaneous_claim_succeeds() -> Result<()> {
     let a = Persistence::open(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let b = Persistence::open(directory.path()).await?;
-    let (first, second) = tokio::join!(
-        a.sessions().claim_turn("session"),
-        b.sessions().claim_turn("session")
-    );
+    let id = SessionId::new("session");
+    let (first, second) = tokio::join!(a.sessions().claim_turn(&id), b.sessions().claim_turn(&id));
     ensure!(first.is_ok() != second.is_ok());
     let (owner, observer) = if first.is_ok() { (&a, &b) } else { (&b, &a) };
     owner
@@ -107,7 +105,13 @@ async fn only_one_simultaneous_claim_succeeds() -> Result<()> {
             .await
             .is_err()
     );
-    ensure!(observer.sessions().delete("session").await.is_err());
+    ensure!(
+        observer
+            .sessions()
+            .delete(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
     ensure!(observer.messages().list_ids().await?.len() == 1);
     Ok(())
 }
@@ -118,7 +122,7 @@ async fn expired_owner_cannot_write_renew_or_release_a_new_claim() -> Result<()>
     let a = Persistence::open(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
-        .claim_turn_for("session", Duration::from_millis(1))
+        .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
         .await?;
     let old = a
         .conversations()
@@ -126,11 +130,18 @@ async fn expired_owner_cannot_write_renew_or_release_a_new_claim() -> Result<()>
         .await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
     let b = Persistence::open(directory.path()).await?;
-    b.sessions().claim_turn("session").await?;
+    b.sessions().claim_turn(&SessionId::new("session")).await?;
     ensure!(a.messages().save(&old.message).await.is_err());
-    ensure!(a.sessions().renew_turn("session").await.is_err());
-    a.sessions().release_turn("session").await?;
-    ensure!(b.sessions().owns_turn("session").await?);
+    ensure!(
+        a.sessions()
+            .renew_turn(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
+    a.sessions()
+        .release_turn(&SessionId::new("session"))
+        .await?;
+    ensure!(b.sessions().owns_turn(&SessionId::new("session")).await?);
     b.conversations()
         .append_message(request("session", "new"))
         .await?;
@@ -143,17 +154,19 @@ async fn release_allows_immediate_submission_without_reusing_the_expiry() -> Res
     let a = Persistence::open(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let b = Persistence::open(directory.path()).await?;
-    a.sessions().claim_turn("session").await?;
+    a.sessions().claim_turn(&SessionId::new("session")).await?;
     let before = a
         .sessions()
-        .observe("session")
+        .observe(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
-    a.sessions().release_turn("session").await?;
-    b.sessions().claim_turn("session").await?;
+    a.sessions()
+        .release_turn(&SessionId::new("session"))
+        .await?;
+    b.sessions().claim_turn(&SessionId::new("session")).await?;
     let after = b
         .sessions()
-        .observe("session")
+        .observe(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(after.lease_expires_at > before.lease_expires_at);
@@ -166,12 +179,17 @@ async fn renewal_changes_the_token_and_prevents_takeover() -> Result<()> {
     let a = Persistence::open(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
-        .claim_turn_for("session", Duration::from_millis(1))
+        .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
         .await?;
-    a.sessions().renew_turn("session").await?;
+    a.sessions().renew_turn(&SessionId::new("session")).await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
     let b = Persistence::open(directory.path()).await?;
-    ensure!(b.sessions().claim_turn("session").await.is_err());
+    ensure!(
+        b.sessions()
+            .claim_turn(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
     a.conversations()
         .append_message(request("session", "still owned"))
         .await?;
@@ -186,7 +204,7 @@ async fn stale_metadata_is_rejected_instead_of_overwriting_another_client() -> R
     let b = Persistence::open(directory.path()).await?;
     let mut stale = b
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     a.conversations()
@@ -252,12 +270,12 @@ async fn rollback_preserves_shared_history_and_deletion_removes_associated_state
         .append_message(request("a", "abandoned"))
         .await?;
     a.conversations()
-        .restore_appended_message("a", &abandoned)
+        .restore_appended_message(&SessionId::new("a"), &abandoned)
         .await?;
     ensure!(a.messages().get(&abandoned.message.id).await?.is_none());
-    a.sessions().delete("a").await?;
+    a.sessions().delete(&SessionId::new("a")).await?;
     ensure!(a.messages().get(&root.message.id).await?.is_some());
-    a.sessions().delete("b").await?;
+    a.sessions().delete(&SessionId::new("b")).await?;
     ensure!(a.messages().get(&root.message.id).await?.is_none());
     Ok(())
 }
@@ -276,13 +294,21 @@ async fn context_mutations_are_serialized_across_connections() -> Result<()> {
             },
         }]
     };
+    let id = SessionId::new("session");
     let (first, second) = tokio::join!(
-        a.context().append_runtime("session", "test", mutation("a")),
-        b.context().append_runtime("session", "test", mutation("b"))
+        a.context().append_runtime(&id, "test", mutation("a")),
+        b.context().append_runtime(&id, "test", mutation("b"))
     );
     first?;
     second?;
-    ensure!(a.context().load("session").await?.events.len() == 2);
+    ensure!(
+        a.context()
+            .load(&SessionId::new("session"))
+            .await?
+            .events
+            .len()
+            == 2
+    );
     Ok(())
 }
 
@@ -292,22 +318,29 @@ async fn expired_script_lease_allows_takeover_and_rejects_old_execution_writes()
     let a = Persistence::open(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
-        .claim_turn_for("session", Duration::from_millis(1))
+        .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
         .await?;
     let record = a.executions().create(execution("session")).await?;
     a.executions().mark_running(&record.id).await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
     let b = Persistence::open(directory.path()).await?;
-    b.sessions().claim_turn("session").await?;
-    ensure!(a.sessions().renew_turn("session").await.is_err());
+    b.sessions().claim_turn(&SessionId::new("session")).await?;
+    ensure!(
+        a.sessions()
+            .renew_turn(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
     ensure!(
         a.executions()
             .append_output(&record.id, ScriptOutputStream::Stdout, b"stale".to_vec())
             .await
             .is_err()
     );
-    a.sessions().release_turn("session").await?;
-    ensure!(b.sessions().owns_turn("session").await?);
+    a.sessions()
+        .release_turn(&SessionId::new("session"))
+        .await?;
+    ensure!(b.sessions().owns_turn(&SessionId::new("session")).await?);
     ensure!(
         b.executions()
             .get(&record.id)
@@ -385,7 +418,7 @@ async fn cancelled_waiter_does_not_interrupt_a_database_commit() -> Result<()> {
     let _ = caller.await;
     ensure!(
         a.sessions()
-            .observe("session")
+            .observe(&SessionId::new("session"))
             .await?
             .is_some_and(|session| session.revision == 2)
     );

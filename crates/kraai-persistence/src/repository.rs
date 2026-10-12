@@ -5,6 +5,7 @@ use crate::{
     SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore,
 };
 use color_eyre::eyre::Result;
+use kraai_types::SessionId;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -75,7 +76,7 @@ impl Persistence {
     pub fn compactions(&self) -> &SqliteCompactionStore {
         &self.compactions
     }
-    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.sessions.delete(session_id).await
     }
 }

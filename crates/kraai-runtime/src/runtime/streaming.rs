@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use futures::FutureExt;
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::ProviderManager;
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId};
 use tokio::sync::Notify;
 
 use super::core::{ActiveStream, RuntimeCore, emit_event};
@@ -29,7 +29,7 @@ impl StreamJobKind {
 impl RuntimeCore {
     pub(crate) async fn start_continuation(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: ModelId,
         provider_id: ProviderId,
         options: kraai_types::ModelOptionValues,
@@ -56,7 +56,7 @@ impl RuntimeCore {
 
     pub(crate) async fn start_continuation_when_ready(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: ModelId,
         provider_id: ProviderId,
         options: kraai_types::ModelOptionValues,
@@ -81,7 +81,7 @@ impl RuntimeCore {
 
     async fn continue_prepared_session(
         &self,
-        session_id: String,
+        session_id: SessionId,
         preparation: SessionPreparation,
         selection: Option<(ModelId, ProviderId, kraai_types::ModelOptionValues)>,
     ) -> RuntimeResult<ContinueSessionOutcome> {
@@ -203,7 +203,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(crate) fn spawn_continuation(&self, session_id: String, expected_tip: MessageId) {
+    pub(crate) fn spawn_continuation(&self, session_id: SessionId, expected_tip: MessageId) {
         if self.is_stopping() {
             return;
         }
@@ -246,7 +246,7 @@ impl RuntimeCore {
     pub(crate) async fn start_stream_job(
         &self,
         kind: StreamJobKind,
-        session_id: String,
+        session_id: SessionId,
         providers: ProviderManager,
         mut request: PendingStreamRequest,
     ) {
@@ -341,7 +341,7 @@ impl RuntimeCore {
     async fn handle_stream_terminal_state(
         &self,
         kind: StreamJobKind,
-        session_id: String,
+        session_id: SessionId,
         message_id: MessageId,
         result: StreamDriveResult,
     ) {
@@ -513,7 +513,7 @@ impl RuntimeCore {
 
     async fn handle_completion_persistence_failure(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message_id: MessageId,
         error: color_eyre::Report,
         continuation_error: bool,
@@ -585,7 +585,7 @@ impl RuntimeCore {
 
     async fn abort_stream_for_recovery(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         message_id: &MessageId,
     ) -> Result<bool> {
         let mut agent = self.agent_manager.write().await;
@@ -613,7 +613,7 @@ impl RuntimeCore {
 
     pub(crate) async fn clear_active_stream(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         message_id: &MessageId,
     ) -> bool {
         let mut active_streams = self.active_streams.lock().await;
@@ -626,21 +626,21 @@ impl RuntimeCore {
         should_remove
     }
 
-    pub(crate) async fn take_active_stream(&self, session_id: &str) -> Option<ActiveStream> {
+    pub(crate) async fn take_active_stream(&self, session_id: &SessionId) -> Option<ActiveStream> {
         self.active_streams.lock().await.remove(session_id)
     }
 
-    pub(crate) async fn cancel_stream(&self, session_id: String) -> Result<bool> {
+    pub(crate) async fn cancel_stream(&self, session_id: SessionId) -> Result<bool> {
         self.cancel_session_work(session_id, false, None).await
     }
 
-    pub(crate) async fn cancel_turn(&self, session_id: String) -> Result<bool> {
+    pub(crate) async fn cancel_turn(&self, session_id: SessionId) -> Result<bool> {
         self.cancel_session_work(session_id, true, None).await
     }
 
     pub(crate) async fn cancel_turn_if_lease_matches(
         &self,
-        session_id: String,
+        session_id: SessionId,
         expected: i64,
     ) -> Result<bool> {
         self.cancel_session_work(session_id, true, Some(expected))
@@ -649,7 +649,7 @@ impl RuntimeCore {
 
     async fn cancel_session_work(
         &self,
-        session_id: String,
+        session_id: SessionId,
         discard_queued: bool,
         expected: Option<i64>,
     ) -> Result<bool> {

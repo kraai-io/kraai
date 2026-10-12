@@ -1,4 +1,5 @@
 use super::*;
+use kraai_types::SessionId;
 
 impl App {
     pub(super) fn set_error(&mut self, error: String) {
@@ -282,13 +283,13 @@ impl App {
         }
     }
 
-    pub(super) fn request_sync_for_session(&mut self, session_id: &str) {
+    pub(super) fn request_sync_for_session(&mut self, session_id: &SessionId) {
         self.request(RuntimeRequest::GetSessionSnapshot {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
         });
     }
 
-    pub(super) fn reset_chat_session(&mut self, session_id: Option<String>, status: &str) {
+    pub(super) fn reset_chat_session(&mut self, session_id: Option<SessionId>, status: &str) {
         if self.state.current_session_id != session_id {
             self.clear_message_draft();
         }
@@ -300,7 +301,7 @@ impl App {
         }
     }
 
-    pub(super) fn reset_session_state(&mut self, session_id: Option<String>, status: &str) {
+    pub(super) fn reset_session_state(&mut self, session_id: Option<SessionId>, status: &str) {
         let has_session = session_id.is_some();
         self.state.mode = UiMode::Chat;
         self.state.current_session_id = session_id;
@@ -354,7 +355,7 @@ impl App {
         self.request(RuntimeRequest::GetAgentProfileCatalog);
     }
 
-    pub(super) fn load_session(&mut self, session_id: String) {
+    pub(super) fn load_session(&mut self, session_id: SessionId) {
         let load_id = self.state.next_session_load_id;
         self.state.next_session_load_id = load_id.wrapping_add(1);
         if self.request(RuntimeRequest::LoadSession {
@@ -368,14 +369,14 @@ impl App {
 
     pub(super) fn dispatch_send_message(
         &mut self,
-        session_id: String,
+        session_id: SessionId,
         message: MessageContent,
         model_id: String,
         provider_id: String,
         options: kraai_types::ModelOptionValues,
         source: types::SubmissionSource,
     ) {
-        let is_foreground = self.state.current_session_id.as_deref() == Some(session_id.as_str());
+        let is_foreground = self.state.current_session_id.as_ref() == Some(&session_id);
         let message_was_draft = matches!(source, types::SubmissionSource::Composer { .. });
         let is_queued = matches!(source, types::SubmissionSource::Composer { queued: true });
         if self.request(RuntimeRequest::SendMessage {
@@ -467,7 +468,7 @@ impl App {
         self.runtime_bridge_connected = false;
         self.state.submitted_script_decisions.clear();
         self.runtime_bridge_error.get_or_insert(message.clone());
-        let mut messages: std::collections::BTreeMap<Option<String>, Vec<MessageContent>> =
+        let mut messages: std::collections::BTreeMap<Option<SessionId>, Vec<MessageContent>> =
             std::collections::BTreeMap::new();
         while let Some(pending) = self.state.pending_messages.pop_front() {
             messages

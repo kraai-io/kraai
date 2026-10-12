@@ -12,7 +12,7 @@ use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
 use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
 use kraai_types::{
     MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
+    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
@@ -24,7 +24,7 @@ use super::state_effects::DurableStateEffects;
 #[derive(Clone)]
 pub(crate) struct EffectiveScriptRequest {
     pub(crate) id: ScriptExecutionId,
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
     pub(crate) source_message_id: MessageId,
     pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId};
+use kraai_types::{
+    MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId, SessionId,
+};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -37,7 +39,7 @@ pub(crate) enum Command {
         response: oneshot::Sender<RuntimeResult<SettingsDocument>>,
     },
     ListAgentProfiles {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<AgentProfilesState>>,
     },
     GetAgentProfileCatalog {
@@ -45,7 +47,7 @@ pub(crate) enum Command {
         response: oneshot::Sender<RuntimeResult<AgentProfileCatalog>>,
     },
     SetSessionProfile {
-        session_id: String,
+        session_id: SessionId,
         profile_id: String,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
@@ -55,10 +57,10 @@ pub(crate) enum Command {
     },
     CreateSession {
         request: CreateSessionRequest,
-        response: oneshot::Sender<RuntimeResult<String>>,
+        response: oneshot::Sender<RuntimeResult<SessionId>>,
     },
     SendMessage {
-        session_id: String,
+        session_id: SessionId,
         message: kraai_types::MessageContent,
         model_id: ModelId,
         provider_id: ProviderId,
@@ -74,11 +76,11 @@ pub(crate) enum Command {
         response: oneshot::Sender<RuntimeResult<Vec<u8>>>,
     },
     StartQueuedMessages {
-        session_id: String,
+        session_id: SessionId,
     },
     LoadConfig,
     LoadSession {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<bool>>,
     },
     ListSessions {
@@ -89,76 +91,76 @@ pub(crate) enum Command {
         response: oneshot::Sender<RuntimeResult<Vec<String>>>,
     },
     DeleteSession {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     GetWorkspaceState {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<WorkspaceState>>>,
     },
     SetWorkspaceDir {
-        session_id: String,
+        session_id: SessionId,
         workspace_dir: String,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     GetTip {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<String>>>,
     },
     UndoLastUserMessage {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<kraai_types::MessageContent>>>,
     },
     GetChatHistory {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<BTreeMap<MessageId, kraai_types::Message>>>,
     },
     GetSessionSnapshot {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<SessionSnapshot>>,
     },
     GetSessionContextUsage {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<SessionContextUsage>>>,
     },
     GetSessionModel {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<kraai_types::ModelSelection>>>,
     },
     SetSessionModel {
-        session_id: String,
+        session_id: SessionId,
         selection: kraai_types::ModelSelection,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     SetSessionMcpServers {
-        session_id: String,
+        session_id: SessionId,
         config: kraai_mcp::McpConfig,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     GetPendingScript {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<crate::PendingScriptInfo>>>,
     },
     ApproveScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: ScriptExecutionId,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     DenyScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: ScriptExecutionId,
         response: oneshot::Sender<RuntimeResult<()>>,
     },
     CancelStream {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<bool>>,
     },
     CancelTurn {
-        session_id: String,
+        session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<bool>>,
     },
     ContinueSession {
-        session_id: String,
+        session_id: SessionId,
         model_id: ModelId,
         provider_id: ProviderId,
         options: ModelOptionValues,

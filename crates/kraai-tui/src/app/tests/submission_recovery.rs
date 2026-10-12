@@ -1,10 +1,10 @@
 use super::*;
-use kraai_types::{ContentPart, ImageAttachment, MessageContent};
+use kraai_types::{ContentPart, ImageAttachment, MessageContent, SessionId};
 
 #[test]
 fn continue_submits_the_current_model_selection() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.config_loaded = true;
     harness.app.state.selected_profile_id = Some("agent".into());
     harness.app.state.selected_model_id = Some("new-model".into());
@@ -13,7 +13,7 @@ fn continue_submits_the_current_model_selection() {
     assert!(matches!(
         harness.requests_rx.try_recv(),
         Ok(RuntimeRequest::ContinueSession { session_id, model_id, provider_id, .. })
-            if session_id == "session" && model_id == "new-model" && provider_id == "new-provider"
+            if session_id == SessionId::new("session") && model_id == "new-model" && provider_id == "new-provider"
     ));
     assert!(harness.requests_rx.try_recv().is_err());
 }
@@ -32,7 +32,7 @@ fn send(harness: &mut TestHarness, text: &str) -> MessageContent {
         },
     ]);
     harness.app.dispatch_send_message(
-        "old".into(),
+        SessionId::new("old"),
         message.clone(),
         "model".into(),
         "provider".into(),
@@ -45,19 +45,23 @@ fn send(harness: &mut TestHarness, text: &str) -> MessageContent {
 #[test]
 fn failed_send_is_recovered_only_in_its_session() {
     let mut harness = test_harness();
-    harness.app.reset_chat_session(Some("old".into()), "old");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("old")), "old");
     let message = send(&mut harness, "old message");
     harness.app.start_new_chat();
     harness.app.set_input_text("new draft".into());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "old".into(),
+            session_id: SessionId::new("old"),
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
     assert_eq!(harness.app.state.input, "new draft");
     assert_eq!(harness.app.state.draft_images.len(), 0);
-    harness.app.reset_chat_session(Some("old".into()), "old");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("old")), "old");
     assert_eq!(
         harness.app.compose_message(&harness.app.state.input),
         message
@@ -68,11 +72,15 @@ fn failed_send_is_recovered_only_in_its_session() {
 #[test]
 fn background_failure_preserves_foreground_pending_send_and_stream() {
     let mut harness = test_harness();
-    harness.app.reset_chat_session(Some("old".into()), "old");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("old")), "old");
     send(&mut harness, "old message");
-    harness.app.reset_chat_session(Some("new".into()), "new");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("new")), "new");
     harness.app.dispatch_send_message(
-        "new".into(),
+        SessionId::new("new"),
         "new message".into(),
         "model".into(),
         "provider".into(),
@@ -84,7 +92,7 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "old".into(),
+            session_id: SessionId::new("old"),
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
     assert_eq!(harness.app.state.input, "next draft");
@@ -98,12 +106,12 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
             .state
             .pending_messages
             .front()
-            .is_some_and(|pending| pending.session_id == "new")
+            .is_some_and(|pending| pending.session_id == SessionId::new("new"))
     );
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "new".into(),
+            session_id: SessionId::new("new"),
             result: Ok(kraai_runtime::SubmitMessageOutcome::Started {
                 message_id: "new-message".into(),
             }),
@@ -115,14 +123,20 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
 #[test]
 fn disconnected_background_submissions_recover_in_submission_order() {
     let mut harness = test_harness();
-    harness.app.reset_chat_session(Some("old".into()), "old");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("old")), "old");
     let first = send(&mut harness, "first");
     let second = send(&mut harness, "second");
-    harness.app.reset_chat_session(Some("new".into()), "new");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("new")), "new");
     harness.app.set_input_text("new draft".into());
     harness.app.handle_runtime_bridge_disconnect();
     assert_eq!(harness.app.state.input, "new draft");
-    harness.app.reset_chat_session(Some("old".into()), "old");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("old")), "old");
     let mut expected = first.0;
     expected.push(ContentPart::Text {
         text: "\n\nsecond".into(),

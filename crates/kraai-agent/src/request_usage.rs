@@ -4,12 +4,12 @@ use std::sync::Arc;
 use color_eyre::eyre::{Context, Result};
 use kraai_persistence::RequestUsageStore;
 use kraai_provider_core::{ProviderManager, ProviderRetryEvent, ProviderRetryObserver};
-use kraai_types::{MessageId, ModelId, ProviderId, RequestUsage, TokenUsage};
+use kraai_types::{MessageId, ModelId, ProviderId, RequestUsage, SessionId, TokenUsage};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 pub struct AuxiliaryUsageRecorder {
     pub store: Arc<dyn RequestUsageStore>,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
     pub barrier: Option<Arc<RwLock<()>>>,
 }

@@ -7,7 +7,7 @@ use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -29,17 +29,17 @@ pub(crate) struct RuntimeCore {
     pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
     pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
     pub(crate) observed_sessions:
-        Arc<Mutex<HashMap<String, kraai_persistence::SessionObservation>>>,
+        Arc<Mutex<HashMap<SessionId, kraai_persistence::SessionObservation>>>,
     pub(crate) session_store: Arc<kraai_persistence::SqliteSessionStore>,
     pub(crate) image_store: Arc<kraai_persistence::FileImageStore>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
-    pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    pub(crate) active_streams: Arc<Mutex<HashMap<SessionId, ActiveStream>>>,
     pub(crate) stream_tasks: Arc<super::stream_tasks::StreamTasks>,
-    pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
-    pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
-    pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
+    pub(crate) active_script_tasks: Arc<Mutex<HashMap<SessionId, ActiveScriptTask>>>,
+    pub(crate) pending_script_approvals: Arc<Mutex<HashMap<SessionId, PendingScriptApproval>>>,
+    pub(crate) queued_messages: Arc<Mutex<HashMap<SessionId, VecDeque<QueuedMessage>>>>,
     /// Separates coherent snapshot reads from state mutations and their corresponding events.
     pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
@@ -88,24 +88,20 @@ impl RuntimeCore {
         });
     }
 
-    pub(crate) fn send_session_error(
-        &self,
-        session_id: impl Into<String>,
-        error: impl std::fmt::Display,
-    ) {
+    pub(crate) fn send_session_error(&self, session_id: &SessionId, error: impl std::fmt::Display) {
         self.send_event(Event::SessionError {
-            session_id: session_id.into(),
+            session_id: session_id.clone(),
             error: crate::RuntimeError::internal(error),
         });
     }
 
     pub(crate) fn send_session_report_error(
         &self,
-        session_id: impl Into<String>,
+        session_id: &SessionId,
         error: color_eyre::Report,
     ) {
         self.send_event(Event::SessionError {
-            session_id: session_id.into(),
+            session_id: session_id.clone(),
             error: crate::RuntimeError::from_report(error),
         });
     }

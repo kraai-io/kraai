@@ -6,7 +6,7 @@ async fn revisions(persistence: &Persistence) -> Result<Vec<i64>> {
         revisions.push(
             persistence
                 .sessions()
-                .observe(id)
+                .observe(&SessionId::new(id))
                 .await?
                 .ok_or_else(|| color_eyre::eyre::eyre!("Missing fork {id}"))?
                 .revision,
@@ -58,11 +58,11 @@ async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
                 .await?;
         }
     }
-    a.sessions().delete("original").await?;
+    a.sessions().delete(&SessionId::new("original")).await?;
     let b = Persistence::open(directory.path()).await?;
     let observer = Persistence::open(directory.path()).await?;
-    a.sessions().claim_turn("fork-b").await?;
-    b.sessions().claim_turn("fork-a").await?;
+    a.sessions().claim_turn(&SessionId::new("fork-b")).await?;
+    b.sessions().claim_turn(&SessionId::new("fork-a")).await?;
     let before = revisions(&observer).await?;
     let mut changed = root.message.clone();
     changed.content = ConversationItem::User {
@@ -85,9 +85,15 @@ async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
     );
     ensure!(observer.compactions().get(&changed.id).await?.as_ref() == Some(&checkpoint));
     for id in ["fork-a", "fork-b"] {
-        ensure!(observer.messages().read_conversation(id).await?.is_some());
+        ensure!(
+            observer
+                .messages()
+                .read_conversation(&SessionId::new(id))
+                .await?
+                .is_some()
+        );
     }
-    a.sessions().release_turn("fork-b").await?;
+    a.sessions().release_turn(&SessionId::new("fork-b")).await?;
     let before = revisions(&observer).await?;
     b.messages().save(&changed).await?;
     ensure_revisions_advanced(&observer, before).await?;
@@ -97,7 +103,7 @@ async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
     let before = revisions(&observer).await?;
     b.compactions().delete(&changed.id).await?;
     ensure_revisions_advanced(&observer, before).await?;
-    b.sessions().release_turn("fork-a").await?;
+    b.sessions().release_turn(&SessionId::new("fork-a")).await?;
     let before = revisions(&observer).await?;
     observer.messages().save(&changed).await?;
     ensure_revisions_advanced(&observer, before).await?;
@@ -123,8 +129,8 @@ async fn new_unlinked_children_are_fenced_by_surviving_parent_sessions() -> Resu
     let mut fork = session("fork");
     fork.tip_id = Some(root.id.clone());
     owner.sessions().save(&fork).await?;
-    owner.sessions().delete("original").await?;
-    owner.sessions().claim_turn("fork").await?;
+    owner.sessions().delete(&SessionId::new("original")).await?;
+    owner.sessions().claim_turn(&SessionId::new("fork")).await?;
     let observer = Persistence::open(directory.path()).await?;
     root.parent_id = Some(root.id.clone());
     root.id = MessageId::new("unlinked-child");
@@ -143,7 +149,10 @@ async fn deleted_original_lease_cannot_mutate_retained_history() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let stale_owner = Persistence::open(directory.path()).await?;
     stale_owner.sessions().save(&session("original")).await?;
-    stale_owner.sessions().claim_turn("original").await?;
+    stale_owner
+        .sessions()
+        .claim_turn(&SessionId::new("original"))
+        .await?;
     let mut root = stale_owner
         .conversations()
         .append_message(request("original", "retained"))
@@ -152,7 +161,10 @@ async fn deleted_original_lease_cannot_mutate_retained_history() -> Result<()> {
     let mut fork = session("fork");
     fork.tip_id = Some(root.id.clone());
     stale_owner.sessions().save(&fork).await?;
-    stale_owner.sessions().delete("original").await?;
+    stale_owner
+        .sessions()
+        .delete(&SessionId::new("original"))
+        .await?;
     root.content = ConversationItem::User {
         content: "stale owner change".into(),
     };
@@ -168,7 +180,10 @@ async fn deleted_original_lease_cannot_mutate_retained_history() -> Result<()> {
     );
     observer.messages().save(&root).await?;
     ensure!(stale_owner.messages().save(&root).await.is_err());
-    stale_owner.sessions().release_turn("original").await?;
+    stale_owner
+        .sessions()
+        .release_turn(&SessionId::new("original"))
+        .await?;
     stale_owner.messages().save(&root).await?;
     Ok(())
 }

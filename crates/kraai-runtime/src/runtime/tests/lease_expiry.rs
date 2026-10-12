@@ -75,7 +75,7 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
     connection.busy_timeout(TEST_TIMEOUT)?;
     connection.execute(
         "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [&session],
+        [session.as_str()],
     )?;
     let after = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {

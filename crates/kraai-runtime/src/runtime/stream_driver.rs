@@ -7,7 +7,7 @@ use kraai_provider_core::{
     ProviderManager, ProviderRequestContext, ProviderStreamEvent, ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{SandboxCapabilities, ToolCallId};
+use kraai_types::{SandboxCapabilities, SessionId, ToolCallId};
 
 use super::core::{RuntimeCore, emit_event};
 use super::request_usage::RuntimeRetryObserver;
@@ -34,7 +34,7 @@ pub(super) enum StreamDriveResult {
 
 #[derive(Debug)]
 pub(super) struct CompletedStreamOutput {
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) call_id: Option<ToolCallId>,
     pub(super) script: Option<ScriptBlock>,
     pub(super) invalid_script: Option<InvalidScriptBlock>,
@@ -43,7 +43,7 @@ pub(super) struct CompletedStreamOutput {
 
 pub(super) fn auxiliary_usage_observer(
     event_tx: RuntimeEventSender,
-    session_id: String,
+    session_id: SessionId,
     task: super::stream_tasks::SessionTaskToken,
 ) -> Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> {
     Arc::new(move |request| {
@@ -60,7 +60,7 @@ pub(super) fn auxiliary_usage_observer(
 
 impl RuntimeCore {
     pub(super) async fn drive_stream(
-        session_id: String,
+        session_id: SessionId,
         request: PendingStreamRequest,
         providers: ProviderManager,
         agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
@@ -134,7 +134,7 @@ impl RuntimeCore {
         let warmup = match providers.prepare_cache_warmup(
             &provider_id,
             &model_id,
-            &session_id,
+            session_id.as_str(),
             &provider_request,
         ) {
             Ok(warmup) => warmup,
@@ -176,7 +176,7 @@ impl RuntimeCore {
                 agent_manager: Arc::clone(&agent_manager),
                 session_state_barrier: Arc::clone(&session_state_barrier),
             }),
-            session_id.clone(),
+            session_id.to_string(),
         )
         .with_image_resolver(Arc::new(super::images::StoredImageResolver(
             agent_manager.read().await.image_store(),

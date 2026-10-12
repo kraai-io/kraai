@@ -1,7 +1,7 @@
 use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::ScriptExecutionStatus;
+use kraai_types::{ScriptExecutionStatus, SessionId};
 use tokio_util::sync::CancellationToken;
 
 use super::harness::{
@@ -11,7 +11,7 @@ use crate::Event;
 use crate::runtime::core::ActiveScriptTask;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
-async fn finished_execution() -> Result<(RuntimeTestHarness, String, CompletedScriptExecution)> {
+async fn finished_execution() -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
     let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "cancel-call",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",

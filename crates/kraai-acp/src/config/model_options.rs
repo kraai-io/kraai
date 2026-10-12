@@ -66,17 +66,13 @@ pub(super) fn model_option(
 
 pub(crate) async fn set_model_option(
     runtime: &RuntimeHandle,
-    session_id: &str,
+    session_id: &kraai_types::SessionId,
     id: &str,
     input: &str,
 ) -> Result<()> {
     let models = runtime.list_models().await.map_err(error::runtime)?;
-    let mut selected = crate::session::selected_model_with_models(
-        runtime,
-        &acp::SessionId::new(session_id),
-        &models,
-    )
-    .await?;
+    let mut selected =
+        crate::session::selected_model_with_models(runtime, session_id, &models).await?;
     let model = models
         .get(&selected.provider)
         .and_then(|models| models.iter().find(|model| model.id == selected.model))
@@ -88,7 +84,7 @@ pub(crate) async fn set_model_option(
     )
     .map_err(error::invalid)?;
     runtime
-        .set_session_model(session_id.to_owned(), selected.selection()?)
+        .set_session_model(session_id.clone(), selected.selection()?)
         .await
         .map_err(error::runtime)
 }

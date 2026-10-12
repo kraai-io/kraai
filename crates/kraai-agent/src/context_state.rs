@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use color_eyre::eyre::Result;
 use kraai_io::fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
 use kraai_persistence::{ContextStateStore, FileContextSnapshot};
-use kraai_types::{ContextStateEvent, ContextStateMutation, MessageId, PinnedFileScope};
+use kraai_types::{ContextStateEvent, ContextStateMutation, MessageId, PinnedFileScope, SessionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PinnedFile {
@@ -40,7 +40,7 @@ pub(crate) fn append_notifications(
 
 pub(crate) async fn refresh_context_state(
     store: &dyn ContextStateStore,
-    session_id: &str,
+    session_id: &SessionId,
     latest: &MessageId,
     history: &[kraai_types::Message],
     compacted: Option<&MessageId>,

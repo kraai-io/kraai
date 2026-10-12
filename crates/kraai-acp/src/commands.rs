@@ -69,11 +69,11 @@ pub(crate) async fn advertise(
 
 pub(crate) async fn undo(
     runtime: &RuntimeHandle,
-    id: &acp::SessionId,
+    id: &kraai_types::SessionId,
     connection: &crate::transport::Connection,
 ) -> Result<()> {
     let restored = runtime
-        .undo_last_user_message(id.to_string())
+        .undo_last_user_message(id.clone())
         .await
         .map_err(error::runtime)?;
     let text = if restored.is_some() {
@@ -82,7 +82,7 @@ pub(crate) async fn undo(
         "No user message to undo."
     };
     connection.send_notification(acp::SessionNotification::new(
-        id.clone(),
+        id.to_string(),
         acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(content::text(text))),
     ))
 }

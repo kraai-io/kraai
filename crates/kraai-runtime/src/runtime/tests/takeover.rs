@@ -92,7 +92,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     connection.busy_timeout(Duration::from_secs(1))?;
     connection.execute(
         "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [&session],
+        [session.as_str()],
     )?;
     new_owner
         .handle

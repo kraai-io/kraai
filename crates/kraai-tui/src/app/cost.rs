@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kraai_types::{CostSummary, MessageId, RequestUsage};
+use kraai_types::{CostSummary, MessageId, RequestUsage, SessionId};
 
 use super::{App, UsageModelKey};
 
@@ -15,13 +15,13 @@ impl App {
 
     pub(super) fn update_costs(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         requests: BTreeMap<MessageId, RequestUsage>,
     ) {
         let session_requests = self
             .state
             .session_requests
-            .entry(session_id.into())
+            .entry(session_id.clone())
             .or_default();
         for (id, request) in requests {
             let request = session_requests
@@ -53,7 +53,7 @@ impl App {
                 self.state.launch_requests.insert(id, request.clone());
             }
         }
-        if self.state.current_session_id.as_deref() == Some(session_id) {
+        if self.state.current_session_id.as_ref() == Some(session_id) {
             self.state.session_cost = summarize_reported(session_requests.values());
         }
     }

@@ -1,7 +1,7 @@
 use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
-use kraai_types::{ModelId, ProviderId, TokenUsage};
+use kraai_types::{ModelId, ProviderId, SessionId, TokenUsage};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -30,12 +30,12 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     let mut events = event_tx.subscribe();
     let recorder = kraai_agent::AuxiliaryUsageRecorder {
         store: Arc::new(SqliteRequestUsageStore::new(&directory)),
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         barrier: Some(barrier.clone()),
         on_usage: Some(super::super::stream_driver::auxiliary_usage_observer(
             event_tx,
-            String::from("session"),
-            tasks.session_token("session"),
+            SessionId::new("session"),
+            tasks.session_token(&SessionId::new("session")),
         )),
     };
     let providers = kraai_provider_core::ProviderManager::new();
@@ -46,7 +46,8 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
         tokio::pin!(starting);
         assert!(poll!(&mut starting).is_pending());
     }
-    let session = tasks.wait_session("session");
+    let session_id = SessionId::new("session");
+    let session = tasks.wait_session(&session_id);
     tokio::pin!(session);
     tasks.close();
     let all = tasks.wait();
@@ -69,14 +70,17 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
             "Expected persisted auxiliary usage notification"
         ));
     };
-    assert_eq!(session_id, "session");
+    assert_eq!(session_id, SessionId::new("session"));
     let reopened = SqliteRequestUsageStore::new(&directory);
     assert_eq!(
-        reopened.load("session").await?.get(&request.message_id),
+        reopened
+            .load(&SessionId::new("session"))
+            .await?
+            .get(&request.message_id),
         Some(request.as_ref())
     );
-    reopened.delete("session").await?;
-    assert!(reopened.load("session").await?.is_empty());
+    reopened.delete(&SessionId::new("session")).await?;
+    assert!(reopened.load(&SessionId::new("session")).await?.is_empty());
     tokio::fs::remove_dir_all(directory).await?;
     Ok(())
 }

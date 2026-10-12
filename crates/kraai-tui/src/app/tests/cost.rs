@@ -1,5 +1,6 @@
 use super::super::UsageModelKey;
 use super::*;
+use kraai_types::SessionId;
 
 fn pending_request(id: &str) -> kraai_types::RequestUsage {
     kraai_types::RequestUsage {
@@ -40,7 +41,7 @@ fn evaluation_costs_require_usage_prices_and_all_attempts() {
     request.subscription = true;
     let update = |harness: &mut TestHarness, request: &kraai_types::RequestUsage| {
         harness.app.update_costs(
-            "session",
+            &SessionId::new("session"),
             std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())]),
         );
     };
@@ -92,14 +93,16 @@ fn evaluation_costs_require_usage_prices_and_all_attempts() {
 fn lag_recovery_restores_costs_from_background_sessions() {
     let mut harness = test_harness();
     harness.app.state.launched_at = 100;
-    harness.app.reset_chat_session(Some("session".into()), "");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "");
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
     harness.drain_requests();
 
     let mut background = session_snapshot_at(10, None);
-    background.session.id = "background".into();
+    background.session.id = SessionId::new("background");
     let request = pending_request("missed-request");
     background
         .requests
@@ -112,13 +115,13 @@ fn lag_recovery_restores_costs_from_background_sessions() {
         ])));
     assert!(harness.drain_requests().iter().any(|request| matches!(
         request,
-        RuntimeRequest::GetSessionSnapshot { session_id } if session_id == "background"
+        RuntimeRequest::GetSessionSnapshot { session_id } if session_id.as_str() == "background"
     )));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "background".into(),
+            session_id: SessionId::new("background"),
             result: Box::new(Ok(background)),
         });
     assert_eq!(
@@ -135,7 +138,7 @@ fn lag_recovery_restores_costs_from_background_sessions() {
     );
     harness
         .app
-        .reset_chat_session(Some("background".into()), "");
+        .reset_chat_session(Some(SessionId::new("background")), "");
     assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
@@ -144,13 +147,15 @@ fn quitting_during_lag_recovery_marks_costs_incomplete() {
     for ci in [false, true] {
         let mut harness = test_harness();
         harness.app.startup_options.ci = ci;
-        harness.app.reset_chat_session(Some("session".into()), "");
+        harness
+            .app
+            .reset_chat_session(Some(SessionId::new("session")), "");
         harness
             .app
             .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
         if ci {
             harness.app.handle_runtime_event(Event::StreamError {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 message_id: "missed-request".into(),
                 error: "connection lost".into(),
             });
@@ -188,7 +193,7 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
     assert!(!harness.app.costs_incomplete());
@@ -202,12 +207,14 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
 fn usage_events_include_inflight_and_background_requests_before_exit() {
     let mut harness = test_harness();
     harness.app.state.launched_at = 100;
-    harness.app.reset_chat_session(Some("session".into()), "");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "");
     for session in ["session", "background"] {
         harness
             .app
             .handle_runtime_event(Event::RequestUsageUpdated {
-                session_id: session.into(),
+                session_id: SessionId::new(session),
                 request: Box::new(pending_request(session)),
             });
     }
@@ -224,7 +231,7 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
     );
     harness
         .app
-        .reset_chat_session(Some("background".into()), "");
+        .reset_chat_session(Some(SessionId::new("background")), "");
     assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
@@ -233,16 +240,18 @@ fn ci_failure_retains_cost_events_without_waiting_for_a_snapshot() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
     harness.app.state.launched_at = 100;
-    harness.app.reset_chat_session(Some("session".into()), "");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "");
     let request = pending_request("request");
     harness
         .app
         .handle_runtime_event(Event::RequestUsageUpdated {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             request: Box::new(request.clone()),
         });
     harness.app.handle_runtime_event(Event::StreamError {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         message_id: "request".into(),
         error: "connection lost".into(),
     });
@@ -261,7 +270,9 @@ fn ci_failure_retains_cost_events_without_waiting_for_a_snapshot() {
 fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
     let mut harness = test_harness();
     harness.app.state.launched_at = 100;
-    harness.app.reset_chat_session(Some("session".into()), "");
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "");
     let pending = pending_request("request");
     let mut completed = pending.clone();
     completed.unpriced_attempts = 1;
@@ -278,16 +289,18 @@ fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
     harness
         .app
         .handle_runtime_event(Event::RequestUsageUpdated {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             request: Box::new(completed.clone()),
         });
     for request in [completed.clone(), pending] {
         harness.app.update_costs(
-            "session",
+            &SessionId::new("session"),
             std::collections::BTreeMap::from([(request.message_id.clone(), request)]),
         );
     }
-    harness.app.update_costs("session", Default::default());
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), Default::default());
     assert_eq!(harness.app.state.launch_requests.len(), 1);
     assert_eq!(
         harness.app.state.launch_requests.get(&completed.message_id),
@@ -303,7 +316,7 @@ fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
 #[test]
 fn costs_replace_unknown_records_without_double_counting_and_restore_session_totals() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.launched_at = 100;
     let mut request = kraai_types::RequestUsage {
         message_id: MessageId::new("request"),
@@ -317,7 +330,9 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     let records = |request: &kraai_types::RequestUsage| {
         std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())])
     };
-    harness.app.update_costs("session", records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&request));
     assert_eq!(harness.app.state.session_cost.unknown, 0);
     request.usage = Some(kraai_types::TokenUsage {
         cost: Some(kraai_types::RequestCost {
@@ -329,8 +344,12 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
         }),
         ..Default::default()
     });
-    harness.app.update_costs("session", records(&request));
-    harness.app.update_costs("session", records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&request));
     assert_eq!(harness.app.state.session_cost.to_string(), "$0.0123");
     assert_eq!(harness.app.state.launch_requests.len(), 1);
     assert!(
@@ -341,28 +360,38 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     );
     request.message_id = MessageId::new("historical");
     request.started_at = 1;
-    harness.app.update_costs("other", records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("other"), records(&request));
     assert_eq!(harness.app.state.launch_requests.len(), 1);
-    harness.app.state.current_session_id = Some("other".into());
-    harness.app.update_costs("other", records(&request));
+    harness.app.state.current_session_id = Some(SessionId::new("other"));
+    harness
+        .app
+        .update_costs(&SessionId::new("other"), records(&request));
     assert_eq!(harness.app.state.session_cost.to_string(), "$0.0123");
 }
 
 #[test]
 fn session_cost_waits_for_usage_but_preserves_unpriced_usage_and_attempts() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let mut request = pending_request("request");
     let records = |request: &kraai_types::RequestUsage| {
         std::collections::BTreeMap::from([(request.message_id.clone(), request.clone())])
     };
-    harness.app.update_costs("session", records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&request));
     assert_eq!(harness.app.state.session_cost.to_string(), "$0.0000");
     request.usage = Some(kraai_types::TokenUsage::default());
-    harness.app.update_costs("session", records(&request));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&request));
     assert_eq!(harness.app.state.session_cost.to_string(), "$unknown");
     let mut retry = pending_request("retry");
     retry.unpriced_attempts = 1;
-    harness.app.update_costs("session", records(&retry));
+    harness
+        .app
+        .update_costs(&SessionId::new("session"), records(&retry));
     assert_eq!(harness.app.state.session_cost.unknown, 2);
 }

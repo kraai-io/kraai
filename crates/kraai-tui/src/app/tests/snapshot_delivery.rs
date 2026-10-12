@@ -1,7 +1,9 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use kraai_types::{ConversationItem, MessageGeneration, ModelId, ProviderId, StreamId, TokenUsage};
+use kraai_types::{
+    ConversationItem, MessageGeneration, ModelId, ProviderId, SessionId, StreamId, TokenUsage,
+};
 
 use super::*;
 
@@ -77,7 +79,7 @@ fn snapshot_with_message(sequence: u64, complete: bool) -> SessionSnapshot {
 fn snapshot_cannot_swallow_ci_stream_output() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let output = RecordedOutput::default();
     harness.app.ci_output = Box::new(output.clone());
     harness
@@ -85,7 +87,7 @@ fn snapshot_cannot_swallow_ci_stream_output() {
         .handle_runtime_event_bridge_message(stream_event(
             1,
             Event::StreamStart {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
             },
         ));
@@ -93,7 +95,7 @@ fn snapshot_cannot_swallow_ci_stream_output() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot_with_message(3, false))),
         });
 
@@ -102,7 +104,7 @@ fn snapshot_cannot_swallow_ci_stream_output() {
         .handle_runtime_event_bridge_message(stream_event(
             2,
             Event::StreamChunk {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
                 chunk: String::from("answer text"),
             },
@@ -118,13 +120,13 @@ fn snapshot_cannot_swallow_ci_stream_output() {
 fn snapshot_cannot_swallow_ci_completion_and_usage() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event_bridge_message(stream_event(
             1,
             Event::StreamStart {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
             },
         ));
@@ -132,7 +134,7 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
 
@@ -141,7 +143,7 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
         .handle_runtime_event_bridge_message(stream_event(
             3,
             Event::StreamComplete {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
             },
         ));
@@ -150,14 +152,14 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
         .handle_runtime_event_bridge_message(stream_event(
             4,
             Event::HistoryUpdated {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
             },
         ));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
 
@@ -173,12 +175,12 @@ fn snapshot_cannot_swallow_ci_completion_and_usage() {
 fn snapshot_cannot_swallow_a_ci_stream_failure() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(4, None))),
         });
 
@@ -187,7 +189,7 @@ fn snapshot_cannot_swallow_a_ci_stream_failure() {
         .handle_runtime_event_bridge_message(stream_event(
             3,
             Event::StreamError {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
                 error: String::from("provider disconnected"),
             },
@@ -204,7 +206,7 @@ fn snapshot_cannot_swallow_a_ci_stream_failure() {
 fn ci_waits_for_the_entire_snapshot_event_backlog() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let output = RecordedOutput::default();
     harness.app.ci_output = Box::new(output.clone());
     let mut snapshot = snapshot_with_message(8, true);
@@ -227,7 +229,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot.clone())),
         });
 
@@ -239,7 +241,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
         (5, "answer", 1),
         (6, "answer", 2),
     ] {
-        let session_id = String::from("session");
+        let session_id = SessionId::new("session");
         let message_id = String::from(message_id);
         let event = match event_kind {
             0 => Event::StreamStart {
@@ -264,7 +266,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
                 .app
                 .handle_runtime_response(RuntimeResponse::SessionSnapshot {
                     model_save_id: 0,
-                    session_id: String::from("session"),
+                    session_id: SessionId::new("session"),
                     result: Box::new(Ok(snapshot.clone())),
                 });
         }
@@ -278,7 +280,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
         .handle_runtime_event_bridge_message(stream_event(
             7,
             Event::HistoryUpdated {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
             },
         ));
     assert!(!harness.app.state.exit);
@@ -287,7 +289,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
         .handle_runtime_event_bridge_message(stream_event(
             8,
             Event::ContextStateChanged {
-                session_id: String::from("background"),
+                session_id: SessionId::new("background"),
                 notifications: Vec::new(),
             },
         ));
@@ -305,14 +307,14 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
 fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let output = RecordedOutput::default();
     harness.app.ci_output = Box::new(output.clone());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot_with_message(4, true))),
         });
     for _ in 0..2 {
@@ -321,7 +323,7 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
             .handle_runtime_event_bridge_message(stream_event(
                 2,
                 Event::StreamChunk {
-                    session_id: String::from("session"),
+                    session_id: SessionId::new("session"),
                     message_id: String::from("answer"),
                     chunk: String::from("answer text"),
                 },
@@ -332,7 +334,7 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
         .handle_runtime_event_bridge_message(stream_event(
             3,
             Event::StreamComplete {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
             },
         ));
@@ -342,7 +344,7 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
         .handle_runtime_event_bridge_message(stream_event(
             3,
             Event::StreamComplete {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("answer"),
             },
         ));
@@ -354,25 +356,25 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
 #[test]
 fn covered_stream_lifecycle_preserves_newer_approval_state() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(10, Some(pending_script("current"))))),
         });
     for (index, event) in [
         Event::StreamStart {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             message_id: String::from("answer"),
         },
         Event::StreamComplete {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             message_id: String::from("answer"),
         },
         Event::ScriptApprovalRequested {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             script: pending_script("old"),
         },
     ]
@@ -405,12 +407,12 @@ fn covered_stream_lifecycle_preserves_newer_approval_state() {
 fn snapshot_cannot_swallow_a_ci_approval_failure() {
     let mut harness = test_harness();
     harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(4, Some(pending_script("current"))))),
         });
     harness
@@ -418,7 +420,7 @@ fn snapshot_cannot_swallow_a_ci_approval_failure() {
         .handle_runtime_event_bridge_message(stream_event(
             3,
             Event::ScriptApprovalRequested {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 script: pending_script("current"),
             },
         ));
@@ -432,10 +434,10 @@ fn snapshot_cannot_swallow_a_ci_approval_failure() {
 #[test]
 fn live_script_calls_remain_structured_across_duplicate_events_and_stale_history() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.chat_history = snapshot_with_message(1, false).history;
     let event = Event::ScriptCall {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
         call_id: kraai_types::ToolCallId::new("call"),
         name: "kraai_nushell".into(),
@@ -456,18 +458,18 @@ fn live_script_calls_remain_structured_across_duplicate_events_and_stale_history
 #[test]
 fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshots() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.handle_runtime_event(Event::StreamStart {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
     });
     harness.app.handle_runtime_event(Event::StreamChunk {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
         chunk: "answer text".into(),
     });
     let call = Event::ScriptCall {
-        session_id: "session".into(),
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
         call_id: kraai_types::ToolCallId::new("call"),
         name: "kraai_nushell".into(),
@@ -477,7 +479,7 @@ fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshot
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ChatHistory {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Ok(Default::default()),
         });
 
@@ -497,7 +499,7 @@ fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshot
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
                 model_save_id: 0,
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 result: Box::new(Ok(stale.clone())),
             });
         assert!(matches!(
@@ -516,7 +518,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some("session".into()), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
     let mut snapshot = session_snapshot_at(1, None);
     snapshot.session.selected_model = Some(kraai_types::ModelSelection {
         provider_id: ProviderId::new("saved-provider"),
@@ -530,7 +532,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot.clone())),
         });
     assert_eq!(
@@ -552,7 +554,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(
@@ -567,7 +569,7 @@ fn observer_refreshes_model_when_saved_selection_changes() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some("session".into()), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
     for (sequence, selection) in [
         None,
         Some(("first-provider", "first-model", "low")),
@@ -591,7 +593,7 @@ fn observer_refreshes_model_when_saved_selection_changes() {
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
                 model_save_id: 0,
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 result: Box::new(Ok(snapshot)),
             });
         if let Some((provider, model, effort)) = selection {

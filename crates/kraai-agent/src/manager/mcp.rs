@@ -1,7 +1,7 @@
 use super::*;
 
 impl AgentManager {
-    pub fn session_mcp(&self, session_id: &str) -> Arc<kraai_mcp::McpManager> {
+    pub fn session_mcp(&self, session_id: &SessionId) -> Arc<kraai_mcp::McpManager> {
         self.session_mcp
             .get(session_id)
             .unwrap_or(&self.mcp)
@@ -10,7 +10,7 @@ impl AgentManager {
 
     pub async fn replace_session_mcp_servers(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         config: kraai_mcp::McpConfig,
     ) -> Result<Option<Arc<kraai_mcp::McpManager>>> {
         self.require_session(session_id).await?;
@@ -31,8 +31,7 @@ impl AgentManager {
         Ok(if empty {
             self.session_mcp.remove(session_id)
         } else {
-            self.session_mcp
-                .insert(session_id.to_owned(), Arc::new(mcp))
+            self.session_mcp.insert(session_id.clone(), Arc::new(mcp))
         })
     }
 

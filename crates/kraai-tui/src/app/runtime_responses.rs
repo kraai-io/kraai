@@ -248,8 +248,7 @@ impl App {
                 profile_id,
                 result: Ok(()),
             } => {
-                let is_foreground =
-                    self.state.current_session_id.as_deref() == Some(session_id.as_str());
+                let is_foreground = self.state.current_session_id.as_ref() == Some(&session_id);
                 self.request(RuntimeRequest::ListSessions);
                 if is_foreground {
                     self.state.selected_profile_id = Some(profile_id.clone());
@@ -268,8 +267,8 @@ impl App {
                     .state
                     .pending_submit
                     .as_ref()
-                    .and_then(|pending| pending.session_id.as_deref())
-                    == Some(session_id.as_str())
+                    .and_then(|pending| pending.session_id.as_ref())
+                    == Some(&session_id)
                     && let Some(pending_submit) = self.state.pending_submit.take()
                 {
                     self.dispatch_send_message(
@@ -298,13 +297,13 @@ impl App {
                     .state
                     .pending_submit
                     .as_ref()
-                    .and_then(|pending| pending.session_id.as_deref())
-                    == Some(session_id.as_str())
+                    .and_then(|pending| pending.session_id.as_ref())
+                    == Some(&session_id)
                     && let Some(pending) = self.state.pending_submit.take()
                 {
                     self.recover_session_message(pending.session_id, pending.message);
                 }
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.profile_lock_stale_after_terminal_event = false;
                     self.set_error(format!("Failed changing agent: {err}"));
                     self.fail_ci(format!("Failed changing agent: {err}"));
@@ -330,7 +329,7 @@ impl App {
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
-                    if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                    if self.state.current_session_id.as_ref() != Some(&session_id) {
                         return;
                     }
                     self.state
@@ -365,7 +364,7 @@ impl App {
                     Ok(mut history) => {
                         self.merge_local_streaming_content(&mut history);
                         self.accumulate_exit_usage_from_history(&history);
-                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                        if self.state.current_session_id.as_ref() == Some(&session_id) {
                             self.state.chat_history = history;
                             self.invalidate_chat_cache();
                             self.reconcile_optimistic_messages();
@@ -373,12 +372,12 @@ impl App {
                         }
                     }
                     Err(err) => {
-                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                        if self.state.current_session_id.as_ref() == Some(&session_id) {
                             self.set_error(format!("Failed loading history: {err}"));
                         }
                     }
                 }
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.ci_metrics_history_pending = false;
                     self.maybe_finish_ci_run();
                 }
@@ -395,8 +394,7 @@ impl App {
                             .get(&session_id)
                             .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
                         {
-                            if self.state.current_session_id.as_deref() == Some(session_id.as_str())
-                            {
+                            if self.state.current_session_id.as_ref() == Some(&session_id) {
                                 self.ci_metrics_history_pending = false;
                                 self.ci_metrics_context_pending = false;
                                 self.maybe_finish_ci_run();
@@ -410,7 +408,7 @@ impl App {
                         self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
                         self.update_costs(&session_id, snapshot.requests);
                         self.state.cost_recovery_sessions.remove(&session_id);
-                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                        if self.state.current_session_id.as_ref() == Some(&session_id) {
                             self.state.turn_timer = snapshot.turn_timer;
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
                             self.state.chat_history = snapshot.history;
@@ -465,19 +463,19 @@ impl App {
                         self.flush_session_model_save(&session_id);
                     }
                     Err(error) => {
-                        if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                        if self.state.current_session_id.as_ref() == Some(&session_id) {
                             self.set_error(format!("Failed loading session: {error}"));
                         }
                     }
                 }
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.ci_metrics_history_pending = false;
                     self.ci_metrics_context_pending = false;
                     self.maybe_finish_ci_run();
                 }
             }
             RuntimeResponse::CurrentTip { session_id, result } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
 
@@ -496,7 +494,7 @@ impl App {
                 }
             }
             RuntimeResponse::UndoLastUserMessage { session_id, result } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
 
@@ -598,7 +596,7 @@ impl App {
                 self.state.sessions.retain(|s| s.id != session_id);
                 self.state.failed_messages.remove(&Some(session_id.clone()));
                 self.state.session_model_saves.remove(&session_id);
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.reset_chat_session(None, "Session deleted");
                 }
             }
@@ -612,7 +610,7 @@ impl App {
                 execution_id,
                 result: Ok(()),
             } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
                 if self
@@ -632,7 +630,7 @@ impl App {
                 result: Err(err),
                 ..
             } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.set_error(format!("Failed approving script: {err}"));
                 }
             }
@@ -641,7 +639,7 @@ impl App {
                 execution_id,
                 result: Ok(()),
             } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
                 if self
@@ -660,7 +658,7 @@ impl App {
                 result: Err(err),
                 ..
             } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.set_error(format!("Failed denying script: {err}"));
                 }
             }

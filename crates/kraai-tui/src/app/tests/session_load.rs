@@ -7,7 +7,7 @@ use super::{RuntimeRequest, RuntimeResponse, TestHarness, session_snapshot, test
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
 use crossbeam_channel::unbounded;
 
-fn begin_load(harness: &mut TestHarness) -> (u64, String) {
+fn begin_load(harness: &mut TestHarness) -> (u64, kraai_types::SessionId) {
     harness.app.state.sessions = vec![session_snapshot(None).session];
     harness.app.state.mode = UiMode::SessionsMenu;
     harness.app.state.sessions_menu_index = 1;

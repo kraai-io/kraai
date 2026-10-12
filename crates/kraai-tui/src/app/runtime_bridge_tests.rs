@@ -224,7 +224,7 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
         RuntimeRequest::ListUserInputHistory { limit: 100 },
         RuntimeRequest::GetAgentProfileCatalog,
         RuntimeRequest::GetSessionSnapshot {
-            session_id: String::from("missing"),
+            session_id: SessionId::new("missing"),
         },
         RuntimeRequest::FinishStartupSync,
     ] {
@@ -282,23 +282,23 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
     assert_eq!(result, Err(failure.clone()));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::SetSessionProfile {
-            session_id: "invalid/session".into(),
+            session_id: SessionId::new("session"),
             profile_id: String::new(),
         }),
         RuntimeResponse::SetSessionProfile { session_id, profile_id, result }
-            if session_id == "invalid/session" && profile_id.is_empty() && result == Err(failure.clone())
+            if session_id == SessionId::new("session") && profile_id.is_empty() && result == Err(failure.clone())
     ));
     assert!(matches!(
-        bridge.dispatch(RuntimeRequest::GetSessionSnapshot { session_id: "missing".into() }),
+        bridge.dispatch(RuntimeRequest::GetSessionSnapshot { session_id: SessionId::new("missing") }),
         RuntimeResponse::SessionSnapshot { session_id, result, .. }
-            if session_id == "missing" && result.as_ref().as_ref().err() == Some(&failure)
+            if session_id == SessionId::new("missing") && result.as_ref().as_ref().err() == Some(&failure)
     ));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::ApproveScript {
-            session_id: "session".into(), execution_id: "invalid/execution".into(),
+            session_id: SessionId::new("session"), execution_id: "invalid/execution".into(),
         }),
         RuntimeResponse::ApproveScript { session_id, execution_id, result }
-            if session_id == "session" && execution_id == "invalid/execution" && result == Err(failure.clone())
+            if session_id == SessionId::new("session") && execution_id == "invalid/execution" && result == Err(failure.clone())
     ));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::GetOpenAiCodexAuthStatus),
@@ -307,10 +307,10 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::LoadSession {
             load_id: 42,
-            session_id: "invalid/session".into(),
+            session_id: SessionId::new("session"),
         }),
         RuntimeResponse::LoadSession { load_id: 42, session_id, result }
-            if session_id == "invalid/session" && result == Err(failure.clone())
+            if session_id == SessionId::new("session") && result == Err(failure.clone())
     ));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::FinishStartupSync),

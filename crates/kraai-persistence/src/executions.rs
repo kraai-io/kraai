@@ -2,7 +2,7 @@ use crate::database::{Database, assert_owner, list_records, read_record, write_r
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{
     MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
+    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use ulid::Ulid;
 #[derive(Debug, Clone)]
 pub struct NewScriptExecution {
     pub id: ScriptExecutionId,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
@@ -27,7 +27,7 @@ pub struct ScriptExecutionRecord {
     pub id: ScriptExecutionId,
     pub result_message_id: MessageId,
     pub images: std::collections::BTreeMap<u64, kraai_types::ImageAttachment>,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
@@ -82,7 +82,7 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>>;
 
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>>;
+    async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>>;
 
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>>;
 
@@ -230,8 +230,8 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
             .run(move |connection, _| read_record(connection, "execution", &id))
             .await
     }
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>> {
-        let session = session_id.to_string();
+    async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>> {
+        let session = session_id.clone();
         self.database
             .run(move |connection, _| list_records(connection, "execution", Some(&session)))
             .await

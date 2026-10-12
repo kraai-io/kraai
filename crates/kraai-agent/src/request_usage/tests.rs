@@ -28,19 +28,19 @@ impl Default for BlockedStore {
 
 #[async_trait::async_trait]
 impl RequestUsageStore for BlockedStore {
-    async fn save(&self, _session_id: &str, request: &RequestUsage) -> Result<()> {
+    async fn save(&self, _session_id: &SessionId, request: &RequestUsage) -> Result<()> {
         self.entered.notify_one();
         self.release.acquire().await?.forget();
         self.requests.lock().await.push(request.clone());
         Ok(())
     }
 
-    async fn delete(&self, _session_id: &str) -> Result<()> {
+    async fn delete(&self, _session_id: &SessionId) -> Result<()> {
         self.requests.lock().await.clear();
         Ok(())
     }
 
-    async fn load(&self, _session_id: &str) -> Result<BTreeMap<MessageId, RequestUsage>> {
+    async fn load(&self, _session_id: &SessionId) -> Result<BTreeMap<MessageId, RequestUsage>> {
         Ok(self
             .requests
             .lock()
@@ -69,7 +69,7 @@ async fn cancelled_usage_commit_blocks_shutdown_until_save_and_observer_finish()
     let usage = Arc::new(AuxiliaryRequestUsage {
         recorder: AuxiliaryUsageRecorder {
             store: store.clone(),
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             barrier: Some(barrier.clone()),
             on_usage: Some(Arc::new({
                 let observed = observed.clone();

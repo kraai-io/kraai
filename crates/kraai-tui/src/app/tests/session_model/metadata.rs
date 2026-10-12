@@ -10,7 +10,7 @@ fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
 fn switch_to_other_session(harness: &mut TestHarness) {
     harness
         .app
-        .reset_chat_session(Some("other".into()), "other session");
+        .reset_chat_session(Some(SessionId::new("other")), "other session");
     harness.app.state.selected_model_options.clear();
 }
 
@@ -35,7 +35,7 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> colo
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
-    snapshot(&mut harness, "session", 0, active);
+    snapshot(&mut harness, &SessionId::new("session"), 0, active);
     harness
         .app
         .set_model_option("effort", "high")
@@ -44,7 +44,12 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> colo
     remove_effort(&mut harness);
     assert!(harness.app.state.selected_model_options.is_empty());
     assert!(saves(&harness).is_empty());
-    snapshot(&mut harness, "session", 0, session_snapshot(None));
+    snapshot(
+        &mut harness,
+        &SessionId::new("session"),
+        0,
+        session_snapshot(None),
+    );
     assert!(matches!(saves(&harness).as_slice(), [(_, _, selection)]
         if selection.options.is_empty()));
     Ok(())
@@ -70,17 +75,22 @@ fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() -> co
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
-    snapshot(&mut harness, "session", 0, active);
+    snapshot(&mut harness, &SessionId::new("session"), 0, active);
     harness.app.state.selected_model_options = options("high", false, None);
     harness.app.save_model_selection();
     assert!(saves(&harness).is_empty());
     switch_to_other_session(&mut harness);
     remove_effort(&mut harness);
     assert!(saves(&harness).is_empty());
-    snapshot(&mut harness, "session", 0, session_snapshot(None));
+    snapshot(
+        &mut harness,
+        &SessionId::new("session"),
+        0,
+        session_snapshot(None),
+    );
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
-        if session == "session"
+        if session.as_str() == "session"
             && selection.provider_id.as_str() == "provider"
             && selection.model_id.as_str() == "model"
             && selection.options == remaining_options())
@@ -111,7 +121,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SetSessionModel {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 save_id: initial_id,
                 result,
             });
@@ -123,17 +133,17 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
         assert_eq!(corrected.options, remaining_options());
         assert_eq!(corrected.provider_id, initial.provider_id);
         assert_eq!(corrected.model_id, initial.model_id);
-        acknowledge(&mut harness, "session", initial_id);
+        acknowledge(&mut harness, &SessionId::new("session"), initial_id);
         let mut stale = session_snapshot(None);
         stale.session.selected_model = Some(initial);
-        snapshot(&mut harness, "session", initial_id, stale);
+        snapshot(&mut harness, &SessionId::new("session"), initial_id, stale);
         assert!(saves(&harness).is_empty());
-        acknowledge(&mut harness, "session", corrected_id);
+        acknowledge(&mut harness, &SessionId::new("session"), corrected_id);
         assert!(saves(&harness).is_empty());
         assert!(harness.app.state.selected_model_options.is_empty());
         assert_eq!(
-            harness.app.state.current_session_id.as_deref(),
-            Some("other")
+            harness.app.state.current_session_id.as_ref(),
+            Some(&SessionId::new("other"))
         );
     }
     Ok(())
@@ -153,18 +163,23 @@ fn metadata_refresh_retries_background_saves_rejected_before_refresh() -> color_
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SetSessionModel {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             save_id,
             result: Err(kraai_runtime::RuntimeError::invalid_argument(
                 "Unknown option effort",
             )),
         });
-    snapshot(&mut harness, "session", 0, session_snapshot(None));
+    snapshot(
+        &mut harness,
+        &SessionId::new("session"),
+        0,
+        session_snapshot(None),
+    );
     assert!(saves(&harness).is_empty());
     remove_effort(&mut harness);
     assert!(
         matches!(saves(&harness).as_slice(), [(session, corrected_id, selection)]
-        if session == "session" && *corrected_id > save_id
+        if session.as_str() == "session" && *corrected_id > save_id
             && selection.options == remaining_options())
     );
     assert!(harness.app.state.selected_model_options.is_empty());

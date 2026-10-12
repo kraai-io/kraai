@@ -6,7 +6,7 @@ use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
     ScriptExecutionStore,
 };
-use kraai_types::{ScriptExecutionId, ScriptOutputStream};
+use kraai_types::{ScriptExecutionId, ScriptOutputStream, SessionId};
 use tokio::sync::Notify;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
@@ -203,7 +203,7 @@ impl ScriptExecutionStore for PausedExecutionStore {
         self.inner.get(id).await
     }
 
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>> {
+    async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>> {
         self.inner.list_for_session(session_id).await
     }
 

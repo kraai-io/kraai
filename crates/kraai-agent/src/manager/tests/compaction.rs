@@ -32,7 +32,7 @@ fn checkpoint(
     }
 }
 
-async fn context(manager: &AgentManager, session: &str) -> Result<Vec<Message>> {
+async fn context(manager: &AgentManager, session: &SessionId) -> Result<Vec<Message>> {
     let tip = manager
         .get_tip(session)
         .await?

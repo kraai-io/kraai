@@ -4,12 +4,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, ensure, eyre};
+use kraai_types::SessionId;
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::ValueRef,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-pub(crate) type LeaseTokens = BTreeMap<String, i64>;
+pub(crate) type LeaseTokens = BTreeMap<SessionId, i64>;
 
 #[derive(Clone)]
 pub struct Database {
@@ -98,12 +99,12 @@ pub(crate) fn now_nanos() -> Result<i64> {
 pub(crate) fn assert_owner(
     connection: &Connection,
     leases: &LeaseTokens,
-    session: &str,
+    session: &SessionId,
 ) -> Result<()> {
     let ownership: Option<(bool, i64)> = connection
         .query_row(
             "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1",
-            [session],
+            [session.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
@@ -132,10 +133,10 @@ pub(crate) fn assert_owner(
     Ok(())
 }
 
-pub(crate) fn bump_revision(connection: &Connection, session: &str) -> Result<()> {
+pub(crate) fn bump_revision(connection: &Connection, session: &SessionId) -> Result<()> {
     connection.execute(
         "UPDATE sessions SET revision = revision + 1 WHERE id = ?1",
-        [session],
+        [session.as_str()],
     )?;
     Ok(())
 }
@@ -159,26 +160,32 @@ pub(crate) fn read_record<T: DeserializeOwned>(
     Ok(Some(serde_json::from_str(json)?))
 }
 
+pub(crate) fn parse_session_id(value: String) -> Result<SessionId> {
+    SessionId::try_new(value).map_err(|error| eyre!("Invalid stored session id: {error}"))
+}
+
 pub(crate) fn record_session(
     connection: &Connection,
     kind: &str,
     id: &str,
-) -> Result<Option<String>> {
-    Ok(connection
+) -> Result<Option<SessionId>> {
+    connection
         .query_row(
             "SELECT session_id FROM records WHERE kind = ?1 AND id = ?2",
             params![kind, id],
-            |row| row.get(0),
+            |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
-        .flatten())
+        .flatten()
+        .map(parse_session_id)
+        .transpose()
 }
 
 pub(crate) fn write_record(
     connection: &Connection,
     kind: &str,
     id: &str,
-    session: Option<&str>,
+    session: Option<&SessionId>,
     value: &impl Serialize,
 ) -> Result<()> {
     let json = serde_json::to_string(value)?;
@@ -186,7 +193,7 @@ pub(crate) fn write_record(
         "INSERT INTO records(kind, id, session_id, data) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data,
          session_id = COALESCE(records.session_id, excluded.session_id)",
-        params![kind, id, session, json],
+        params![kind, id, session.map(SessionId::as_str), json],
     )?;
     if let Some(session) = session {
         bump_revision(connection, session)?;
@@ -197,11 +204,13 @@ pub(crate) fn write_record(
 pub(crate) fn list_records<T: DeserializeOwned>(
     connection: &Connection,
     kind: &str,
-    session: Option<&str>,
+    session: Option<&SessionId>,
 ) -> Result<Vec<T>> {
     let mut statement = connection.prepare(
         "SELECT data FROM records WHERE kind = ?1 AND (?2 IS NULL OR session_id = ?2) ORDER BY id",
     )?;
-    let rows = statement.query_map(params![kind, session], |row| row.get::<_, String>(0))?;
+    let rows = statement.query_map(params![kind, session.map(SessionId::as_str)], |row| {
+        row.get::<_, String>(0)
+    })?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }

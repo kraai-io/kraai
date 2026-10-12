@@ -2,12 +2,12 @@ use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream};
 
 use super::core::RuntimeCore;
-use kraai_types::DomainError;
+use kraai_types::{DomainError, SessionId};
 
 impl RuntimeCore {
     pub(crate) async fn set_session_mcp_servers(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         config: kraai_mcp::McpConfig,
     ) -> Result<()> {
         let Some(_preparation) = self.session_preparations.try_begin(session_id) else {

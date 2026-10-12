@@ -11,20 +11,24 @@ struct ControlledUsageStore {
 
 #[async_trait::async_trait]
 impl RequestUsageStore for ControlledUsageStore {
-    async fn save(&self, session_id: &str, request: &kraai_types::RequestUsage) -> Result<()> {
+    async fn save(
+        &self,
+        session_id: &SessionId,
+        request: &kraai_types::RequestUsage,
+    ) -> Result<()> {
         if self.reject_writes.load(Ordering::Acquire) {
             return Err(eyre!("usage storage unavailable"));
         }
         self.inner.save(session_id, request).await
     }
 
-    async fn delete(&self, session_id: &str) -> Result<()> {
+    async fn delete(&self, session_id: &SessionId) -> Result<()> {
         self.inner.delete(session_id).await
     }
 
     async fn load(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Result<BTreeMap<MessageId, kraai_types::RequestUsage>> {
         self.inner.load(session_id).await
     }
@@ -181,7 +185,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
             .map(|request| request.unpriced_attempts),
         Some(1)
     );
-    assert!(store.load("../escape").await?.is_empty());
+    assert!(SessionId::try_new("../escape").is_err());
     cleanup_dir(data_dir).await;
     Ok(())
 }

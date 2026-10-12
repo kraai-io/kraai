@@ -151,13 +151,13 @@ impl SessionStore for LimitedWrites {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
         self.inner.list().await
     }
-    async fn get(&self, id: &str) -> Result<Option<SessionMeta>> {
+    async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>> {
         self.inner.get(id).await
     }
     async fn save(&self, session: &SessionMeta) -> Result<()> {
         self.inner.save(session).await
     }
-    async fn delete(&self, id: &str) -> Result<()> {
+    async fn delete(&self, id: &SessionId) -> Result<()> {
         self.inner.delete(id).await
     }
     async fn save_if_tip_matches(

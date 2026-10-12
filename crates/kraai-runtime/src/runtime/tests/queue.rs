@@ -1,3 +1,4 @@
+use kraai_types::SessionId;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -149,7 +150,7 @@ async fn drains_coalesce_without_losing_sessions_or_rescheduled_work() -> Result
     runtime.queue_drains = Arc::default();
     let (_commands, mut receiver) = mpsc::channel(1);
     for session in ["first", "first", "second", "first", "second"] {
-        runtime.schedule_queue_drain(session);
+        runtime.schedule_queue_drain(&SessionId::new(session));
     }
     for expected in ["first", "second"] {
         let Some(Command::StartQueuedMessages { session_id }) =
@@ -158,7 +159,7 @@ async fn drains_coalesce_without_losing_sessions_or_rescheduled_work() -> Result
         else {
             panic!("missing drain");
         };
-        assert_eq!(session_id, expected);
+        assert_eq!(session_id, SessionId::new(expected));
     }
     {
         let next = runtime.next_command(&mut receiver);
@@ -168,9 +169,9 @@ async fn drains_coalesce_without_losing_sessions_or_rescheduled_work() -> Result
             "duplicate drain survived coalescing"
         );
     }
-    runtime.schedule_queue_drain("first");
+    runtime.schedule_queue_drain(&SessionId::new("first"));
     assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver)).await?, Some(Command::StartQueuedMessages { session_id }) if session_id == "first")
+        matches!(tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver)).await?, Some(Command::StartQueuedMessages { session_id }) if session_id == SessionId::new("first"))
     );
     harness.shutdown().await;
     Ok(())
@@ -262,7 +263,7 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
     // submission is waiting to inspect turn state.
     let other = runtime
         .session_preparations
-        .try_begin("another-session")
+        .try_begin(&SessionId::new("another-session"))
         .expect("independent session");
     drop(other);
     drop(preparation);
