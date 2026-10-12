@@ -7,27 +7,16 @@ use tokio::task::{JoinHandle, JoinSet};
 
 impl RuntimeCore {
     pub(crate) async fn release_turn(&self, session_id: &SessionId) {
-        self.agent_manager
-            .read()
-            .await
-            .discard_streaming_state(session_id)
-            .await;
+        self.agent_manager.discard_streaming_state(session_id).await;
         match self.session_store.release_turn(session_id).await {
-            Ok(false) => self
-                .agent_manager
-                .write()
-                .await
-                .clear_active_turn(session_id),
+            Ok(false) => self.agent_manager.clear_active_turn(session_id),
             Ok(true) => {}
             Err(error) => self.send_session_error(session_id, error),
         }
     }
 
     pub(crate) async fn finish_turn(&self, session_id: &SessionId) {
-        self.agent_manager
-            .write()
-            .await
-            .clear_active_turn(session_id);
+        self.agent_manager.clear_active_turn(session_id);
         self.release_turn(session_id).await;
         self.event_tx.finish_timer(session_id);
     }
@@ -88,7 +77,7 @@ impl RuntimeCore {
                 interval.tick().await;
                 {
                     let _state_guard = runtime.session_state_barrier.read().await;
-                    let agent = runtime.agent_manager.read().await;
+                    let agent = &runtime.agent_manager;
                     if let Err(error) = agent.publish_streaming_snapshots().await {
                         runtime.send_service_error(error);
                     }
@@ -151,8 +140,6 @@ impl RuntimeCore {
             let recovered = async {
                 self.recover_session_executions(&session_id).await?;
                 self.agent_manager
-                    .write()
-                    .await
                     .recover_interrupted_session(&session_id)
                     .await
             }

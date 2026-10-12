@@ -18,7 +18,7 @@ impl RuntimeCore {
         if records.is_empty() {
             return Ok(());
         }
-        let sessions = self.agent_manager.read().await.list_session_ids().await?;
+        let sessions = self.agent_manager.list_session_ids().await?;
         let mut sources: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
         for record in &records {
             if sessions.contains(&record.session_id) {
@@ -37,8 +37,6 @@ impl RuntimeCore {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => entry.insert(
                     self.agent_manager
-                        .read()
-                        .await
                         .reachable_message_ids(
                             &record.session_id,
                             sources.remove(&record.session_id).unwrap_or_default(),
@@ -78,8 +76,6 @@ impl RuntimeCore {
             let result_message_id = completed.record.result_message_id.clone();
             let session_id = completed.record.session_id.clone();
             self.agent_manager
-                .write()
-                .await
                 .add_script_result_to_history(
                     &session_id,
                     result_message_id.clone(),

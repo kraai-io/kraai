@@ -32,7 +32,7 @@ fn request_file_context(request: &PendingStreamRequest) -> String {
 #[tokio::test]
 async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidation() -> Result<()>
 {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace = data_dir.join("profile-workspace");
     tokio::fs::create_dir_all(workspace.join(".kraai")).await?;
     let profile_path = workspace.join(".kraai/agents.toml");
@@ -243,7 +243,7 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
 
 #[tokio::test]
 async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-missing");
     tokio::fs::create_dir_all(&workspace_dir).await?;
 
@@ -288,7 +288,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
 
 #[tokio::test]
 async fn script_examples_use_the_shared_tool_prompt() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let session = manager.require_session(&session_id).await?;
     let profile = manager.resolve_selected_profile(&session)?;
@@ -308,7 +308,7 @@ async fn script_examples_use_the_shared_tool_prompt() -> Result<()> {
 
 #[tokio::test]
 async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -349,7 +349,7 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
 
 #[tokio::test]
 async fn execution_context_reports_selected_profile_grants_and_policy() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let session = manager.require_session(&session_id).await?;
     let mut profile = manager.resolve_selected_profile(&session)?;
@@ -406,7 +406,7 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
 
 #[tokio::test]
 async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-present");
     tokio::fs::create_dir_all(&workspace_dir).await?;
     tokio::fs::write(
@@ -445,7 +445,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
 
 #[tokio::test]
 async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-dynamic");
     tokio::fs::create_dir_all(&workspace_dir).await?;
 
@@ -506,7 +506,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
 #[tokio::test]
 async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending()
 -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_a = test_dir("agents-active-workspace-a");
     let workspace_b = test_dir("agents-active-workspace-b");
     tokio::fs::create_dir_all(&workspace_a).await?;
@@ -582,10 +582,11 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
 
     let session = manager.require_session(&session_id).await?;
     let profile = manager.resolve_selected_profile(&session)?;
-    let state = manager.ensure_runtime_state(&session_id, &session.workspace_dir);
-    state.last_model = Some(ModelId::new("mock-model"));
-    state.last_provider = Some(ProviderId::new("mock"));
-    state.active_turn_profile = Some(Arc::new(profile));
+    manager.with_runtime_state(&session_id, &session.workspace_dir, |state| {
+        state.last_model = Some(ModelId::new("mock-model"));
+        state.last_provider = Some(ProviderId::new("mock"));
+        state.active_turn_profile = Some(Arc::new(profile));
+    });
 
     let request = manager
         .prepare_continuation_stream(&session_id)
@@ -607,7 +608,7 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
 
 #[tokio::test]
 async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("skills-catalog");
     let skill_dir = workspace_dir.join(".agents/skills/review");
     tokio::fs::create_dir_all(&skill_dir).await?;
@@ -652,7 +653,7 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
 
 #[tokio::test]
 async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = data_dir.join("workspace");
     tokio::fs::create_dir_all(&workspace_dir).await?;
     let user_path = data_dir.join(AGENTS_MD_FILE_NAME);
@@ -720,7 +721,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
 #[tokio::test]
 async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_errors() -> Result<()>
 {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_dir = data_dir.join("workspace");
     tokio::fs::create_dir_all(&workspace_dir).await?;
     let user_path = data_dir.join(AGENTS_MD_FILE_NAME);

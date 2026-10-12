@@ -37,10 +37,9 @@ impl RuntimeCore {
         let queued_messages = self.session_store.queued_messages(session_id).await?.len();
         let active_stream = self.active_streams.lock().await.contains_key(session_id);
 
-        let agent = self.agent_manager.read().await;
+        let agent = &self.agent_manager;
         let reader = agent.capture_session_snapshot(session_id).await?;
         let is_running = agent.is_turn_active(session_id) || foreign_owner;
-        drop(agent);
         // Capture the sequence alongside mutable state. History loading below follows the
         // captured tip and uses copied in-flight messages, never later stream contents.
         let (event_sequence, turn_timer) = self.event_tx.timer_snapshot(session_id);
@@ -120,7 +119,7 @@ impl RuntimeCore {
         };
         match command {
             Command::ListModels { response } => {
-                let models_map = self.agent_manager.read().await.list_models().await;
+                let models_map = self.agent_manager.list_models().await;
                 let models: HashMap<String, Vec<Model>> = models_map
                     .into_iter()
                     .map(|(provider_id, model_list)| {
@@ -155,12 +154,7 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                let profiles = self
-                    .agent_manager
-                    .read()
-                    .await
-                    .list_agent_profiles(&session_id)
-                    .await;
+                let profiles = self.agent_manager.list_agent_profiles(&session_id).await;
                 respond(response, profiles);
             }
             Command::GetAgentProfileCatalog {
@@ -173,10 +167,9 @@ impl RuntimeCore {
                         .as_deref()
                         .map(canonicalize_workspace_dir)
                         .transpose()?;
-                    let agent = agent_manager.blocking_read();
+                    let agent = &agent_manager;
                     let (workspace_dir, profiles) =
                         agent.list_agent_profiles_for_workspace(workspace_dir.as_deref());
-                    drop(agent);
                     let default_profile_id = profiles
                         .selected_profile_id
                         .clone()
@@ -199,8 +192,6 @@ impl RuntimeCore {
             } => {
                 let result = self
                     .agent_manager
-                    .write()
-                    .await
                     .set_session_profile(&session_id, profile_id)
                     .await;
                 respond(response, result);
@@ -217,8 +208,6 @@ impl RuntimeCore {
                         .map(canonicalize_workspace_dir)
                         .transpose()?;
                     self.agent_manager
-                        .write()
-                        .await
                         .create_session_with(workspace_dir, request.profile_id)
                         .await
                 }
@@ -264,12 +253,7 @@ impl RuntimeCore {
                     watched.clear();
                     watched.insert(session_id.clone(), observation);
                 }
-                let loaded = self
-                    .agent_manager
-                    .write()
-                    .await
-                    .prepare_session(&session_id)
-                    .await;
+                let loaded = self.agent_manager.prepare_session(&session_id).await;
                 respond(response, loaded);
             }
             Command::ListSessions { response } => {
@@ -281,7 +265,7 @@ impl RuntimeCore {
                         .keys()
                         .cloned()
                         .collect::<std::collections::HashSet<_>>();
-                    let agent = self.agent_manager.read().await;
+                    let agent = &self.agent_manager;
                     let sessions = agent.list_sessions().await?;
                     let streaming_sessions = agent.streaming_session_ids().await;
                     let mut sessions: Vec<_> = sessions
@@ -294,7 +278,6 @@ impl RuntimeCore {
                             ..Session::from_session_meta(session)
                         })
                         .collect();
-                    drop(agent);
                     let foreign = self.session_store.foreign_session_activity().await?;
                     for session in &mut sessions {
                         if let Some(activity) = foreign.get(&session.id) {
@@ -310,12 +293,7 @@ impl RuntimeCore {
                 respond(response, result);
             }
             Command::ListUserInputHistory { limit, response } => {
-                let history = self
-                    .agent_manager
-                    .read()
-                    .await
-                    .list_user_input_history(limit)
-                    .await;
+                let history = self.agent_manager.list_user_input_history(limit).await;
                 respond(response, history);
             }
             Command::DeleteSession {
@@ -335,18 +313,11 @@ impl RuntimeCore {
                     ))));
                     return Ok(());
                 }
-                let agent = self.agent_manager.write().await;
                 if let Some(active_stream) = self.take_active_stream(&session_id).await {
                     active_stream.abort_handle.abort();
                 }
-                drop(agent);
                 self.stream_tasks.wait_session(&session_id).await;
-                let result = self
-                    .agent_manager
-                    .write()
-                    .await
-                    .delete_session(&session_id)
-                    .await;
+                let result = self.agent_manager.delete_session(&session_id).await;
                 if result.is_ok() {
                     self.release_turn(&session_id).await;
                     self.observed_sessions.lock().await.remove(&session_id);
@@ -360,8 +331,6 @@ impl RuntimeCore {
             } => {
                 let result = self
                     .agent_manager
-                    .write()
-                    .await
                     .get_workspace_dir_state(&session_id)
                     .await
                     .map(|workspace_state| {
@@ -380,8 +349,6 @@ impl RuntimeCore {
                 let result = async {
                     let workspace_dir = canonicalize_workspace_dir(&workspace_dir)?;
                     self.agent_manager
-                        .write()
-                        .await
                         .set_workspace_dir(&session_id, workspace_dir)
                         .await
                 }
@@ -394,8 +361,6 @@ impl RuntimeCore {
             } => {
                 let tip_id = self
                     .agent_manager
-                    .read()
-                    .await
                     .get_tip(&session_id)
                     .await
                     .map(|tip_id| tip_id.map(|id| id.to_string()));
@@ -405,24 +370,14 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => {
-                let restored_message = self
-                    .agent_manager
-                    .read()
-                    .await
-                    .undo_last_user_message(&session_id)
-                    .await;
+                let restored_message = self.agent_manager.undo_last_user_message(&session_id).await;
                 respond(response, restored_message);
             }
             Command::GetChatHistory {
                 session_id,
                 response,
             } => {
-                let history = self
-                    .agent_manager
-                    .read()
-                    .await
-                    .get_chat_history(&session_id)
-                    .await;
+                let history = self.agent_manager.get_chat_history(&session_id).await;
                 respond(response, history);
             }
             Command::GetSessionSnapshot {
@@ -441,8 +396,6 @@ impl RuntimeCore {
             } => {
                 let usage = self
                     .agent_manager
-                    .read()
-                    .await
                     .get_session_context_usage(&session_id)
                     .await
                     .map(|usage| {
@@ -461,11 +414,7 @@ impl RuntimeCore {
             } => {
                 respond(
                     response,
-                    self.agent_manager
-                        .read()
-                        .await
-                        .get_session_model(&session_id)
-                        .await,
+                    self.agent_manager.get_session_model(&session_id).await,
                 );
             }
             Command::SetSessionModel {
@@ -476,8 +425,6 @@ impl RuntimeCore {
                 respond(
                     response,
                     self.agent_manager
-                        .write()
-                        .await
                         .set_session_model(&session_id, selection)
                         .await,
                 );
@@ -562,19 +509,19 @@ impl RuntimeCore {
                 let _ = response.send(Ok(self.openai_codex_auth.get_status().await));
             }
             Command::GetMcpAuthStatuses { response } => {
-                let mcp = self.agent_manager.read().await.mcp();
+                let mcp = self.agent_manager.mcp();
                 let _ = response.send(Ok(mcp.auth_statuses().await));
             }
             Command::StartMcpLogin { server, response } => {
-                let mcp = self.agent_manager.read().await.mcp();
+                let mcp = self.agent_manager.mcp();
                 respond(response, mcp.start_login(&server).await);
             }
             Command::CancelMcpLogin { server, response } => {
-                let mcp = self.agent_manager.read().await.mcp();
+                let mcp = self.agent_manager.mcp();
                 respond(response, mcp.cancel_login(&server).await);
             }
             Command::LogoutMcp { server, response } => {
-                let mcp = self.agent_manager.read().await.mcp();
+                let mcp = self.agent_manager.mcp();
                 respond(response, mcp.logout(&server).await);
             }
             Command::StartOpenAiCodexBrowserLogin { response } => {

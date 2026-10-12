@@ -112,7 +112,7 @@ async fn rejected_usage_writes_leave_stream_state_unchanged_and_can_be_retried()
 
 #[tokio::test]
 async fn request_cost_survives_empty_response_cancellation_and_store_reload() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let pending = manager
         .prepare_start_stream(
@@ -192,7 +192,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
 
 #[tokio::test]
 async fn aborted_request_without_usage_remains_unknown() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let pending = manager
         .prepare_start_stream(

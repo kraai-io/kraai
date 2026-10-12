@@ -171,8 +171,6 @@ impl RuntimeCore {
     ) -> RuntimeResult<SubmitMessageOutcome> {
         let has_pending_messages = self.has_pending_messages(&session_id).await?;
         self.agent_manager
-            .read()
-            .await
             .validate_model_options(&provider_id, &model_id, &options, true)
             .await
             .map_err(RuntimeError::from_report)?;
@@ -197,7 +195,7 @@ impl RuntimeCore {
         let active_script = self.has_active_script_tasks(&session_id).await;
         let has_pending_messages =
             has_pending_messages || self.has_pending_messages(&session_id).await?;
-        let agent = self.agent_manager.write().await;
+        let agent = &self.agent_manager;
         let preparation =
             if agent.is_turn_active(&session_id) || has_pending_messages || active_script {
                 None
@@ -206,7 +204,6 @@ impl RuntimeCore {
                     .try_begin_with_drain(&session_id, Some(&self.queue_drains))
             };
         let Some(preparation) = preparation else {
-            drop(agent);
             if !self
                 .session_store
                 .owns_turn(&session_id)
@@ -252,18 +249,16 @@ impl RuntimeCore {
                 .await
                 .map_err(RuntimeError::from_report)?;
         }
-        drop(agent);
         if newly_claimed && let Err(error) = self.recover_session_executions(&session_id).await {
             self.release_turn(&session_id).await;
             return Err(RuntimeError::from_report(error));
         }
-        let mut agent = self.agent_manager.write().await;
+        let agent = &self.agent_manager;
         let stream_request = {
             let result = agent
                 .prepare_start_stream(&session_id, message, model_id, provider_id, options)
                 .await;
             let providers = agent.cloned_provider_manager();
-            drop(agent);
             match result {
                 Ok(request) => (providers, request),
                 Err(error) => {
@@ -299,7 +294,7 @@ impl RuntimeCore {
             return;
         };
         let is_turn_active = {
-            let agent = self.agent_manager.read().await;
+            let agent = &self.agent_manager;
             agent.is_turn_active(&session_id)
         };
         if is_turn_active || self.has_active_script_tasks(&session_id).await {
@@ -319,7 +314,7 @@ impl RuntimeCore {
         let selection = last.message.selection.clone();
 
         let stream_request = {
-            let mut agent = self.agent_manager.write().await;
+            let agent = &self.agent_manager;
             let result = agent
                 .prepare_queued_stream(&session_id, queued, selection)
                 .await;
@@ -328,7 +323,6 @@ impl RuntimeCore {
                 self.event_tx.finish_timer(&session_id);
             }
             let providers = agent.cloned_provider_manager();
-            drop(agent);
             if result.is_err() {
                 self.release_turn(&session_id).await;
             }

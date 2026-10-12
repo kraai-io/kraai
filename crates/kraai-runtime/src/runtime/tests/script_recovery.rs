@@ -19,21 +19,15 @@ async fn completed_script()
 
 #[tokio::test]
 async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> {
-    let Some((harness, session_id, completed)) = completed_script().await? else {
+    let Some((mut harness, session_id, completed)) = completed_script().await? else {
         return Ok(());
     };
-    reopen_agent(&harness).await?;
+    reopen_agent(&mut harness).await?;
     let runtime = harness.runtime.clone();
 
     runtime.recover_session_executions(&session_id).await?;
 
-    assert!(
-        !runtime
-            .agent_manager
-            .read()
-            .await
-            .is_profile_locked(&session_id)
-    );
+    assert!(!runtime.agent_manager.is_profile_locked(&session_id));
     let snapshot = harness.handle.get_session_snapshot(session_id).await?;
     assert!(!snapshot.session.is_running);
     let expected = completed.record.outcome()?;
@@ -125,7 +119,7 @@ pub(super) async fn completed_script_with_image(
         record,
     };
     {
-        let mut manager = harness.runtime.agent_manager.write().await;
+        let manager = &harness.runtime.agent_manager;
         manager
             .add_script_result_to_history(
                 &session_id,
@@ -142,7 +136,7 @@ pub(super) async fn completed_script_with_image(
 }
 
 pub(super) async fn reopen_agent(
-    harness: &RuntimeTestHarness,
+    harness: &mut RuntimeTestHarness,
 ) -> Result<(Arc<SqliteMessageStore>, Arc<SqliteSessionStore>)> {
     let messages = Arc::new(SqliteMessageStore::with_database(
         harness.runtime.session_store.sqlite_database(),
@@ -157,27 +151,22 @@ pub(super) async fn reopen_agent(
             sessions.claim_turn(&session.id).await?;
         }
     }
-    let providers = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .cloned_provider_manager();
-    *harness.runtime.agent_manager.write().await = AgentManager::new(
+    let providers = harness.runtime.agent_manager.cloned_provider_manager();
+    harness.runtime.agent_manager = Arc::new(AgentManager::new(
         providers,
         harness.data_dir.join("workspace"),
         persistence,
         harness.data_dir.clone(),
-    );
+    ));
     Ok((messages, sessions))
 }
 
 async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Result<()> {
-    let Some((harness, session_id, completed)) = completed_script().await? else {
+    let Some((mut harness, session_id, completed)) = completed_script().await? else {
         return Ok(());
     };
     if retained_by_other_session {
-        let (_, sessions) = reopen_agent(&harness).await?;
+        let (_, sessions) = reopen_agent(&mut harness).await?;
         let mut retained = sessions.get(&session_id).await?.unwrap();
         retained.id = SessionId::new("retained");
         retained.revision = 0;
@@ -198,7 +187,7 @@ async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Res
             .is_empty()
     );
 
-    let (messages, sessions) = reopen_agent(&harness).await?;
+    let (messages, sessions) = reopen_agent(&mut harness).await?;
     assert_eq!(
         messages.exists(&completed.record.source_message_id).await?,
         retained_by_other_session
@@ -230,7 +219,7 @@ async fn restart_ignores_undone_script_sources_retained_by_another_session() -> 
 }
 
 async fn append_later_message(
-    harness: &RuntimeTestHarness,
+    harness: &mut RuntimeTestHarness,
     session_id: &SessionId,
 ) -> Result<Arc<SqliteMessageStore>> {
     let (messages, sessions) = reopen_agent(harness).await?;
@@ -251,11 +240,11 @@ async fn append_later_message(
 
 #[tokio::test]
 async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Result<()> {
-    let Some((harness, session_id, completed)) = completed_script().await? else {
+    let Some((mut harness, session_id, completed)) = completed_script().await? else {
         return Ok(());
     };
-    append_later_message(&harness, &session_id).await?;
-    reopen_agent(&harness).await?;
+    append_later_message(&mut harness, &session_id).await?;
+    reopen_agent(&mut harness).await?;
     let before = harness.handle.get_chat_history(session_id.clone()).await?;
     assert!(before.contains_key(&completed.record.source_message_id));
     assert!(before.contains_key(&completed.record.result_message_id));
@@ -276,10 +265,10 @@ async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Re
 #[tokio::test]
 async fn recovery_still_validates_previously_delivered_script_results() -> Result<()> {
     for corrupt_output in [false, true] {
-        let Some((harness, session_id, completed)) = completed_script().await? else {
+        let Some((mut harness, session_id, completed)) = completed_script().await? else {
             return Ok(());
         };
-        let messages = append_later_message(&harness, &session_id).await?;
+        let messages = append_later_message(&mut harness, &session_id).await?;
         if corrupt_output {
             rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?.execute(
                 "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, 'corrupt', x'00')",
@@ -298,7 +287,7 @@ async fn recovery_still_validates_previously_delivered_script_results() -> Resul
             });
             messages.save(&message).await?;
         }
-        reopen_agent(&harness).await?;
+        reopen_agent(&mut harness).await?;
         let error = harness
             .runtime
             .recover_session_executions(&session_id)

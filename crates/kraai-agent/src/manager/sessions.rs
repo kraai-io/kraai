@@ -1,14 +1,14 @@
 use super::*;
 
 impl AgentManager {
-    pub fn clear_active_turn(&mut self, session_id: &SessionId) {
-        if let Some(state) = self.session_states.get_mut(session_id) {
+    pub fn clear_active_turn(&self, session_id: &SessionId) {
+        if let Some(state) = lock(&self.session_states).get_mut(session_id) {
             state.active_turn_profile = None;
         }
     }
 
     pub fn is_turn_active(&self, session_id: &SessionId) -> bool {
-        self.session_states
+        lock(&self.session_states)
             .get(session_id)
             .is_some_and(|state| state.active_turn_profile.is_some())
     }
@@ -31,7 +31,7 @@ impl AgentManager {
     }
 
     pub fn cloned_provider_manager(&self) -> ProviderManager {
-        self.providers.clone()
+        read(&self.providers).clone()
     }
 
     pub fn new(
@@ -42,9 +42,9 @@ impl AgentManager {
     ) -> Self {
         let conversation_store = persistence.conversations();
         Self {
-            mcp: Arc::default(),
-            session_mcp: BTreeMap::new(),
-            providers,
+            mcp: StdRwLock::default(),
+            session_mcp: StdMutex::default(),
+            providers: StdRwLock::new(providers),
             default_workspace_dir,
             user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),
             storage_root,
@@ -54,19 +54,19 @@ impl AgentManager {
             context_state_store: persistence.context().clone(),
             usage_store: persistence.usage().clone(),
             persistence,
-            session_states: HashMap::new(),
-            last_used_profile_id: None,
+            session_states: StdMutex::default(),
+            last_used_profile_id: StdMutex::default(),
             streaming_messages: RwLock::new(BTreeMap::new()),
             streaming_persistence: Mutex::new(()),
         }
     }
 
-    pub async fn create_session(&mut self) -> Result<SessionId> {
+    pub async fn create_session(&self) -> Result<SessionId> {
         self.create_session_with(None, None).await
     }
 
     pub async fn create_session_with(
-        &mut self,
+        &self,
         workspace_dir: Option<PathBuf>,
         profile_id: Option<String>,
     ) -> Result<SessionId> {
@@ -102,8 +102,8 @@ impl AgentManager {
         };
 
         self.session_store.save(&session).await?;
-        self.ensure_runtime_state(&session_id, &session.workspace_dir);
-        self.last_used_profile_id = Some(selected_profile_id);
+        self.with_runtime_state(&session_id, &session.workspace_dir, |_| ());
+        *lock(&self.last_used_profile_id) = Some(selected_profile_id);
         Ok(session_id)
     }
 
@@ -132,17 +132,17 @@ impl AgentManager {
     }
 
     fn default_profile_for_profiles(&self, profiles: &[AgentProfile]) -> String {
-        self.last_used_profile_id
+        lock(&self.last_used_profile_id)
             .as_ref()
             .filter(|selected| profiles.iter().any(|profile| &profile.id == *selected))
             .cloned()
             .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string())
     }
 
-    pub async fn prepare_session(&mut self, session_id: &SessionId) -> Result<bool> {
+    pub async fn prepare_session(&self, session_id: &SessionId) -> Result<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
-                self.ensure_runtime_state(session_id, &session.workspace_dir);
+                self.with_runtime_state(session_id, &session.workspace_dir, |_| ());
                 self.validate_history_for_session(&session).await?;
                 Ok(true)
             }
@@ -151,7 +151,7 @@ impl AgentManager {
     }
 
     pub async fn prepare_script_recovery(
-        &mut self,
+        &self,
         session_id: &SessionId,
         source_message_id: &MessageId,
     ) -> Result<()> {
@@ -177,16 +177,17 @@ impl AgentManager {
         }
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
-        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-        state.last_model = Some(generation.model_id);
-        state.last_provider = Some(generation.provider_id);
-        state.last_options = generation.options;
-        state.active_turn_profile = Some(Arc::new(profile));
+        self.with_runtime_state(session_id, &session.workspace_dir, |state| {
+            state.last_model = Some(generation.model_id);
+            state.last_provider = Some(generation.provider_id);
+            state.last_options = generation.options;
+            state.active_turn_profile = Some(Arc::new(profile));
+        });
         Ok(())
     }
 
     /// Rolls back a streaming placeholder left by a stopped runtime; requires the session lease.
-    pub async fn recover_interrupted_session(&mut self, session_id: &SessionId) -> Result<()> {
+    pub async fn recover_interrupted_session(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id).await?;
         self.recover_interrupted_stream(session).await?;
         Ok(())
@@ -284,22 +285,23 @@ impl AgentManager {
         Ok(history)
     }
 
-    pub async fn delete_session(&mut self, session_id: &SessionId) -> Result<()> {
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.persistence
             .sessions()
             .ensure_writable(session_id)
             .await?;
         self.abort_streaming_messages_for_session(session_id)
             .await?;
-        if let Some(mcp) = self.session_mcp.remove(session_id) {
+        let mcp = lock(&self.session_mcp).remove(session_id);
+        if let Some(mcp) = mcp {
             mcp.shutdown().await;
         }
-        self.session_states.remove(session_id);
+        lock(&self.session_states).remove(session_id);
         self.persistence.delete_session(session_id).await
     }
 
     pub async fn set_workspace_dir(
-        &mut self,
+        &self,
         session_id: &SessionId,
         workspace_dir: PathBuf,
     ) -> Result<()> {
@@ -308,8 +310,9 @@ impl AgentManager {
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
 
-        self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_workspace_dir = Some(workspace_dir);
+        self.with_runtime_state(session_id, &session.workspace_dir, |state| {
+            state.pending_workspace_dir = Some(workspace_dir);
+        });
         Ok(())
     }
 
@@ -330,7 +333,7 @@ impl AgentManager {
     }
 
     pub async fn set_session_profile(
-        &mut self,
+        &self,
         session_id: &SessionId,
         profile_id: String,
     ) -> Result<()> {
@@ -366,7 +369,7 @@ impl AgentManager {
     }
 
     pub async fn set_session_model(
-        &mut self,
+        &self,
         session_id: &SessionId,
         selection: kraai_types::ModelSelection,
     ) -> Result<()> {
@@ -407,11 +410,13 @@ impl AgentManager {
         options: &ModelOptionValues,
         require_all: bool,
     ) -> Result<()> {
-        let provider = self.providers.get_provider(provider_id).ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Unknown provider: {provider_id}"
-            )))
-        })?;
+        let provider = read(&self.providers)
+            .get_provider(provider_id)
+            .ok_or_else(|| {
+                eyre!(kraai_types::DomainError::not_found(format!(
+                    "Unknown provider: {provider_id}"
+                )))
+            })?;
         let model = provider.get_model(model_id).await.ok_or_else(|| {
             eyre!(kraai_types::DomainError::not_found(format!(
                 "Unknown model: {model_id}"
@@ -438,36 +443,42 @@ impl AgentManager {
     }
 
     pub async fn get_workspace_dir_state(
-        &mut self,
+        &self,
         session_id: &SessionId,
     ) -> Result<Option<(PathBuf, bool)>> {
         let Some(session) = self.session_store.get(session_id).await? else {
             return Ok(None);
         };
 
-        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-        Ok(Some((
-            state.effective_workspace_dir(),
-            state.pending_workspace_dir.is_some(),
+        Ok(Some(self.with_runtime_state(
+            session_id,
+            &session.workspace_dir,
+            |state| {
+                (
+                    state.effective_workspace_dir(),
+                    state.pending_workspace_dir.is_some(),
+                )
+            },
         )))
     }
 
     pub fn is_profile_locked(&self, session_id: &SessionId) -> bool {
-        self.session_states
-            .get(session_id)
-            .is_some_and(|state| state.active_turn_profile.is_some())
+        self.is_turn_active(session_id)
     }
 
     pub async fn set_providers(
-        &mut self,
+        &self,
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
     ) -> Result<()> {
-        self.providers.load_config(config, registry).await
+        let mut providers = self.cloned_provider_manager();
+        let result = providers.load_config(config, registry).await;
+        *write(&self.providers) = providers;
+        result
     }
 
     pub async fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
-        self.providers.list_all_models().await
+        self.cloned_provider_manager().list_all_models().await
     }
 
     pub async fn get_tip(&self, session_id: &SessionId) -> Result<Option<MessageId>> {
@@ -493,13 +504,14 @@ impl AgentManager {
         Ok(())
     }
 
-    pub(super) fn ensure_runtime_state(
-        &mut self,
+    pub(super) fn with_runtime_state<T>(
+        &self,
         session_id: &SessionId,
         workspace_dir: &Path,
-    ) -> &mut SessionRuntimeState {
-        let state = self
-            .session_states
+        update: impl FnOnce(&mut SessionRuntimeState) -> T,
+    ) -> T {
+        let mut states = lock(&self.session_states);
+        let state = states
             .entry(session_id.clone())
             .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()));
         if state.active_turn_profile.is_none() {
@@ -512,7 +524,7 @@ impl AgentManager {
                 state.pending_workspace_dir = None;
             }
         }
-        state
+        update(state)
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
@@ -550,7 +562,8 @@ impl AgentManager {
     }
 
     pub fn script_turn_context(&self, session_id: &SessionId) -> Result<ScriptTurnContext> {
-        let state = self.session_states.get(session_id).ok_or_else(|| {
+        let states = lock(&self.session_states);
+        let state = states.get(session_id).ok_or_else(|| {
             eyre!(kraai_types::DomainError::not_found(format!(
                 "Session runtime state is unavailable: {session_id}"
             )))

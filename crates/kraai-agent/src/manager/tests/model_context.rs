@@ -55,7 +55,7 @@ impl Provider for ContextProvider {
 async fn model_switches_use_current_context_limits_after_restarting() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     for (id, standard_limit) in [("first", 10_000), ("second", 30_000)] {
-        manager.providers.register_provider(
+        super::super::write(&manager.providers).register_provider(
             ProviderId::new(id),
             Box::new(ContextProvider {
                 id: ProviderId::new(id),

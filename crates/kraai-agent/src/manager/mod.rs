@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex as StdMutex, MutexGuard, PoisonError, RwLock as StdRwLock, RwLockReadGuard,
+    RwLockWriteGuard,
+};
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
@@ -47,6 +50,18 @@ mod tests;
 const DEFAULT_AGENT_PROFILE_ID: &str = "coding";
 const AGENTS_MD_FILE_NAME: &str = "AGENTS.md";
 const SESSION_TITLE_MAX_CHARS: usize = 60;
+
+fn lock<T>(mutex: &StdMutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn read<T>(lock: &StdRwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn write<T>(lock: &StdRwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn title_from_user_prompt(prompt: &str) -> Option<String> {
     let title: String = prompt
@@ -167,10 +182,10 @@ impl StreamingMessageState {
 }
 
 pub struct AgentManager {
-    mcp: Arc<kraai_mcp::McpManager>,
-    session_mcp: BTreeMap<SessionId, Arc<kraai_mcp::McpManager>>,
+    mcp: StdRwLock<Arc<kraai_mcp::McpManager>>,
+    session_mcp: StdMutex<BTreeMap<SessionId, Arc<kraai_mcp::McpManager>>>,
     usage_store: Arc<dyn kraai_persistence::RequestUsageStore>,
-    providers: ProviderManager,
+    providers: StdRwLock<ProviderManager>,
     default_workspace_dir: PathBuf,
     storage_root: PathBuf,
     user_agents_path: Option<PathBuf>,
@@ -179,8 +194,8 @@ pub struct AgentManager {
     message_store: Arc<dyn MessageStore>,
     session_store: Arc<dyn SessionStore>,
     context_state_store: Arc<dyn ContextStateStore>,
-    session_states: HashMap<SessionId, SessionRuntimeState>,
-    last_used_profile_id: Option<String>,
+    session_states: StdMutex<HashMap<SessionId, SessionRuntimeState>>,
+    last_used_profile_id: StdMutex<Option<String>>,
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,
     streaming_persistence: Mutex<()>,
@@ -188,11 +203,11 @@ pub struct AgentManager {
 
 impl AgentManager {
     pub fn mcp(&self) -> Arc<kraai_mcp::McpManager> {
-        self.mcp.clone()
+        read(&self.mcp).clone()
     }
 
-    pub fn set_mcp(&mut self, mcp: Arc<kraai_mcp::McpManager>) {
-        self.mcp = mcp;
+    pub fn set_mcp(&self, mcp: Arc<kraai_mcp::McpManager>) {
+        *write(&self.mcp) = mcp;
     }
 
     pub fn image_store(&self) -> kraai_persistence::FileImageStore {

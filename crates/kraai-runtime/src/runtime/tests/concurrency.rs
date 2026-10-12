@@ -135,7 +135,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             if let std::task::Poll::Ready(result) = poll!(&mut continuation) {
                 break Some(result);
             }
-            if harness.runtime.agent_manager.try_read().is_err() {
+            if harness.runtime.session_preparations.is_active(&session_id) {
                 break None;
             }
             tokio::task::yield_now().await;
@@ -460,8 +460,6 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
     let request = harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .prepare_start_stream(
             &session_id,
             "hello".into(),
@@ -473,8 +471,6 @@ async fn automatic_continuation_waits_for_handoff() -> Result<()> {
     harness
         .runtime
         .agent_manager
-        .read()
-        .await
         .complete_message(&request.message_id)
         .await?;
     let preparation = harness
@@ -553,8 +549,6 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
     let request = harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .prepare_start_stream(
             &session_id,
             "hello".into(),
@@ -586,19 +580,12 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
             harness
                 .runtime
                 .agent_manager
-                .write()
-                .await
                 .complete_message(&request.message_id)
                 .await?;
         }
     }
 
-    harness
-        .runtime
-        .agent_manager
-        .write()
-        .await
-        .clear_active_turn(&session_id);
+    harness.runtime.agent_manager.clear_active_turn(&session_id);
     let sessions = harness.handle.list_sessions().await?;
     assert!(sessions.iter().all(|session| !session.is_running));
     let snapshot = harness.runtime.build_session_snapshot(&session_id).await?;
@@ -614,7 +601,7 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mutation = harness.runtime.session_state_barrier.read().await;
-    let mut agent = harness.runtime.agent_manager.write().await;
+    let agent = &harness.runtime.agent_manager;
     let mut request = agent
         .prepare_start_stream(
             &session_id,
@@ -625,7 +612,6 @@ async fn stream_start_events_precede_a_snapshot_queued_during_preparation() -> R
         )
         .await?;
     let providers = agent.cloned_provider_manager();
-    drop(agent);
     request.context_notifications = vec!["missing file automatically unpinned".into()];
     let message_id = request.message_id.to_string();
     let mut events = harness.runtime.event_tx.subscribe();
@@ -754,7 +740,6 @@ async fn shutdown_drains_commits_started_after_its_initial_barrier() -> Result<(
             abort_handle: stream.abort_handle(),
         },
     );
-    let manager = harness.runtime.agent_manager.write().await;
     let runtime = harness.runtime.clone();
     let shutdown = runtime.stop_active_work();
     tokio::pin!(shutdown);
@@ -766,7 +751,6 @@ async fn shutdown_drains_commits_started_after_its_initial_barrier() -> Result<(
         let _guard = guard;
         release_rx.await.expect("release detached commit");
     });
-    drop(manager);
     assert!(poll!(&mut shutdown).is_pending());
     assert!(stream.await.is_err_and(|error| error.is_cancelled()));
     assert!(poll!(&mut shutdown).is_pending());
@@ -892,7 +876,7 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
         .await
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut agent = harness.runtime.agent_manager.write().await;
+    let agent = &harness.runtime.agent_manager;
     let request = agent
         .prepare_start_stream(
             &session_id,
@@ -903,7 +887,6 @@ async fn continuation_queued_behind_shutdown_cannot_start_a_new_stream() -> Resu
         )
         .await?;
     agent.complete_message(&request.message_id).await?;
-    drop(agent);
     let event_sequence = harness.runtime.event_tx.latest_sequence();
     let runtime = harness.runtime.clone();
     let mutation = runtime.session_state_barrier.read().await;
@@ -959,8 +942,6 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
     harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .add_script_result_to_history(
             &session_id,
             message_id.clone(),

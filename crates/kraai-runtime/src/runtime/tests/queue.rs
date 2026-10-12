@@ -33,13 +33,7 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
         runtime.handle_start_queued_messages(session_id.clone()),
     )
     .await?;
-    assert!(
-        !runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session_id)
-    );
+    assert!(!runtime.agent_manager.is_turn_active(&session_id));
     let mut messages = super::harness::take_queue(runtime, &session_id).await;
     assert_eq!(
         messages
@@ -48,15 +42,7 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(
-        runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session_id)
-            .await?
-            .is_none()
-    );
+    assert!(runtime.agent_manager.get_tip(&session_id).await?.is_none());
     for message in &mut messages {
         message.selection.provider_id = kraai_types::ProviderId::new("mock");
     }
@@ -192,7 +178,6 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
         )
     };
     super::harness::enqueue(&runtime, &session_id, vec![message("first")]).await;
-    let agent = runtime.agent_manager.write().await;
     let first = runtime.start_continuation(
         session_id.clone(),
         kraai_types::ModelId::new("mock-model"),
@@ -225,7 +210,6 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
         runtime.handle_start_queued_messages(session_id.clone()),
     )
     .await?;
-    drop(agent);
     assert!(first.await.is_err());
     assert!(!runtime.session_preparations.is_active(&session_id));
     let restored = super::harness::take_queue(&runtime, &session_id).await;
@@ -250,7 +234,6 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
         .session_preparations
         .try_begin(&session_id)
         .expect("first preparation");
-    let agent = runtime.agent_manager.write().await;
     let send = runtime.handle_send_message(
         session_id.clone(),
         "new message".into(),
@@ -268,21 +251,12 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
         .expect("independent session");
     drop(other);
     drop(preparation);
-    drop(agent);
     let outcome = send.await?;
     assert!(matches!(
         outcome,
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
-    assert!(
-        runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session_id)
-            .await?
-            .is_none()
-    );
+    assert!(runtime.agent_manager.get_tip(&session_id).await?.is_none());
     assert!(
         runtime
             .session_preparations
@@ -299,7 +273,6 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut runtime = harness.runtime.clone();
     runtime.queue_drains = Arc::default();
-    let agent = runtime.agent_manager.write().await;
     let send = runtime.handle_send_message(
         session_id.clone(),
         "new message".into(),
@@ -313,7 +286,6 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
         .session_preparations
         .try_begin(&session_id)
         .expect("continuation preparation");
-    drop(agent);
     assert!(matches!(
         send.await?,
         crate::SubmitMessageOutcome::Queued { position: 1 }
@@ -324,15 +296,7 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
         queued.first().expect("queued message").content,
         "new message".into()
     );
-    assert!(
-        runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session_id)
-            .await?
-            .is_none()
-    );
+    assert!(runtime.agent_manager.get_tip(&session_id).await?.is_none());
     drop(preparation);
     harness.shutdown().await;
     Ok(())
@@ -345,7 +309,7 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
     let mut runtime = harness.runtime.clone();
     runtime.queue_drains = Arc::default();
     let (tip, workspace) = {
-        let mut agent = runtime.agent_manager.write().await;
+        let agent = &runtime.agent_manager;
         let request = agent
             .prepare_start_stream(
                 &session_id,
@@ -367,7 +331,6 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
         agent
             .set_workspace_dir(&session_id, pending_workspace)
             .await?;
-        drop(agent);
         (request.message_id, turn.workspace_dir.join("pending"))
     };
     super::harness::enqueue(
@@ -393,16 +356,12 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
         .await?
         .is_err()
     );
-    let agent = runtime.agent_manager.read().await;
-    assert!(agent.is_turn_active(&session_id));
+    assert!(runtime.agent_manager.is_turn_active(&session_id));
     assert!(runtime.session_store.owns_turn(&session_id).await?);
-    assert_eq!(agent.get_tip(&session_id).await?, Some(tip));
-    drop(agent);
+    assert_eq!(runtime.agent_manager.get_tip(&session_id).await?, Some(tip));
     assert_eq!(
         runtime
             .agent_manager
-            .write()
-            .await
             .get_workspace_dir_state(&session_id)
             .await?,
         Some((workspace, true))

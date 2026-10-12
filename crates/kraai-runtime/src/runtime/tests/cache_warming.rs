@@ -163,8 +163,6 @@ async fn fixture(
     let mut request = harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .prepare_start_stream(
             &session,
             "history ".repeat(1500).into(),
@@ -187,12 +185,7 @@ async fn fixture(
 async fn warming_discards_outputs_and_accounts_separately_before_the_real_request() -> Result<()> {
     let (harness, session, request, calls, _, _) = fixture(WarmResult::Success).await?;
     let message_id = request.message_id.clone();
-    let providers = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .cloned_provider_manager();
+    let providers = harness.runtime.agent_manager.cloned_provider_manager();
     let result = RuntimeCore::drive_stream(
         session.clone(),
         request,
@@ -215,7 +208,7 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
             calls[1].0.messages[..calls[1].0.messages.len() - 1]
         );
     }
-    let agent = harness.runtime.agent_manager.read().await;
+    let agent = &harness.runtime.agent_manager;
     let history = agent.get_chat_history(&session).await?;
     assert!(
         matches!(history[&message_id].content.assistant_items(), Some([kraai_types::AssistantItem::Text { text, .. }]) if text == "real answer")
@@ -242,7 +235,6 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
             .input_tokens,
         3000
     );
-    drop(agent);
     harness.shutdown().await;
     Ok(())
 }
@@ -255,12 +247,7 @@ async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Resul
         WarmResult::NoUsage,
     ] {
         let (harness, session, request, calls, _, _) = fixture(mode).await?;
-        let providers = harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .cloned_provider_manager();
+        let providers = harness.runtime.agent_manager.cloned_provider_manager();
         let result = RuntimeCore::drive_stream(
             session.clone(),
             request,
@@ -273,12 +260,7 @@ async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Resul
         .await;
         assert!(matches!(result, StreamDriveResult::Completed(_)));
         assert_eq!(calls.lock().unwrap().len(), 2);
-        let store = harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .request_usage_store();
+        let store = harness.runtime.agent_manager.request_usage_store();
         let requests = store.load(&session).await?;
         assert_eq!(requests.len(), 2);
         assert!(requests.values().any(|request| {
@@ -294,12 +276,7 @@ async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Resul
 async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting() -> Result<()> {
     let (harness, session, request, calls, entered, _) =
         fixture(WarmResult::WaitForCancellation).await?;
-    let providers = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .cloned_provider_manager();
+    let providers = harness.runtime.agent_manager.cloned_provider_manager();
     let task = tokio::spawn(RuntimeCore::drive_stream(
         session.clone(),
         request,
@@ -313,12 +290,7 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     assert_eq!(calls.lock().unwrap().len(), 1);
-    let store = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .request_usage_store();
+    let store = harness.runtime.agent_manager.request_usage_store();
     let requests = store.load(&session).await?;
     assert_eq!(requests.len(), 1);
     assert!(requests.values().all(|request| request.usage.is_none()));
@@ -329,12 +301,7 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
 #[tokio::test]
 async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> {
     let (harness, session, request, calls, _, _) = fixture(WarmResult::InvalidPolicy).await?;
-    let providers = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .cloned_provider_manager();
+    let providers = harness.runtime.agent_manager.cloned_provider_manager();
     let result = RuntimeCore::drive_stream(
         session.clone(),
         request,
@@ -355,12 +322,7 @@ async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> 
 async fn warming_waits_for_stream_completion_and_usage_before_the_real_request() -> Result<()> {
     let (harness, session, request, calls, entered, release) =
         fixture(WarmResult::DelayedSuccess).await?;
-    let providers = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .cloned_provider_manager();
+    let providers = harness.runtime.agent_manager.cloned_provider_manager();
     let message_id = request.message_id.clone();
     let mut task = AbortOnDropHandle::new(tokio::spawn(RuntimeCore::drive_stream(
         session.clone(),
@@ -380,12 +342,7 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
             .is_err()
     );
     assert_eq!(calls.lock().unwrap().len(), 1);
-    let store = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .request_usage_store();
+    let store = harness.runtime.agent_manager.request_usage_store();
     let requests = store.load(&session).await?;
     assert_eq!(requests.len(), 1);
     assert!(requests.values().all(|r| r.usage.is_none()));
@@ -414,8 +371,6 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
     let history = harness
         .runtime
         .agent_manager
-        .read()
-        .await
         .get_chat_history(&session)
         .await?;
     assert!(

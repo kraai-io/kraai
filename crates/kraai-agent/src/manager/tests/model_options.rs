@@ -97,8 +97,8 @@ fn selection(options: ModelOptionValues) -> ModelSelection {
 #[tokio::test]
 async fn message_append_failure_keeps_the_validated_selection() -> Result<()> {
     for role in ["user", "assistant"] {
-        let (mut manager, data_dir) = test_manager().await;
-        manager.providers.register_provider(
+        let (manager, data_dir) = test_manager().await;
+        super::super::write(&manager.providers).register_provider(
             ProviderId::new("configured"),
             Box::new(ConfigurableProvider),
         );
@@ -136,8 +136,8 @@ async fn message_append_failure_keeps_the_validated_selection() -> Result<()> {
 
 #[tokio::test]
 async fn interrupted_stream_recovery_keeps_the_persisted_options() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-    manager.providers.register_provider(
+    let (manager, data_dir) = test_manager().await;
+    super::super::write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
@@ -152,7 +152,7 @@ async fn interrupted_stream_recovery_keeps_the_persisted_options() -> Result<()>
         )
         .await?;
     manager.streaming_messages.write().await.clear();
-    manager.session_states.remove(&session);
+    super::super::lock(&manager.session_states).remove(&session);
     manager
         .recover_interrupted_stream(manager.require_session(&session).await?)
         .await?;
@@ -168,8 +168,8 @@ async fn interrupted_stream_recovery_keeps_the_persisted_options() -> Result<()>
 
 #[tokio::test]
 async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-    manager.providers.register_provider(
+    let (manager, data_dir) = test_manager().await;
+    super::super::write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
@@ -226,8 +226,8 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
 
 #[tokio::test]
 async fn continuation_and_script_recovery_keep_the_original_options() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
-    manager.providers.register_provider(
+    let (manager, data_dir) = test_manager().await;
+    super::super::write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
@@ -254,7 +254,7 @@ async fn continuation_and_script_recovery_keep_the_original_options() -> Result<
     manager
         .set_session_model(&session, selection(values("high")))
         .await?;
-    manager.session_states.remove(&session);
+    super::super::lock(&manager.session_states).remove(&session);
     manager
         .prepare_script_recovery(&session, &first.message_id)
         .await?;

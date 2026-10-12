@@ -66,8 +66,6 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner
         .runtime
         .agent_manager
-        .read()
-        .await
         .publish_streaming_snapshots()
         .await?;
     let old_message = old_owner
@@ -107,8 +105,6 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         new_owner
             .runtime
             .agent_manager
-            .read()
-            .await
             .get_message(&old_message)
             .await?
             .is_none()
@@ -150,16 +146,12 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner
         .runtime
         .agent_manager
-        .read()
-        .await
         .publish_streaming_snapshots()
         .await?;
     assert!(
         new_owner
             .runtime
             .agent_manager
-            .read()
-            .await
             .get_message(&old_message)
             .await?
             .is_none(),

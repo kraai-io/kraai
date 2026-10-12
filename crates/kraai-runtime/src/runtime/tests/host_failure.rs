@@ -73,14 +73,7 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
         .runtime
         .recover_session_executions(&session_id)
         .await?;
-    assert!(
-        !harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session_id)
-    );
+    assert!(!harness.runtime.agent_manager.is_turn_active(&session_id));
     harness.handle.delete_session(session_id.clone()).await?;
     assert!(store.list_all().await?.is_empty());
     assert!(harness.handle.list_sessions().await?.is_empty());

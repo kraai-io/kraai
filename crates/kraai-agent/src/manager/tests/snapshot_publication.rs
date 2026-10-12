@@ -165,7 +165,7 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
 
 #[tokio::test]
 async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(

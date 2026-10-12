@@ -3,7 +3,7 @@ use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
 async fn explicit_continuation_matches_message_submission_after_restoring_session() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let first = manager
         .prepare_start_stream(
@@ -24,7 +24,7 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
         .await;
     manager.complete_message(&first.message_id).await?;
     manager.clear_active_turn(&session);
-    manager.session_states.remove(&session);
+    super::super::lock(&manager.session_states).remove(&session);
 
     let continuation = manager
         .prepare_messages_stream(
@@ -84,7 +84,7 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
 
 #[tokio::test]
 async fn failed_explicit_continuation_restores_model_and_history() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let first = manager
         .prepare_start_stream(
@@ -111,7 +111,10 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
     );
     assert!(!manager.is_turn_active(&session));
     assert_eq!(manager.get_tip(&session).await?, Some(first.message_id));
-    let state = manager.session_states.get(&session).expect("session state");
+    let state = super::super::lock(&manager.session_states)
+        .get(&session)
+        .cloned()
+        .expect("session state");
     assert_eq!(
         state.last_model.as_ref().map(ModelId::as_str),
         Some("mock-model")

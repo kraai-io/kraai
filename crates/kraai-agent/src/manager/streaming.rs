@@ -3,7 +3,7 @@ use super::*;
 impl AgentManager {
     #[cfg(test)]
     pub(super) async fn add_message(
-        &mut self,
+        &self,
         session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
@@ -17,7 +17,7 @@ impl AgentManager {
     }
 
     pub async fn add_script_result_to_history(
-        &mut self,
+        &self,
         session_id: &SessionId,
         message_id: MessageId,
         profile_id: String,
@@ -49,7 +49,7 @@ impl AgentManager {
 
     #[cfg(test)]
     pub(super) async fn append_message(
-        &mut self,
+        &self,
         session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
@@ -102,7 +102,7 @@ impl AgentManager {
     }
 
     pub(super) async fn start_streaming_message(
-        &mut self,
+        &self,
         session_id: &SessionId,
         input: stream_requests::TurnInput,
         stream_id: StreamId,
@@ -117,9 +117,9 @@ impl AgentManager {
             ))));
         }
 
-        let subscription = generation
-            .as_ref()
-            .is_some_and(|generation| self.providers.is_subscription(&generation.provider_id));
+        let subscription = generation.as_ref().is_some_and(|generation| {
+            read(&self.providers).is_subscription(&generation.provider_id)
+        });
         let stream_tip = input
             .users
             .last()

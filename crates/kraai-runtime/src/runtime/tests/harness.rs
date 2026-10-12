@@ -396,12 +396,12 @@ path = \"inherit\"\n",
         let image_store = persistence.images().clone();
         let (model_catalog_tx, _) =
             tokio::sync::watch::channel(providers.subscribe_model_catalog());
-        let agent_manager = Arc::new(tokio::sync::RwLock::new(AgentManager::new(
+        let agent_manager = Arc::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
             persistence,
             data_dir.clone(),
-        )));
+        ));
 
         let auth_root = kraai_persistence::agent_state_root().expect("locate application state");
         let auth_path = auth_root.join("provider-state/openai-codex/auth.json");

@@ -32,7 +32,7 @@ pub(super) struct Reply {
 }
 
 impl Fixture {
-    async fn new(mut manager: AgentManager, persistence: Persistence) -> Result<Self> {
+    async fn new(manager: AgentManager, persistence: Persistence) -> Result<Self> {
         let session = manager
             .create_session_with(None, Some(agent::PROFILE.into()))
             .await?;

@@ -83,7 +83,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         .expect("runtime fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let original_tip = {
-        let mut agent = harness.runtime.agent_manager.write().await;
+        let agent = &harness.runtime.agent_manager;
         let first = agent
             .prepare_start_stream(
                 &session_id,
@@ -103,7 +103,6 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .await;
         agent.complete_message(&first.message_id).await?;
         agent.clear_active_turn(&session_id);
-        drop(agent);
         first.message_id
     };
     if queued {
@@ -187,8 +186,6 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
     let tip = harness
         .runtime
         .agent_manager
-        .read()
-        .await
         .get_tip(&session_id)
         .await?
         .expect("tip");
@@ -227,10 +224,9 @@ async fn continuing_empty_session_does_not_start_a_turn() -> Result<()> {
             .await?,
         ContinueSessionOutcome::NothingToContinue
     );
-    let agent = harness.runtime.agent_manager.read().await;
+    let agent = &harness.runtime.agent_manager;
     assert!(!agent.is_turn_active(&session_id));
     assert!(agent.get_tip(&session_id).await?.is_none());
-    drop(agent);
     harness.shutdown().await;
     Ok(())
 }

@@ -32,12 +32,7 @@ fn config(name: &str) -> McpConfig {
 }
 
 async fn servers(harness: &RuntimeTestHarness, session: &SessionId) -> Vec<Value> {
-    let mcp = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .session_mcp(session);
+    let mcp = harness.runtime.agent_manager.session_mcp(session);
     mcp.execute(McpRequest::Servers)
         .await
         .unwrap()
@@ -53,14 +48,9 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
     let harness = RuntimeTestHarness::new(Vec::new())
         .await
         .expect("runtime fixture");
-    harness
-        .runtime
-        .agent_manager
-        .write()
-        .await
-        .set_mcp(std::sync::Arc::new(
-            McpManager::new(config("configured")).unwrap(),
-        ));
+    harness.runtime.agent_manager.set_mcp(std::sync::Arc::new(
+        McpManager::new(config("configured")).unwrap(),
+    ));
     let first = harness.handle.create_session().await?;
     let second = harness.handle.create_session().await?;
     harness
@@ -125,7 +115,6 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
         .session_preparations
         .try_begin(&session)
         .expect("preparation guard");
-    let manager = harness.runtime.agent_manager.write().await;
     let busy = tokio::time::timeout(
         Duration::from_secs(1),
         harness
@@ -133,7 +122,6 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
             .set_session_mcp_servers(session.clone(), config("attached")),
     )
     .await?;
-    drop(manager);
     assert_eq!(busy.unwrap_err().kind, RuntimeErrorKind::Conflict);
     drop(preparation);
     super::harness::enqueue(

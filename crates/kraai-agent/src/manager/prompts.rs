@@ -90,8 +90,8 @@ impl AgentManager {
         provider_id: &ProviderId,
         model_id: &ModelId,
     ) -> Option<usize> {
-        self.providers
-            .get_provider(provider_id)?
+        let provider = read(&self.providers).get_provider(provider_id)?;
+        provider
             .get_model(model_id)
             .await
             .and_then(|model| model.max_context)

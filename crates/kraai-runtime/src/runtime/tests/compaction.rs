@@ -35,7 +35,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let (request, providers) = {
-        let mut agent = harness.runtime.agent_manager.write().await;
+        let agent = &harness.runtime.agent_manager;
         let previous = agent
             .prepare_start_stream(
                 &session_id,
@@ -160,7 +160,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
     {
-        let mut agent = harness.runtime.agent_manager.write().await;
+        let agent = &harness.runtime.agent_manager;
         let request = agent
             .prepare_start_stream(
                 &session_id,
@@ -245,7 +245,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let (request, providers) = {
-        let mut agent = harness.runtime.agent_manager.write().await;
+        let agent = &harness.runtime.agent_manager;
         let previous = agent
             .prepare_start_stream(
                 &session_id,

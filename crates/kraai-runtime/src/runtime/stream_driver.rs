@@ -65,7 +65,7 @@ impl RuntimeCore {
         session_id: SessionId,
         request: PendingStreamRequest,
         providers: ProviderManager,
-        agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
+        agent_manager: Arc<kraai_agent::AgentManager>,
         event_tx: RuntimeEventSender,
         session_state_barrier: Arc<tokio::sync::RwLock<()>>,
         auxiliary_usage_task: super::stream_tasks::SessionTaskToken,
@@ -84,7 +84,7 @@ impl RuntimeCore {
             let compaction = compaction
                 .observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone())
                 .with_image_resolver(Arc::new(super::images::StoredImageResolver(
-                    agent_manager.read().await.image_store(),
+                    agent_manager.image_store(),
                 )));
             emit_event(
                 &event_tx,
@@ -146,7 +146,7 @@ impl RuntimeCore {
             }
         };
         if let Some(warmup) = warmup {
-            let store = agent_manager.read().await.request_usage_store();
+            let store = agent_manager.request_usage_store();
             let recorder = kraai_agent::AuxiliaryUsageRecorder {
                 store,
                 session_id: session_id.clone(),
@@ -160,7 +160,7 @@ impl RuntimeCore {
                 warmup,
                 recorder,
                 Arc::new(super::images::StoredImageResolver(
-                    agent_manager.read().await.image_store(),
+                    agent_manager.image_store(),
                 )),
             )
             .await
@@ -181,16 +181,11 @@ impl RuntimeCore {
             session_id.to_string(),
         )
         .with_image_resolver(Arc::new(super::images::StoredImageResolver(
-            agent_manager.read().await.image_store(),
+            agent_manager.image_store(),
         )));
         {
             let _state_guard = session_state_barrier.read().await;
-            match agent_manager
-                .read()
-                .await
-                .record_request_started(&message_id)
-                .await
-            {
+            match agent_manager.record_request_started(&message_id).await {
                 Ok(Some(request)) => emit_event(
                     &event_tx,
                     Event::RequestUsageUpdated {
@@ -270,8 +265,6 @@ impl RuntimeCore {
                     Ok(ProviderStreamEvent::Reasoning { payload }) => {
                         let _state_guard = session_state_barrier.read().await;
                         if agent_manager
-                            .read()
-                            .await
                             .append_reasoning(&message_id, provider_id.clone(), payload)
                             .await
                             .is_none()
@@ -293,7 +286,7 @@ impl RuntimeCore {
                         }
                         let _state_guard = session_state_barrier.read().await;
                         let visible = {
-                            let agent = agent_manager.read().await;
+                            let agent = &agent_manager;
                             agent
                                 .append_text_chunk(&message_id, &item_id, phase, &delta)
                                 .await
@@ -346,7 +339,7 @@ impl RuntimeCore {
                             };
                         let _state_guard = session_state_barrier.read().await;
                         let appended = {
-                            let agent = agent_manager.read().await;
+                            let agent = &agent_manager;
                             agent
                                 .append_script_call(
                                     &message_id,
@@ -384,7 +377,7 @@ impl RuntimeCore {
                     }
                     Ok(ProviderStreamEvent::Usage(usage)) => {
                         let _state_guard = session_state_barrier.read().await;
-                        let agent = agent_manager.read().await;
+                        let agent = &agent_manager;
                         match agent.set_streaming_message_usage(&message_id, usage).await {
                             Ok(Some(request)) => emit_event(
                                 &event_tx,
@@ -400,7 +393,6 @@ impl RuntimeCore {
                                 };
                             }
                         }
-                        drop(agent);
                         if draining_after_boundary {
                             tracing::debug!(
                                 drained_events = post_boundary_events,
@@ -424,11 +416,7 @@ impl RuntimeCore {
                         if transient && reissues < MAX_STREAM_REISSUES {
                             reissues += 1;
                             let _state_guard = session_state_barrier.read().await;
-                            let reset = agent_manager
-                                .read()
-                                .await
-                                .reset_streaming_message(&message_id)
-                                .await;
+                            let reset = agent_manager.reset_streaming_message(&message_id).await;
                             match reset {
                                 Ok(Some(request)) => {
                                     if let Some(request) = request {

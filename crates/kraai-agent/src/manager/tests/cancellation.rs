@@ -95,7 +95,7 @@ async fn restart_after_cancellation_failure(
     drop(manager);
 
     let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
-    let mut reopened = AgentManager::new(
+    let reopened = AgentManager::new(
         providers,
         "/tmp/default-workspace".into(),
         persistence,
@@ -184,7 +184,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
         (false, false, true),
         (false, true, false),
     ] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let session_id = manager.create_session().await?;
         let request = manager
             .prepare_start_stream(

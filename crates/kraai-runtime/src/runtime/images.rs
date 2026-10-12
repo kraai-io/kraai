@@ -14,7 +14,7 @@ impl kraai_provider_core::ImageResolver for StoredImageResolver {
 pub(super) struct DurableImageAttachments {
     pub(super) execution_id: ScriptExecutionId,
     pub(super) session_id: SessionId,
-    pub(super) agent: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
+    pub(super) agent: Arc<kraai_agent::AgentManager>,
     pub(super) images: Arc<FileImageStore>,
     pub(super) executions: Arc<dyn ScriptExecutionStore>,
 }
@@ -72,8 +72,6 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
         Box::pin(async move {
             let history = self
                 .agent
-                .read()
-                .await
                 .get_chat_history(&self.session_id)
                 .await
                 .map_err(|error| error.to_string())?;

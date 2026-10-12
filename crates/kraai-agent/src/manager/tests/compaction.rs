@@ -48,7 +48,7 @@ async fn context(manager: &AgentManager, session: &SessionId) -> Result<Vec<Mess
 
 #[tokio::test]
 async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let first = manager
         .add_message(&session, ChatRole::User, "old request".into(), None)
@@ -119,7 +119,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
 
 #[tokio::test]
 async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "first request".into(), None)
@@ -181,7 +181,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
 
 #[tokio::test]
 async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoints() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let user = "Preserve this exact constraint: do not publish.";
     manager
@@ -248,7 +248,7 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
 
 #[tokio::test]
 async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(
@@ -327,7 +327,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
 
 #[tokio::test]
 async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let boundary = manager
         .add_message(
@@ -437,7 +437,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
 
 #[tokio::test]
 async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "original task".into(), None)

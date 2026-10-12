@@ -23,7 +23,7 @@ impl Benchmark for Case {
     }
 
     async fn run(context: &Context, _fixture: &mut Self::Fixture) -> Result<Self::Output> {
-        let (mut manager, persistence) = agent::create(&context.directory).await?;
+        let (manager, persistence) = agent::create(&context.directory).await?;
         let session = manager
             .create_session_with(None, Some(agent::PROFILE.into()))
             .await?;

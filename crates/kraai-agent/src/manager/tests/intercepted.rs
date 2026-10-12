@@ -4,7 +4,7 @@ use super::common::{cleanup_dir, test_manager};
 #[tokio::test]
 async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()> {
     for already_owned in [false, true] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let session = manager.create_session().await?;
         let observer = kraai_persistence::Persistence::open(&data_dir).await?;
         if already_owned {
@@ -44,7 +44,7 @@ async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()>
 
 #[tokio::test]
 async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let mut metadata = manager.session_store.get(&session).await?.expect("session");
     metadata.selected_profile_id = Some("missing-profile".into());
@@ -71,7 +71,7 @@ async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()>
 
 #[tokio::test]
 async fn preparation_error_survives_lease_release_failure() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let mut metadata = manager.session_store.get(&session).await?.expect("session");
     metadata.selected_profile_id = Some("missing-profile".into());
@@ -108,7 +108,7 @@ async fn preparation_error_survives_lease_release_failure() -> Result<()> {
 
 #[tokio::test]
 async fn rejected_interception_preserves_active_model_and_provider() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let first = manager
         .prepare_start_stream(
@@ -151,7 +151,7 @@ async fn rejected_interception_preserves_active_model_and_provider() -> Result<(
 
 #[tokio::test]
 async fn failed_preparation_appends_no_history() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let first = manager
         .prepare_start_stream(
@@ -177,12 +177,12 @@ async fn failed_preparation_appends_no_history() -> Result<()> {
         .await
         .expect_err("preparation fails");
     assert!(!manager.is_turn_active(&session_id));
-    let state = manager
-        .session_states
+    let (last_model, last_provider) = super::super::lock(&manager.session_states)
         .get(&session_id)
+        .map(|state| (state.last_model.clone(), state.last_provider.clone()))
         .expect("session state");
-    assert_eq!(state.last_model, Some(ModelId::new("mock-model")));
-    assert_eq!(state.last_provider, Some(ProviderId::new("mock")));
+    assert_eq!(last_model, Some(ModelId::new("mock-model")));
+    assert_eq!(last_provider, Some(ProviderId::new("mock")));
     assert_eq!(
         manager.get_tip(&session_id).await?,
         Some(first.message_id.clone())

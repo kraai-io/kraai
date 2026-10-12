@@ -282,14 +282,7 @@ async fn continuation_during_a_live_stream_preserves_ownership() -> Result<()> {
             .await
             .is_err()
     );
-    assert!(
-        owner
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session)
-    );
+    assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("owner completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
     observer.shutdown().await;
@@ -404,7 +397,7 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
     owner.runtime.session_store.release_turn(&session).await?;
     owner.runtime.session_store.claim_turn(&session).await?;
     let (providers, request) = {
-        let mut agent = owner.runtime.agent_manager.write().await;
+        let agent = &owner.runtime.agent_manager;
         let request = agent
             .prepare_start_stream(
                 &session,
@@ -438,14 +431,7 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
             .await
             .contains_key(&session)
     );
-    assert!(
-        owner
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session)
-    );
+    assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("replacement completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id, .. } if session_id == &session))).await;
     owner.shutdown().await;
@@ -508,7 +494,6 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             .observe(&session)
             .await?
             .expect("lease");
-        let manager = owner.runtime.agent_manager.write().await;
         tokio::time::timeout(Duration::from_secs(7), async {
             loop {
                 let after = owner
@@ -524,7 +509,6 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             }
         })
         .await??;
-        drop(manager);
         assert!(
             observer
                 .runtime

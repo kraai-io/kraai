@@ -295,12 +295,12 @@ impl RuntimeBuilder {
             .provider_config_path_override
             .unwrap_or_else(|| storage_root.join("providers.toml"));
 
-        let agent_manager = Arc::new(RwLock::new(AgentManager::new(
+        let agent_manager = Arc::new(AgentManager::new(
             providers,
             default_workspace_dir,
             persistence,
             storage_root.clone(),
-        )));
+        ));
 
         let mcp_config_path = host_options
             .mcp_config_path
@@ -315,7 +315,7 @@ impl RuntimeBuilder {
             storage_root.join("mcp-auth"),
         )
         .map_err(|error| eyre!(error))?;
-        agent_manager.write().await.set_mcp(Arc::new(mcp));
+        agent_manager.set_mcp(Arc::new(mcp));
 
         let runtime = RuntimeCore {
             observed_sessions: Arc::default(),

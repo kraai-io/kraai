@@ -40,13 +40,11 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
             profile_id: Some(String::from("test-profile")),
         })
         .await?;
-    let read_guard = harness.runtime.agent_manager.read().await;
     let profiles = tokio::time::timeout(
         Duration::from_secs(1),
         harness.handle.list_agent_profiles(session_id),
     )
     .await;
-    drop(read_guard);
     let profiles = profiles??;
     assert_eq!(
         profiles.selected_profile_id.as_deref(),
@@ -63,7 +61,6 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
     );
 
     let missing = harness.data_dir.join("missing-workspace");
-    let write_guard = harness.runtime.agent_manager.write().await;
     let invalid = tokio::time::timeout(
         Duration::from_secs(1),
         harness
@@ -71,7 +68,6 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
             .get_agent_profile_catalog(Some(missing.display().to_string())),
     )
     .await;
-    drop(write_guard);
     let error = invalid?
         .err()
         .ok_or_else(|| eyre!("missing workspace unexpectedly returned a profile catalog"))?;

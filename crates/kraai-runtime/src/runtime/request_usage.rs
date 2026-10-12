@@ -12,7 +12,7 @@ pub(super) struct RuntimeRetryObserver {
     pub(super) model_id: ModelId,
     pub(super) event_tx: RuntimeEventSender,
     pub(super) message_id: MessageId,
-    pub(super) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(super) agent_manager: Arc<AgentManager>,
     pub(super) session_state_barrier: Arc<RwLock<()>>,
 }
 
@@ -40,7 +40,7 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
                 return Ok(());
             }
             let _guard = self.session_state_barrier.read().await;
-            let agent = self.agent_manager.read().await;
+            let agent = &self.agent_manager;
             if let Some(request) = agent
                 .record_request_attempt(&self.message_id, unpriced_prior_attempts)
                 .await?
@@ -53,7 +53,6 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
                     },
                 );
             }
-            drop(agent);
             Ok(())
         })
     }

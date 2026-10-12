@@ -5,7 +5,7 @@ use super::common::{cleanup_dir, test_manager};
 async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_precedence()
 -> Result<()> {
     for with_stream in [false, true] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let session_id = manager.create_session().await?;
         let oldest = manager
             .add_message(&session_id, ChatRole::User, "oldest".into(), None)
@@ -79,7 +79,7 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
 
 #[tokio::test]
 async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(
@@ -117,7 +117,7 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
 
 #[tokio::test]
 async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(
@@ -180,7 +180,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
 
 #[tokio::test]
 async fn captured_snapshot_survives_deletion_of_an_aborted_stream() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(
@@ -203,7 +203,7 @@ async fn captured_snapshot_survives_deletion_of_an_aborted_stream() -> Result<()
 
 #[tokio::test]
 async fn snapshot_keeps_captured_streams_outside_the_tip_chain() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(
@@ -235,7 +235,7 @@ async fn snapshot_keeps_captured_streams_outside_the_tip_chain() -> Result<()> {
 
 #[tokio::test]
 async fn snapshot_reports_missing_history_instead_of_returning_partial_state() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(

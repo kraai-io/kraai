@@ -93,8 +93,6 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
     let request = harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .prepare_start_stream(
             &session_id,
             "hello".into(),
@@ -110,7 +108,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
     let (release_tx, release_rx) = oneshot::channel();
     let (saved_tx, saved_rx) = oneshot::channel();
     let task = harness.runtime.stream_tasks.spawn(&session_id, async move {
-        let agent = manager.read().await;
+        let agent = &manager;
         started_tx.send(()).unwrap();
         release_rx.await.unwrap();
         let request = agent
@@ -127,7 +125,6 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
             .unwrap()
             .unwrap();
         saved_tx.send(request).unwrap();
-        drop(agent);
         std::future::pending::<()>().await;
     });
     started_rx.await?;

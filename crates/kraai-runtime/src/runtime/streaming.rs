@@ -41,8 +41,6 @@ impl RuntimeCore {
             return Ok(ContinueSessionOutcome::NothingToContinue);
         };
         self.agent_manager
-            .read()
-            .await
             .validate_model_options(&provider_id, &model_id, &options, true)
             .await
             .map_err(RuntimeError::from_report)?;
@@ -66,8 +64,6 @@ impl RuntimeCore {
         }
         let preparation = self.session_preparations.begin(&session_id).await;
         self.agent_manager
-            .read()
-            .await
             .validate_model_options(&provider_id, &model_id, &options, true)
             .await
             .map_err(RuntimeError::from_report)?;
@@ -106,7 +102,7 @@ impl RuntimeCore {
                 .map_err(RuntimeError::from_report)?;
             let intercepted = !queued_messages.is_empty();
             let streaming = {
-                let agent = self.agent_manager.read().await;
+                let agent = &self.agent_manager;
                 agent.session_has_active_stream(&session_id).await
             };
             if streaming {
@@ -128,7 +124,7 @@ impl RuntimeCore {
             }
 
             let continuation = {
-                let mut agent = self.agent_manager.write().await;
+                let agent = &self.agent_manager;
                 let selected_model = selection
                     .clone()
                     .map(
@@ -204,7 +200,7 @@ impl RuntimeCore {
             let _state_guard = runtime.session_state_barrier.read().await;
             let preparation = runtime.session_preparations.begin(&session_id).await;
             let result: RuntimeResult<()> = async {
-                let agent = runtime.agent_manager.read().await;
+                let agent = &runtime.agent_manager;
                 if !agent.is_turn_active(&session_id)
                     || agent
                         .get_tip(&session_id)
@@ -215,7 +211,6 @@ impl RuntimeCore {
                 {
                     return Ok(());
                 }
-                drop(agent);
                 runtime
                     .continue_prepared_session(session_id.clone(), preparation, None)
                     .await?;
@@ -307,9 +302,7 @@ impl RuntimeCore {
             },
         );
         if let Some(previous) = previous {
-            let agent = self.agent_manager.write().await;
             previous.abort_handle.abort();
-            drop(agent);
         }
         if !context_notifications.is_empty() {
             emit_event(
@@ -353,7 +346,7 @@ impl RuntimeCore {
                     reached_output_limit,
                 } = *completed;
                 let completed_session = {
-                    let agent = self.agent_manager.read().await;
+                    let agent = &self.agent_manager;
                     agent.complete_message(&message_id).await
                 };
                 let completed_session = match completed_session {
@@ -508,11 +501,10 @@ impl RuntimeCore {
         continuation_error: bool,
     ) {
         let rollback_result = {
-            let mut agent = self.agent_manager.write().await;
+            let agent = &self.agent_manager;
             let rollback_result = agent.abort_streaming_message(&message_id).await;
             if rollback_result.is_ok() {
                 agent.clear_active_turn(&session_id);
-                drop(agent);
                 self.release_turn(&session_id).await;
                 self.event_tx.finish_timer(&session_id);
             }
@@ -577,10 +569,9 @@ impl RuntimeCore {
         session_id: &SessionId,
         message_id: &MessageId,
     ) -> Result<bool> {
-        let mut agent = self.agent_manager.write().await;
+        let agent = &self.agent_manager;
         let rollback_result = agent.abort_streaming_message(message_id).await;
         if rollback_result.is_err() {
-            drop(agent);
             if !self.session_store.owns_turn(session_id).await? {
                 self.finish_turn(session_id).await;
                 return Ok(true);
@@ -590,12 +581,10 @@ impl RuntimeCore {
         let rollback_result = rollback_result?;
         if rollback_result.is_some() {
             agent.clear_active_turn(session_id);
-            drop(agent);
             self.release_turn(session_id).await;
             self.event_tx.finish_timer(session_id);
             Ok(true)
         } else {
-            drop(agent);
             Ok(false)
         }
     }
@@ -668,12 +657,11 @@ impl RuntimeCore {
                     task.completion.clone()
                 })
             };
-            let mut agent = self.agent_manager.write().await;
+            let agent = &self.agent_manager;
             let active = agent.is_turn_active(&session_id);
             if active {
                 agent.clear_active_turn(&session_id);
             }
-            drop(agent);
             let cancelled = active || completion.is_some() || discarded;
             if completion.is_none() && cancelled {
                 self.release_turn(&session_id).await;
@@ -695,7 +683,7 @@ impl RuntimeCore {
         };
 
         let cancelled_stream = {
-            let mut agent = self.agent_manager.write().await;
+            let agent = &self.agent_manager;
             active_stream.abort_handle.abort();
             let cancelled_script_output = kraai_script_protocol::render_tool_call_result(
                 kraai_script_protocol::ToolCallResultView {
@@ -713,7 +701,6 @@ impl RuntimeCore {
             {
                 Ok(cancelled) => cancelled,
                 Err(error) => {
-                    drop(agent);
                     if !self.session_store.owns_turn(&session_id).await? {
                         self.stream_tasks.wait_session(&session_id).await;
                         self.finish_turn(&session_id).await;
@@ -729,7 +716,6 @@ impl RuntimeCore {
                 }
             };
             agent.clear_active_turn(&session_id);
-            drop(agent);
             if cancelled.is_some() {
                 self.stream_tasks.wait_session(&session_id).await;
             }

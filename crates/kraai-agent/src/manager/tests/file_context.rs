@@ -74,7 +74,7 @@ fn texts(request: &ProviderRequest) -> Vec<String> {
 
 #[tokio::test]
 async fn unchanged_files_stay_in_place_and_refresh_only_moves_the_changed_file() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let a = root.join("a.txt");
     let b = root.join("b.txt");
@@ -142,7 +142,7 @@ async fn unchanged_files_stay_in_place_and_refresh_only_moves_the_changed_file()
 
 #[tokio::test]
 async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "persistent\n").await?;
@@ -166,7 +166,7 @@ async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
 
 #[tokio::test]
 async fn compaction_reanchors_snapshots_once_and_closed_files_do_not_return() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "exact snapshot\n").await?;
@@ -221,7 +221,7 @@ async fn compaction_reanchors_snapshots_once_and_closed_files_do_not_return() ->
 
 #[tokio::test]
 async fn unreadable_files_do_not_leave_stale_contents_and_recovery_refreshes_them() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "before\n").await?;
@@ -280,7 +280,7 @@ async fn unreadable_files_do_not_leave_stale_contents_and_recovery_refreshes_the
 #[tokio::test]
 async fn abandoned_anchors_move_to_the_current_tip_without_changing_recorded_history() -> Result<()>
 {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "contents\n").await?;
@@ -310,7 +310,7 @@ async fn abandoned_anchors_move_to_the_current_tip_without_changing_recorded_his
 #[tokio::test]
 async fn refreshing_with_the_same_tip_appends_after_other_snapshots_and_keeps_that_order()
 -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "task".into(), None)

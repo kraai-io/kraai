@@ -4,7 +4,7 @@ use super::common::{cleanup_dir, test_manager};
 #[tokio::test]
 async fn context_usage_selects_the_latest_complete_assistant_and_validates_older_messages()
 -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let oldest = manager
         .add_message(&session_id, ChatRole::User, "oldest".into(), None)
@@ -91,7 +91,7 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
 
 #[tokio::test]
 async fn limited_user_history_reads_the_entire_session() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let oldest = manager
         .add_message(&session_id, ChatRole::User, "oldest".into(), None)
@@ -116,7 +116,7 @@ async fn limited_user_history_reads_the_entire_session() -> Result<()> {
 #[tokio::test]
 async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Result<()> {
     for corruption in ["cycle", "missing", "malformed"] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let session_id = manager.create_session().await?;
         let oldest = manager
             .add_message(&session_id, ChatRole::User, "oldest".into(), None)
@@ -156,7 +156,7 @@ async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Res
 #[tokio::test]
 async fn limited_user_history_preserves_validation_at_the_session_boundary() -> Result<()> {
     for has_ancestor in [false, true] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let newest_session = manager.create_session().await?;
         if has_ancestor {
             manager

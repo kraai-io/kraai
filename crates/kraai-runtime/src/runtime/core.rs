@@ -27,7 +27,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) command_tx: mpsc::Sender<Command>,
     pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
     pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
-    pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(crate) agent_manager: Arc<AgentManager>,
     pub(crate) observed_sessions:
         Arc<Mutex<HashMap<SessionId, kraai_persistence::SessionObservation>>>,
     pub(crate) session_store: Arc<kraai_persistence::SqliteSessionStore>,
@@ -187,11 +187,9 @@ impl RuntimeCore {
             .collect::<Vec<_>>();
         drop(state_guard);
         if !active_streams.is_empty() {
-            let agent = self.agent_manager.write().await;
             for stream in active_streams {
                 stream.abort_handle.abort();
             }
-            drop(agent);
         }
         for task in &active_script_tasks {
             task.cancellation.cancel();
@@ -212,12 +210,11 @@ impl RuntimeCore {
         let config = self
             .read_and_validate_provider_config(&self.config.provider_config_path)
             .await?;
-        let mut agent = self.agent_manager.write().await;
+        let agent = &self.agent_manager;
         let result = agent
             .set_providers(config, self.provider_registry.clone())
             .await;
         let updates = agent.cloned_provider_manager().subscribe_model_catalog();
-        drop(agent);
         self.model_catalog_tx.send_if_modified(|current| {
             if current.same_channel(&updates) {
                 false

@@ -30,8 +30,6 @@ impl RuntimeCore {
         }
         let previous = self
             .agent_manager
-            .write()
-            .await
             .replace_session_mcp_servers(session_id, config)
             .await?;
         if let Some(previous) = previous {
@@ -41,7 +39,7 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn shutdown_mcp(&self) {
-        let managers = self.agent_manager.write().await.take_mcp_managers();
+        let managers = self.agent_manager.take_mcp_managers();
         stream::iter(managers)
             .for_each_concurrent(8, |manager| async move {
                 manager.shutdown().await;

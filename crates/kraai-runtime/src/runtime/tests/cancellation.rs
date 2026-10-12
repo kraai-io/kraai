@@ -111,7 +111,7 @@ async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_con
     assert!(poll!(&mut cancel).is_pending());
     assert!(cancellation.is_cancelled());
     assert!(!completion.is_cancelled());
-    assert!(!runtime.agent_manager.read().await.is_turn_active(&session));
+    assert!(!runtime.agent_manager.is_turn_active(&session));
     let observer = kraai_persistence::Persistence::open(&harness.data_dir).await?;
     assert!(observer.sessions().claim_turn(&session).await.is_err());
     finish_tx.send(()).expect("release finalization");
@@ -139,8 +139,6 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
     harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .add_script_result_to_history(
             &session,
             completed.record.result_message_id.clone(),
@@ -168,8 +166,6 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
             if harness
                 .runtime
                 .agent_manager
-                .read()
-                .await
                 .streaming_session_ids()
                 .await
                 .contains(&session)
@@ -192,7 +188,7 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
     );
     tokio::time::timeout(TEST_TIMEOUT, cancel).await??;
     assert!(runtime.active_streams.lock().await.is_empty());
-    assert!(!runtime.agent_manager.read().await.is_turn_active(&session));
+    assert!(!runtime.agent_manager.is_turn_active(&session));
     harness.shutdown().await;
     Ok(())
 }
@@ -203,8 +199,6 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
     harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .add_script_result_to_history(
             &session,
             completed.record.result_message_id.clone(),
@@ -224,7 +218,7 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
         }
     })
     .await?;
-    let mut agent = harness.runtime.agent_manager.write().await;
+    let agent = &harness.runtime.agent_manager;
     agent.clear_active_turn(&session);
     let request = agent
         .prepare_start_stream(
@@ -236,7 +230,6 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
         )
         .await?;
     agent.complete_message(&request.message_id).await?;
-    drop(agent);
     let sequence = harness.runtime.event_tx.latest_sequence();
     drop(preparation);
     let state =
@@ -244,13 +237,7 @@ async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
     assert_eq!(harness.runtime.event_tx.latest_sequence(), sequence);
     assert!(harness.runtime.active_streams.lock().await.is_empty());
     assert_eq!(
-        harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session)
-            .await?,
+        harness.runtime.agent_manager.get_tip(&session).await?,
         Some(request.message_id)
     );
     drop(state);

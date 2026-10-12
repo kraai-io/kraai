@@ -123,11 +123,7 @@ impl RuntimeCore {
         call_id: kraai_types::ToolCallId,
         script: ScriptBlock,
     ) -> Result<()> {
-        let turn = self
-            .agent_manager
-            .read()
-            .await
-            .script_turn_context(&session_id)?;
+        let turn = self.agent_manager.script_turn_context(&session_id)?;
         let resolution = turn
             .profile
             .permissions
@@ -239,11 +235,7 @@ impl RuntimeCore {
         invalid: InvalidScriptBlock,
         error: ProtocolError,
     ) -> Result<()> {
-        let turn = self
-            .agent_manager
-            .read()
-            .await
-            .script_turn_context(session_id)?;
+        let turn = self.agent_manager.script_turn_context(session_id)?;
         let id = ScriptExecutionId::new(Ulid::generate());
         let effective_capabilities = turn.profile.permissions.capabilities().clone();
         self.execution_store
@@ -312,8 +304,6 @@ impl RuntimeCore {
         let execution_id = completed.record.id.to_string();
         let result = completed.render_result()?;
         self.agent_manager
-            .write()
-            .await
             .add_script_result_to_history(
                 session_id,
                 completed.record.result_message_id.clone(),
@@ -336,7 +326,7 @@ impl RuntimeCore {
                 outcome,
             },
         );
-        let turn_active = self.agent_manager.read().await.is_turn_active(session_id);
+        let turn_active = self.agent_manager.is_turn_active(session_id);
         if status == ScriptExecutionStatus::HostUnavailable {
             self.fail_script_turn(session_id, &host_failure(&completed))
                 .await;

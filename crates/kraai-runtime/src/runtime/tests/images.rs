@@ -5,7 +5,8 @@ use kraai_types::{ContentPart, ConversationItem, MessageContent, ScriptExecution
 
 #[tokio::test]
 async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Result<()> {
-    let Some((harness, session_id, completed)) = completed_script_with_image(true).await? else {
+    let Some((mut harness, session_id, completed)) = completed_script_with_image(true).await?
+    else {
         return Ok(());
     };
     let image = completed
@@ -24,7 +25,7 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
             .await?
             .is_empty()
     );
-    reopen_agent(&harness).await?;
+    reopen_agent(&mut harness).await?;
     harness
         .runtime
         .recover_session_executions(&session_id)
@@ -123,8 +124,6 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
     let pending = harness
         .runtime
         .agent_manager
-        .write()
-        .await
         .prepare_start_stream(
             &session_id,
             content.clone(),
@@ -134,7 +133,7 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
         )
         .await?;
     {
-        let mut manager = harness.runtime.agent_manager.write().await;
+        let manager = &harness.runtime.agent_manager;
         manager.abort_streaming_message(&pending.message_id).await?;
         manager.clear_active_turn(&session_id);
     }
