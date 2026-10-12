@@ -6,6 +6,7 @@ use super::harness::{
     RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
 };
 use crate::Event;
+use kraai_persistence::SessionStore;
 
 #[tokio::test]
 async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -> Result<()> {
@@ -111,5 +112,76 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
         .await?;
     observer.events.wait_for("turn completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
     observer.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()> {
+    let directory = std::env::temp_dir().join(format!(
+        "kraai-startup-sweep-{}-{}",
+        std::process::id(),
+        ulid::Ulid::generate()
+    ));
+    let session = kraai_types::SessionId::new("crashed");
+    {
+        let crashed = kraai_persistence::Persistence::open(&directory).await?;
+        crashed
+            .sessions()
+            .save(&kraai_persistence::SessionMeta {
+                revision: 0,
+                id: session.clone(),
+                tip_id: None,
+                workspace_dir: directory.join("workspace"),
+                created_at: 1,
+                updated_at: 1,
+                title: None,
+                selected_profile_id: Some("test-profile".into()),
+                selected_model: None,
+            })
+            .await?;
+        crashed.sessions().claim_turn(&session).await?;
+        crashed
+            .conversations()
+            .append_messages(
+                &session,
+                None,
+                vec![kraai_persistence::NewMessage {
+                    id: kraai_types::MessageId::new("partial"),
+                    content: kraai_types::ConversationItem::Assistant { items: Vec::new() },
+                    status: kraai_types::MessageStatus::Streaming {
+                        stream_id: kraai_types::StreamId::new("stream"),
+                    },
+                    agent_profile_id: None,
+                    generation: None,
+                }],
+                None,
+                None,
+            )
+            .await?;
+    }
+    let connection = rusqlite::Connection::open(directory.join("kraai.sqlite3"))?;
+    connection.execute(
+        "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
+        [session.as_str()],
+    )?;
+
+    let restarted = RuntimeTestHarness::new_shared(Vec::new(), directory.clone())
+        .await
+        .expect("restarted runtime");
+    assert!(
+        restarted
+            .handle
+            .get_chat_history(session.clone())
+            .await?
+            .is_empty()
+    );
+    let lease_active: bool = connection.query_row(
+        "SELECT lease_active FROM sessions WHERE id = ?1",
+        [session.as_str()],
+        |row| row.get(0),
+    )?;
+    assert!(!lease_active);
+    restarted.shutdown().await;
+    tokio::fs::remove_dir_all(directory).await?;
     Ok(())
 }

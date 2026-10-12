@@ -459,6 +459,7 @@ path = \"inherit\"\n",
         });
         let runtime_for_task = runtime.clone();
         let runtime_task = tokio::spawn(async move {
+            runtime_for_task.sweep_expired_leases().await;
             while let Some(command) = runtime_for_task.next_command(&mut command_rx).await {
                 if let Command::Shutdown { response } = command {
                     runtime_for_task.stop_active_work().await;

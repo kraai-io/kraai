@@ -183,3 +183,19 @@ impl SqliteSessionStore {
         self.database.leases().get(session_id) == Some(expected)
     }
 }
+
+impl SqliteSessionStore {
+    /// Sessions whose owner stopped without releasing a lease that has since expired.
+    pub async fn expired_leases(&self) -> Result<Vec<SessionId>> {
+        self.database
+            .read(|connection, _| {
+                let mut statement = connection.prepare(
+                    "SELECT id FROM sessions WHERE lease_active = 1 AND lease_expires_at < ?1 ORDER BY id",
+                )?;
+                let rows = statement.query_map([now_nanos()?], |row| row.get::<_, String>(0))?;
+                rows.map(|id| crate::database::parse_session_id(id?))
+                    .collect()
+            })
+            .await
+    }
+}

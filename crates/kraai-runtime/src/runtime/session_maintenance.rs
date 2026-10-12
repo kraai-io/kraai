@@ -133,3 +133,35 @@ impl RuntimeCore {
         })
     }
 }
+
+impl RuntimeCore {
+    /// Recovers sessions left mid-turn by a runtime that stopped without releasing them.
+    pub(crate) async fn sweep_expired_leases(&self) {
+        let sessions = match self.session_store.expired_leases().await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                self.send_service_error(error);
+                return;
+            }
+        };
+        for session_id in sessions {
+            if self.session_store.claim_turn(&session_id).await.is_err() {
+                continue;
+            }
+            let recovered = async {
+                self.recover_session_executions(&session_id).await?;
+                self.agent_manager
+                    .write()
+                    .await
+                    .recover_interrupted_session(&session_id)
+                    .await
+            }
+            .await;
+            if let Err(error) = recovered {
+                self.send_session_report_error(&session_id, error);
+            }
+            self.release_turn(&session_id).await;
+            self.send_event(Event::HistoryUpdated { session_id });
+        }
+    }
+}

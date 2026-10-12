@@ -185,6 +185,13 @@ impl AgentManager {
         Ok(())
     }
 
+    /// Rolls back a streaming placeholder left by a stopped runtime; requires the session lease.
+    pub async fn recover_interrupted_session(&mut self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session(session_id).await?;
+        self.recover_interrupted_stream(session).await?;
+        Ok(())
+    }
+
     /// Roll back an assistant placeholder left by a process that stopped during a stream.
     ///
     /// Provider streams are not resumable. Keeping an incomplete assistant message in the

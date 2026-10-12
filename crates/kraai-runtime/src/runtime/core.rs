@@ -123,6 +123,7 @@ impl RuntimeCore {
                 self.send_service_error(error);
             }
         }
+        self.sweep_expired_leases().await;
 
         let mut shutdown_response = None;
         loop {
