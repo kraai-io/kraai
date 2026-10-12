@@ -8,34 +8,33 @@ impl AgentManager {
         identity: (&ProviderId, &ModelId),
     ) -> Result<Vec<Message>> {
         let store = self.persistence.compactions().clone();
-        let mut cursor = Some(from.clone());
-        let mut visited = HashSet::new();
+        let mut cursor = HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()));
         let mut history = Vec::new();
         let mut covered = false;
         let mut found_user = false;
-        while let Some(id) = cursor {
-            if !visited.insert(id.clone()) {
-                return Err(eyre!("Cycle in model context history at {id}"));
-            }
-            let message = self
-                .message_store
-                .get(&id)
-                .await?
-                .ok_or_else(|| eyre!("Missing model context message {id}"))?;
-            cursor = message.parent_id.clone();
-            let user = matches!(message.content, ConversationItem::User { .. });
-            if !covered || (!found_user && user) {
-                history.push(message);
-            }
-            found_user |= user;
-            if !covered {
-                covered = store
-                    .get(&id)
+        'walk: while let Some(page) = cursor.next_page().await? {
+            let boundaries = if covered {
+                HashMap::new()
+            } else {
+                store
+                    .compatible_checkpoints(
+                        page.iter().map(|message| &message.id),
+                        identity.0,
+                        identity.1,
+                    )
                     .await?
-                    .is_some_and(|checkpoint| checkpoint.compatible_with(identity.0, identity.1));
-            }
-            if covered && found_user {
-                break;
+            };
+            for message in page {
+                let user = matches!(message.content, ConversationItem::User { .. });
+                let boundary = boundaries.contains_key(&message.id);
+                if !covered || (!found_user && user) {
+                    history.push(message);
+                }
+                found_user |= user;
+                covered |= boundary;
+                if covered && found_user {
+                    break 'walk;
+                }
             }
         }
         history.reverse();
@@ -52,17 +51,23 @@ impl AgentManager {
         selection: &kraai_types::ModelSelection,
     ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
         let store = self.persistence.compactions().clone();
-        let mut previous = None;
-        let mut start = 0;
-        for (index, message) in history.iter().enumerate().rev() {
-            if let Some(checkpoint) = store.get(&message.id).await?
-                && checkpoint.compatible_with(&selection.provider_id, &selection.model_id)
-            {
-                previous = Some(checkpoint);
-                start = index + 1;
-                break;
-            }
-        }
+        let mut checkpoints = store
+            .compatible_checkpoints(
+                history.iter().map(|message| &message.id),
+                &selection.provider_id,
+                &selection.model_id,
+            )
+            .await?;
+        let (start, previous) = history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| {
+                checkpoints
+                    .remove(&message.id)
+                    .map(|checkpoint| (index + 1, Some(checkpoint)))
+            })
+            .unwrap_or((0, None));
         let latest_user = history
             .iter()
             .enumerate()

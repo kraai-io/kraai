@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
@@ -177,23 +176,14 @@ impl ConversationStore {
 
     async fn message_is_in_history(
         &self,
-        mut cursor: Option<MessageId>,
+        tip: Option<MessageId>,
         target: &MessageId,
     ) -> Result<bool> {
-        let mut visited = HashSet::new();
-        while let Some(id) = cursor {
-            if &id == target {
+        let mut history = crate::HistoryCursor::new(self.message_store.as_ref(), tip);
+        while let Some(page) = history.next_page().await? {
+            if page.iter().any(|message| &message.id == target) {
                 return Ok(true);
             }
-            if !visited.insert(id.clone()) {
-                return Err(eyre!(
-                    "Corrupt message parent graph: cycle repeats message {id}"
-                ));
-            }
-            let Some(message) = self.message_store.get(&id).await? else {
-                return Err(eyre!("History references missing message {id}"));
-            };
-            cursor = message.parent_id;
         }
         Ok(false)
     }

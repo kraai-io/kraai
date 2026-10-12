@@ -428,18 +428,11 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
     ) -> Result<BTreeMap<MessageId, Message>> {
-        let mut result = BTreeMap::new();
-
         let Some(tip_id) = self.get_tip(session_id).await? else {
-            return Ok(result);
+            return Ok(BTreeMap::new());
         };
 
-        self.visit_history_context(&tip_id, |message| {
-            result
-                .entry(message.id.clone())
-                .or_insert_with(|| message.into_owned());
-        })
-        .await?;
+        let mut result = kraai_persistence::history_by_id(self.history_context(&tip_id).await?);
 
         let streaming = self.streaming_messages.read().await;
         let mut streaming_messages: Vec<_> = streaming

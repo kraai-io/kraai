@@ -243,24 +243,9 @@ impl AgentManager {
     }
 
     pub(super) async fn validate_history_for_session(&self, session: &SessionMeta) -> Result<()> {
-        let mut keep_ids = HashSet::new();
-
-        if let Some(tip_id) = &session.tip_id {
-            let mut current = Some(tip_id.clone());
-            while let Some(id) = current {
-                if !keep_ids.insert(id.clone()) {
-                    return Err(eyre!(
-                        "Corrupt message parent graph: cycle repeats message {id}"
-                    ));
-                }
-                if let Some(msg) = self.message_store.get(&id).await? {
-                    current = msg.parent_id;
-                } else {
-                    break;
-                }
-            }
-        }
-
+        HistoryCursor::new(self.message_store.as_ref(), session.tip_id.clone())
+            .read_to_root()
+            .await?;
         Ok(())
     }
 
@@ -273,40 +258,28 @@ impl AgentManager {
     }
 
     pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-
         let mut history = Vec::new();
+        if limit == 0 {
+            return Ok(history);
+        }
+        let in_flight = self.capture_in_flight_messages(None).await;
         for session in self.session_store.list().await? {
-            let Some(tip_id) = session.tip_id else {
-                continue;
-            };
-
-            let mut limit_reached = false;
-            self.visit_history_context(&tip_id, |message| {
-                if history.len() >= limit {
-                    limit_reached = true;
-                    return;
+            let mut messages = HistoryCursor::new(self.message_store.as_ref(), session.tip_id)
+                .with_overlay(&in_flight);
+            while let Some(page) = messages.next_page().await? {
+                for message in page {
+                    if history.len() >= limit {
+                        return Ok(history);
+                    }
+                    if let ConversationItem::User { content } = &message.content {
+                        let content = content.text_only().trim().to_string();
+                        if !content.is_empty() {
+                            history.push(content);
+                        }
+                    }
                 }
-                if message.role() != ChatRole::User {
-                    return;
-                }
-
-                let content = match &message.content {
-                    ConversationItem::User { content } => content.text_only().trim().to_string(),
-                    _ => String::new(),
-                };
-                if !content.is_empty() {
-                    history.push(content);
-                }
-            })
-            .await?;
-            if limit_reached {
-                return Ok(history);
             }
         }
-
         Ok(history)
     }
 

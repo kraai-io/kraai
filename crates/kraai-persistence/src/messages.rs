@@ -1,4 +1,5 @@
 use crate::database::{Database, assert_owner, list_records, read_record, record_session};
+use crate::history::read_history_chain;
 use crate::message_references::{
     assert_message_owners, delete_message_record, write_message_record,
 };
@@ -30,8 +31,25 @@ pub trait MessageStore: Send + Sync {
     /// Get a message by ID
     async fn get(&self, id: &MessageId) -> Result<Option<Message>>;
 
-    async fn read_parent_id(&self, id: &MessageId) -> Result<Option<MessageId>> {
-        Ok(self.get(id).await?.and_then(|message| message.parent_id))
+    /// Reads up to `limit` messages from `from` toward the root, tip first.
+    async fn read_history(&self, from: &MessageId, limit: usize) -> Result<Vec<Message>> {
+        let mut history = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cursor = Some(from.clone());
+        while let Some(id) = cursor
+            && history.len() < limit
+        {
+            if !visited.insert(id.clone()) {
+                return Err(crate::history::history_cycle(&id));
+            }
+            let message = self
+                .get(&id)
+                .await?
+                .ok_or_else(|| crate::history::missing_history_message(&id))?;
+            cursor = message.parent_id.clone();
+            history.push(message);
+        }
+        Ok(history)
     }
 
     /// Save a message
@@ -85,21 +103,12 @@ impl MessageStore for SqliteMessageStore {
                 else {
                     return Ok(None);
                 };
-                let mut history = BTreeMap::new();
-                let mut cursor = session.tip_id.clone();
-                let mut visited = HashSet::new();
-                while let Some(id) = cursor {
-                    ensure!(
-                        visited.insert(id.clone()),
-                        "Corrupt message parent graph: cycle repeats message {id}"
-                    );
-                    let message = read_record::<Message>(&transaction, "message", id.as_str())?
-                        .ok_or_else(|| {
-                            color_eyre::eyre::eyre!("History references missing message {id}")
-                        })?;
-                    cursor = message.parent_id.clone();
-                    history.entry(message.id.clone()).or_insert(message);
-                }
+                let history = match &session.tip_id {
+                    Some(tip) => {
+                        crate::history_by_id(read_history_chain(&transaction, tip, usize::MAX)?)
+                    }
+                    None => BTreeMap::new(),
+                };
                 let requests = list_records::<kraai_types::RequestUsage>(
                     &transaction,
                     "usage",
@@ -126,6 +135,13 @@ impl MessageStore for SqliteMessageStore {
         let id = id.to_string();
         self.database
             .read(move |connection, _| read_record(connection, "message", &id))
+            .await
+    }
+
+    async fn read_history(&self, from: &MessageId, limit: usize) -> Result<Vec<Message>> {
+        let from = from.clone();
+        self.database
+            .read(move |connection, _| read_history_chain(connection, &from, limit))
             .await
     }
 

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{
-    AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, MessageStore,
-    SessionMeta, SessionStore,
+    AppendMessageRequest, AppendedMessage, ContextStateStore, ConversationStore, HistoryCursor,
+    MessageStore, SessionMeta, SessionStore,
 };
 use kraai_provider_core::{
     Model, ProviderManager, ProviderManagerConfig, ProviderRegistry, ProviderRequest,

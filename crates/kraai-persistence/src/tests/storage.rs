@@ -354,3 +354,57 @@ async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn history_cursor_pages_double_and_detect_cycles_across_pages() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = Persistence::open(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
+    let conversation = persistence.conversations();
+    let mut ids = Vec::new();
+    for index in 0..7 {
+        ids.push(
+            conversation
+                .append_message(request("session", &format!("message {index}")))
+                .await?
+                .message
+                .id,
+        );
+    }
+    ids.reverse();
+    let tip = ids.first().cloned();
+    let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip.clone());
+    let mut pages = Vec::new();
+    while let Some(page) = cursor.next_page().await? {
+        pages.push(
+            page.into_iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+        );
+    }
+    ensure!(pages.iter().map(Vec::len).collect::<Vec<_>>() == [1, 2, 4]);
+    ensure!(pages.concat() == ids);
+
+    let root = ids.last().ok_or_eyre("missing root")?;
+    let mut message = persistence
+        .messages()
+        .get(root)
+        .await?
+        .ok_or_eyre("missing root message")?;
+    message.parent_id.clone_from(&tip);
+    persistence.messages().save(&message).await?;
+    let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip);
+    let error = loop {
+        match cursor.next_page().await {
+            Ok(Some(_)) => {}
+            Ok(None) => color_eyre::eyre::bail!("cycle was not detected"),
+            Err(error) => break error,
+        }
+    };
+    ensure!(error.to_string().contains("cycle repeats message"));
+    Ok(())
+}

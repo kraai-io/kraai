@@ -1,9 +1,8 @@
-use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::{MessageStore, SessionMeta};
+use color_eyre::eyre::Result;
+use kraai_persistence::{HistoryCursor, MessageStore, SessionMeta};
 use kraai_types::{AgentProfilesState, ChatRole, Message, MessageId, MessageStatus, SessionId};
 
 use super::{AgentManager, SessionContextUsage};
@@ -63,7 +62,7 @@ impl AgentManager {
         })
     }
 
-    async fn capture_in_flight_messages(
+    pub(super) async fn capture_in_flight_messages(
         &self,
         session_id: Option<&SessionId>,
     ) -> HashMap<MessageId, Message> {
@@ -77,19 +76,12 @@ impl AgentManager {
         in_flight
     }
 
-    pub(super) async fn visit_history_context(
-        &self,
-        from: &MessageId,
-        visit: impl FnMut(Cow<'_, Message>) + Send,
-    ) -> Result<()> {
+    pub(super) async fn history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
         let in_flight = self.capture_in_flight_messages(None).await;
-        visit_history(
-            self.message_store.as_ref(),
-            Some(from.clone()),
-            &in_flight,
-            visit,
-        )
-        .await
+        HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
+            .with_overlay(&in_flight)
+            .read_to_root()
+            .await
     }
 
     pub async fn get_session_context_usage(
@@ -99,52 +91,39 @@ impl AgentManager {
         let Some(tip_id) = self.get_tip(session_id).await? else {
             return Ok(None);
         };
-
-        let mut usage = None;
-        self.visit_history_context(&tip_id, |message| {
-            if usage.is_none() {
-                usage = message_context_usage(&message);
+        let in_flight = self.capture_in_flight_messages(None).await;
+        let mut history =
+            HistoryCursor::new(self.message_store.as_ref(), Some(tip_id)).with_overlay(&in_flight);
+        while let Some(page) = history.next_page().await? {
+            if let Some(usage) = page.iter().find_map(message_context_usage) {
+                return Ok(Some(usage));
             }
-        })
-        .await?;
-        Ok(usage)
+        }
+        Ok(None)
     }
 }
 
 impl SessionSnapshotReader {
     /// Performs history and profile I/O without holding the runtime or manager locks.
     pub async fn load(self) -> Result<SessionSnapshotData> {
-        let mut context_usage = None;
         let mut history = self.persisted_history.unwrap_or_default();
         if history.is_empty() && self.session.tip_id.is_some() {
-            visit_history(
-                self.messages.as_ref(),
-                self.session.tip_id.clone(),
-                &self.in_flight,
-                |message| {
-                    if context_usage.is_none() {
-                        context_usage = message_context_usage(&message);
-                    }
-                    if let Cow::Owned(message) = message {
-                        history.entry(message.id.clone()).or_insert(message);
-                    }
-                },
-            )
-            .await?;
+            history = kraai_persistence::history_by_id(
+                HistoryCursor::new(self.messages.as_ref(), self.session.tip_id.clone())
+                    .with_overlay(&self.in_flight)
+                    .read_to_root()
+                    .await?,
+            );
         }
         history.extend(self.in_flight);
-        if context_usage.is_none() {
-            let mut cursor = self.session.tip_id.clone();
-            while let Some(id) = cursor {
-                let Some(message) = history.get(&id) else {
-                    break;
-                };
-                if let Some(usage) = message_context_usage(message) {
-                    context_usage = Some(usage);
-                    break;
-                }
-                cursor = message.parent_id.clone();
+        let mut context_usage = None;
+        let mut cursor = self.session.tip_id.clone();
+        while let Some(message) = cursor.as_ref().and_then(|id| history.get(id)) {
+            if let Some(usage) = message_context_usage(message) {
+                context_usage = Some(usage);
+                break;
             }
+            cursor = message.parent_id.clone();
         }
 
         let mut requests = self.requests;
@@ -194,32 +173,6 @@ impl SessionSnapshotReader {
             profiles,
         })
     }
-}
-
-async fn visit_history(
-    store: &dyn MessageStore,
-    mut current: Option<MessageId>,
-    in_flight: &HashMap<MessageId, Message>,
-    mut visit: impl FnMut(Cow<'_, Message>) + Send,
-) -> Result<()> {
-    let mut visited = HashSet::new();
-    while let Some(id) = current {
-        if !visited.insert(id.clone()) {
-            return Err(eyre!(
-                "Corrupt message parent graph: cycle repeats message {id}"
-            ));
-        }
-        let message =
-            match in_flight.get(&id) {
-                Some(message) => Cow::Borrowed(message),
-                None => Cow::Owned(store.get(&id).await?.ok_or_else(|| {
-                    eyre!("Message {id} disappeared while reading session history")
-                })?),
-            };
-        current = message.parent_id.clone();
-        visit(message);
-    }
-    Ok(())
 }
 
 pub(super) fn message_context_usage(message: &Message) -> Option<SessionContextUsage> {
