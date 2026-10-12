@@ -79,7 +79,7 @@ impl MessageStore for SqliteMessageStore {
     ) -> Result<Option<ConversationSnapshot>> {
         let session_id = session_id.clone();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 let transaction = connection.transaction()?;
                 let Some(session) = crate::sessions::read_session(&transaction, &session_id)?
                 else {
@@ -125,7 +125,7 @@ impl MessageStore for SqliteMessageStore {
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| read_record(connection, "message", &id))
+            .read(move |connection, _| read_record(connection, "message", &id))
             .await
     }
 
@@ -214,7 +214,7 @@ impl MessageStore for SqliteMessageStore {
     }
     async fn list_ids(&self) -> Result<HashSet<MessageId>> {
         self.database
-            .run(|connection, _| {
+            .read(|connection, _| {
                 let mut statement =
                     connection.prepare("SELECT id FROM records WHERE kind = 'message'")?;
                 let ids = statement.query_map([], |row| row.get::<_, String>(0))?;

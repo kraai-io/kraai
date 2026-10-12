@@ -57,7 +57,7 @@ impl RequestUsageStore for SqliteRequestUsageStore {
     async fn load(&self, session_id: &SessionId) -> Result<BTreeMap<MessageId, RequestUsage>> {
         let session = session_id.clone();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 Ok(
                     list_records::<RequestUsage>(connection, "usage", Some(&session))?
                         .into_iter()

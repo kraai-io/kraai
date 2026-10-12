@@ -248,7 +248,7 @@ async fn failed_release_stops_renewing_the_abandoned_claim() -> Result<()> {
             .await
             .is_err()
     );
-    ensure!(persistence.sessions().owned_sessions().await?.is_empty());
+    ensure!(persistence.sessions().owned_sessions().is_empty());
     ensure!(
         persistence
             .sessions()

@@ -205,7 +205,7 @@ fn delete_message_records(connection: &Connection, leases: &LeaseTokens, id: &st
 #[async_trait::async_trait]
 impl SessionStore for SqliteSessionStore {
     async fn list(&self) -> Result<Vec<SessionMeta>> {
-        self.database.run(|connection, _| {
+        self.database.read(|connection, _| {
             let mut statement = connection.prepare("SELECT data, metadata_revision FROM sessions ORDER BY json_extract(data, '$.updated_at') DESC, id")?;
             let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
             rows.map(|row| {
@@ -220,7 +220,7 @@ impl SessionStore for SqliteSessionStore {
     async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>> {
         let id = id.clone();
         self.database
-            .run(move |connection, _| read_session(connection, &id))
+            .read(move |connection, _| read_session(connection, &id))
             .await
     }
 

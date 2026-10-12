@@ -79,11 +79,10 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .expect("old stream")
         .message_id
         .clone();
-    let old_expiry = old_owner
+    let old_token = old_owner
         .runtime
         .session_store
         .owned_turns()
-        .await?
         .into_iter()
         .find(|(id, _)| id == &session)
         .expect("old lease")
@@ -131,7 +130,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner.runtime.stream_tasks.wait_session(&session).await;
     old_owner
         .runtime
-        .cancel_turn_if_lease_matches(session.clone(), old_expiry)
+        .cancel_turn_if_lease_matches(session.clone(), old_token)
         .await?;
     assert!(new_owner.runtime.session_store.owns_turn(&session).await?);
     takeover_sender.send(Ok(ProviderStreamEvent::TextDelta {

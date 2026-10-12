@@ -659,7 +659,6 @@ impl RuntimeCore {
             && !self
                 .session_store
                 .lease_token_matches(&session_id, expected)
-                .await?
         {
             return Ok(false);
         }

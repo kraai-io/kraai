@@ -55,13 +55,7 @@ impl RuntimeCore {
                         continue;
                     }
                 }
-                let sessions = match runtime.session_store.owned_turns().await {
-                    Ok(sessions) => sessions,
-                    Err(error) => {
-                        runtime.send_service_error(error);
-                        continue;
-                    }
-                };
+                let sessions = runtime.session_store.owned_turns();
                 for (session, expected) in sessions {
                     if cancelling.contains(&session) {
                         continue;

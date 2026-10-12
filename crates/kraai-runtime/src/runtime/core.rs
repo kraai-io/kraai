@@ -159,10 +159,8 @@ impl RuntimeCore {
 
         self.stop_active_work().await;
 
-        if let Ok(sessions) = self.session_store.owned_sessions().await {
-            for session in sessions {
-                self.release_turn(&session).await;
-            }
+        for session in self.session_store.owned_sessions() {
+            self.release_turn(&session).await;
         }
         self.shutdown_mcp().await;
 

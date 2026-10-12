@@ -227,24 +227,24 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| read_record(connection, "execution", &id))
+            .read(move |connection, _| read_record(connection, "execution", &id))
             .await
     }
     async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>> {
         let session = session_id.clone();
         self.database
-            .run(move |connection, _| list_records(connection, "execution", Some(&session)))
+            .read(move |connection, _| list_records(connection, "execution", Some(&session)))
             .await
     }
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
         self.database
-            .run(|connection, _| list_records(connection, "execution", None))
+            .read(|connection, _| list_records(connection, "execution", None))
             .await
     }
     async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 Ok(connection.query_row(
                     "SELECT source FROM execution_sources WHERE execution_id = ?1",
                     [id],
@@ -255,7 +255,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     }
     async fn read_output(&self, id: &ScriptExecutionId) -> Result<PersistedScriptOutput> {
         let id = id.to_string();
-        self.database.run(move |connection, _| {
+        self.database.read(move |connection, _| {
             ensure!(read_record::<ScriptExecutionRecord>(connection, "execution", &id)?.is_some(), "Execution not found: {id}");
             let mut output = PersistedScriptOutput { stdout: Vec::new(), stderr: Vec::new() };
             let mut statement = connection.prepare("SELECT stream, bytes FROM execution_output WHERE execution_id = ?1 ORDER BY sequence")?;

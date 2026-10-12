@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     revision INTEGER NOT NULL DEFAULT 0,
     metadata_revision INTEGER NOT NULL DEFAULT 0,
     lease_active INTEGER NOT NULL DEFAULT 0,
-    lease_expires_at INTEGER NOT NULL DEFAULT 0
+    lease_expires_at INTEGER NOT NULL DEFAULT 0,
+    lease_token INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS records (
     kind TEXT NOT NULL,
@@ -32,4 +33,4 @@ CREATE TABLE IF NOT EXISTS execution_output (
     bytes BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS execution_output_id ON execution_output(execution_id, sequence);
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

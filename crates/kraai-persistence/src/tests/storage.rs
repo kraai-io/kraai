@@ -31,7 +31,7 @@ async fn database_creation_records_the_schema_version() -> Result<()> {
     persistence.sessions().save(&session("session")).await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    ensure!(version == 1);
+    ensure!(version == 2);
     let reopened = Persistence::open(directory.path()).await?;
     ensure!(
         reopened
@@ -44,13 +44,45 @@ async fn database_creation_records_the_schema_version() -> Result<()> {
 }
 
 #[tokio::test]
+async fn version_one_databases_gain_lease_tokens() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    connection.execute_batch(
+        "CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            tip_id TEXT,
+            revision INTEGER NOT NULL DEFAULT 0,
+            metadata_revision INTEGER NOT NULL DEFAULT 0,
+            lease_active INTEGER NOT NULL DEFAULT 0,
+            lease_expires_at INTEGER NOT NULL DEFAULT 0
+        );
+        PRAGMA user_version = 1;",
+    )?;
+    let persistence = Persistence::open(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    let id = SessionId::new("session");
+    persistence.sessions().claim_turn(&id).await?;
+    ensure!(persistence.sessions().owns_turn(&id).await?);
+    let (version, token): (i64, i64) = (
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?,
+        connection.query_row(
+            "SELECT lease_token FROM sessions WHERE id = 'session'",
+            [],
+            |row| row.get(0),
+        )?,
+    );
+    ensure!(version == 2 && token == 1);
+    Ok(())
+}
+#[tokio::test]
 async fn unsupported_schema_version_is_rejected_without_changing_the_database() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-    connection.pragma_update(None, "user_version", 2)?;
+    connection.pragma_update(None, "user_version", 3)?;
     ensure!(Persistence::open(directory.path()).await.is_err());
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    ensure!(version == 2);
+    ensure!(version == 3);
     let tables: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'",
         [],

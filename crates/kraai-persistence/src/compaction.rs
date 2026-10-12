@@ -62,7 +62,7 @@ impl SqliteCompactionStore {
     pub async fn get(&self, boundary: &MessageId) -> Result<Option<CompactionCheckpoint>> {
         let boundary = boundary.to_string();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 let checkpoint =
                     read_record::<CompactionCheckpoint>(connection, "compaction", &boundary)?;
                 if let Some(checkpoint) = &checkpoint {

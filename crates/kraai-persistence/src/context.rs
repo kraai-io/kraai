@@ -124,7 +124,7 @@ impl ContextStateStore for SqliteContextStateStore {
     async fn load(&self, session_id: &SessionId) -> Result<ContextStateDocument> {
         let session = session_id.clone();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 Ok(read_record(connection, "context", session.as_str())?.unwrap_or_default())
             })
             .await

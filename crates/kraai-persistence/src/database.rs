@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -9,66 +10,163 @@ use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::ValueRef,
 };
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::sync::Semaphore;
 
-pub(crate) type LeaseTokens = BTreeMap<SessionId, i64>;
+const SCHEMA_VERSION: i64 = 2;
+const READER_CONNECTIONS: usize = 4;
+
+#[derive(Default)]
+pub(crate) struct LeaseTokens(Mutex<BTreeMap<SessionId, i64>>);
+
+impl LeaseTokens {
+    fn tokens(&self) -> std::sync::MutexGuard<'_, BTreeMap<SessionId, i64>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn get(&self, session: &SessionId) -> Option<i64> {
+        self.tokens().get(session).copied()
+    }
+
+    pub(crate) fn insert(&self, session: SessionId, token: i64) {
+        self.tokens().insert(session, token);
+    }
+
+    pub(crate) fn remove(&self, session: &SessionId) -> Option<i64> {
+        self.tokens().remove(session)
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<(SessionId, i64)> {
+        self.tokens()
+            .iter()
+            .map(|(session, token)| (session.clone(), *token))
+            .collect()
+    }
+}
 
 #[derive(Clone)]
 pub struct Database {
     path: PathBuf,
-    state: Arc<Mutex<DatabaseState>>,
-}
-
-#[derive(Default)]
-struct DatabaseState {
-    connection: Option<Connection>,
-    leases: LeaseTokens,
+    writer: Arc<Mutex<Option<Connection>>>,
+    initialized: Arc<AtomicBool>,
+    readers: Arc<Mutex<Vec<Connection>>>,
+    reader_permits: Arc<Semaphore>,
+    leases: Arc<LeaseTokens>,
 }
 
 impl Database {
     pub(crate) fn new(directory: &Path) -> Self {
         Self {
             path: directory.join("kraai.sqlite3"),
-            state: Arc::default(),
+            writer: Arc::default(),
+            initialized: Arc::default(),
+            readers: Arc::default(),
+            reader_permits: Arc::new(Semaphore::new(READER_CONNECTIONS)),
+            leases: Arc::default(),
         }
+    }
+
+    pub(crate) fn leases(&self) -> &LeaseTokens {
+        &self.leases
+    }
+
+    fn open_writer(&self) -> Result<Connection> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| eyre!("Database has no parent"))?;
+        kraai_io::fs::create_dir_all(parent)?;
+        let connection = Connection::open(&self.path)
+            .with_context(|| format!("Failed to open database {}", self.path.display()))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        ensure!(
+            (0..=SCHEMA_VERSION).contains(&version),
+            "Unsupported SQLite schema version {version}"
+        );
+        if version == 1 {
+            connection.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN lease_token INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        connection.execute_batch(include_str!("schema.sql"))?;
+        Ok(connection)
+    }
+
+    fn open_reader(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.path)
+            .with_context(|| format!("Failed to open database {}", self.path.display()))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch("PRAGMA query_only = ON")?;
+        Ok(connection)
+    }
+
+    fn with_writer<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T>,
+    ) -> Result<T> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_poisoned| eyre!("Database mutex poisoned"))?;
+        if writer.is_none() {
+            *writer = Some(self.open_writer()?);
+            self.initialized.store(true, Ordering::Release);
+        }
+        let result = operation(
+            writer
+                .as_mut()
+                .ok_or_else(|| eyre!("Database was not initialized"))?,
+            &self.leases,
+        );
+        drop(writer);
+        result
     }
 
     pub(crate) async fn run<T: Send + 'static>(
         &self,
-        operation: impl FnOnce(&mut Connection, &mut LeaseTokens) -> Result<T> + Send + 'static,
+        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let database = self.clone();
+        tokio::task::spawn_blocking(move || database.with_writer(operation))
+            .await
+            .context("Database task failed")?
+    }
+
+    pub(crate) async fn read<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let permit = self
+            .reader_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .context("Database reader pool closed")?;
+        let database = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut state = database
-                .state
-                .lock()
-                .map_err(|_poisoned| eyre!("Database mutex poisoned"))?;
-            if state.connection.is_none() {
-                let parent = database
-                    .path
-                    .parent()
-                    .ok_or_else(|| eyre!("Database has no parent"))?;
-                kraai_io::fs::create_dir_all(parent)?;
-                let connection = Connection::open(&database.path).with_context(|| {
-                    format!("Failed to open database {}", database.path.display())
-                })?;
-                connection.busy_timeout(Duration::from_secs(5))?;
-                let version: i64 =
-                    connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-                ensure!(
-                    matches!(version, 0 | 1),
-                    "Unsupported SQLite schema version {version}"
-                );
-                connection.execute_batch(include_str!("schema.sql"))?;
-                state.connection = Some(connection);
+            if !database.initialized.load(Ordering::Acquire) {
+                database.with_writer(|_, _| Ok(()))?;
             }
-            let DatabaseState { connection, leases } = &mut *state;
-            let result = operation(
-                connection
-                    .as_mut()
-                    .ok_or_else(|| eyre!("Database was not initialized"))?,
-                leases,
-            );
-            drop(state);
+            let idle = database
+                .readers
+                .lock()
+                .map_err(|_poisoned| eyre!("Database reader pool poisoned"))?
+                .pop();
+            let mut connection = match idle {
+                Some(connection) => connection,
+                None => database.open_reader()?,
+            };
+            let result = operation(&mut connection, &database.leases);
+            if connection.is_autocommit() {
+                database
+                    .readers
+                    .lock()
+                    .map_err(|_poisoned| eyre!("Database reader pool poisoned"))?
+                    .push(connection);
+            }
+            drop(permit);
             result
         })
         .await
@@ -103,15 +201,15 @@ pub(crate) fn assert_owner(
 ) -> Result<()> {
     let ownership: Option<(bool, i64)> = connection
         .query_row(
-            "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1",
+            "SELECT lease_active, lease_token FROM sessions WHERE id = ?1",
             [session.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if let Some((active, expiry)) = ownership {
+    if let Some((active, token)) = ownership {
         if let Some(expected) = leases.get(session) {
             ensure!(
-                active && *expected == expiry,
+                active && expected == token,
                 kraai_types::DomainError::conflict(format!(
                     "Ownership of session {session} was lost"
                 ))
@@ -126,7 +224,7 @@ pub(crate) fn assert_owner(
         }
     } else {
         ensure!(
-            !leases.contains_key(session),
+            leases.get(session).is_none(),
             "Owned session {session} was deleted"
         );
     }
