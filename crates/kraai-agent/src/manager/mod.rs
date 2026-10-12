@@ -140,10 +140,29 @@ struct StreamingMessageState {
     message: Message,
     cancellation_result_id: Option<MessageId>,
     text_item_ids: HashMap<String, usize>,
-    snapshot_dirty: bool,
+    pending_deltas: Vec<kraai_persistence::StreamDelta>,
+    first_pending_sequence: u64,
+    sealed_deltas: usize,
     request_started_at: u64,
     unpriced_attempts: u32,
     subscription: bool,
+}
+
+impl StreamingMessageState {
+    fn record(&mut self, delta: kraai_persistence::StreamDelta) -> Result<()> {
+        delta.apply(&mut self.message)?;
+        self.queue_delta(delta);
+        Ok(())
+    }
+
+    fn queue_delta(&mut self, delta: kraai_persistence::StreamDelta) {
+        let unsealed = self.pending_deltas.len() > self.sealed_deltas;
+        let unmerged = match self.pending_deltas.last_mut() {
+            Some(last) if unsealed => last.coalesce(delta),
+            _ => Some(delta),
+        };
+        self.pending_deltas.extend(unmerged);
+    }
 }
 
 pub struct AgentManager {

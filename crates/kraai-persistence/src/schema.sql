@@ -33,4 +33,10 @@ CREATE TABLE IF NOT EXISTS execution_output (
     bytes BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS execution_output_id ON execution_output(execution_id, sequence);
+CREATE TABLE IF NOT EXISTS stream_deltas (
+    message_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (message_id, sequence)
+) WITHOUT ROWID;
 PRAGMA user_version = 2;

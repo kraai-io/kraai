@@ -1,8 +1,9 @@
-use crate::database::{Database, assert_owner, list_records, read_record, record_session};
+use crate::database::{Database, assert_owner, list_records, record_session};
 use crate::history::read_history_chain;
 use crate::message_references::{
     assert_message_owners, delete_message_record, write_message_record,
 };
+use crate::stream_deltas::read_message;
 use crate::{SessionMeta, SessionStore};
 use color_eyre::eyre::{Result, ensure};
 use kraai_types::{Message, MessageId, SessionId};
@@ -54,6 +55,18 @@ pub trait MessageStore: Send + Sync {
 
     /// Save a message
     async fn save(&self, message: &Message) -> Result<()>;
+
+    /// Durably appends incremental changes to a streaming message. Deltas are
+    /// numbered from `first_sequence`, so resending an already stored delta is a
+    /// no-op. `message` is the streaming message with every delta applied.
+    async fn append_stream_deltas(
+        &self,
+        message: &Message,
+        _first_sequence: u64,
+        _deltas: &[crate::StreamDelta],
+    ) -> Result<()> {
+        self.save(message).await
+    }
 
     async fn save_linked(
         &self,
@@ -134,7 +147,7 @@ impl MessageStore for SqliteMessageStore {
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         let id = id.to_string();
         self.database
-            .read(move |connection, _| read_record(connection, "message", &id))
+            .read(move |connection, _| read_message(connection, &id))
             .await
     }
 
@@ -142,6 +155,26 @@ impl MessageStore for SqliteMessageStore {
         let from = from.clone();
         self.database
             .read(move |connection, _| read_history_chain(connection, &from, limit))
+            .await
+    }
+
+    async fn append_stream_deltas(
+        &self,
+        message: &Message,
+        first_sequence: u64,
+        deltas: &[crate::StreamDelta],
+    ) -> Result<()> {
+        let (message_id, deltas) = (message.id.clone(), deltas.to_vec());
+        self.database
+            .transaction(move |transaction, leases| {
+                crate::stream_deltas::append_stream_deltas(
+                    transaction,
+                    leases,
+                    &message_id,
+                    first_sequence,
+                    &deltas,
+                )
+            })
             .await
     }
 
@@ -194,9 +227,7 @@ impl MessageStore for SqliteMessageStore {
                     return Ok(false);
                 }
                 crate::sessions::assert_session_revision(current.as_ref(), &session)?;
-                if let Some(existing) =
-                    read_record::<Message>(transaction, "message", message.id.as_str())?
-                {
+                if let Some(existing) = read_message(transaction, message.id.as_str())? {
                     ensure!(
                         serde_json::to_value(&existing)? == serde_json::to_value(&message)?,
                         "Message ID reused with different content"

@@ -62,9 +62,8 @@ impl AgentManager {
             && let Some(request) = Self::request_usage(state, Some(usage.clone()))
         {
             self.usage_store.save(&state.session_id, &request).await?;
-            if let Some(generation) = state.message.generation.as_mut() {
-                generation.usage = Some(usage);
-                state.snapshot_dirty = true;
+            if state.message.generation.is_some() {
+                state.record(kraai_persistence::StreamDelta::Usage { usage })?;
             }
             drop(streaming);
             return Ok(Some(request));

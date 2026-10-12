@@ -87,6 +87,9 @@ pub(crate) fn write_message_record(
 ) -> Result<()> {
     let sessions = assert_message_owners(connection, leases, id, associated_session)?;
     write_record(connection, kind, id, associated_session, value)?;
+    if kind == "message" {
+        crate::stream_deltas::clear_stream_deltas(connection, id)?;
+    }
     for session in sessions {
         if Some(&session) != associated_session {
             bump_revision(connection, &session)?;
@@ -115,6 +118,9 @@ pub(crate) fn delete_message_record(
         "DELETE FROM records WHERE kind = ?1 AND id = ?2",
         params![kind, id],
     )?;
+    if kind == "message" {
+        crate::stream_deltas::clear_stream_deltas(connection, id)?;
+    }
     for session in sessions {
         bump_revision(connection, &session)?;
     }

@@ -18,6 +18,7 @@ mod messages;
 mod preferences;
 mod repository;
 mod sessions;
+mod stream_deltas;
 mod turns;
 mod usage;
 pub use compaction::{CompactionCheckpoint, SqliteCompactionStore};
@@ -29,6 +30,7 @@ pub use messages::{ConversationSnapshot, MessageStore, SqliteMessageStore};
 pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};
 pub use repository::Persistence;
 pub use sessions::{SessionMeta, SessionStore, SqliteSessionStore};
+pub use stream_deltas::StreamDelta;
 pub use usage::{RequestUsageStore, SqliteRequestUsageStore};
 
 pub use context::{

@@ -408,3 +408,69 @@ async fn history_cursor_pages_double_and_detect_cycles_across_pages() -> Result<
     ensure!(error.to_string().contains("cycle repeats message"));
     Ok(())
 }
+
+#[tokio::test]
+async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
+    use kraai_types::{AssistantItem, AssistantPhase, StreamId};
+    let directory = tempfile::tempdir()?;
+    let persistence = Persistence::open(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
+    let mut streaming = request("session", "unused");
+    streaming.content = ConversationItem::Assistant { items: Vec::new() };
+    streaming.status = MessageStatus::Streaming {
+        stream_id: StreamId::new("stream"),
+    };
+    let mut message = persistence
+        .conversations()
+        .append_message(streaming)
+        .await?
+        .message;
+    let deltas = [
+        StreamDelta::Text {
+            index: 0,
+            phase: AssistantPhase::FinalAnswer,
+            text: "hello".into(),
+        },
+        StreamDelta::Text {
+            index: 0,
+            phase: AssistantPhase::FinalAnswer,
+            text: " world".into(),
+        },
+    ];
+    for delta in &deltas {
+        delta.apply(&mut message)?;
+    }
+    let messages = persistence.messages();
+    messages.append_stream_deltas(&message, 0, &deltas).await?;
+    messages.append_stream_deltas(&message, 0, &deltas).await?;
+    let reopened = Persistence::open(directory.path()).await?;
+    let replayed = reopened
+        .messages()
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("missing streamed message")?;
+    ensure!(replayed.content == message.content && replayed.status == message.status);
+
+    message.content = ConversationItem::Assistant {
+        items: vec![AssistantItem::Text {
+            phase: AssistantPhase::FinalAnswer,
+            text: "final".into(),
+        }],
+    };
+    message.status = MessageStatus::Complete;
+    messages.save(&message).await?;
+    let saved = messages
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("missing saved message")?;
+    ensure!(saved.content == message.content && saved.status == message.status);
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    let remaining: i64 =
+        connection.query_row("SELECT COUNT(*) FROM stream_deltas", [], |row| row.get(0))?;
+    ensure!(remaining == 0);
+    Ok(())
+}

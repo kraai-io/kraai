@@ -50,6 +50,9 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
                 Default::default(),
             )
             .await?;
+        manager
+            .append_text_chunk(&request.message_id, "text", AssistantPhase::FinalAnswer, "")
+            .await;
         let store = Arc::new(ControlledSaves {
             inner: manager.message_store.clone(),
             block: AtomicBool::new(true),
@@ -91,7 +94,11 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
         assert!(futures::poll!(&mut finishing).is_pending());
         store.release.notify_one();
         publication.await?;
-        assert!(manager.streaming_messages.read().await[&request.message_id].snapshot_dirty);
+        assert!(
+            !manager.streaming_messages.read().await[&request.message_id]
+                .pending_deltas
+                .is_empty()
+        );
         finishing.await?;
         let saved = store.get(&request.message_id).await?;
         if terminal == "abort" {
@@ -119,6 +126,14 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
             Default::default(),
         )
         .await?;
+    manager
+        .append_text_chunk(
+            &request.message_id,
+            "text",
+            AssistantPhase::FinalAnswer,
+            "start",
+        )
+        .await;
     let store = Arc::new(ControlledSaves {
         inner: manager.message_store.clone(),
         block: AtomicBool::new(true),
@@ -132,9 +147,17 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
         assert!(futures::poll!(&mut publication).is_pending());
     }
     assert!(manager.publish_streaming_snapshots().await.is_err());
-    assert!(manager.streaming_messages.read().await[&request.message_id].snapshot_dirty);
+    assert!(
+        !manager.streaming_messages.read().await[&request.message_id]
+            .pending_deltas
+            .is_empty()
+    );
     manager.publish_streaming_snapshots().await?;
-    assert!(!manager.streaming_messages.read().await[&request.message_id].snapshot_dirty);
+    assert!(
+        manager.streaming_messages.read().await[&request.message_id]
+            .pending_deltas
+            .is_empty()
+    );
     manager.abort_streaming_message(&request.message_id).await?;
     cleanup_dir(data_dir).await;
     Ok(())

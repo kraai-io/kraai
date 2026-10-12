@@ -145,7 +145,9 @@ impl AgentManager {
                 message: appended.message,
                 cancellation_result_id: None,
                 text_item_ids: HashMap::new(),
-                snapshot_dirty: true,
+                pending_deltas: Vec::new(),
+                first_pending_sequence: 0,
+                sealed_deltas: 0,
                 subscription,
                 unpriced_attempts: 0,
                 request_started_at: std::time::SystemTime::now()
@@ -183,12 +185,12 @@ impl AgentManager {
     ) -> Option<String> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
+        let ConversationItem::Assistant { items } = &state.message.content else {
             return None;
         };
 
         let mut visible = String::new();
-        let item_index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
+        let index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
             index
         } else {
             if items
@@ -198,28 +200,19 @@ impl AgentManager {
             {
                 visible.push_str("\n\n");
             }
-            items.push(AssistantItem::Text {
-                phase,
-                text: String::new(),
-            });
-            let index = items.len().saturating_sub(1);
+            let index = items.len();
             state.text_item_ids.insert(item_id.to_string(), index);
             index
         };
-        let Some(AssistantItem::Text {
-            phase: stored_phase,
-            text,
-        }) = items.get_mut(item_index)
-        else {
-            return None;
-        };
-        if *stored_phase != phase {
-            return None;
-        }
-        text.push_str(chunk);
-        visible.push_str(chunk);
-        state.snapshot_dirty = true;
+        state
+            .record(kraai_persistence::StreamDelta::Text {
+                index,
+                phase,
+                text: chunk.to_string(),
+            })
+            .ok()?;
         drop(streaming);
+        visible.push_str(chunk);
         Some(visible)
     }
 
@@ -231,14 +224,14 @@ impl AgentManager {
     ) -> Option<()> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
-            return None;
-        };
-        items.push(AssistantItem::Reasoning {
-            provider_id,
-            payload,
-        });
-        state.snapshot_dirty = true;
+        state
+            .record(kraai_persistence::StreamDelta::Item {
+                item: AssistantItem::Reasoning {
+                    provider_id,
+                    payload,
+                },
+            })
+            .ok()?;
         drop(streaming);
         Some(())
     }
@@ -252,21 +245,24 @@ impl AgentManager {
     ) -> Option<()> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
-            return None;
-        };
-        if items
+        if state
+            .message
+            .content
+            .assistant_items()?
             .iter()
             .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
         {
             return None;
         }
-        items.push(AssistantItem::ScriptCall {
-            call_id,
-            name,
-            input,
-        });
-        state.snapshot_dirty = true;
+        state
+            .record(kraai_persistence::StreamDelta::Item {
+                item: AssistantItem::ScriptCall {
+                    call_id,
+                    name,
+                    input,
+                },
+            })
+            .ok()?;
         drop(streaming);
         Some(())
     }
@@ -511,22 +507,30 @@ impl AgentManager {
 impl AgentManager {
     pub async fn publish_streaming_snapshots(&self) -> Result<()> {
         let _persistence = self.streaming_persistence.lock().await;
-        let snapshots: Vec<_> = self
+        let batches: Vec<_> = self
             .streaming_messages
-            .read()
+            .write()
             .await
-            .values()
-            .filter(|state| state.snapshot_dirty)
-            .map(|state| state.message.clone())
+            .values_mut()
+            .filter(|state| !state.pending_deltas.is_empty())
+            .map(|state| {
+                state.sealed_deltas = state.pending_deltas.len();
+                (
+                    state.message.clone(),
+                    state.first_pending_sequence,
+                    state.pending_deltas.clone(),
+                )
+            })
             .collect();
-        for message in snapshots {
-            self.message_store.save(&message).await?;
+        for (message, first_sequence, deltas) in batches {
+            self.message_store
+                .append_stream_deltas(&message, first_sequence, &deltas)
+                .await?;
             let mut streaming = self.streaming_messages.write().await;
-            if let Some(state) = streaming.get_mut(&message.id)
-                && state.message.content == message.content
-                && state.message.generation == message.generation
-            {
-                state.snapshot_dirty = false;
+            if let Some(state) = streaming.get_mut(&message.id) {
+                state.pending_deltas.drain(..deltas.len());
+                state.first_pending_sequence += deltas.len() as u64;
+                state.sealed_deltas = 0;
             }
             drop(streaming);
         }

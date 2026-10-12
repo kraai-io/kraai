@@ -5,7 +5,7 @@ use kraai_types::{Message, MessageId};
 use rusqlite::Connection;
 
 use crate::MessageStore;
-use crate::database::read_record;
+use crate::stream_deltas::read_message;
 
 pub(crate) fn missing_history_message(id: &MessageId) -> Report {
     eyre!("Message {id} disappeared while reading session history")
@@ -29,8 +29,8 @@ pub(crate) fn read_history_chain(
         if !visited.insert(id.clone()) {
             return Err(history_cycle(&id));
         }
-        let message = read_record::<Message>(connection, "message", id.as_str())?
-            .ok_or_else(|| missing_history_message(&id))?;
+        let message =
+            read_message(connection, id.as_str())?.ok_or_else(|| missing_history_message(&id))?;
         cursor = message.parent_id.clone();
         history.push(message);
     }

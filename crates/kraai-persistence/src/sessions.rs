@@ -199,6 +199,7 @@ fn delete_message_records(connection: &Connection, leases: &LeaseTokens, id: &st
         "DELETE FROM records WHERE kind IN ('message', 'compaction') AND id = ?1",
         [id],
     )?;
+    crate::stream_deltas::clear_stream_deltas(connection, id)?;
     Ok(())
 }
 
