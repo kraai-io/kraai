@@ -5,7 +5,9 @@ use tokio::sync::{Notify, mpsc};
 
 use kraai_types::{ModelId, ProviderId, SessionId};
 
-use super::core::{QueuedMessage, RuntimeCore};
+use kraai_persistence::QueuedMessage;
+
+use super::core::RuntimeCore;
 use super::streaming::StreamJobKind;
 use crate::handle::Command;
 use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
@@ -167,7 +169,7 @@ impl RuntimeCore {
         provider_id: ProviderId,
         options: kraai_types::ModelOptionValues,
     ) -> RuntimeResult<SubmitMessageOutcome> {
-        let has_pending_messages = self.has_pending_messages(&session_id).await;
+        let has_pending_messages = self.has_pending_messages(&session_id).await?;
         self.agent_manager
             .read()
             .await
@@ -194,7 +196,7 @@ impl RuntimeCore {
         }
         let active_script = self.has_active_script_tasks(&session_id).await;
         let has_pending_messages =
-            has_pending_messages || self.has_pending_messages(&session_id).await;
+            has_pending_messages || self.has_pending_messages(&session_id).await?;
         let agent = self.agent_manager.write().await;
         let preparation =
             if agent.is_turn_active(&session_id) || has_pending_messages || active_script {
@@ -221,16 +223,20 @@ impl RuntimeCore {
                 }
             }
             let position = self
+                .session_store
                 .enqueue_message(
                     &session_id,
-                    QueuedMessage {
-                        message,
-                        model_id,
-                        provider_id,
-                        options,
+                    &QueuedMessage {
+                        content: message,
+                        selection: kraai_types::ModelSelection {
+                            provider_id,
+                            model_id,
+                            options,
+                        },
                     },
                 )
-                .await;
+                .await
+                .map_err(RuntimeError::from_report)?;
             self.schedule_queue_drain(&session_id);
             return Ok(SubmitMessageOutcome::Queued { position });
         };
@@ -279,25 +285,13 @@ impl RuntimeCore {
         Ok(SubmitMessageOutcome::Started { message_id })
     }
 
-    async fn has_pending_messages(&self, session_id: &SessionId) -> bool {
-        let queued = self.queued_messages.lock().await;
-        queued
-            .get(session_id)
-            .is_some_and(|queue| !queue.is_empty())
-            || self.session_preparations.is_active(session_id)
-    }
-
-    pub(super) async fn enqueue_message(
-        &self,
-        session_id: &SessionId,
-        queued_message: QueuedMessage,
-    ) -> usize {
-        let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.clone()).or_default();
-        queue.push_back(queued_message);
-        let position = queue.len();
-        drop(queued);
-        position
+    async fn has_pending_messages(&self, session_id: &SessionId) -> RuntimeResult<bool> {
+        Ok(self.session_preparations.is_active(session_id)
+            || self
+                .session_store
+                .has_queued_messages(session_id)
+                .await
+                .map_err(RuntimeError::from_report)?)
     }
 
     pub(crate) async fn handle_start_queued_messages(&self, session_id: SessionId) {
@@ -315,22 +309,22 @@ impl RuntimeCore {
             return;
         }
 
-        let messages = self.take_queued_messages(&session_id).await;
-        let Some(last_message) = messages.last() else {
+        let queued = match self.session_store.queued_messages(&session_id).await {
+            Ok(queued) => queued,
+            Err(error) => {
+                self.send_session_report_error(&session_id, error);
+                return;
+            }
+        };
+        let Some(last) = queued.last() else {
             return;
         };
-        let model_id = last_message.model_id.clone();
-        let provider_id = last_message.provider_id.clone();
-        let options = last_message.options.clone();
-        let contents = messages
-            .iter()
-            .map(|message| message.message.clone())
-            .collect();
+        let selection = last.message.selection.clone();
 
         let stream_request = {
             let mut agent = self.agent_manager.write().await;
             let result = agent
-                .prepare_messages_stream(&session_id, contents, model_id, provider_id, options)
+                .prepare_queued_stream(&session_id, queued, selection)
                 .await;
             if result.is_err() {
                 agent.clear_active_turn(&session_id);
@@ -342,43 +336,18 @@ impl RuntimeCore {
                 self.release_turn(&session_id).await;
             }
             match result {
-                Ok(Some(result)) => Some((providers, result)),
-                Ok(None) => {
-                    self.restore_queued_messages(&session_id, messages).await;
-                    return;
-                }
+                Ok(Some(result)) => (providers, result),
+                Ok(None) => return,
                 Err(error) => {
-                    self.restore_queued_messages(&session_id, messages).await;
                     self.send_session_report_error(&session_id, error);
-                    None
+                    return;
                 }
             }
         };
 
-        let Some((providers, request)) = stream_request else {
-            return;
-        };
-
+        let (providers, request) = stream_request;
         self.start_stream_job(StreamJobKind::Initial, session_id, providers, request)
             .await;
         drop(preparation);
-    }
-
-    pub(crate) async fn take_queued_messages(&self, session_id: &SessionId) -> Vec<QueuedMessage> {
-        let messages = self.queued_messages.lock().await.remove(session_id);
-        messages.map(Vec::from).unwrap_or_default()
-    }
-
-    pub(crate) async fn restore_queued_messages(
-        &self,
-        session_id: &SessionId,
-        messages: Vec<QueuedMessage>,
-    ) {
-        let mut queued = self.queued_messages.lock().await;
-        let queue = queued.entry(session_id.clone()).or_default();
-        for message in messages.into_iter().rev() {
-            queue.push_front(message);
-        }
-        drop(queued);
     }
 }

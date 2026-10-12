@@ -107,18 +107,16 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         first.message_id
     };
     if queued {
-        harness
-            .runtime
-            .restore_queued_messages(
-                &session_id,
-                vec![super::super::core::QueuedMessage {
-                    options: Default::default(),
-                    message: "queued message".into(),
-                    model_id: ModelId::new("old-model"),
-                    provider_id: ProviderId::new("old-provider"),
-                }],
-            )
-            .await;
+        super::harness::enqueue(
+            &harness.runtime,
+            &session_id,
+            vec![super::harness::queued(
+                "queued message".into(),
+                ModelId::new("old-model"),
+                ProviderId::new("old-provider"),
+            )],
+        )
+        .await;
     }
     let outcome = if wait_for_preparation {
         let preparation = harness

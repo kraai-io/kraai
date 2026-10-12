@@ -70,15 +70,24 @@ pub trait MessageStore: Send + Sync {
 
     async fn save_linked(
         &self,
-        messages: &[Message],
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
+        request: LinkRequest<'_>,
         sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
-        for message in messages {
+        for message in request.messages {
             self.save(message).await?;
         }
-        sessions.save_if_tip_matches(session, expected_tip).await
+        if !sessions
+            .save_if_tip_matches(request.session, request.expected_tip)
+            .await?
+        {
+            return Ok(false);
+        }
+        if let Some(through) = request.consumed_queue_through {
+            sessions
+                .remove_queued_messages(&request.session.id, through)
+                .await?;
+        }
+        Ok(true)
     }
 
     /// Delete a message
@@ -210,14 +219,13 @@ impl MessageStore for SqliteMessageStore {
 
     async fn save_linked(
         &self,
-        messages: &[Message],
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
+        request: LinkRequest<'_>,
         _sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
-        let messages = messages.to_vec();
-        let session = session.clone();
-        let expected = expected_tip.cloned();
+        let messages = request.messages.to_vec();
+        let session = request.session.clone();
+        let expected = request.expected_tip.cloned();
+        let consumed_queue_through = request.consumed_queue_through;
         self.database
             .transaction(move |transaction, leases| {
                 assert_owner(transaction, leases, &session.id)?;
@@ -246,6 +254,9 @@ impl MessageStore for SqliteMessageStore {
                     )?;
                 }
                 crate::sessions::save_session(transaction, &session)?;
+                if let Some(through) = consumed_queue_through {
+                    crate::queue::consume_queued_messages(transaction, &session.id, through)?;
+                }
                 Ok(true)
             })
             .await
@@ -276,4 +287,12 @@ impl MessageStore for SqliteMessageStore {
             })
             .await
     }
+}
+
+/// Messages to link after `expected_tip`, optionally consuming queued messages in the same step.
+pub struct LinkRequest<'a> {
+    pub messages: &'a [Message],
+    pub session: &'a SessionMeta,
+    pub expected_tip: Option<&'a MessageId>,
+    pub consumed_queue_through: Option<i64>,
 }

@@ -35,12 +35,7 @@ impl RuntimeCore {
         let snapshot_guard = self.session_state_barrier.write().await;
         let pending_script = self.get_pending_script(session_id).await;
         let executing_script = self.has_active_script_tasks(session_id).await;
-        let queued_messages = self
-            .queued_messages
-            .lock()
-            .await
-            .get(session_id)
-            .map_or(0, std::collections::VecDeque::len);
+        let queued_messages = self.session_store.queued_messages(session_id).await?.len();
         let active_stream = self.active_streams.lock().await.contains_key(session_id);
 
         let agent = self.agent_manager.read().await;
@@ -370,7 +365,6 @@ impl RuntimeCore {
                 }
                 drop(agent);
                 self.stream_tasks.wait_session(&session_id).await;
-                self.queued_messages.lock().await.remove(&session_id);
                 let result = self
                     .agent_manager
                     .write()

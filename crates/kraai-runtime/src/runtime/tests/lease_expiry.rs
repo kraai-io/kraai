@@ -13,18 +13,16 @@ async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -
         .await
         .expect("observer fixture");
     let session = create_session_with_profile(&observer.handle, "test-profile").await?;
-    observer
-        .runtime
-        .restore_queued_messages(
-            &session,
-            vec![super::super::core::QueuedMessage {
-                options: Default::default(),
-                message: "pending input".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("mock"),
-            }],
-        )
-        .await;
+    super::harness::enqueue(
+        &observer.runtime,
+        &session,
+        vec![super::harness::queued(
+            "pending input".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
     let owner = kraai_persistence::Persistence::open(&observer.data_dir).await?;
     owner.sessions().claim_turn(&session).await?;
     assert!(
@@ -39,10 +37,10 @@ async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -
             .await
             .is_err()
     );
-    let queued = observer.runtime.take_queued_messages(&session).await;
+    let queued = super::harness::queue(&observer.runtime, &session).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(
-        queued.first().expect("queued input").message,
+        queued.first().expect("queued input").content,
         "pending input".into()
     );
     assert!(owner.sessions().owns_turn(&session).await?);

@@ -136,7 +136,13 @@ impl AgentManager {
         });
         let mut appended = self
             .conversation_store
-            .append_messages(session_id, input.tip.as_ref(), messages, input.title)
+            .append_messages(
+                session_id,
+                input.tip.as_ref(),
+                messages,
+                input.title,
+                input.consumed_queue_through,
+            )
             .await?;
         let message = appended
             .messages

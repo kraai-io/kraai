@@ -5,6 +5,7 @@ pub(super) struct TurnInput {
     pub(super) tip: Option<MessageId>,
     pub(super) users: Vec<kraai_persistence::NewMessage>,
     pub(super) title: Option<String>,
+    pub(super) consumed_queue_through: Option<i64>,
 }
 
 impl AgentManager {
@@ -30,13 +31,14 @@ impl AgentManager {
         &mut self,
         session_id: &SessionId,
     ) -> Result<Option<PendingStreamRequest>> {
-        self.prepare_turn_stream(session_id, Vec::new()).await
+        self.prepare_turn_stream(session_id, Vec::new(), None).await
     }
 
     pub(super) async fn prepare_turn_stream(
         &mut self,
         session_id: &SessionId,
         users: Vec<kraai_types::MessageContent>,
+        consumed_queue_through: Option<i64>,
     ) -> Result<Option<PendingStreamRequest>> {
         let Some(state) = self.session_states.get(session_id) else {
             return Ok(None);
@@ -88,6 +90,7 @@ impl AgentManager {
                 })
                 .collect(),
             tip,
+            consumed_queue_through,
         };
         let mut parent_id = input.tip.clone();
         let pending_users: Vec<_> = input

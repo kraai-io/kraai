@@ -333,7 +333,6 @@ impl RuntimeBuilder {
             stream_tasks: Default::default(),
             active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            queued_messages: Arc::new(Mutex::new(std::collections::HashMap::new())),
             session_state_barrier: Arc::new(RwLock::new(())),
             stopping: Arc::default(),
             openai_codex_auth,

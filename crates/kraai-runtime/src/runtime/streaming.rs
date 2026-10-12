@@ -99,15 +99,17 @@ impl RuntimeCore {
         }
         let mut retried = false;
         loop {
-            let queued_messages = self.take_queued_messages(&session_id).await;
+            let queued_messages = self
+                .session_store
+                .queued_messages(&session_id)
+                .await
+                .map_err(RuntimeError::from_report)?;
             let intercepted = !queued_messages.is_empty();
             let streaming = {
                 let agent = self.agent_manager.read().await;
                 agent.session_has_active_stream(&session_id).await
             };
             if streaming {
-                self.restore_queued_messages(&session_id, queued_messages)
-                    .await;
                 return Ok(ContinueSessionOutcome::NothingToContinue);
             }
             let ownership = async {
@@ -122,34 +124,28 @@ impl RuntimeCore {
             }
             .await;
             if let Err(error) = ownership {
-                self.restore_queued_messages(&session_id, queued_messages)
-                    .await;
                 return Err(RuntimeError::from_report(error));
             }
 
             let continuation = {
                 let mut agent = self.agent_manager.write().await;
-                let selected_model = selection.clone().or_else(|| {
-                    queued_messages.last().map(|message| {
-                        (
-                            message.model_id.clone(),
-                            message.provider_id.clone(),
-                            message.options.clone(),
-                        )
-                    })
-                });
-                let result = if let Some((model_id, provider_id, options)) = selected_model {
-                    agent
-                        .prepare_messages_stream(
-                            &session_id,
-                            queued_messages
-                                .iter()
-                                .map(|message| message.message.clone())
-                                .collect(),
-                            model_id,
+                let selected_model = selection
+                    .clone()
+                    .map(
+                        |(model_id, provider_id, options)| kraai_types::ModelSelection {
                             provider_id,
+                            model_id,
                             options,
-                        )
+                        },
+                    )
+                    .or_else(|| {
+                        queued_messages
+                            .last()
+                            .map(|entry| entry.message.selection.clone())
+                    });
+                let result = if let Some(selected_model) = selected_model {
+                    agent
+                        .prepare_queued_stream(&session_id, queued_messages, selected_model)
                         .await
                 } else {
                     agent.prepare_continuation_stream(&session_id).await
@@ -175,14 +171,10 @@ impl RuntimeCore {
                     return Ok(ContinueSessionOutcome::Started);
                 }
                 Ok(None) => {
-                    self.restore_queued_messages(&session_id, queued_messages)
-                        .await;
                     self.finish_turn(&session_id).await;
                     return Ok(ContinueSessionOutcome::NothingToContinue);
                 }
                 Err(error) => {
-                    self.restore_queued_messages(&session_id, queued_messages)
-                        .await;
                     if intercepted && !retried {
                         retried = true;
                         continue;
@@ -662,7 +654,12 @@ impl RuntimeCore {
         {
             return Ok(false);
         }
-        let discarded = discard_queued && !self.take_queued_messages(&session_id).await.is_empty();
+        let discarded = discard_queued
+            && self.session_store.owns_turn(&session_id).await?
+            && self
+                .session_store
+                .clear_queued_messages(&session_id)
+                .await?;
         if self.cancel_pending_script(&session_id).await? {
             return Ok(true);
         }

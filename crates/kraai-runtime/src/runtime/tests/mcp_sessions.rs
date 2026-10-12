@@ -136,28 +136,23 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
     drop(manager);
     assert_eq!(busy.unwrap_err().kind, RuntimeErrorKind::Conflict);
     drop(preparation);
-    harness.runtime.queued_messages.lock().await.insert(
-        session.clone(),
-        [super::super::core::QueuedMessage {
-            options: Default::default(),
-            message: "queued".into(),
-            model_id: kraai_types::ModelId::new("mock-model"),
-            provider_id: kraai_types::ProviderId::new("mock"),
-        }]
-        .into(),
-    );
+    super::harness::enqueue(
+        &harness.runtime,
+        &session,
+        [super::harness::queued(
+            "queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
     let busy = harness
         .handle
         .set_session_mcp_servers(session.clone(), config("attached"))
         .await
         .unwrap_err();
     assert_eq!(busy.kind, RuntimeErrorKind::Conflict);
-    harness
-        .runtime
-        .queued_messages
-        .lock()
-        .await
-        .remove(&session);
+    super::harness::take_queue(&harness.runtime, &session).await;
     harness
         .handle
         .set_session_mcp_servers(session.clone(), config("attached"))

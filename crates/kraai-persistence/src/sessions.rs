@@ -60,6 +60,8 @@ pub trait SessionStore: Send + Sync {
         expected_tip: Option<&MessageId>,
     ) -> Result<bool>;
 
+    async fn remove_queued_messages(&self, session_id: &SessionId, through: i64) -> Result<()>;
+
     async fn lock_message_mutation(&self, id: &MessageId) -> OwnedMutexGuard<()>;
 
     async fn delete_message_if_unreferenced(
@@ -266,12 +268,23 @@ impl SessionStore for SqliteSessionStore {
                 statement.query_map([id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
             };
             transaction.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+            transaction.execute("DELETE FROM queued_messages WHERE session_id = ?1", [id])?;
             for message in message_ids { delete_message_records(transaction, leases, &message)?; }
             transaction.execute("DELETE FROM execution_output WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [id])?;
             transaction.execute("DELETE FROM execution_sources WHERE execution_id IN (SELECT id FROM records WHERE kind = 'execution' AND session_id = ?1)", [id])?;
             transaction.execute("DELETE FROM records WHERE session_id = ?1 AND kind NOT IN ('message', 'compaction')", [id])?;
             Ok(())
         }).await
+    }
+
+    async fn remove_queued_messages(&self, session_id: &SessionId, through: i64) -> Result<()> {
+        let session = session_id.clone();
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                crate::queue::consume_queued_messages(transaction, &session, through)
+            })
+            .await
     }
 
     async fn lock_message_mutation(&self, id: &MessageId) -> OwnedMutexGuard<()> {

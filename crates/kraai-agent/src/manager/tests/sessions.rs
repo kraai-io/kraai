@@ -413,6 +413,7 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
                 tip: Some(stable_tip.clone()),
                 users: Vec::new(),
                 title: None,
+                consumed_queue_through: None,
             },
             StreamId::new("call-1"),
             None,

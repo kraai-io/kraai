@@ -22,12 +22,7 @@ impl RuntimeCore {
                 .await
                 .contains_key(session_id)
             || self.active_streams.lock().await.contains_key(session_id)
-            || self
-                .queued_messages
-                .lock()
-                .await
-                .get(session_id)
-                .is_some_and(|queue| !queue.is_empty())
+            || self.session_store.has_queued_messages(session_id).await?
         {
             return Err(eyre!(DomainError::conflict(
                 "Cannot change MCP servers while the session has pending work"

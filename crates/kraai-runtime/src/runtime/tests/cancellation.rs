@@ -312,23 +312,21 @@ async fn cancel_stream_preserves_queued_messages() -> Result<()> {
         .await
         .expect("runtime fixture");
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
-    harness
-        .runtime
-        .restore_queued_messages(
-            &session,
-            vec![crate::runtime::core::QueuedMessage {
-                options: Default::default(),
-                message: "keep queued".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("mock"),
-            }],
-        )
-        .await;
+    super::harness::enqueue(
+        &harness.runtime,
+        &session,
+        vec![super::harness::queued(
+            "keep queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
     assert!(!harness.handle.cancel_stream(session.clone()).await?);
-    let queued = harness.runtime.take_queued_messages(&session).await;
+    let queued = super::harness::take_queue(&harness.runtime, &session).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(
-        queued.first().expect("queued message").message.as_text(),
+        queued.first().expect("queued message").content.as_text(),
         Some("keep queued")
     );
     harness.shutdown().await;

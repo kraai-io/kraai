@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +7,7 @@ use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
 use kraai_provider_openai_codex::OpenAiCodexAuthController;
-use kraai_types::{MessageId, ModelId, ProviderId, SessionId};
+use kraai_types::{MessageId, SessionId};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -39,7 +39,6 @@ pub(crate) struct RuntimeCore {
     pub(crate) stream_tasks: Arc<super::stream_tasks::StreamTasks>,
     pub(crate) active_script_tasks: Arc<Mutex<HashMap<SessionId, ActiveScriptTask>>>,
     pub(crate) pending_script_approvals: Arc<Mutex<HashMap<SessionId, PendingScriptApproval>>>,
-    pub(crate) queued_messages: Arc<Mutex<HashMap<SessionId, VecDeque<QueuedMessage>>>>,
     /// Separates coherent snapshot reads from state mutations and their corresponding events.
     pub(crate) session_state_barrier: Arc<RwLock<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
@@ -67,14 +66,6 @@ pub(crate) struct ActiveScriptTask {
     pub(crate) cancellation: CancellationToken,
     pub(crate) completion: CancellationToken,
     pub(crate) join_handle: JoinHandle<()>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct QueuedMessage {
-    pub(crate) message: kraai_types::MessageContent,
-    pub(crate) model_id: ModelId,
-    pub(crate) provider_id: ProviderId,
-    pub(crate) options: kraai_types::ModelOptionValues,
 }
 
 impl RuntimeCore {

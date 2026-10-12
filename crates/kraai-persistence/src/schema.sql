@@ -39,4 +39,10 @@ CREATE TABLE IF NOT EXISTS stream_deltas (
     data TEXT NOT NULL,
     PRIMARY KEY (message_id, sequence)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS queued_messages (
+    session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (session_id, sequence)
+) WITHOUT ROWID;
 PRAGMA user_version = 2;

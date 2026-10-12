@@ -254,13 +254,9 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         .expect_err("invalid queued settings are rejected");
     assert_eq!(error.kind, RuntimeErrorKind::InvalidArgument);
     assert!(
-        harness
-            .runtime
-            .queued_messages
-            .lock()
+        super::harness::queue(&harness.runtime, &session)
             .await
-            .get(&session)
-            .is_none()
+            .is_empty()
     );
     assert_eq!(
         serde_json::to_value(before)?,
@@ -283,14 +279,11 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         SubmitMessageOutcome::Queued { position: 1 }
     );
     assert_eq!(
-        harness
-            .runtime
-            .queued_messages
-            .lock()
+        super::harness::queue(&harness.runtime, &session)
             .await
-            .get(&session)
-            .and_then(|queue| queue.front())
+            .first()
             .expect("queued snapshot")
+            .selection
             .options,
         queued
     );

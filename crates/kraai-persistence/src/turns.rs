@@ -57,6 +57,7 @@ impl ConversationStore {
                     generation: request.generation,
                 }],
                 request.title_if_first_message,
+                None,
             )
             .await?;
         Ok(AppendedMessage {
@@ -77,6 +78,7 @@ impl ConversationStore {
         expected_tip: Option<&MessageId>,
         messages: Vec<NewMessage>,
         title_if_first_message: Option<String>,
+        consumed_queue_through: Option<i64>,
     ) -> Result<AppendedMessages> {
         let mut session = self
             .session_store
@@ -128,9 +130,12 @@ impl ConversationStore {
         if !self
             .message_store
             .save_linked(
-                &messages,
-                &session,
-                previous_tip.as_ref(),
+                crate::LinkRequest {
+                    messages: &messages,
+                    session: &session,
+                    expected_tip: previous_tip.as_ref(),
+                    consumed_queue_through,
+                },
                 self.session_store.clone(),
             )
             .await?

@@ -16,20 +16,18 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
         .expect("runtime fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let runtime = &harness.runtime;
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            ["one", "two"]
-                .into_iter()
-                .map(|message| crate::runtime::core::QueuedMessage {
-                    options: Default::default(),
-                    message: message.into(),
-                    model_id: kraai_types::ModelId::new("mock-model"),
-                    provider_id: kraai_types::ProviderId::new("missing-provider"),
-                })
-                .collect(),
-        )
-        .await;
+    super::harness::enqueue(
+        runtime,
+        &session_id,
+        ["one", "two"].into_iter().map(|message| {
+            super::harness::queued(
+                message.into(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("missing-provider"),
+            )
+        }),
+    )
+    .await;
     tokio::time::timeout(
         Duration::from_secs(1),
         runtime.handle_start_queued_messages(session_id.clone()),
@@ -42,11 +40,11 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
             .await
             .is_turn_active(&session_id)
     );
-    let mut messages = runtime.take_queued_messages(&session_id).await;
+    let mut messages = super::harness::take_queue(runtime, &session_id).await;
     assert_eq!(
         messages
             .iter()
-            .map(|message| message.message.as_text().unwrap_or(""))
+            .map(|message| message.content.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
@@ -60,15 +58,19 @@ async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Res
             .is_none()
     );
     for message in &mut messages {
-        message.provider_id = kraai_types::ProviderId::new("mock");
+        message.selection.provider_id = kraai_types::ProviderId::new("mock");
     }
-    runtime.restore_queued_messages(&session_id, messages).await;
+    super::harness::enqueue(runtime, &session_id, messages).await;
     tokio::time::timeout(
         Duration::from_secs(1),
         runtime.handle_start_queued_messages(session_id.clone()),
     )
     .await?;
-    assert!(runtime.take_queued_messages(&session_id).await.is_empty());
+    assert!(
+        super::harness::take_queue(runtime, &session_id)
+            .await
+            .is_empty()
+    );
     harness.shutdown().await;
     Ok(())
 }
@@ -92,17 +94,16 @@ async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() 
     tokio::pin!(snapshot);
     assert!(poll!(&mut snapshot).is_pending());
 
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            vec![crate::runtime::core::QueuedMessage {
-                options: Default::default(),
-                message: "queued".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("missing-provider"),
-            }],
-        )
-        .await;
+    super::harness::enqueue(
+        &runtime,
+        &session_id,
+        vec![super::harness::queued(
+            "queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("missing-provider"),
+        )],
+    )
+    .await;
 
     // A failed continuation clears turn state and schedules a drain under the
     // caller's barrier. It must finish even though no command slot can free up.
@@ -183,15 +184,14 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut runtime = harness.runtime.clone();
     runtime.queue_drains = Arc::default();
-    let message = |text: &str| crate::runtime::core::QueuedMessage {
-        options: Default::default(),
-        message: text.into(),
-        model_id: kraai_types::ModelId::new("mock-model"),
-        provider_id: kraai_types::ProviderId::new("mock"),
+    let message = |text: &str| {
+        super::harness::queued(
+            text.into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
     };
-    runtime
-        .restore_queued_messages(&session_id, vec![message("first")])
-        .await;
+    super::harness::enqueue(&runtime, &session_id, vec![message("first")]).await;
     let agent = runtime.agent_manager.write().await;
     let first = runtime.start_continuation(
         session_id.clone(),
@@ -203,8 +203,9 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
     assert!(poll!(&mut first).is_pending());
     assert_eq!(
         runtime
-            .enqueue_message(&session_id, message("second"))
-            .await,
+            .session_store
+            .enqueue_message(&session_id, &message("second"))
+            .await?,
         2
     );
     assert!(matches!(
@@ -227,11 +228,11 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
     drop(agent);
     assert!(first.await.is_err());
     assert!(!runtime.session_preparations.is_active(&session_id));
-    let restored = runtime.take_queued_messages(&session_id).await;
+    let restored = super::harness::take_queue(&runtime, &session_id).await;
     assert_eq!(
         restored
             .iter()
-            .map(|m| m.message.as_text().unwrap_or(""))
+            .map(|m| m.content.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["first", "second"]
     );
@@ -317,10 +318,10 @@ async fn preparation_starting_during_admission_queues_the_message() -> Result<()
         send.await?,
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
-    let queued = runtime.take_queued_messages(&session_id).await;
+    let queued = super::harness::take_queue(&runtime, &session_id).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(
-        queued.first().expect("queued message").message,
+        queued.first().expect("queued message").content,
         "new message".into()
     );
     assert!(
@@ -369,17 +370,16 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
         drop(agent);
         (request.message_id, turn.workspace_dir.join("pending"))
     };
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            vec![crate::runtime::core::QueuedMessage {
-                options: Default::default(),
-                message: "queued".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("missing"),
-            }],
-        )
-        .await;
+    super::harness::enqueue(
+        &runtime,
+        &session_id,
+        vec![super::harness::queued(
+            "queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("missing"),
+        )],
+    )
+    .await;
     assert!(
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -407,12 +407,88 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
             .await?,
         Some((workspace, true))
     );
-    let queued = runtime.take_queued_messages(&session_id).await;
+    let queued = super::harness::take_queue(&runtime, &session_id).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(
-        queued.first().expect("restored message").message,
+        queued.first().expect("restored message").content,
         "queued".into()
     );
     harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<()> {
+    let previous = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("previous runtime");
+    let session_id = create_session_with_profile(&previous.handle, "test-profile").await?;
+    super::harness::enqueue(
+        &previous.runtime,
+        &session_id,
+        [super::harness::queued(
+            "queued before restart".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
+    let restarted = RuntimeTestHarness::new_shared(
+        vec![vec![super::harness::ScriptedChunk::plain("both handled")]],
+        previous.data_dir.clone(),
+    )
+    .await
+    .expect("restarted runtime");
+    let snapshot = restarted
+        .runtime
+        .build_session_snapshot(&session_id)
+        .await?;
+    assert_eq!(snapshot.queued_messages, 1);
+    assert!(!snapshot.session.is_running);
+    assert!(snapshot.history.is_empty());
+
+    assert_eq!(
+        restarted
+            .handle
+            .send_message(
+                session_id.clone(),
+                "sent after restart".into(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default(),
+            )
+            .await?,
+        crate::SubmitMessageOutcome::Queued { position: 2 }
+    );
+    restarted
+        .events
+        .wait_for("queued turn", |events| {
+            events.iter().any(|event| {
+                matches!(event, crate::Event::TurnCompleted { session_id: id } if id == &session_id)
+            })
+        })
+        .await;
+    let users: Vec<_> = restarted
+        .handle
+        .get_chat_history(session_id.clone())
+        .await?
+        .into_values()
+        .filter_map(|message| match message.content {
+            kraai_types::ConversationItem::User { content } => {
+                content.as_text().map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users.len(), 2);
+    assert!(users.contains(&"queued before restart".to_string()));
+    assert!(users.contains(&"sent after restart".to_string()));
+    assert!(
+        super::harness::queue(&restarted.runtime, &session_id)
+            .await
+            .is_empty()
+    );
+    restarted.shutdown().await;
+    previous.shutdown().await;
     Ok(())
 }

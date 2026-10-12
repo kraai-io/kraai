@@ -114,9 +114,9 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
         result,
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
-    let queued = harness.runtime.take_queued_messages(&session_id).await;
+    let queued = super::harness::take_queue(&harness.runtime, &session_id).await;
     assert_eq!(
-        queued.first().map(|message| &message.message),
+        queued.first().map(|message| &message.content),
         Some(&content)
     );
     drop(preparation);

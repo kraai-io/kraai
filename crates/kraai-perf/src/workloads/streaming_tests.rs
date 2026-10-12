@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use kraai_persistence::{
-    ConversationSnapshot, MessageStore, SessionMeta, SessionStore, SqliteDatabase,
-    SqliteMessageStore,
+    ConversationSnapshot, MessageStore, SessionStore, SqliteDatabase, SqliteMessageStore,
 };
 use kraai_types::{Message, SessionId};
 use tokio::sync::Mutex;
@@ -63,14 +62,10 @@ impl MessageStore for ObservedSnapshots {
 
     async fn save_linked(
         &self,
-        messages: &[Message],
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
+        request: kraai_persistence::LinkRequest<'_>,
         sessions: Arc<dyn SessionStore>,
     ) -> Result<bool> {
-        self.inner
-            .save_linked(messages, session, expected_tip, sessions)
-            .await
+        self.inner.save_linked(request, sessions).await
     }
 
     async fn delete(&self, id: &MessageId) -> Result<()> {

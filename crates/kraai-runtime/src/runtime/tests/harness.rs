@@ -433,7 +433,6 @@ path = \"inherit\"\n",
             stream_tasks: Default::default(),
             active_script_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_script_approvals: Arc::new(Mutex::new(HashMap::new())),
-            queued_messages: Arc::new(Mutex::new(HashMap::new())),
             session_state_barrier: Arc::new(RwLock::new(())),
             stopping: Arc::default(),
             openai_codex_auth,
@@ -515,4 +514,82 @@ pub(super) async fn create_session_with_profile(
         .set_session_profile(session_id.clone(), profile_id.to_string())
         .await?;
     Ok(session_id)
+}
+
+pub(super) fn queued(
+    content: kraai_types::MessageContent,
+    model_id: ModelId,
+    provider_id: ProviderId,
+) -> kraai_persistence::QueuedMessage {
+    kraai_persistence::QueuedMessage {
+        content,
+        selection: kraai_types::ModelSelection {
+            provider_id,
+            model_id,
+            options: Default::default(),
+        },
+    }
+}
+
+async fn with_turn<T>(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+    operation: impl AsyncFnOnce(&kraai_persistence::SqliteSessionStore) -> T,
+) -> T {
+    let store = &runtime.session_store;
+    let claimed = !store.owns_turn(session).await.expect("session ownership");
+    if claimed {
+        store.claim_turn(session).await.expect("claim session");
+    }
+    let result = operation(store).await;
+    if claimed {
+        store.release_turn(session).await.expect("release session");
+    }
+    result
+}
+
+/// Queues messages as this runtime would, claiming the session only for the write.
+pub(super) async fn enqueue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+    messages: impl IntoIterator<Item = kraai_persistence::QueuedMessage>,
+) {
+    with_turn(runtime, session, async |store| {
+        for message in messages {
+            store
+                .enqueue_message(session, &message)
+                .await
+                .expect("enqueue message");
+        }
+    })
+    .await;
+}
+
+pub(super) async fn queue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+) -> Vec<kraai_persistence::QueuedMessage> {
+    runtime
+        .session_store
+        .queued_messages(session)
+        .await
+        .expect("queued messages")
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
+}
+
+pub(super) async fn take_queue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+) -> Vec<kraai_persistence::QueuedMessage> {
+    let messages = queue(runtime, session).await;
+    with_turn(runtime, session, async |store| {
+        store
+            .clear_queued_messages(session)
+            .await
+            .expect("clear queue");
+    })
+    .await;
+    messages
 }

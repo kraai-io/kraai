@@ -442,7 +442,11 @@ async fn handoff_defers_queue_drain_without_blocking_another_session() -> Result
         })
         })
         .await;
-    assert!(runtime.take_queued_messages(&session_id).await.is_empty());
+    assert!(
+        super::harness::take_queue(&runtime, &session_id)
+            .await
+            .is_empty()
+    );
     harness.shutdown().await;
     Ok(())
 }
