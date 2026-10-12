@@ -16,7 +16,7 @@ const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
     messages: &'a [&'a Message],
-    scroll: u16,
+    scroll: usize,
     auto_scroll: bool,
 }
 
@@ -33,7 +33,7 @@ struct RenderedSpan {
 
 impl<'a> ChatHistory<'a> {
     #[cfg(test)]
-    pub fn new(messages: &'a [&'a Message], scroll: u16, auto_scroll: bool) -> Self {
+    pub fn new(messages: &'a [&'a Message], scroll: usize, auto_scroll: bool) -> Self {
         Self {
             messages,
             scroll,
@@ -446,16 +446,16 @@ impl<'a> ChatHistory<'a> {
         lines: &[RenderedLine],
         area: Rect,
         buf: &mut Buffer,
-        scroll: u16,
+        scroll: usize,
         auto_scroll: bool,
     ) {
         if area.width == 0 || area.height == 0 || lines.is_empty() {
             return;
         }
 
-        let scroll = Self::resolve_scroll(lines.len() as u16, area.height, scroll, auto_scroll);
+        let scroll = Self::resolve_scroll(lines.len(), area.height, scroll, auto_scroll);
 
-        let start_idx = scroll as usize;
+        let start_idx = scroll;
         let end_idx = start_idx
             .saturating_add(area.height as usize)
             .min(lines.len());
@@ -473,10 +473,10 @@ impl<'a> ChatHistory<'a> {
 
     pub(crate) fn render_prebuilt_sections(
         sections: &[Arc<Vec<RenderedLine>>],
-        total_lines: u16,
+        total_lines: usize,
         area: Rect,
         buf: &mut Buffer,
-        scroll: u16,
+        scroll: usize,
         auto_scroll: bool,
     ) {
         if area.width == 0 || area.height == 0 || total_lines == 0 {
@@ -485,7 +485,7 @@ impl<'a> ChatHistory<'a> {
 
         let scroll = Self::resolve_scroll(total_lines, area.height, scroll, auto_scroll);
 
-        let start_idx = scroll as usize;
+        let start_idx = scroll;
         let mut consumed = 0usize;
         let mut visual_idx = 0usize;
 
@@ -516,12 +516,12 @@ impl<'a> ChatHistory<'a> {
     }
 
     pub(crate) fn resolve_scroll(
-        total_lines: u16,
+        total_lines: usize,
         viewport_height: u16,
-        scroll: u16,
+        scroll: usize,
         auto_scroll: bool,
-    ) -> u16 {
-        let max_scroll = total_lines.saturating_sub(viewport_height);
+    ) -> usize {
+        let max_scroll = total_lines.saturating_sub(usize::from(viewport_height));
         if auto_scroll {
             max_scroll
         } else {

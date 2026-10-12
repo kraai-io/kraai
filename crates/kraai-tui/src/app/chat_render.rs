@@ -11,9 +11,11 @@ use super::state::AppState;
 use super::types::UiMode;
 
 impl AppState {
-    pub(super) fn chat_max_scroll(&self) -> u16 {
+    pub(super) fn chat_max_scroll(&self) -> usize {
         let cache = self.chat_render_cache.borrow();
-        cache.total_lines.saturating_sub(self.chat_viewport_height)
+        cache
+            .total_lines
+            .saturating_sub(usize::from(self.chat_viewport_height))
     }
 
     pub(super) fn rendered_messages(&self) -> Vec<Cow<'_, Message>> {
@@ -81,7 +83,7 @@ impl AppState {
 
         let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
         let mut sections = Vec::new();
-        let mut total_lines: u16 = 0;
+        let mut total_lines = 0_usize;
         let mut execution_offsets = HashMap::new();
 
         let projected: Vec<_> = rendered_messages
@@ -141,7 +143,7 @@ impl AppState {
                     .unwrap_or(false);
                 execution_offsets.insert(
                     call_id.to_string(),
-                    total_lines.saturating_add(u16::from(!sections.is_empty())),
+                    total_lines.saturating_add(usize::from(!sections.is_empty())),
                 );
                 let source = sources.get(call_id.as_str()).copied();
                 let selected = self.selected_execution.as_deref() == Some(call_id.as_str());
@@ -180,7 +182,7 @@ impl AppState {
                 total_lines = total_lines.saturating_add(1);
             }
 
-            total_lines = total_lines.saturating_add(lines.len().min(u16::MAX as usize) as u16);
+            total_lines = total_lines.saturating_add(lines.len());
             sections.push(Arc::clone(&lines));
             next_entries.insert(key, CachedMessageRender { fingerprint, lines });
         }
@@ -196,11 +198,11 @@ impl AppState {
 
 #[derive(Default)]
 pub(super) struct ChatRenderCache {
-    pub(super) execution_offsets: HashMap<String, u16>,
+    pub(super) execution_offsets: HashMap<String, usize>,
     pub(super) width: u16,
     pub(super) epoch: u64,
     pub(super) sections: Vec<Arc<Vec<RenderedLine>>>,
-    pub(super) total_lines: u16,
+    pub(super) total_lines: usize,
     message_cache: HashMap<String, CachedMessageRender>,
     separator: Option<Arc<Vec<RenderedLine>>>,
 }

@@ -48,7 +48,7 @@ pub(super) struct AppState {
     pub(super) chat_epoch: u64,
     pub(super) chat_render_cache: RefCell<ChatRenderCache>,
     pub(super) chat_viewport_height: u16,
-    pub(super) scroll: u16,
+    pub(super) scroll: usize,
     pub(super) auto_scroll: bool,
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,

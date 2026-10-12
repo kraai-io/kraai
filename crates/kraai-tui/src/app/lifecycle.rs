@@ -9,7 +9,7 @@ impl App {
         self.clamp_chat_scroll();
     }
 
-    pub(super) fn effective_chat_scroll(&self) -> u16 {
+    pub(super) fn effective_chat_scroll(&self) -> usize {
         let max_scroll = self.state.chat_max_scroll();
         if self.state.auto_scroll {
             max_scroll
@@ -26,7 +26,7 @@ impl App {
         let max_scroll = self.state.chat_max_scroll();
         let next_scroll = self
             .effective_chat_scroll()
-            .saturating_add_signed(delta)
+            .saturating_add_signed(isize::from(delta))
             .min(max_scroll);
         self.state.scroll = next_scroll;
         self.state.auto_scroll = delta > 0 && next_scroll == max_scroll;
