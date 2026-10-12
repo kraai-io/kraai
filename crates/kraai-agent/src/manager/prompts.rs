@@ -47,7 +47,7 @@ impl AgentManager {
         let mcp = if profile
             .commands
             .iter()
-            .any(|id| id == kraai_command_catalog::MCP.id)
+            .any(|id| id == kraai_commands::mcp::METADATA.id)
         {
             self.session_mcp(session_id).prompt().await
         } else {
@@ -122,7 +122,7 @@ fn render_command_prompt(command_ids: &[String]) -> Result<String> {
         "# Kraai Commands\nThese commands return Nushell records.",
     )];
     for command_id in command_ids {
-        let metadata = kraai_command_catalog::command_metadata(command_id)
+        let metadata = kraai_commands::command_metadata(command_id)
             .ok_or_else(|| eyre!("Profile references unavailable command: {command_id}"))?;
         let mut section = format!(
             "## {}\n{}\n\nSignature: `{}`",

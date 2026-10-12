@@ -2,17 +2,10 @@
 members = [
   "crates/kraai-io",
   "crates/kraai-mcp",
-  "crates/commands/kraai-command-mcp",
   "crates/kraai-acp",
   "crates/kraai-agent",
   "crates/kraai-web",
-  "crates/commands/kraai-command-web-search",
-  "crates/commands/kraai-command-view-image",
-  "crates/commands/kraai-command-open-files",
-  "crates/commands/kraai-command-close-files",
-  "crates/commands/kraai-command-edit-file",
-  "crates/kraai-command-catalog",
-  "crates/kraai-command-core",
+  "crates/kraai-commands",
   "crates/kraai-nushell-runtime",
   "crates/kraai-sandbox",
   "crates/kraai-script-protocol",
@@ -49,14 +42,7 @@ strip = false
 [workspace.dependencies]
 agent-client-protocol = "2.2.0"
 kraai-agent = { path = "crates/kraai-agent" }
-kraai-command-catalog = { path = "crates/kraai-command-catalog" }
-kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
-kraai-command-core = { path = "crates/kraai-command-core" }
-kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
-kraai-command-mcp = { path = "crates/commands/kraai-command-mcp" }
-kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
-kraai-command-view-image = { path = "crates/commands/kraai-command-view-image" }
-kraai-command-web-search = { path = "crates/commands/kraai-command-web-search" }
+kraai-commands = { path = "crates/kraai-commands" }
 kraai-io = { path = "crates/kraai-io" }
 kraai-mcp = { path = "crates/kraai-mcp" }
 kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }

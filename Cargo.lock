@@ -3234,7 +3234,7 @@ dependencies = [
  "color-eyre",
  "directories",
  "futures",
- "kraai-command-catalog",
+ "kraai-commands",
  "kraai-io",
  "kraai-mcp",
  "kraai-persistence",
@@ -3253,92 +3253,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "kraai-command-catalog"
-version = "0.1.0"
-dependencies = [
- "kraai-types",
-]
-
-[[package]]
-name = "kraai-command-close-files"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-core"
-version = "0.1.0"
-dependencies = [
- "kraai-types",
- "nu-protocol",
- "serde_json",
-]
-
-[[package]]
-name = "kraai-command-edit-file"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-mcp"
+name = "kraai-commands"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "nu-engine",
- "nu-protocol",
- "serde_json",
-]
-
-[[package]]
-name = "kraai-command-open-files"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-view-image"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
  "kraai-io",
  "kraai-types",
+ "kraai-workspace-fs",
  "nix 0.31.3",
  "nu-engine",
  "nu-protocol",
+ "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "kraai-command-web-search"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "nu-engine",
- "nu-protocol",
 ]
 
 [[package]]
@@ -3420,14 +3346,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "hmac",
- "kraai-command-catalog",
- "kraai-command-close-files",
- "kraai-command-core",
- "kraai-command-edit-file",
- "kraai-command-mcp",
- "kraai-command-open-files",
- "kraai-command-view-image",
- "kraai-command-web-search",
+ "kraai-commands",
  "kraai-io",
  "kraai-mcp",
  "kraai-sandbox",
@@ -3574,7 +3493,7 @@ dependencies = [
  "futures",
  "image",
  "kraai-agent",
- "kraai-command-catalog",
+ "kraai-commands",
  "kraai-io",
  "kraai-mcp",
  "kraai-nushell-runtime",

@@ -10,10 +10,10 @@ async fn documented_edits_produce_the_shown_files()
         "enabled = true\nretries = 1\n",
     )];
     assert_eq!(
-        kraai_command_catalog::EDIT_FILE.examples.len(),
+        kraai_commands::edit_file::METADATA.examples.len(),
         fixtures.len()
     );
-    for (example, (path, before, after)) in kraai_command_catalog::EDIT_FILE
+    for (example, (path, before, after)) in kraai_commands::edit_file::METADATA
         .examples
         .iter()
         .zip(fixtures)

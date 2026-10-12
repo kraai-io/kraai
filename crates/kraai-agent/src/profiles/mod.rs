@@ -122,7 +122,7 @@ pub fn resolve_profiles(
 }
 
 pub fn available_command_ids() -> HashSet<String> {
-    kraai_command_catalog::command_id_set()
+    kraai_commands::command_id_set()
 }
 
 #[expect(

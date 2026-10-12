@@ -1,6 +1,6 @@
 use super::boxed_error as command_error;
+use crate::CommandContext;
 use base64::Engine;
-use kraai_command_core::CommandContext;
 use nu_protocol::{ShellError, Span};
 use serde_json::{Value, json};
 

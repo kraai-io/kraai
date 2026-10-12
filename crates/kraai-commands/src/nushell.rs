@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -8,7 +6,7 @@ use nu_protocol::engine::Command;
 use nu_protocol::shell_error::generic::GenericError;
 use nu_protocol::{ShellError, Span};
 
-pub use kraai_types::CommandMetadata;
+use crate::{close_files, edit_file, mcp, open_files, view_image, web_search};
 
 #[derive(Clone)]
 pub struct CommandRegistration {
@@ -102,6 +100,17 @@ impl CommandRegistry {
     pub fn command_ids(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
         self.registrations.keys().copied()
     }
+}
+
+pub fn command_registry(context: CommandContext) -> Result<CommandRegistry, CommandRegistryError> {
+    CommandRegistry::new([
+        open_files::OpenFilesCommand::registration(context.clone())?,
+        close_files::CloseFilesCommand::registration(context.clone())?,
+        edit_file::EditFileCommand::registration(context.clone())?,
+        web_search::WebSearchCommand::registration(context.clone())?,
+        view_image::ViewImageCommand::registration(context.clone())?,
+        mcp::McpCommand::registration(context)?,
+    ])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +239,6 @@ pub fn command_error(
     ShellError::Generic(GenericError::new(title, message, span))
 }
 
-#[macro_export]
 macro_rules! declare_kraai_command {
     (
         $(#[$attributes:meta])*
@@ -303,4 +311,90 @@ macro_rules! declare_kraai_command {
             }
         }
     };
+}
+
+pub(crate) use declare_kraai_command;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    struct UnusedEffects;
+
+    impl McpClient for UnusedEffects {
+        fn execute(&self, _: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
+
+    impl StateEffectClient for UnusedEffects {
+        fn apply(
+            &self,
+            _command_id: &'static str,
+            _deltas: Vec<ContextStateDelta>,
+        ) -> Result<(), StateEffectError> {
+            Err(StateEffectError::new("test commands must not run"))
+        }
+    }
+
+    impl WebSearchClient for UnusedEffects {
+        fn search(
+            &self,
+            _: kraai_types::WebSearchRequest,
+        ) -> Result<kraai_types::WebSearchResponse, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
+
+    impl ImageAttachmentClient for UnusedEffects {
+        fn attach_existing(&self, _: String) -> Result<kraai_types::ImageAttachment, String> {
+            Err(String::from("test commands must not run"))
+        }
+        fn attach(&self, _: Vec<u8>) -> Result<kraai_types::ImageAttachment, String> {
+            Err(String::from("test commands must not run"))
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "catalog consistency test propagates setup errors and asserts the command contract"
+    )]
+    fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
+        let registry = command_registry(CommandContext::new(
+            Arc::new(UnusedEffects),
+            Arc::new(UnusedEffects),
+            Arc::new(UnusedEffects),
+            Arc::new(UnusedEffects),
+        ))?;
+        assert_eq!(
+            registry.command_ids().collect::<BTreeSet<_>>(),
+            crate::command_ids().collect::<BTreeSet<_>>()
+        );
+        for id in registry.command_ids() {
+            let metadata =
+                crate::command_metadata(id).ok_or("registered command is missing metadata")?;
+            for command in registry.select(&[String::from(id)])? {
+                assert_eq!(command.name(), metadata.name);
+                assert_eq!(command.signature().name, metadata.name);
+                assert_eq!(command.description(), metadata.description);
+                let examples = command.examples();
+                assert_eq!(examples.len(), metadata.examples.len());
+                for (example, metadata) in examples.iter().zip(metadata.examples) {
+                    assert_eq!(example.description, metadata.description);
+                    assert_eq!(example.example, metadata.script);
+                    assert_eq!(
+                        metadata
+                            .script_input
+                            .split_once('\n')
+                            .map(|(_, script)| script),
+                        Some(metadata.script)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }

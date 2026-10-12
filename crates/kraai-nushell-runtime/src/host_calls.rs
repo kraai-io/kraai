@@ -3,8 +3,8 @@ mod protocol;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
-use kraai_command_core::{
-    ImageAttachmentClient, StateEffectClient, StateEffectError, WebSearchClient,
+use kraai_commands::{
+    HostService, ImageAttachmentClient, StateEffectClient, StateEffectError, WebSearchClient,
 };
 use kraai_types::{
     CommandInvocationId, ContextStateDelta, ImageAttachment, ScriptExecutionId, StateEffectAck,
@@ -137,7 +137,7 @@ impl WebSearchClient for DescriptorClient {
     }
 }
 
-impl kraai_command_core::McpClient for DescriptorClient {
+impl kraai_commands::McpClient for DescriptorClient {
     fn execute(&self, request: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
         match self.call(|_| Request::Mcp(request))? {
             Response::Mcp(result) => result,
@@ -195,46 +195,30 @@ pub(crate) async fn serve(
             .checked_add(1)
             .ok_or(HostProtocolError::SequenceExhausted)?;
         let response = match frame.payload {
-            Request::Mcp(request) => {
-                let result = if !active_commands
-                    .iter()
-                    .any(|id| id == kraai_command_catalog::MCP.id)
+            Request::Mcp(request) => Response::Mcp(
+                match require_service(active_commands, HostService::Mcp)
+                    .and_then(|()| request.validate())
                 {
-                    Err(String::from("MCP command is not enabled"))
-                } else if let Err(error) = request.validate() {
-                    Err(error)
-                } else {
-                    services.mcp.execute(request).await
-                };
-                Response::Mcp(result)
-            }
-            Request::ExistingImage { id } => {
-                let result = if !active_commands.iter().any(|command| {
-                    command == kraai_command_catalog::VIEW_IMAGE.id
-                        || command == kraai_command_catalog::MCP.id
-                }) {
-                    Err(String::from("view image command is not enabled"))
-                } else if let Err(error) = validate_image_id(&id) {
-                    Err(error)
-                } else {
-                    services.images.attach_existing(frame.sequence, id).await
-                };
-                Response::ImageAttachment(result)
-            }
-            Request::ImageAttachment { base64 } => {
-                let result = if !active_commands.iter().any(|id| {
-                    id == kraai_command_catalog::VIEW_IMAGE.id
-                        || id == kraai_command_catalog::MCP.id
-                }) {
-                    Err(String::from("view image command is not enabled"))
-                } else {
-                    match decode_image(&base64) {
-                        Ok(bytes) => services.images.attach(frame.sequence, bytes).await,
-                        Err(error) => Err(error),
-                    }
-                };
-                Response::ImageAttachment(result)
-            }
+                    Ok(()) => services.mcp.execute(request).await,
+                    Err(error) => Err(error),
+                },
+            ),
+            Request::ExistingImage { id } => Response::ImageAttachment(
+                match require_service(active_commands, HostService::Images)
+                    .and_then(|()| validate_image_id(&id))
+                {
+                    Ok(()) => services.images.attach_existing(frame.sequence, id).await,
+                    Err(error) => Err(error),
+                },
+            ),
+            Request::ImageAttachment { base64 } => Response::ImageAttachment(
+                match require_service(active_commands, HostService::Images)
+                    .and_then(|()| decode_image(&base64))
+                {
+                    Ok(bytes) => services.images.attach(frame.sequence, bytes).await,
+                    Err(error) => Err(error),
+                },
+            ),
             Request::StateEffect(request) => {
                 if request.sequence != frame.sequence {
                     return Err(HostProtocolError::PayloadSequence {
@@ -242,24 +226,23 @@ pub(crate) async fn serve(
                         payload: request.sequence,
                     });
                 }
+                let error = match require_service(active_commands, HostService::StateEffects) {
+                    Ok(()) => services.effects.apply(&request).await.err(),
+                    Err(error) => Some(error),
+                };
                 Response::StateEffect(StateEffectAck {
-                    error: services.effects.apply(&request).await.err(),
+                    error,
                     invocation_id: request.invocation_id,
                 })
             }
-            Request::WebSearch(request) => {
-                let result = if !active_commands
-                    .iter()
-                    .any(|id| id == kraai_command_catalog::WEB_SEARCH.id)
+            Request::WebSearch(request) => Response::WebSearch(
+                match require_service(active_commands, HostService::WebSearch)
+                    .and_then(|()| request.validate())
                 {
-                    Err(String::from("web search command is not enabled"))
-                } else if let Err(error) = request.validate() {
-                    Err(error)
-                } else {
-                    services.web.search(&request).await
-                };
-                Response::WebSearch(result)
-            }
+                    Ok(()) => services.web.search(&request).await,
+                    Err(error) => Err(error),
+                },
+            ),
         };
         write_authenticated_async(
             &mut writer,
@@ -288,3 +271,13 @@ fn decode_image(encoded: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests;
+
+fn require_service(active_commands: &[String], service: HostService) -> Result<(), String> {
+    if kraai_commands::provides_service(active_commands, service) {
+        Ok(())
+    } else {
+        Err(format!(
+            "no enabled command provides the {service:?} host service"
+        ))
+    }
+}

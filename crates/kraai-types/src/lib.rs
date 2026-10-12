@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod command;
 mod context_state;
 mod cost;
 mod effect;
@@ -24,7 +23,6 @@ mod script;
 mod web;
 pub use web::{WebSearchRequest, WebSearchResponse};
 
-pub use command::{CommandExample, CommandMetadata};
 pub use context_state::{
     ContextStateEvent, ContextStateEventSource, ContextStateMutation, PinnedFileScope,
 };

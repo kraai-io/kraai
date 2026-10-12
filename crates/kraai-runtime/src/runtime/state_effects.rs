@@ -92,7 +92,7 @@ fn authorize_context_mutations(
                 OpenedFilesOperation::parse(&delta.operation),
             ) {
                 (command_id, Some(OpenedFilesOperation::Open))
-                    if command_id == kraai_command_catalog::OPEN_FILES.id =>
+                    if command_id == kraai_commands::open_files::METADATA.id =>
                 {
                     let scope = if path.starts_with(workspace_root) {
                         PinnedFileScope::Workspace {
@@ -109,7 +109,7 @@ fn authorize_context_mutations(
                     Ok(ContextStateMutation::PinFile { path, scope })
                 }
                 (command_id, Some(OpenedFilesOperation::Close))
-                    if command_id == kraai_command_catalog::CLOSE_FILES.id =>
+                    if command_id == kraai_commands::close_files::METADATA.id =>
                 {
                     Ok(ContextStateMutation::UnpinFile { path, reason: None })
                 }

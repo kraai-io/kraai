@@ -63,80 +63,10 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
-    "kraai-command-catalog" = rec {
-      packageId = "kraai-command-catalog";
+    "kraai-commands" = rec {
+      packageId = "kraai-commands";
       build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-catalog";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-close-files" = rec {
-      packageId = "kraai-command-close-files";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-close-files";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-core" = rec {
-      packageId = "kraai-command-core";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-core";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-edit-file" = rec {
-      packageId = "kraai-command-edit-file";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-edit-file";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-mcp" = rec {
-      packageId = "kraai-command-mcp";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-mcp";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-open-files" = rec {
-      packageId = "kraai-command-open-files";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-open-files";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-view-image" = rec {
-      packageId = "kraai-command-view-image";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-view-image";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-web-search" = rec {
-      packageId = "kraai-command-web-search";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-web-search";
+        packageId = "kraai-commands";
       };
 
       # Debug support which might change between releases.
@@ -10099,8 +10029,8 @@ rec {
             packageId = "futures";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
           }
           {
             name = "kraai-io";
@@ -10180,158 +10110,22 @@ rec {
         ];
 
       };
-      "kraai-command-catalog" = rec {
-        crateName = "kraai-command-catalog";
+      "kraai-commands" = rec {
+        crateName = "kraai-commands";
         version = "0.1.0";
         edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-command-catalog; };
-        libName = "kraai_command_catalog";
-        dependencies = [
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-        ];
-
-      };
-      "kraai-command-close-files" = rec {
-        crateName = "kraai-command-close-files";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-close-files; };
-        libName = "kraai_command_close_files";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "kraai-workspace-fs";
-            packageId = "kraai-workspace-fs";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-core" = rec {
-        crateName = "kraai-command-core";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-command-core; };
-        libName = "kraai_command_core";
-        dependencies = [
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
-          }
-        ];
-
-      };
-      "kraai-command-edit-file" = rec {
-        crateName = "kraai-command-edit-file";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-edit-file; };
-        libName = "kraai_command_edit_file";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-workspace-fs";
-            packageId = "kraai-workspace-fs";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-mcp" = rec {
-        crateName = "kraai-command-mcp";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-mcp; };
-        libName = "kraai_command_mcp";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-commands; };
+        libName = "kraai_commands";
         dependencies = [
           {
             name = "base64";
             packageId = "base64 0.23.1";
+            optional = true;
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
-          }
-        ];
-
-      };
-      "kraai-command-open-files" = rec {
-        crateName = "kraai-command-open-files";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-open-files; };
-        libName = "kraai_command_open_files";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
+            name = "kraai-io";
+            packageId = "kraai-io";
+            optional = true;
           }
           {
             name = "kraai-types";
@@ -10340,48 +10134,22 @@ rec {
           {
             name = "kraai-workspace-fs";
             packageId = "kraai-workspace-fs";
+            optional = true;
           }
           {
             name = "nu-engine";
             packageId = "nu-engine";
+            optional = true;
           }
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-view-image" = rec {
-        crateName = "kraai-command-view-image";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-view-image; };
-        libName = "kraai_command_view_image";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            optional = true;
           }
           {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-io";
-            packageId = "kraai-io";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
           }
         ];
         devDependencies = [
@@ -10396,37 +10164,10 @@ rec {
             packageId = "tempfile";
           }
         ];
-
-      };
-      "kraai-command-web-search" = rec {
-        crateName = "kraai-command-web-search";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-web-search; };
-        libName = "kraai_command_web_search";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
+        features = {
+          "nushell" = [ "dep:base64" "dep:kraai-io" "dep:kraai-workspace-fs" "dep:nu-engine" "dep:nu-protocol" "dep:serde_json" ];
+        };
+        resolvedDefaultFeatures = [ "nushell" ];
       };
       "kraai-eval" = rec {
         crateName = "kraai-eval";
@@ -10746,36 +10487,9 @@ rec {
             packageId = "hmac";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-close-files";
-            packageId = "kraai-command-close-files";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-command-edit-file";
-            packageId = "kraai-command-edit-file";
-          }
-          {
-            name = "kraai-command-mcp";
-            packageId = "kraai-command-mcp";
-          }
-          {
-            name = "kraai-command-open-files";
-            packageId = "kraai-command-open-files";
-          }
-          {
-            name = "kraai-command-view-image";
-            packageId = "kraai-command-view-image";
-          }
-          {
-            name = "kraai-command-web-search";
-            packageId = "kraai-command-web-search";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
+            features = [ "nushell" ];
           }
           {
             name = "kraai-io";
@@ -10887,10 +10601,6 @@ rec {
           {
             name = "async-trait";
             packageId = "async-trait";
-          }
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
           }
         ];
 
@@ -11347,8 +11057,8 @@ rec {
             packageId = "kraai-agent";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
           }
           {
             name = "kraai-io";

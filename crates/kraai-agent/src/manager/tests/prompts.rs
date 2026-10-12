@@ -334,7 +334,7 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
             .system_prompt
             .is_empty()
     );
-    let edit_command = kraai_command_catalog::EDIT_FILE;
+    let edit_command = kraai_commands::edit_file::METADATA;
     assert!(system_prompt.contains(edit_command.description));
     assert!(system_prompt.contains(edit_command.signature_help));
     for example in edit_command.examples {

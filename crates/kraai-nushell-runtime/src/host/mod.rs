@@ -4,7 +4,7 @@ mod startup;
 
 use startup::load_startup_files;
 
-use kraai_command_core::{CommandRegistry, CommandRegistryError};
+use kraai_commands::{CommandRegistry, CommandRegistryError};
 use kraai_types::NushellStartup;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 
