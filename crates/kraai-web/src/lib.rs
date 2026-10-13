@@ -5,7 +5,7 @@ mod response;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use kraai_types::{WebSearchRequest, WebSearchResponse};
+use kraai_execution_types::{WebSearchRequest, WebSearchResponse};
 
 const ENDPOINT: &str = "https://mcp.exa.ai/mcp";
 const MAX_BYTES: usize = 1024 * 1024;

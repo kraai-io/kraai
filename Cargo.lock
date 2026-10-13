@@ -3213,6 +3213,7 @@ dependencies = [
  "color-eyre",
  "futures",
  "image",
+ "kraai-execution-types",
  "kraai-mcp",
  "kraai-persistence",
  "kraai-providers",
@@ -3237,6 +3238,7 @@ dependencies = [
  "directories",
  "futures",
  "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-persistence",
@@ -3260,8 +3262,8 @@ name = "kraai-commands"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
  "kraai-workspace-fs",
  "nix 0.31.3",
  "nu-engine",
@@ -3299,6 +3301,15 @@ dependencies = [
  "ulid",
  "unicode-width 0.2.2",
  "webbrowser",
+]
+
+[[package]]
+name = "kraai-execution-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
@@ -3345,8 +3356,8 @@ dependencies = [
  "color-eyre",
  "futures",
  "http",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
  "reqwest 0.13.5",
  "rmcp",
  "serde",
@@ -3370,10 +3381,10 @@ dependencies = [
  "base64 0.23.1",
  "hmac",
  "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-sandbox",
- "kraai-types",
  "kraai-web",
  "nix 0.31.3",
  "nu-cli",
@@ -3405,6 +3416,7 @@ dependencies = [
  "color-eyre",
  "futures",
  "kraai-agent",
+ "kraai-execution-types",
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
@@ -3430,6 +3442,7 @@ dependencies = [
  "color-eyre",
  "directories",
  "image",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-types",
  "nix 0.31.3",
@@ -3453,6 +3466,7 @@ dependencies = [
  "directories",
  "futures",
  "httpdate",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-types",
  "rand 0.10.3",
@@ -3473,6 +3487,7 @@ dependencies = [
  "async-trait",
  "color-eyre",
  "futures",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
  "kraai-types",
@@ -3490,6 +3505,7 @@ dependencies = [
  "base64 0.23.1",
  "color-eyre",
  "futures",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
  "kraai-types",
@@ -3529,6 +3545,7 @@ dependencies = [
  "image",
  "kraai-agent",
  "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-nushell-runtime",
@@ -3573,7 +3590,7 @@ dependencies = [
 name = "kraai-sandbox"
 version = "0.1.0"
 dependencies = [
- "kraai-types",
+ "kraai-execution-types",
  "libc",
  "nix 0.31.3",
  "rand 0.10.3",
@@ -3587,7 +3604,7 @@ dependencies = [
 name = "kraai-script-protocol"
 version = "0.1.0"
 dependencies = [
- "kraai-types",
+ "kraai-execution-types",
 ]
 
 [[package]]
@@ -3600,6 +3617,7 @@ dependencies = [
  "color-eyre",
  "crossbeam-channel",
  "image",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-persistence",
  "kraai-providers",
@@ -3624,6 +3642,7 @@ dependencies = [
 name = "kraai-types"
 version = "0.1.0"
 dependencies = [
+ "kraai-execution-types",
  "serde",
  "serde_json",
  "ts-rs",
@@ -3634,8 +3653,8 @@ name = "kraai-web"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
  "reqwest 0.13.5",
  "serde_json",
  "tokio",

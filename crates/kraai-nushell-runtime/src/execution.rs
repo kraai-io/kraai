@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use kraai_execution_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
 use kraai_sandbox::{ExecutionOutput, LaunchPlan, OutputEvent, PrivateTempConfig};
-use kraai_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -102,7 +102,7 @@ pub async fn execute(
         restrict_network: !plan.capabilities.is_unsandboxed()
             && !plan
                 .capabilities
-                .contains(kraai_types::SandboxCapability::Network),
+                .contains(kraai_execution_types::SandboxCapability::Network),
     };
 
     let private_temp = plan.private_temp.reserve();

@@ -210,14 +210,14 @@ pub(crate) fn assert_owner(
         if let Some(expected) = leases.get(session) {
             ensure!(
                 active && expected == token,
-                kraai_types::DomainError::conflict(format!(
+                kraai_execution_types::DomainError::conflict(format!(
                     "Ownership of session {session} was lost"
                 ))
             );
         } else {
             ensure!(
                 !active,
-                kraai_types::DomainError::conflict(format!(
+                kraai_execution_types::DomainError::conflict(format!(
                     "Session {session} is owned by another runtime"
                 ))
             );

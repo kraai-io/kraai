@@ -1,9 +1,12 @@
 use crate::*;
 use color_eyre::eyre::{Result, ensure};
-use kraai_types::{
-    ContextStateMutation, ConversationItem, MessageId, MessageStatus, PinnedFileScope,
+use kraai_execution_types::{
     SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
+    ScriptOutputStream, ScriptProfileSnapshot,
+};
+use kraai_types::{
+    ContextStateMutation, ConversationItem, MessageId, MessageStatus, PinnedFileScope, SessionId,
+    ToolCallId,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -41,13 +44,13 @@ fn execution(session: &str) -> NewScriptExecution {
         call_id: ToolCallId::new("call"),
         profile: ScriptProfileSnapshot {
             id: "test".into(),
-            permissions: kraai_types::SandboxPermissionSet::workspace_read(),
+            permissions: kraai_execution_types::SandboxPermissionSet::workspace_read(),
             permission_rules: Default::default(),
             commands: Vec::new(),
-            escalation_policy: kraai_types::EscalationPolicy::Deny,
-            environment: kraai_types::EnvironmentPolicy::Minimal,
-            nushell_startup: kraai_types::NushellStartup::Clean,
-            path: kraai_types::PathPolicy::Inherit,
+            escalation_policy: kraai_execution_types::EscalationPolicy::Deny,
+            environment: kraai_execution_types::EnvironmentPolicy::Minimal,
+            nushell_startup: kraai_execution_types::NushellStartup::Clean,
+            path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"print hello".to_vec(),
         requested_capabilities: SandboxCapabilities::default(),

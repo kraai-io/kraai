@@ -1,6 +1,6 @@
 use super::*;
 mod cancellation;
-use kraai_types::{CommandInvocationId, ContextStateDelta};
+use kraai_execution_types::{CommandInvocationId, ContextStateDelta};
 use ulid::Ulid;
 
 fn open_request(path: &str) -> StateEffectRequest {

@@ -5,8 +5,8 @@
     reason = "configuration fixtures assert parsing and availability"
 )]
 
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, TransportConfig};
-use kraai_types::McpRequest;
 
 #[tokio::test]
 async fn config_defaults_and_relative_working_directory_are_resolved() {

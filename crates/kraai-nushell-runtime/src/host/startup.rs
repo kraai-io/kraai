@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use kraai_types::NushellStartup;
+use kraai_execution_types::NushellStartup;
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::report_error::{SUPPRESS_REPORTING, format_cli_error};

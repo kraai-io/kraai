@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use kraai_execution_types::ScriptExecutionId;
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{
-    MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId, SessionId,
-};
+use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, SessionId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
@@ -227,12 +226,15 @@ impl RuntimeHandle {
     pub async fn import_image(
         &self,
         bytes: Vec<u8>,
-    ) -> RuntimeResult<kraai_types::ImageAttachment> {
+    ) -> RuntimeResult<kraai_execution_types::ImageAttachment> {
         self.request(|response| Command::ImportImage { bytes, response })
             .await
     }
 
-    pub async fn read_image(&self, image: kraai_types::ImageAttachment) -> RuntimeResult<Vec<u8>> {
+    pub async fn read_image(
+        &self,
+        image: kraai_execution_types::ImageAttachment,
+    ) -> RuntimeResult<Vec<u8>> {
         self.request(|response| Command::ReadImage { image, response })
             .await
     }

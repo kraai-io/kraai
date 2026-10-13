@@ -13,6 +13,7 @@ color-eyre = { workspace = true }
 directories.workspace = true
 futures = { workspace = true }
 httpdate = { workspace = true }
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["http"] }
 kraai-types = { workspace = true }
 rand = { workspace = true }

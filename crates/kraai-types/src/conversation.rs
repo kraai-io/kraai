@@ -1,4 +1,5 @@
-use crate::{ChatRole, ImageAttachment, ProviderId, ToolCallId};
+use crate::{ChatRole, ProviderId, ToolCallId};
+use kraai_execution_types::ImageAttachment;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -167,7 +168,7 @@ pub enum ConversationItem {
     ScriptResult {
         call_id: ToolCallId,
         output: MessageContent,
-        outcome: crate::ScriptExecutionOutcome,
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
     },
 }
 

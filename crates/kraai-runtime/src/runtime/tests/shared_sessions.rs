@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
+use kraai_execution_types::{ScriptExecutionId, ScriptExecutionStatus};
 use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderStreamEvent};
-use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptExecutionId, ScriptExecutionStatus};
+use kraai_types::{AssistantPhase, ModelId, ProviderId};
 use tokio::sync::{Mutex, mpsc};
 
 use super::harness::FullHistory as _;

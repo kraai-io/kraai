@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kraai_types::ScriptExecutionStatus;
+use kraai_execution_types::ScriptExecutionStatus;
 
 const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
 
@@ -123,7 +123,7 @@ fn push_excerpt(rendered: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::{ToolCallResultView, render_tool_call_result};
-    use kraai_types::ScriptExecutionStatus;
+    use kraai_execution_types::ScriptExecutionStatus;
 
     #[test]
     fn preserves_text_channels_exactly_even_when_they_resemble_protocol() {

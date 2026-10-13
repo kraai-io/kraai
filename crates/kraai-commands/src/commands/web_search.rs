@@ -13,7 +13,7 @@ pub use command::WebSearchCommand;
 
 #[cfg(feature = "nushell")]
 mod command {
-    use kraai_types::WebSearchRequest;
+    use kraai_execution_types::WebSearchRequest;
     use nu_engine::CallExt;
     use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};
 

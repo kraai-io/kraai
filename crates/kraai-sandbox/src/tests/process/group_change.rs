@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{DetachedFixture, capabilities, temp_dir};
 use crate::{LaunchPlan, Termination, run};
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 
 const PROBE: &str = "tests::process::group_change::changing_group_child";
 const MODE: &str = "KRAAI_GROUP_CHANGE";

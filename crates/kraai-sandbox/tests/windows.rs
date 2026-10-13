@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 use kraai_sandbox::{LaunchPlan, SandboxError, Termination};
-use kraai_types::{SandboxCapabilities, SandboxCapability};
 use tokio_util::sync::CancellationToken;
 
 struct Fixture(PathBuf);

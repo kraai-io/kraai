@@ -309,8 +309,8 @@ mod tests {
                     ],
                 },
                 ConversationItem::ScriptResult {
-                    outcome: kraai_types::ScriptExecutionOutcome {
-                        status: kraai_types::ScriptExecutionStatus::Completed,
+                    outcome: kraai_execution_types::ScriptExecutionOutcome {
+                        status: kraai_execution_types::ScriptExecutionStatus::Completed,
                         exit_code: Some(0),
                     },
                     call_id: ToolCallId::new("call-1"),
@@ -368,8 +368,8 @@ mod tests {
 )]
 mod image_tests {
     use super::*;
+    use kraai_execution_types::ImageAttachment;
     use kraai_provider_core::{ImageResolver, ProviderRequestContext};
-    use kraai_types::ImageAttachment;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -406,8 +406,8 @@ mod image_tests {
                 content: content.clone(),
             },
             ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call"),

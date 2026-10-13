@@ -1,4 +1,4 @@
-use kraai_types::{SandboxCapabilities, SandboxCapability};
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 
 use crate::ProtocolError;
 use crate::duration::parse_duration;

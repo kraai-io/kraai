@@ -15,9 +15,9 @@ pub use command::ViewImageCommand;
 mod command {
     use std::path::Path;
 
+    use kraai_execution_types::image::MAX_IMAGE_BYTES;
     use kraai_io::fs::{FinalSymlinkPolicy, open_regular_file};
     use kraai_io::read::{ReadLimitError, read_bounded};
-    use kraai_types::image::MAX_IMAGE_BYTES;
     use nu_engine::CallExt;
     use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};
 

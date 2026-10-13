@@ -133,7 +133,7 @@ async fn restart_after_cancellation_failure(
                 .filter(|message| matches!(&message.content,
             ConversationItem::ScriptResult { call_id, outcome, .. }
                 if call_id.as_str() == "cancelled-call"
-                    && outcome.status == kraai_types::ScriptExecutionStatus::Cancelled
+                    && outcome.status == kraai_execution_types::ScriptExecutionStatus::Cancelled
                     && outcome.exit_code.is_none()))
                 .count(),
             1
@@ -229,8 +229,8 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
                 "coding".into(),
                 ToolCallId::new(if matching { "call" } else { "different-call" }),
                 "cancelled".into(),
-                kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Cancelled,
+                kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
                     exit_code: None,
                 },
             )

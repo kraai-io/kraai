@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::Report;
 use futures::{StreamExt, stream};
-use kraai_types::{DomainError, McpRequest};
+use kraai_execution_types::{DomainError, McpRequest};
 use serde_json::{Value, json};
 
 pub use auth::{McpAuthState, McpAuthStatus};

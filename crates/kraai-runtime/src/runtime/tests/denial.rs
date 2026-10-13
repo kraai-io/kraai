@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use kraai_types::ScriptExecutionId;
+use kraai_execution_types::ScriptExecutionId;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::{Event, SubmitMessageOutcome};

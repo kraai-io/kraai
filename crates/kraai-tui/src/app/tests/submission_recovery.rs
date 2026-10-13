@@ -1,5 +1,6 @@
 use super::*;
-use kraai_types::{ContentPart, ImageAttachment, MessageContent, SessionId};
+use kraai_execution_types::ImageAttachment;
+use kraai_types::{ContentPart, MessageContent, SessionId};
 
 #[test]
 fn continue_submits_the_current_model_selection() {

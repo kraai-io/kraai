@@ -4,6 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, eyre};
+use kraai_execution_types::{
+    SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
+    ScriptOutputStream, ScriptProfileSnapshot,
+};
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan};
 use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
@@ -12,10 +16,7 @@ use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
 use kraai_script_protocol::{
     ToolCallResultView, channel_needs_output_file, render_tool_call_result,
 };
-use kraai_types::{
-    MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
-};
+use kraai_types::{MessageId, SessionId, ToolCallId};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 

@@ -7,4 +7,4 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-kraai-types = { workspace = true }
+kraai-execution-types = { workspace = true }

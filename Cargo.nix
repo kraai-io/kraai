@@ -83,6 +83,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-execution-types" = rec {
+      packageId = "kraai-execution-types";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-execution-types";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-headless" = rec {
       packageId = "kraai-headless";
       build = internal.buildRustCrateWithFeatures {
@@ -9965,6 +9975,10 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-mcp";
             packageId = "kraai-mcp";
           }
@@ -10061,6 +10075,10 @@ rec {
             packageId = "kraai-commands";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "async" ];
@@ -10155,13 +10173,13 @@ rec {
             optional = true;
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             optional = true;
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "kraai-workspace-fs";
@@ -10326,6 +10344,34 @@ rec {
           }
         ];
 
+      };
+      "kraai-execution-types" = rec {
+        crateName = "kraai-execution-types";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-execution-types; };
+        libName = "kraai_execution_types";
+        dependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
+          }
+        ];
+        features = {
+          "typescript" = [ "dep:ts-rs" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
       };
       "kraai-headless" = rec {
         crateName = "kraai-headless";
@@ -10514,13 +10560,13 @@ rec {
             packageId = "http";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "reqwest";
@@ -10620,6 +10666,10 @@ rec {
             features = [ "nushell" ];
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
           }
@@ -10630,10 +10680,6 @@ rec {
           {
             name = "kraai-sandbox";
             packageId = "kraai-sandbox";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "kraai-web";
@@ -10768,6 +10814,10 @@ rec {
             packageId = "kraai-agent";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-nushell-runtime";
             packageId = "kraai-nushell-runtime";
           }
@@ -10867,6 +10917,10 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "async" ];
@@ -10953,6 +11007,10 @@ rec {
             packageId = "httpdate";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
@@ -11029,6 +11087,10 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
@@ -11085,6 +11147,10 @@ rec {
           {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11222,6 +11288,10 @@ rec {
           {
             name = "kraai-commands";
             packageId = "kraai-commands";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11407,8 +11477,8 @@ rec {
         libName = "kraai_sandbox";
         dependencies = [
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "libc";
@@ -11458,8 +11528,8 @@ rec {
         libName = "kraai_script_protocol";
         dependencies = [
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
         ];
 
@@ -11505,6 +11575,10 @@ rec {
             packageId = "image";
             usesDefaultFeatures = false;
             features = [ "jpeg" "png" ];
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11595,6 +11669,10 @@ rec {
         libName = "kraai_types";
         dependencies = [
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -11611,7 +11689,7 @@ rec {
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" ];
+          "typescript" = [ "dep:ts-rs" "kraai-execution-types/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
@@ -11627,13 +11705,13 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "reqwest";

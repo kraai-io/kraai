@@ -194,8 +194,8 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
             .await
             .expect_err("a concrete supported effort is required");
         assert_eq!(
-            error.domain().map(kraai_types::DomainError::kind),
-            Some(kraai_types::DomainErrorKind::InvalidArgument)
+            error.domain().map(kraai_execution_types::DomainError::kind),
+            Some(kraai_execution_types::DomainErrorKind::InvalidArgument)
         );
         assert!(manager.get_chat_history(&session).await?.is_empty());
         assert!(!manager.is_turn_active(&session));

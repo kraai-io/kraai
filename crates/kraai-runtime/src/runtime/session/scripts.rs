@@ -1,10 +1,11 @@
 use color_eyre::eyre::{Context, Result, eyre};
+use kraai_execution_types::{
+    PermissionResolution, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
+    ScriptExecutionStatus,
+};
 use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
-use kraai_types::{
-    MessageId, PermissionResolution, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
-    ScriptExecutionStatus, ToolCallId,
-};
+use kraai_types::{MessageId, ToolCallId};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
@@ -357,17 +358,18 @@ impl SessionActor {
         let pending_id = match &self.state {
             TurnState::AwaitingApproval(pending) => pending.request.id.clone(),
             _ => {
-                return Err(eyre!(kraai_types::DomainError::not_found(format!(
-                    "Session {} has no pending script approval",
-                    self.session_id
-                ))));
+                return Err(eyre!(kraai_execution_types::DomainError::not_found(
+                    format!("Session {} has no pending script approval", self.session_id)
+                )));
             }
         };
         if &pending_id != execution_id {
-            return Err(eyre!(kraai_types::DomainError::conflict(format!(
-                "Pending execution for session {} is {pending_id}, not {execution_id}",
-                self.session_id
-            ))));
+            return Err(eyre!(kraai_execution_types::DomainError::conflict(
+                format!(
+                    "Pending execution for session {} is {pending_id}, not {execution_id}",
+                    self.session_id
+                )
+            )));
         }
         match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::AwaitingApproval(pending) => Ok(*pending),

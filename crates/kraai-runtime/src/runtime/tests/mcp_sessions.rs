@@ -2,8 +2,9 @@ use kraai_persistence::SessionStore;
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::{McpRequest, SessionId};
+use kraai_types::SessionId;
 use serde_json::{Value, json};
 
 use super::harness::RuntimeTestHarness;

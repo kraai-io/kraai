@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, is_known_slash_command};
-use kraai_types::{ContentPart, ImageAttachment, MessageContent, SessionId};
+use kraai_execution_types::ImageAttachment;
+use kraai_types::{ContentPart, MessageContent, SessionId};
 
 fn image() -> ImageAttachment {
     ImageAttachment {
@@ -315,7 +316,7 @@ fn undo_preserves_ordered_content_when_resubmitted() {
 #[test]
 fn attachment_limit_keeps_the_draft() {
     let mut harness = test_harness();
-    for _ in 0..kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+    for _ in 0..kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
         paste(&mut harness);
     }
     harness.app.paste_image();
@@ -325,7 +326,7 @@ fn attachment_limit_keeps_the_draft() {
     assert!(harness.app.state.input.ends_with("question"));
     assert_eq!(
         harness.app.state.draft_images.len(),
-        kraai_types::image::MAX_IMAGE_ATTACHMENTS
+        kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS
     );
 }
 

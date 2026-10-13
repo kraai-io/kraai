@@ -6,6 +6,7 @@ use std::sync::{
 };
 
 use color_eyre::eyre::{Result, eyre};
+use kraai_execution_types::ScriptProfileSnapshot;
 use kraai_persistence::{
     AppendMessageRequest, ContextStateStore, ConversationStore, HistoryCursor, MessageStore,
     SessionMeta, SessionStore,
@@ -16,8 +17,8 @@ use kraai_provider_core::{
 };
 use kraai_types::{
     AgentProfilesState, AssistantItem, AssistantPhase, ChatRole, ConversationItem, Message,
-    MessageGeneration, MessageId, MessageStatus, ModelId, ModelOptionValues, ProviderId,
-    ScriptProfileSnapshot, SessionId, StreamId, TokenUsage, ToolCallId,
+    MessageGeneration, MessageId, MessageStatus, ModelId, ModelOptionValues, ProviderId, SessionId,
+    StreamId, TokenUsage, ToolCallId,
 };
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;

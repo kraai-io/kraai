@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use color_eyre::eyre::Result;
+use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus, SessionId};
+use kraai_types::{MessageId, SessionId};
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
@@ -47,7 +48,8 @@ impl RuntimeCore {
             if !history.contains(&record.source_message_id) {
                 continue;
             }
-            let completed = if record.phase == kraai_types::ScriptExecutionPhase::Finished {
+            let completed = if record.phase == kraai_execution_types::ScriptExecutionPhase::Finished
+            {
                 CompletedScriptExecution {
                     output: self.execution_store.read_output(&record.id).await?,
                     record,

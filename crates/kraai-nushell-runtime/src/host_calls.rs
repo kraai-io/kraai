@@ -6,7 +6,7 @@ use base64::Engine;
 use kraai_commands::{
     HostService, ImageAttachmentClient, StateEffectClient, StateEffectError, WebSearchClient,
 };
-use kraai_types::{
+use kraai_execution_types::{
     CommandInvocationId, ContextStateDelta, ImageAttachment, ScriptExecutionId, StateEffectAck,
     StateEffectRequest, WebSearchRequest, WebSearchResponse,
 };
@@ -16,7 +16,7 @@ use ulid::Ulid;
 
 use crate::effects::StateEffectHandler;
 use crate::images::ImageAttachmentHandler;
-use kraai_types::image::{MAX_IMAGE_BYTES, validate_image_id};
+use kraai_execution_types::image::{MAX_IMAGE_BYTES, validate_image_id};
 use protocol::{
     HostProtocolError, read_authenticated_sync, read_frame_async, verify_frame,
     write_authenticated_async, write_authenticated_sync,
@@ -24,7 +24,7 @@ use protocol::{
 
 #[derive(Serialize, Deserialize)]
 enum Request {
-    Mcp(kraai_types::McpRequest),
+    Mcp(kraai_execution_types::McpRequest),
     StateEffect(StateEffectRequest),
     WebSearch(WebSearchRequest),
     ImageAttachment { base64: String },
@@ -138,7 +138,10 @@ impl WebSearchClient for DescriptorClient {
 }
 
 impl kraai_commands::McpClient for DescriptorClient {
-    fn execute(&self, request: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+    fn execute(
+        &self,
+        request: kraai_execution_types::McpRequest,
+    ) -> Result<serde_json::Value, String> {
         match self.call(|_| Request::Mcp(request))? {
             Response::Mcp(result) => result,
             _ => Err(String::from("unexpected MCP host response")),

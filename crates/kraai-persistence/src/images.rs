@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail, ensure, eyre};
 use image::{ImageDecoder, ImageFormat, ImageReader, Limits};
+use kraai_execution_types::image::{ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 use kraai_io::fs::{FinalSymlinkPolicy, open_regular_file_async};
 use kraai_io::read::{ReadLimitError, read_bounded_async};
-use kraai_types::image::{ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 

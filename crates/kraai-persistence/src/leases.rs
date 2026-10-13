@@ -23,14 +23,14 @@ fn ensure_claimable(connection: &Connection, session: &SessionId) -> Result<i64>
         )
         .optional()?
         .ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
+            eyre!(kraai_execution_types::DomainError::not_found(format!(
                 "Session not found: {session}"
             )))
         })?;
     let now = now_nanos()?;
     ensure!(
         !active || expires_at < now,
-        kraai_types::DomainError::conflict(format!(
+        kraai_execution_types::DomainError::conflict(format!(
             "Session {session} is already running in another instance"
         ))
     );
@@ -140,7 +140,7 @@ impl SqliteSessionStore {
                 )?;
                 ensure!(
                     updated == 1,
-                    kraai_types::DomainError::conflict(format!(
+                    kraai_execution_types::DomainError::conflict(format!(
                         "Ownership of session {session} was lost"
                     ))
                 );
@@ -239,7 +239,8 @@ impl SqliteSessionStore {
                     )?
                     .iter()
                     .any(|record| {
-                        record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval
+                        record.phase
+                            == kraai_execution_types::ScriptExecutionPhase::AwaitingApproval
                     });
                     let streaming = match tip {
                         Some(tip) => crate::stream_deltas::read_message(connection, &tip)?

@@ -86,7 +86,7 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
             let capabilities = profile
                 .capabilities
                 .iter()
-                .map(kraai_types::SandboxCapability::as_str)
+                .map(kraai_execution_types::SandboxCapability::as_str)
                 .collect::<Vec<_>>()
                 .join(",");
             lines.push(Line::raw(format!(

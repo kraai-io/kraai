@@ -3,9 +3,9 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan, execute};
 use kraai_sandbox::{PrivateTempConfig, SandboxError};
-use kraai_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 

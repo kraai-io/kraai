@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use kraai_execution_types::ImageAttachment;
 use kraai_runtime::{
     AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{ImageAttachment, MessageContent, MessageId, SessionId, TokenUsage};
+use kraai_types::{MessageContent, MessageId, SessionId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 

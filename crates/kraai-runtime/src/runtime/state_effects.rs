@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use kraai_execution_types::{
+    OpenedFilesOperation, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
+    StateEffectRequest,
+};
 use kraai_nushell_runtime::StateEffectHandler;
 use kraai_persistence::ContextStateStore;
-use kraai_types::{
-    ContextStateMutation, OpenedFilesOperation, PinnedFileScope, SandboxCapabilities,
-    SandboxCapability, ScriptExecutionId, SessionId, StateEffectRequest,
-};
+use kraai_types::{ContextStateMutation, PinnedFileScope, SessionId};
 
 pub(super) struct DurableStateEffects {
     pub(super) execution_id: ScriptExecutionId,

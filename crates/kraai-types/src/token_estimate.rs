@@ -75,7 +75,7 @@ mod tests {
                     text: "x".repeat(400),
                 },
                 ContentPart::Image {
-                    image: crate::ImageAttachment {
+                    image: kraai_execution_types::ImageAttachment {
                         id: "a".repeat(64),
                         mime_type: "image/png".into(),
                         width: 2,

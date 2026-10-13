@@ -1,5 +1,6 @@
 use super::*;
-use kraai_types::{SandboxCapability, ToolCallId};
+use kraai_execution_types::SandboxCapability;
+use kraai_types::ToolCallId;
 use std::path::PathBuf;
 use tokio::fs;
 use ulid::Ulid;
@@ -20,13 +21,15 @@ fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
         profile: ScriptProfileSnapshot {
             id: String::from("coding"),
             commands: Vec::new(),
-            permissions: kraai_types::SandboxPermissionSet::new([SandboxCapability::WorkspaceRead])
-                .unwrap(),
-            permission_rules: kraai_types::CapabilityPermissionRules::default(),
-            escalation_policy: kraai_types::EscalationPolicy::Prompt,
-            environment: kraai_types::EnvironmentPolicy::AllowList,
-            nushell_startup: kraai_types::NushellStartup::Clean,
-            path: kraai_types::PathPolicy::Inherit,
+            permissions: kraai_execution_types::SandboxPermissionSet::new([
+                SandboxCapability::WorkspaceRead,
+            ])
+            .unwrap(),
+            permission_rules: kraai_execution_types::CapabilityPermissionRules::default(),
+            escalation_policy: kraai_execution_types::EscalationPolicy::Prompt,
+            environment: kraai_execution_types::EnvironmentPolicy::AllowList,
+            nushell_startup: kraai_execution_types::NushellStartup::Clean,
+            path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"1 + 1".to_vec(),
         requested_capabilities: SandboxCapabilities::default(),
@@ -133,7 +136,7 @@ async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
     let store = SqliteScriptExecutionStore::new(&data_dir);
     let id = ScriptExecutionId::new(Ulid::generate());
     store.create(execution(&id)).await.unwrap();
-    let image = kraai_types::ImageAttachment {
+    let image = kraai_execution_types::ImageAttachment {
         id: "a".repeat(64),
         mime_type: "image/png".into(),
         width: 1,

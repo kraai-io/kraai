@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kraai_types::ContextStateDelta;
+use kraai_execution_types::ContextStateDelta;
 use nu_protocol::engine::Command;
 use nu_protocol::shell_error::generic::GenericError;
 use nu_protocol::{ShellError, Span};
@@ -141,12 +141,15 @@ impl std::error::Error for CommandRegistryError {}
 pub trait WebSearchClient: Send + Sync {
     fn search(
         &self,
-        request: kraai_types::WebSearchRequest,
-    ) -> Result<kraai_types::WebSearchResponse, String>;
+        request: kraai_execution_types::WebSearchRequest,
+    ) -> Result<kraai_execution_types::WebSearchResponse, String>;
 }
 
 pub trait McpClient: Send + Sync {
-    fn execute(&self, request: kraai_types::McpRequest) -> Result<serde_json::Value, String>;
+    fn execute(
+        &self,
+        request: kraai_execution_types::McpRequest,
+    ) -> Result<serde_json::Value, String>;
 }
 
 pub trait StateEffectClient: Send + Sync {
@@ -158,8 +161,9 @@ pub trait StateEffectClient: Send + Sync {
 }
 
 pub trait ImageAttachmentClient: Send + Sync {
-    fn attach(&self, bytes: Vec<u8>) -> Result<kraai_types::ImageAttachment, String>;
-    fn attach_existing(&self, id: String) -> Result<kraai_types::ImageAttachment, String>;
+    fn attach(&self, bytes: Vec<u8>) -> Result<kraai_execution_types::ImageAttachment, String>;
+    fn attach_existing(&self, id: String)
+    -> Result<kraai_execution_types::ImageAttachment, String>;
 }
 
 #[derive(Clone)]
@@ -324,7 +328,10 @@ mod tests {
     struct UnusedEffects;
 
     impl McpClient for UnusedEffects {
-        fn execute(&self, _: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+        fn execute(
+            &self,
+            _: kraai_execution_types::McpRequest,
+        ) -> Result<serde_json::Value, String> {
             Err(String::from("test commands must not run"))
         }
     }
@@ -342,17 +349,20 @@ mod tests {
     impl WebSearchClient for UnusedEffects {
         fn search(
             &self,
-            _: kraai_types::WebSearchRequest,
-        ) -> Result<kraai_types::WebSearchResponse, String> {
+            _: kraai_execution_types::WebSearchRequest,
+        ) -> Result<kraai_execution_types::WebSearchResponse, String> {
             Err(String::from("test commands must not run"))
         }
     }
 
     impl ImageAttachmentClient for UnusedEffects {
-        fn attach_existing(&self, _: String) -> Result<kraai_types::ImageAttachment, String> {
+        fn attach_existing(
+            &self,
+            _: String,
+        ) -> Result<kraai_execution_types::ImageAttachment, String> {
             Err(String::from("test commands must not run"))
         }
-        fn attach(&self, _: Vec<u8>) -> Result<kraai_types::ImageAttachment, String> {
+        fn attach(&self, _: Vec<u8>) -> Result<kraai_execution_types::ImageAttachment, String> {
             Err(String::from("test commands must not run"))
         }
     }

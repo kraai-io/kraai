@@ -19,8 +19,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpAuthState, McpConfig, McpHost, McpManager};
-use kraai_types::McpRequest;
 use serde_json::{Value, json};
 
 struct Fixture {

@@ -9,6 +9,7 @@ members = [
   "crates/kraai-nushell-runtime",
   "crates/kraai-sandbox",
   "crates/kraai-script-protocol",
+  "crates/kraai-execution-types",
   "crates/kraai-eval",
   "crates/kraai-headless",
   "crates/kraai-persistence",
@@ -45,6 +46,7 @@ strip = false
 agent-client-protocol = "2.2.0"
 kraai-agent = { path = "crates/kraai-agent" }
 kraai-commands = { path = "crates/kraai-commands" }
+kraai-execution-types = { path = "crates/kraai-execution-types" }
 kraai-headless = { path = "crates/kraai-headless", default-features = false }
 kraai-io = { path = "crates/kraai-io" }
 kraai-mcp = { path = "crates/kraai-mcp" }

@@ -24,7 +24,7 @@ pub use command::McpCommand;
 
 #[cfg(feature = "nushell")]
 mod command {
-    use kraai_types::McpRequest;
+    use kraai_execution_types::McpRequest;
     use nu_engine::CallExt;
     use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value};
 

@@ -8,12 +8,12 @@ struct FixtureSearch;
 impl kraai_web::WebSearch for FixtureSearch {
     async fn search(
         &self,
-        request: &kraai_types::WebSearchRequest,
-    ) -> Result<kraai_types::WebSearchResponse, String> {
+        request: &kraai_execution_types::WebSearchRequest,
+    ) -> Result<kraai_execution_types::WebSearchResponse, String> {
         assert_eq!(request.query, "test query");
         assert_eq!(request.limit, 3);
         assert_eq!(request.max_chars, 100);
-        Ok(kraai_types::WebSearchResponse {
+        Ok(kraai_execution_types::WebSearchResponse {
             provider: String::from("exa"),
             content: String::from("fixture search result"),
             truncated: false,
@@ -66,8 +66,8 @@ struct StalledSearch {
 impl kraai_web::WebSearch for StalledSearch {
     async fn search(
         &self,
-        _: &kraai_types::WebSearchRequest,
-    ) -> Result<kraai_types::WebSearchResponse, String> {
+        _: &kraai_execution_types::WebSearchRequest,
+    ) -> Result<kraai_execution_types::WebSearchResponse, String> {
         let _guard = self.dropped.clone().drop_guard();
         self.entered.cancel();
         std::future::pending().await

@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use kraai_types::ImageAttachment;
+use kraai_execution_types::ImageAttachment;
 
 pub trait ImageAttachmentHandler: Send + Sync {
     fn attach(

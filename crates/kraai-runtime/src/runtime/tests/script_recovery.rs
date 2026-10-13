@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use color_eyre::eyre::Result;
 use kraai_agent::AgentManager;
+use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::{
     AppendMessageRequest, ConversationStore, MessageStore, ScriptExecutionCompletion, SessionStore,
     SqliteMessageStore, SqliteSessionStore,
 };
-use kraai_types::{ConversationItem, MessageStatus, ScriptExecutionStatus, SessionId};
+use kraai_types::{ConversationItem, MessageStatus, SessionId};
 
 use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};

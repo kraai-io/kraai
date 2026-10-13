@@ -1,4 +1,4 @@
-use kraai_types::DomainError;
+use kraai_execution_types::DomainError;
 
 /// A failure of an agent operation: either the request was wrong for the current state, or the
 /// service failed.

@@ -755,8 +755,8 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
             "test-profile".into(),
             kraai_types::ToolCallId::new("test-call"),
             "old history".into(),
-            kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
         )
@@ -788,8 +788,8 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
             .expect("captured history")
             .content,
         kraai_types::ConversationItem::ScriptResult {
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
             call_id: kraai_types::ToolCallId::new("test-call"),

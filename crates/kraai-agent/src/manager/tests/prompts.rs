@@ -1,7 +1,8 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_dir, test_manager};
 use color_eyre::eyre::Result;
-use kraai_types::{CommandInvocationId, ContextStateMutation, PinnedFileScope, ScriptExecutionId};
+use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
+use kraai_types::{ContextStateMutation, PinnedFileScope};
 use ulid::Ulid;
 
 fn request_prefix(request: &PendingStreamRequest) -> &str {
@@ -373,17 +374,18 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
     let session_id = manager.create_session().await?;
     let session = manager.require_session(&session_id).await?;
     let mut profile = manager.resolve_selected_profile(&session)?;
-    profile.permissions =
-        kraai_types::SandboxPermissionSet::new([kraai_types::SandboxCapability::WorkspaceRead])?;
-    profile.permission_rules = kraai_types::CapabilityPermissionRules::new([(
-        kraai_types::SandboxCapability::Network,
-        kraai_types::EscalationPolicy::Deny,
+    profile.permissions = kraai_execution_types::SandboxPermissionSet::new([
+        kraai_execution_types::SandboxCapability::WorkspaceRead,
+    ])?;
+    profile.permission_rules = kraai_execution_types::CapabilityPermissionRules::new([(
+        kraai_execution_types::SandboxCapability::Network,
+        kraai_execution_types::EscalationPolicy::Deny,
     )]);
-    profile.escalation_policy = kraai_types::EscalationPolicy::Prompt;
+    profile.escalation_policy = kraai_execution_types::EscalationPolicy::Prompt;
     for unsandboxed in [false, true] {
         if unsandboxed {
-            profile.permissions = kraai_types::SandboxPermissionSet::new([
-                kraai_types::SandboxCapability::NoSandbox,
+            profile.permissions = kraai_execution_types::SandboxPermissionSet::new([
+                kraai_execution_types::SandboxCapability::NoSandbox,
             ])?;
         }
         let prompt = manager

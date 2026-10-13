@@ -10,10 +10,10 @@ version = "0.1.0"
 base64.workspace = true
 hmac = { workspace = true }
 kraai-commands = { workspace = true, features = ["nushell"] }
+kraai-execution-types = { workspace = true }
 kraai-io.workspace = true
 kraai-mcp.workspace = true
 kraai-sandbox = { workspace = true }
-kraai-types = { workspace = true }
 kraai-web.workspace = true
 nu-cli = { workspace = true }
 nu-cmd-lang = { workspace = true }

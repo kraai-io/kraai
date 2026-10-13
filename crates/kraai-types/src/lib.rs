@@ -2,11 +2,8 @@
 
 mod context_state;
 mod cost;
-mod effect;
-mod mcp;
 mod model;
 mod model_options;
-pub use mcp::McpRequest;
 pub use model::ModelSelection;
 pub use model_options::{
     ModelOptionBinding, ModelOptionChoice, ModelOptionCondition, ModelOptionDefinition,
@@ -14,56 +11,18 @@ pub use model_options::{
     parse_model_option_assignments, reconcile_model_option_values, validate_model_option_values,
     validate_model_options,
 };
-mod error;
-pub mod image;
-mod permissions;
-mod policy;
-mod profile;
-mod script;
-mod web;
-pub use web::{WebSearchRequest, WebSearchResponse};
 
 pub use context_state::{
     ContextStateEvent, ContextStateEventSource, ContextStateMutation, PinnedFileScope,
 };
 pub use cost::{CostSummary, RequestCost, RequestUsage, TokenRates, Usd};
 
-pub use effect::{ContextStateDelta, OpenedFilesOperation, StateEffectAck, StateEffectRequest};
-pub use error::{DomainError, DomainErrorKind};
-pub use image::ImageAttachment;
-pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
-pub use policy::{
-    CapabilityPermissionRules, EscalationPolicy, PermissionResolution, ResolvedPermissions,
-    SandboxPermissionSet,
+use kraai_execution_types::{
+    EnvironmentPolicy, EscalationPolicy, NushellStartup, PathPolicy, SandboxCapabilities,
+    define_id, validate_id, validate_message_id,
 };
-pub use profile::{EnvironmentPolicy, NushellStartup, PathPolicy, ScriptProfileSnapshot};
-pub use script::{
-    ScriptExecutionOutcome, ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream,
-};
-
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, sync::Arc};
-
-fn validate_id(value: &str) -> Result<(), String> {
-    if value.is_empty() {
-        return Err("id cannot be empty".to_string());
-    }
-
-    Ok(())
-}
-
-fn validate_message_id(value: &str) -> Result<(), String> {
-    validate_id(value)?;
-    if !value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(
-            "id may contain only ASCII letters, digits, hyphens, and underscores".to_string(),
-        );
-    }
-    Ok(())
-}
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ChatRole {
@@ -215,63 +174,9 @@ pub struct AgentProfilesState {
     pub profile_locked: bool,
 }
 
-/// Wrapper that gives type safety while keeping Arc<str> benefits
-macro_rules! define_id {
-    ($name:ident, $validator:path) => {
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-        #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-        #[cfg_attr(feature = "typescript", ts(type = "string"))]
-        pub struct $name(pub Arc<str>);
-
-        impl $name {
-            pub fn new(s: impl Into<String>) -> Self {
-                Self::try_new(s).expect(concat!(stringify!($name), " contains invalid characters"))
-            }
-
-            pub fn try_new(s: impl Into<String>) -> Result<Self, String> {
-                let s = s.into();
-                $validator(&s)?;
-                Ok(Self(Arc::from(s)))
-            }
-
-            pub fn as_str(&self) -> &str {
-                self.0.as_ref()
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                serializer.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let s = String::deserialize(deserializer)?;
-                Self::try_new(s).map_err(serde::de::Error::custom)
-            }
-        }
-    };
-}
-
 define_id!(MessageId, validate_message_id);
 define_id!(SessionId, validate_message_id);
 define_id!(StreamId, validate_id);
-define_id!(ScriptExecutionId, validate_message_id);
-define_id!(CommandInvocationId, validate_message_id);
 define_id!(ToolCallId, validate_id);
 define_id!(ProviderId, validate_id);
 define_id!(ModelId, validate_id);
@@ -326,8 +231,8 @@ mod tests {
                 content: text.into(),
             },
             ConversationItem::ScriptResult {
-                outcome: crate::ScriptExecutionOutcome {
-                    status: crate::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call"),
@@ -358,17 +263,7 @@ mod tests {
             ".",
         ] {
             assert!(MessageId::try_new(invalid).is_err(), "accepted {invalid:?}");
-            assert!(
-                ScriptExecutionId::try_new(invalid).is_err(),
-                "accepted {invalid:?}"
-            );
-            assert!(
-                CommandInvocationId::try_new(invalid).is_err(),
-                "accepted {invalid:?}"
-            );
         }
         assert!(MessageId::try_new("01J_VALID-message_id").is_ok());
-        assert!(ScriptExecutionId::try_new("01J_VALID-execution_id").is_ok());
-        assert!(CommandInvocationId::try_new("01J_VALID-invocation_id").is_ok());
     }
 }

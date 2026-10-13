@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use color_eyre::eyre::{Context, Result, eyre};
-use kraai_types::{EnvironmentPolicy, PathPolicy, ScriptProfileSnapshot};
+use kraai_execution_types::{EnvironmentPolicy, PathPolicy, ScriptProfileSnapshot};
 
 pub(super) fn configured_runtime_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = std::env::var_os("KRAAI_SCRIPT_RUNTIME_ROOTS")

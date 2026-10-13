@@ -1,5 +1,5 @@
 use color_eyre::eyre::{Result, eyre};
-use kraai_types::{DomainError, ScriptExecutionStatus};
+use kraai_execution_types::{DomainError, ScriptExecutionStatus};
 
 use super::actor::{CancelRequest, Responder, SessionActor, StreamJob, TurnState};
 use crate::RuntimeError;

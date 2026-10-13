@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
+use kraai_execution_types::ScriptExecutionId;
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{
-    MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId, SessionId,
-};
+use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, SessionId};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -69,10 +68,10 @@ pub(crate) enum Command {
     },
     ImportImage {
         bytes: Vec<u8>,
-        response: oneshot::Sender<RuntimeResult<kraai_types::ImageAttachment>>,
+        response: oneshot::Sender<RuntimeResult<kraai_execution_types::ImageAttachment>>,
     },
     ReadImage {
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
         response: oneshot::Sender<RuntimeResult<Vec<u8>>>,
     },
     LoadConfig,

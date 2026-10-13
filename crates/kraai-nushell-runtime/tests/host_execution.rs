@@ -11,9 +11,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use kraai_execution_types::{
+    NushellStartup, SandboxCapabilities, SandboxCapability, StateEffectRequest,
+};
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan, StateEffectHandler, execute};
 use kraai_sandbox::Termination;
-use kraai_types::{NushellStartup, SandboxCapabilities, SandboxCapability, StateEffectRequest};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
@@ -45,7 +47,7 @@ fn plan(source: impl Into<Vec<u8>>, workspace: &TestWorkspace) -> ScriptExecutio
     let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox])
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let mut plan = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::generate()),
+        kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
         host_executable(),
         source.into(),
         workspace.0.clone(),
@@ -405,7 +407,7 @@ async fn private_transport_crosses_the_sandbox_boundary() {
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let host = host_executable();
     let mut execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::generate()),
+        kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
         host.clone(),
         b"{transport: private, engine: embedded} | to json --raw".to_vec(),
         workspace.0.clone(),
@@ -444,7 +446,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
         .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     let host = host_executable();
     let mut execution = ScriptExecutionPlan::new(
-        kraai_types::ScriptExecutionId::new(Ulid::generate()),
+        kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
         host.clone(),
         b"kraai-edit-file denied.txt --create --contents 'denied'".to_vec(),
         workspace.0.clone(),

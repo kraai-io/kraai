@@ -139,11 +139,14 @@ pub(crate) fn assert_session_revision(
     match current {
         Some(current) => ensure!(
             current.revision == updated.revision,
-            kraai_types::DomainError::conflict("Session changed while updating metadata")
+            kraai_execution_types::DomainError::conflict("Session changed while updating metadata")
         ),
         None => ensure!(
             updated.revision == 0,
-            kraai_types::DomainError::not_found(format!("Session not found: {}", updated.id))
+            kraai_execution_types::DomainError::not_found(format!(
+                "Session not found: {}",
+                updated.id
+            ))
         ),
     }
     Ok(())

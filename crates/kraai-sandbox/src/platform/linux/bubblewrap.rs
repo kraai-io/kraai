@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use tokio::process::Command;
 
 use crate::config::LaunchPlan;

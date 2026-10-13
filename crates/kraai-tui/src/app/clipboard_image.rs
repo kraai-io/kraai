@@ -1,7 +1,7 @@
 use std::io::Write;
 
+use kraai_execution_types::image::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 use kraai_runtime::{RuntimeError, RuntimeResult};
-use kraai_types::image::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 
 fn read() -> RuntimeResult<Option<Vec<u8>>> {
     let mut clipboard = arboard::Clipboard::new()

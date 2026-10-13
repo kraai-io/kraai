@@ -1,6 +1,7 @@
 use color_eyre::eyre::Result;
+use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{ScriptExecutionStatus, SessionId};
+use kraai_types::SessionId;
 
 use super::harness::{
     RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,

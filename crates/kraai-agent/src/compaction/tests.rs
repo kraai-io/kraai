@@ -185,8 +185,8 @@ fn fixture(
         message(
             "result",
             ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call"),
@@ -657,7 +657,7 @@ fn empty_user_messages_do_not_discard_older_requests() {
 #[test]
 fn image_request_budget_keeps_recent_images_and_reopenable_references() {
     let image = |index: usize| kraai_types::ContentPart::Image {
-        image: kraai_types::ImageAttachment {
+        image: kraai_execution_types::ImageAttachment {
             id: format!("{index:064x}"),
             mime_type: "image/png".into(),
             width: 1,
@@ -684,7 +684,7 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
             _ => None,
         })
         .sum::<usize>();
-    assert_eq!(count, kraai_types::image::MAX_REQUEST_IMAGES);
+    assert_eq!(count, kraai_execution_types::image::MAX_REQUEST_IMAGES);
     assert!(request.messages.first().is_some_and(|message| {
         message
             .display_text()
@@ -738,14 +738,14 @@ struct TestImageResolver;
 
 #[async_trait::async_trait]
 impl kraai_provider_core::ImageResolver for TestImageResolver {
-    async fn resolve(&self, _: &kraai_types::ImageAttachment) -> Result<Vec<u8>> {
+    async fn resolve(&self, _: &kraai_execution_types::ImageAttachment) -> Result<Vec<u8>> {
         Ok(vec![1, 2, 3])
     }
 }
 
 #[tokio::test]
 async fn compaction_reads_images_but_retains_only_reopenable_references() -> Result<()> {
-    let image = kraai_types::ImageAttachment {
+    let image = kraai_execution_types::ImageAttachment {
         id: "a".repeat(64),
         mime_type: "image/png".into(),
         width: 2,

@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
+use kraai_execution_types::{ScriptExecutionId, ScriptOutputStream};
 use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
     ScriptExecutionStore,
 };
-use kraai_types::{ScriptExecutionId, ScriptOutputStream, SessionId};
+use kraai_types::SessionId;
 use tokio::sync::Notify;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
@@ -237,7 +238,7 @@ impl ScriptExecutionStore for PausedExecutionStore {
         &self,
         id: &ScriptExecutionId,
         sequence: u64,
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
     ) -> Result<()> {
         self.inner.append_image(id, sequence, image).await
     }

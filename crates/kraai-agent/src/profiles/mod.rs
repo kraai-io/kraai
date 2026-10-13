@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use kraai_types::{
-    AgentProfileSource, AgentProfileSummary, AgentProfileWarning, CapabilityPermissionRules,
-    EnvironmentPolicy, EscalationPolicy, NushellStartup, PathPolicy, SandboxCapability,
-    SandboxPermissionSet, ScriptProfileSnapshot,
+use kraai_execution_types::{
+    CapabilityPermissionRules, EnvironmentPolicy, EscalationPolicy, NushellStartup, PathPolicy,
+    SandboxCapability, SandboxPermissionSet, ScriptProfileSnapshot,
 };
+use kraai_types::{AgentProfileSource, AgentProfileSummary, AgentProfileWarning};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use kraai_nushell_runtime::ScriptExecutionPlan;
 use kraai_sandbox::PrivateTempConfig;
-use kraai_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use ulid::Ulid;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;

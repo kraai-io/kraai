@@ -17,8 +17,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::post,
 };
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
 use serde_json::{Value, json};
 
 #[derive(Default)]

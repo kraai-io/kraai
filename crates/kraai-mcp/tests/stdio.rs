@@ -5,8 +5,8 @@
     reason = "stdio fixture asserts protocol results"
 )]
 
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
 
 const FIXTURE: &str = r#"
 printf 'started\n' >> "$MCP_RECORD"

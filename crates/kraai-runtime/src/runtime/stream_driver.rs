@@ -4,12 +4,13 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use kraai_agent::{ContextCompaction, PendingStreamRequest};
+use kraai_execution_types::SandboxCapabilities;
 use kraai_provider_core::{
     ProviderManager, ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
     ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{MessageId, ModelId, ProviderId, SandboxCapabilities, SessionId, ToolCallId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId, ToolCallId};
 use tokio::sync::{RwLock, mpsc};
 
 use super::core::emit_event;

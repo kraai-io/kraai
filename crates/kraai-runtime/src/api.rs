@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use kraai_execution_types::{DomainError, DomainErrorKind};
 use kraai_mcp::McpAuthStatus;
 use kraai_persistence::SessionMeta;
 pub use kraai_provider_core::{
@@ -7,8 +8,7 @@ pub use kraai_provider_core::{
     ProviderLoginState,
 };
 use kraai_types::{
-    AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
-    SessionId, TokenUsage,
+    AgentProfileSummary, AgentProfileWarning, Message, MessageId, SessionId, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -420,7 +420,7 @@ pub enum Event {
         execution_id: String,
         call_id: String,
         output: kraai_types::MessageContent,
-        outcome: kraai_types::ScriptExecutionOutcome,
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
     },
     ContextStateChanged {
         session_id: SessionId,

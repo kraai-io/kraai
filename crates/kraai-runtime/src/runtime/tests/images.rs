@@ -1,8 +1,9 @@
 use super::harness::FullHistory as _;
 use super::script_recovery::{completed_script_with_image, reopen_agent};
 use color_eyre::eyre::{Result, eyre};
+use kraai_execution_types::ScriptExecutionId;
 use kraai_nushell_runtime::ImageAttachmentHandler;
-use kraai_types::{ContentPart, ConversationItem, MessageContent, ScriptExecutionId};
+use kraai_types::{ContentPart, ConversationItem, MessageContent};
 
 #[tokio::test]
 async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Result<()> {

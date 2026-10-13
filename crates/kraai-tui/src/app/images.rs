@@ -1,6 +1,6 @@
 use super::*;
+use kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS;
 use kraai_types::SessionId;
-use kraai_types::image::MAX_IMAGE_ATTACHMENTS;
 
 impl App {
     pub(super) fn paste_image(&mut self) {

@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 
 use kraai_agent::PendingStreamRequest;
+use kraai_execution_types::ScriptExecutionId;
 use kraai_provider_core::ProviderManager;
-use kraai_types::{MessageContent, MessageId, ModelSelection, ScriptExecutionId, SessionId};
+use kraai_types::{MessageContent, MessageId, ModelSelection, SessionId};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;

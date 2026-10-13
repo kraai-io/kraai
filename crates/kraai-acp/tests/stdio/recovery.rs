@@ -60,7 +60,7 @@ async fn restart_after_pending_approval_waits_for_the_next_prompt() -> Result<()
     assert_eq!(executions.len(), 1);
     assert_eq!(
         executions.first().and_then(|execution| execution.status),
-        Some(kraai_types::ScriptExecutionStatus::Cancelled)
+        Some(kraai_execution_types::ScriptExecutionStatus::Cancelled)
     );
     harness.stop().await
 }

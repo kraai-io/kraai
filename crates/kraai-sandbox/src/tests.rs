@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use kraai_types::{SandboxCapabilities, SandboxCapability};
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 #[cfg(unix)]
 use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;

@@ -253,7 +253,7 @@ impl Output {
         runtime: &RuntimeHandle,
         call_id: String,
         output: &kraai_types::MessageContent,
-        outcome: kraai_types::ScriptExecutionOutcome,
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
     ) -> Result<()> {
         if self.open.remove(&call_id) || !self.announced.contains(&call_id) {
             self.announced.insert(call_id.clone());

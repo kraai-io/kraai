@@ -220,8 +220,8 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         id: MessageId::new("result"),
         parent_id: Some(call.id.clone()),
         content: ConversationItem::ScriptResult {
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
             call_id: ToolCallId::new("tool"),
@@ -274,8 +274,8 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new(id),
@@ -476,8 +476,8 @@ fn execution_view_navigates_from_latest_and_preserves_draft() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new(id),

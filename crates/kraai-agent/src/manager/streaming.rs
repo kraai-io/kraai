@@ -25,7 +25,7 @@ impl AgentManager {
         profile_id: String,
         call_id: ToolCallId,
         content: kraai_types::MessageContent,
-        outcome: kraai_types::ScriptExecutionOutcome,
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
     ) -> AgentResult<bool> {
         self.require_session(session_id).await?;
         let append = self
@@ -339,7 +339,7 @@ impl AgentManager {
         };
         let output = kraai_script_protocol::render_tool_call_result(
             kraai_script_protocol::ToolCallResultView {
-                status: kraai_types::ScriptExecutionStatus::Cancelled,
+                status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
                 exit_code: None,
                 elapsed_millis: None,
                 stdout: &[],
@@ -368,8 +368,8 @@ impl AgentManager {
                         content: ConversationItem::ScriptResult {
                             call_id: skipped.clone(),
                             output: output.clone().into(),
-                            outcome: kraai_types::ScriptExecutionOutcome {
-                                status: kraai_types::ScriptExecutionStatus::Cancelled,
+                            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                                status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
                                 exit_code: None,
                             },
                         },
@@ -479,8 +479,9 @@ impl AgentManager {
                                 content: ConversationItem::ScriptResult {
                                     call_id,
                                     output: cancelled_script_output.to_string().into(),
-                                    outcome: kraai_types::ScriptExecutionOutcome {
-                                        status: kraai_types::ScriptExecutionStatus::Cancelled,
+                                    outcome: kraai_execution_types::ScriptExecutionOutcome {
+                                        status:
+                                            kraai_execution_types::ScriptExecutionStatus::Cancelled,
                                         exit_code: None,
                                     },
                                 },

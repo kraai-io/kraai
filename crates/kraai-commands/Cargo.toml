@@ -18,8 +18,8 @@ nushell = [
 
 [dependencies]
 base64 = { workspace = true, optional = true }
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, optional = true }
-kraai-types.workspace = true
 kraai-workspace-fs = { workspace = true, optional = true }
 nu-engine = { workspace = true, optional = true }
 nu-protocol = { workspace = true, optional = true }

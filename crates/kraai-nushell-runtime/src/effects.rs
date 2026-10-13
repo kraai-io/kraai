@@ -1,4 +1,4 @@
-use kraai_types::StateEffectRequest;
+use kraai_execution_types::StateEffectRequest;
 use std::future::Future;
 use std::pin::Pin;
 

@@ -145,13 +145,13 @@ impl SessionActor {
         selection: &ModelSelection,
     ) -> RuntimeResult<()> {
         self.validate_selection(selection).await?;
-        if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+        if message.images().count() > kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
             return Err(RuntimeError::invalid_argument("Too many image attachments"));
         }
         if message
             .images()
             .try_fold(0u64, |total, image| total.checked_add(image.byte_length))
-            .is_none_or(|total| total > kraai_types::image::MAX_REQUEST_IMAGE_BYTES)
+            .is_none_or(|total| total > kraai_execution_types::image::MAX_REQUEST_IMAGE_BYTES)
         {
             return Err(RuntimeError::invalid_argument(
                 "Image attachments exceed the request byte limit",

@@ -1,9 +1,10 @@
 use crate::database::{Database, assert_owner, list_records, read_record, write_record};
 use color_eyre::eyre::{Result, ensure, eyre};
-use kraai_types::{
-    MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
+use kraai_execution_types::{
+    SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
+    ScriptOutputStream, ScriptProfileSnapshot,
 };
+use kraai_types::{MessageId, SessionId, ToolCallId};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -26,7 +27,7 @@ pub struct NewScriptExecution {
 pub struct ScriptExecutionRecord {
     pub id: ScriptExecutionId,
     pub result_message_id: MessageId,
-    pub images: std::collections::BTreeMap<u64, kraai_types::ImageAttachment>,
+    pub images: std::collections::BTreeMap<u64, kraai_execution_types::ImageAttachment>,
     pub session_id: SessionId,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
@@ -45,8 +46,8 @@ pub struct ScriptExecutionRecord {
 }
 
 impl ScriptExecutionRecord {
-    pub fn outcome(&self) -> Result<kraai_types::ScriptExecutionOutcome> {
-        Ok(kraai_types::ScriptExecutionOutcome {
+    pub fn outcome(&self) -> Result<kraai_execution_types::ScriptExecutionOutcome> {
+        Ok(kraai_execution_types::ScriptExecutionOutcome {
             status: self
                 .status
                 .ok_or_else(|| eyre!("Execution {} has no terminal status", self.id))?,
@@ -94,7 +95,7 @@ pub trait ScriptExecutionStore: Send + Sync {
         &self,
         id: &ScriptExecutionId,
         sequence: u64,
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
     ) -> Result<()>;
 
     async fn mark_awaiting_approval(&self, id: &ScriptExecutionId)
@@ -291,7 +292,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
         &self,
         id: &ScriptExecutionId,
         sequence: u64,
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
     ) -> Result<()> {
         image.validate().map_err(|error| eyre!(error))?;
         ensure!(sequence > 0, "Image attachment sequence must be positive");
@@ -305,7 +306,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
             }
             require_phase(record, &[ScriptExecutionPhase::Running])?;
             ensure!(
-                record.images.len() < kraai_types::image::MAX_IMAGE_ATTACHMENTS,
+                record.images.len() < kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS,
                 "Too many image attachments in one script execution"
             );
             let total = record
@@ -314,7 +315,9 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
                 .map(|image| image.byte_length)
                 .try_fold(image.byte_length, u64::checked_add);
             ensure!(
-                total.is_some_and(|total| total <= kraai_types::image::MAX_REQUEST_IMAGE_BYTES),
+                total.is_some_and(
+                    |total| total <= kraai_execution_types::image::MAX_REQUEST_IMAGE_BYTES
+                ),
                 "Image attachments exceed the execution byte limit"
             );
             record.images.insert(sequence, image);

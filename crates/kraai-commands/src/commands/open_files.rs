@@ -15,7 +15,7 @@ pub use command::OpenFilesCommand;
 mod command {
     use std::path::Path;
 
-    use kraai_types::OpenedFilesOperation;
+    use kraai_execution_types::OpenedFilesOperation;
     use kraai_workspace_fs::validate_text_file;
     use nu_engine::CallExt;
     use nu_protocol::{Category, IntoPipelineData, Signature, SyntaxShape, Type, Value, record};

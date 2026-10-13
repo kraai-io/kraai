@@ -2,7 +2,8 @@ use color_eyre::eyre::Result;
 use kraai_agent::SessionSnapshotReader;
 use std::collections::BTreeMap;
 
-use kraai_types::{Message, MessageId, MessageStatus, ScriptExecutionPhase};
+use kraai_execution_types::ScriptExecutionPhase;
+use kraai_types::{Message, MessageId, MessageStatus};
 
 use super::super::client_view::client_message;
 

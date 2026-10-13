@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, find_bwrap, shell_plan, temp_dir};

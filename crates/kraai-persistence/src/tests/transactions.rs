@@ -29,8 +29,8 @@ async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Re
         .ok_or_else(|| color_eyre::eyre::eyre!("An active foreign lease must reject the claim"))?;
     ensure!(
         error
-            .downcast_ref::<kraai_types::DomainError>()
-            .is_some_and(|error| error.kind() == kraai_types::DomainErrorKind::Conflict),
+            .downcast_ref::<kraai_execution_types::DomainError>()
+            .is_some_and(|error| error.kind() == kraai_execution_types::DomainErrorKind::Conflict),
         "Expected an ownership conflict while the writer is held, got {error}"
     );
     transaction.rollback()?;

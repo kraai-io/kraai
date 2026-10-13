@@ -1,9 +1,7 @@
 use color_eyre::eyre::Result;
+use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::{ScriptExecutionStore, SqliteScriptExecutionStore};
-use kraai_types::{
-    AssistantItem, AssistantPhase, ChatRole, ScriptExecutionPhase, ScriptExecutionStatus,
-    TokenUsage,
-};
+use kraai_types::{AssistantItem, AssistantPhase, ChatRole, TokenUsage};
 
 use super::super::stream_driver::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
 use super::harness::FullHistory as _;

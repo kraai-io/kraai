@@ -1,4 +1,4 @@
-use kraai_types::WebSearchResponse;
+use kraai_execution_types::WebSearchResponse;
 use serde_json::Value;
 
 pub(super) fn decode(body: &str, max_chars: usize) -> Result<WebSearchResponse, String> {

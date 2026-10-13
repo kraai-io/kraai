@@ -121,9 +121,8 @@ mod tests {
         reason = "assertions validate terminal tool updates"
     )]
     async fn live_and_replayed_results_use_durable_outcomes() -> color_eyre::Result<()> {
-        use kraai_types::{
-            Message, MessageStatus, ScriptExecutionOutcome, ScriptExecutionStatus, ToolCallId,
-        };
+        use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
+        use kraai_types::{Message, MessageStatus, ToolCallId};
 
         let root = tempfile::tempdir()?;
         let runtime = kraai_runtime::RuntimeBuilder::new(kraai_providers::DefaultProviders)

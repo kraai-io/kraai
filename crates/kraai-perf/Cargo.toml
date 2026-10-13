@@ -12,6 +12,7 @@ clap = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
 kraai-agent = { workspace = true }
+kraai-execution-types.workspace = true
 kraai-nushell-runtime = { workspace = true }
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }

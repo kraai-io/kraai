@@ -1,6 +1,6 @@
 use color_eyre::eyre::Result;
+use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::ScriptExecutionStatus;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;

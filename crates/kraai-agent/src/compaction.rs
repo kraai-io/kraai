@@ -217,9 +217,9 @@ pub(crate) fn limit_request_images(request: &mut ProviderRequest) {
         };
         for part in content.0.iter_mut().rev() {
             if let kraai_types::ContentPart::Image { image } = part {
-                if count < kraai_types::image::MAX_REQUEST_IMAGES
+                if count < kraai_execution_types::image::MAX_REQUEST_IMAGES
                     && bytes.saturating_add(image.byte_length)
-                        <= kraai_types::image::MAX_REQUEST_IMAGE_BYTES
+                        <= kraai_execution_types::image::MAX_REQUEST_IMAGE_BYTES
                 {
                     count += 1;
                     bytes += image.byte_length;

@@ -37,7 +37,7 @@ pub(super) fn prepare(
                 .get("data")
                 .and_then(Value::as_str)
                 .ok_or_else(|| command_error("Invalid MCP image", "Missing image data", span))?;
-            if data.len() > kraai_types::image::MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+            if data.len() > kraai_execution_types::image::MAX_IMAGE_BYTES.div_ceil(3) * 4 {
                 return Err(command_error(
                     "Invalid MCP image",
                     "Image exceeds attachment byte limit",

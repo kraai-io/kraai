@@ -1,6 +1,6 @@
 use crate::config::{LaunchPlan, PreparedCommand, path_is_absolute};
 use crate::error::SandboxError;
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;

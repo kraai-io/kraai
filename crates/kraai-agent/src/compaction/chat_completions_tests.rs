@@ -75,7 +75,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         })
         .await?;
     let (mut context, mut providers, _, root) = fixture(false, vec![], false);
-    let image = kraai_types::ImageAttachment {
+    let image = kraai_execution_types::ImageAttachment {
         id: "a".repeat(64),
         mime_type: "image/png".into(),
         width: 1,

@@ -1,5 +1,5 @@
 use super::*;
-use kraai_types::McpRequest;
+use kraai_execution_types::McpRequest;
 use serde_json::{Value, json};
 
 struct FixtureMcp;

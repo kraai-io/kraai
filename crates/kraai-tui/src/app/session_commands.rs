@@ -42,7 +42,7 @@ impl App {
             || self.state.pending_script.is_some();
 
         let message = self.compose_message(&raw_input);
-        if message.images().count() > kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+        if message.images().count() > kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
             self.state.status =
                 String::from("Too many images. Delete an image chip before sending");
             return;

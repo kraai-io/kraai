@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::{Pid, setsid};
 use tokio_util::sync::CancellationToken;

@@ -131,8 +131,8 @@ async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() 
                 "test-profile".into(),
                 kraai_types::ToolCallId::new(format!("call-{index}")),
                 "output".into(),
-                kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
             )

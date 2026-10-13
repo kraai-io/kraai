@@ -4,13 +4,13 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
+use kraai_execution_types::ImageAttachment;
 use kraai_runtime::{
     AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
 use kraai_types::{
-    AssistantItem, ChatRole, ConversationItem, ImageAttachment, MessageContent, MessageId,
-    MessageStatus, SessionId,
+    AssistantItem, ChatRole, ConversationItem, MessageContent, MessageId, MessageStatus, SessionId,
 };
 use ratatui::crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,

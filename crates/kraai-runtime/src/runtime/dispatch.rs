@@ -31,7 +31,7 @@ impl RuntimeCore {
             .find(|auth| auth.provider_type() == provider_type)
             .cloned()
             .ok_or_else(|| {
-                eyre!(kraai_types::DomainError::not_found(format!(
+                eyre!(kraai_execution_types::DomainError::not_found(format!(
                     "Provider type {provider_type} has no account sign-in"
                 )))
             })

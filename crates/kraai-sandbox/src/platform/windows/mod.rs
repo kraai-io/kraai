@@ -8,7 +8,7 @@ pub(crate) mod process;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf, Prefix};
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use windows_sys::Win32::Security::{SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
 
 use crate::SandboxError;

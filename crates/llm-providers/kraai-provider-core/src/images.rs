@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use color_eyre::eyre::{Result, ensure, eyre};
-use kraai_types::image::{MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGES};
-use kraai_types::{ContentPart, ConversationItem, ImageAttachment, ModelId};
+use kraai_execution_types::ImageAttachment;
+use kraai_execution_types::image::{MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGES};
+use kraai_types::{ContentPart, ConversationItem, ModelId};
 
 use crate::ProviderRequestContext;
 
