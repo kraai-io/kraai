@@ -170,7 +170,7 @@ async fn logout_after_cancelled_refresh_cannot_restore_credentials() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
+    assert_eq!(status.state, ProviderLoginState::SignedOut);
     assert!(controller.get_request_auth().await.is_err());
     assert!(load_auth_file(&path).unwrap().is_none());
     assert_eq!(requests.load(Ordering::SeqCst), 1);
@@ -210,16 +210,16 @@ async fn cancelled_refresh_still_times_out_and_releases_the_file_lock() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
     assert_eq!(
         result.unwrap().unwrap().state,
-        OpenAiCodexLoginState::SignedOut
+        ProviderLoginState::SignedOut
     );
 }
 
 async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
     for login_state in [
-        OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+        ProviderLoginState::BrowserPending(PendingBrowserLogin {
             auth_url: String::from("https://example.invalid"),
         }),
-        OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+        ProviderLoginState::DeviceCodePending(PendingDeviceCodeLogin {
             verification_url: String::from("https://example.invalid"),
             user_code: String::from("ABCD"),
         }),
@@ -278,7 +278,7 @@ async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+            assert_eq!(status.state, ProviderLoginState::Authenticated);
             assert!(status.error.is_none());
             let current = controller.get_request_auth().await.unwrap();
             let persisted = load_auth_file(&path).unwrap().unwrap();

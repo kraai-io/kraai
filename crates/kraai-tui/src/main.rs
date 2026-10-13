@@ -119,7 +119,8 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse().validate().unwrap_or_else(|error| error.exit());
 
-    let runtime_builder = RuntimeBuilder::new().use_current_executable_as_nushell_host();
+    let runtime_builder = RuntimeBuilder::new(kraai_providers::DefaultProviders)
+        .use_current_executable_as_nushell_host();
     let runtime_builder = if let Some(path) = cli.provider_config.clone() {
         runtime_builder.provider_config_path(path)
     } else {

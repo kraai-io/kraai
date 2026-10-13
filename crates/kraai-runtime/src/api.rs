@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use kraai_mcp::McpAuthStatus;
 use kraai_persistence::SessionMeta;
-pub use kraai_provider_openai_codex::{
-    OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
+pub use kraai_provider_core::{
+    LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuthStatus,
+    ProviderLoginState,
 };
 use kraai_types::{
     AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
@@ -436,8 +437,9 @@ pub enum Event {
     HistoryUpdated {
         session_id: SessionId,
     },
-    OpenAiCodexAuthUpdated {
-        status: OpenAiCodexAuthStatus,
+    /// A provider type's sign-in changed.
+    ProviderAuthUpdated {
+        status: ProviderAuthStatus,
     },
     McpAuthUpdated {
         status: McpAuthStatus,
@@ -475,7 +477,7 @@ impl Event {
             | Self::ModelsUpdated
             | Self::ServiceError { .. }
             | Self::McpAuthUpdated { .. }
-            | Self::OpenAiCodexAuthUpdated { .. } => None,
+            | Self::ProviderAuthUpdated { .. } => None,
         }
     }
 }

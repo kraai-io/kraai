@@ -8,8 +8,8 @@ use tokio::sync::oneshot;
 
 use crate::{
     AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Model,
-    OpenAiCodexAuthStatus, RuntimeResult, Session, SessionContextUsage, SessionSnapshot,
-    SettingsDocument, SubmitMessageOutcome, WorkspaceState,
+    RuntimeResult, Session, SessionContextUsage, SessionSnapshot, SettingsDocument,
+    SubmitMessageOutcome, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime
@@ -166,20 +166,21 @@ pub(crate) enum Command {
         wait_for_preparation: bool,
         response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
     },
-    GetOpenAiCodexAuthStatus {
-        response: oneshot::Sender<RuntimeResult<OpenAiCodexAuthStatus>>,
+    GetProviderAuthStatuses {
+        response: oneshot::Sender<RuntimeResult<Vec<crate::ProviderAuthStatus>>>,
     },
-    StartOpenAiCodexBrowserLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
+    StartProviderLogin {
+        provider_type: String,
+        method: crate::LoginMethod,
+        response: oneshot::Sender<RuntimeResult<crate::ProviderAuthStatus>>,
     },
-    StartOpenAiCodexDeviceCodeLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
+    CancelProviderLogin {
+        provider_type: String,
+        response: oneshot::Sender<RuntimeResult<crate::ProviderAuthStatus>>,
     },
-    CancelOpenAiCodexLogin {
-        response: oneshot::Sender<RuntimeResult<()>>,
-    },
-    LogoutOpenAiCodexAuth {
-        response: oneshot::Sender<RuntimeResult<()>>,
+    LogoutProvider {
+        provider_type: String,
+        response: oneshot::Sender<RuntimeResult<crate::ProviderAuthStatus>>,
     },
     Shutdown {
         response: Option<oneshot::Sender<RuntimeResult<()>>>,

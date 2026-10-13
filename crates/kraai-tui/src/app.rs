@@ -53,7 +53,7 @@ mod types;
 mod ui;
 mod workspace_preferences;
 use self::auth::{
-    ProviderAuthState, ProviderAuthStatus, map_openai_codex_auth_status, open_external_target,
+    ProviderAuthState, ProviderAuthStatus, map_provider_auth_status, open_external_target,
     pending_auth_target,
 };
 use self::chat_render::build_tip_chain;

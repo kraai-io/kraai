@@ -20,6 +20,7 @@ members = [
   "crates/llm-providers/kraai-provider-core",
   "crates/llm-providers/kraai-provider-openai-chat-completions",
   "crates/llm-providers/kraai-provider-openai-codex",
+  "crates/llm-providers/kraai-providers",
 ]
 resolver = "3"
 
@@ -50,6 +51,7 @@ kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
 kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }
 kraai-provider-openai-codex = { path = "crates/llm-providers/kraai-provider-openai-codex" }
+kraai-providers = { path = "crates/llm-providers/kraai-providers" }
 kraai-runtime = { path = "crates/kraai-runtime" }
 kraai-sandbox = { path = "crates/kraai-sandbox" }
 kraai-script-protocol = { path = "crates/kraai-script-protocol" }

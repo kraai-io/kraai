@@ -4,11 +4,7 @@ use std::sync::Arc;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use kraai_agent::AgentManager;
 use kraai_persistence::agent_state_root;
-use kraai_provider_core::{ProviderManager, ProviderRegistry};
-use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
-use kraai_provider_openai_codex::{
-    OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexFactory,
-};
+use kraai_provider_core::{ProviderManager, ProviderSet, ProviderSetup};
 use tokio::sync::mpsc;
 
 use super::core::{RuntimeConfig, RuntimeCore, emit_event};
@@ -18,6 +14,7 @@ use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle
 
 /// Builder for creating a runtime
 pub struct RuntimeBuilder {
+    providers: Arc<dyn ProviderSet>,
     mcp_config_path: Option<PathBuf>,
     provider_config_path: Option<PathBuf>,
     nushell_host_path: Option<PathBuf>,
@@ -37,6 +34,7 @@ struct RuntimeParts {
 }
 
 struct RuntimeHostOptions {
+    providers: Arc<dyn ProviderSet>,
     mcp_config_path: Option<PathBuf>,
     nushell_host_path: Option<PathBuf>,
     script_runtime_roots: Option<Vec<PathBuf>>,
@@ -72,9 +70,10 @@ impl RuntimeParts {
 }
 
 impl RuntimeBuilder {
-    /// Create a new runtime builder.
-    pub fn new() -> Self {
+    /// Create a runtime builder that offers the provider types in `providers`.
+    pub fn new(providers: impl ProviderSet + 'static) -> Self {
         Self {
+            providers: Arc::new(providers),
             mcp_config_path: None,
             provider_config_path: None,
             nushell_host_path: None,
@@ -132,6 +131,7 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            providers: self.providers,
             mcp_config_path: self.mcp_config_path,
             nushell_host_path: self.nushell_host_path,
             script_runtime_roots: self.script_runtime_roots,
@@ -190,6 +190,7 @@ impl RuntimeBuilder {
             startup_tx,
         } = RuntimeParts::new();
         let host_options = RuntimeHostOptions {
+            providers: self.providers,
             mcp_config_path: self.mcp_config_path,
             nushell_host_path: self.nushell_host_path,
             script_runtime_roots: self.script_runtime_roots,
@@ -263,15 +264,9 @@ impl RuntimeBuilder {
             Self::init_tracing(&storage_root)?;
         }
         let data_dir = storage_root.join("data");
-        let auth_options = OpenAiCodexAuthControllerOptions::new(
-            storage_root.clone(),
-            storage_root.join("provider-state/openai-codex/auth.json"),
-        );
-        let (persistence, auth) = tokio::join!(
+        let (persistence, setup) = tokio::join!(
             kraai_persistence::Persistence::open(&data_dir),
-            tokio::task::spawn_blocking(move || {
-                OpenAiCodexAuthController::new_with_options(auth_options)
-            }),
+            host_options.providers.load(&storage_root),
         );
         let persistence = persistence.wrap_err("Failed to initialize persistence layer")?;
         let session_store = persistence.sessions().clone();
@@ -286,11 +281,8 @@ impl RuntimeBuilder {
             .and_then(|path| path.canonicalize())
             .or_else(|_| std::env::current_dir())
             .wrap_err("Failed to determine current workspace directory")?;
-        let openai_codex_auth = Arc::new(
-            auth.wrap_err("OpenAI auth initialization task failed")?
-                .wrap_err("Failed to initialize OpenAI auth")?,
-        );
-        let registry = build_provider_registry(openai_codex_auth.clone())?;
+        let ProviderSetup { registry, auth } =
+            setup.wrap_err("Failed to initialize provider types")?;
         let provider_config_path = host_options
             .provider_config_path_override
             .unwrap_or_else(|| storage_root.join("providers.toml"));
@@ -331,7 +323,7 @@ impl RuntimeBuilder {
             stream_tasks: Default::default(),
             config_reload: Arc::default(),
             stopping: Arc::default(),
-            openai_codex_auth,
+            provider_auth: Arc::new(auth),
             config: Arc::new(RuntimeConfig {
                 provider_config_path,
                 nushell_host_path: host_options.nushell_host_path,
@@ -394,38 +386,4 @@ impl RuntimeBuilder {
             })
             .unwrap_or_else(|| Ok(()))
     }
-}
-
-impl Default for RuntimeBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub(crate) fn build_provider_registry(
-    openai_codex_auth: Arc<OpenAiCodexAuthController>,
-) -> Result<ProviderRegistry> {
-    let mut registry = ProviderRegistry::default();
-    registry
-        .register_factory::<OpenAiChatCompletionsFactory>()
-        .map_err(|error| eyre!(error.to_string()))?;
-    registry
-        .register_factory::<OpenAiFactory>()
-        .map_err(|error| eyre!(error.to_string()))?;
-    let openai_codex_factory = OpenAiCodexFactory::new(openai_codex_auth);
-    registry
-        .register_dynamic_factory(
-            OpenAiCodexFactory::TYPE_ID,
-            OpenAiCodexFactory::definition(),
-            OpenAiCodexFactory::pricing_policy(),
-            move |id, config| {
-                openai_codex_factory.create(id, config).map_err(|error| {
-                    kraai_provider_core::ProviderError::ConfigParseError(error.to_string())
-                })
-            },
-            OpenAiCodexFactory::validate_provider_config,
-            OpenAiCodexFactory::validate_model_config,
-        )
-        .map_err(|error| eyre!(error.to_string()))?;
-    Ok(registry)
 }

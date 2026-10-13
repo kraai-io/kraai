@@ -125,7 +125,7 @@ async fn immediately_failing_login_does_not_leave_pending_state() {
     };
     controller
         .install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            ProviderLoginState::BrowserPending(PendingBrowserLogin {
                 auth_url: String::from("https://example.invalid"),
             }),
             async { Err(io::Error::other("immediate failure")) },
@@ -144,7 +144,7 @@ async fn immediately_failing_login_does_not_leave_pending_state() {
     .await
     .unwrap();
 
-    assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
+    assert_eq!(status.state, ProviderLoginState::SignedOut);
     assert_eq!(status.error.as_deref(), Some("immediate failure"));
 }
 
@@ -164,7 +164,7 @@ async fn dropping_last_controller_releases_pending_browser_listener() {
     let weak = Arc::downgrade(&controller.inner);
     drop(reservation);
     let status = controller.start_browser_login().await.unwrap();
-    let OpenAiCodexLoginState::BrowserPending(pending) = status.state else {
+    let ProviderLoginState::BrowserPending(pending) = status.state else {
         panic!("browser login was not pending");
     };
     let auth_url = url::Url::parse(&pending.auth_url).unwrap();
@@ -201,7 +201,7 @@ async fn completed_login_still_publishes_status_and_persists_auth() {
     let mut updates = controller.subscribe();
     controller
         .install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            ProviderLoginState::BrowserPending(PendingBrowserLogin {
                 auth_url: String::from("https://example.invalid"),
             }),
             async move { Ok(auth) },
@@ -212,7 +212,7 @@ async fn completed_login_still_publishes_status_and_persists_auth() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+    assert_eq!(status.state, ProviderLoginState::Authenticated);
     assert_eq!(
         load_auth_file(&path).unwrap().unwrap().generation,
         generation
@@ -249,7 +249,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
     let mut updates = controller.subscribe();
     controller
         .install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            ProviderLoginState::BrowserPending(PendingBrowserLogin {
                 auth_url: String::from("https://example.invalid"),
             }),
             std::future::pending(),
@@ -305,7 +305,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+    assert_eq!(status.state, ProviderLoginState::Authenticated);
     assert_eq!(
         controller.get_request_auth().await.unwrap().generation,
         generation
@@ -322,7 +322,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
     let file_lock = controller.acquire_file_lock().await.unwrap();
     controller
         .install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            ProviderLoginState::BrowserPending(PendingBrowserLogin {
                 auth_url: String::from("https://example.invalid"),
             }),
             std::future::pending(),
@@ -352,7 +352,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
         .unwrap();
 
     let status = controller.get_status().await;
-    assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+    assert_eq!(status.state, ProviderLoginState::Authenticated);
     assert!(status.error.is_none());
     assert_eq!(
         controller.get_request_auth().await.unwrap().generation,
@@ -372,7 +372,7 @@ async fn stale_login_completion_cannot_clear_newer_attempt() {
     };
     controller
         .install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+            ProviderLoginState::BrowserPending(PendingBrowserLogin {
                 auth_url: String::from("https://old.invalid"),
             }),
             std::future::pending(),
@@ -394,7 +394,7 @@ async fn stale_login_completion_cannot_clear_newer_attempt() {
         controller.cancel_pending_task_locked().await;
         controller
             .install_login_task(
-                OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+                ProviderLoginState::BrowserPending(PendingBrowserLogin {
                     auth_url: String::from("https://new.invalid"),
                 }),
                 std::future::pending(),
@@ -408,7 +408,7 @@ async fn stale_login_completion_cannot_clear_newer_attempt() {
     let status = controller.get_status().await;
     assert_eq!(
         status.state,
-        OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+        ProviderLoginState::BrowserPending(PendingBrowserLogin {
             auth_url: String::from("https://new.invalid"),
         })
     );
@@ -436,7 +436,7 @@ async fn missing_auth_file_reports_signed_out_status() {
 
     assert_eq!(
         controller.get_status().await.state,
-        OpenAiCodexLoginState::SignedOut
+        ProviderLoginState::SignedOut
     );
 }
 
@@ -661,12 +661,12 @@ async fn separate_controllers_do_not_reuse_a_rotated_refresh_token() {
     );
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     assert_eq!(
-        first_updates.try_recv().unwrap().account_id.as_deref(),
-        Some("workspace_123")
+        first_updates.try_recv().unwrap().state,
+        ProviderLoginState::Authenticated
     );
     assert_eq!(
-        second_updates.try_recv().unwrap().account_id.as_deref(),
-        Some("workspace_123")
+        second_updates.try_recv().unwrap().state,
+        ProviderLoginState::Authenticated
     );
 
     server.abort();
@@ -722,7 +722,7 @@ async fn stalled_refresh_releases_auth_file_lock_after_timeout() {
             .unwrap()
             .unwrap()
             .state,
-        OpenAiCodexLoginState::SignedOut
+        ProviderLoginState::SignedOut
     );
 
     server.abort();

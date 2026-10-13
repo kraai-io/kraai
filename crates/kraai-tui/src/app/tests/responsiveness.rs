@@ -32,10 +32,8 @@ fn pending_input_leaves_runtime_notifications_queued() {
     let (tx, rx) = unbounded();
     harness.app.runtime_rx = rx;
     assert!(
-        tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-            Default::default()
-        )))
-        .is_ok()
+        tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+            .is_ok()
     );
     assert!(matches!(harness.app.process_events(|| Ok(true)), Ok(false)));
     assert_eq!(harness.app.runtime_rx.len(), 1);
@@ -50,10 +48,8 @@ fn runtime_backlog_yields_before_draining_the_queue() {
     harness.app.runtime_rx = rx;
     for _ in 0..200 {
         assert!(
-            tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-                Default::default()
-            )))
-            .is_ok()
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
         );
     }
     assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
@@ -67,10 +63,8 @@ fn input_arriving_during_runtime_processing_stops_the_batch() {
     harness.app.runtime_rx = rx;
     for _ in 0..3 {
         assert!(
-            tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-                Default::default()
-            )))
-            .is_ok()
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
         );
     }
     let mut polls = 0;

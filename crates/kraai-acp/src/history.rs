@@ -126,7 +126,7 @@ mod tests {
         };
 
         let root = tempfile::tempdir()?;
-        let runtime = kraai_runtime::RuntimeBuilder::new()
+        let runtime = kraai_runtime::RuntimeBuilder::new(kraai_providers::DefaultProviders)
             .storage_root(root.path().to_path_buf())
             .mcp_config_path(root.path().join("mcp.toml"))
             .build_on(&tokio::runtime::Handle::current());

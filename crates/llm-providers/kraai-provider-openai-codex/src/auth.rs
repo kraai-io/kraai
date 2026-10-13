@@ -1,5 +1,4 @@
 mod login;
-mod status;
 mod storage;
 mod token;
 
@@ -17,8 +16,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, oneshot};
 use tokio_util::task::AbortOnDropHandle;
 
-pub use status::{
-    OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
+use kraai_provider_core::{
+    LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuth, ProviderAuthStatus,
+    ProviderLoginState,
 };
 
 use login::{bind_listener, build_authorize_url, generate_pkce, generate_state};
@@ -100,7 +100,7 @@ struct Inner {
     state: Arc<Mutex<ControllerState>>,
     login_gate: Mutex<()>,
     refresh_gate: Mutex<()>,
-    updates: broadcast::Sender<OpenAiCodexAuthStatus>,
+    updates: broadcast::Sender<ProviderAuthStatus>,
     config: AuthConfig,
 }
 
@@ -166,7 +166,7 @@ async fn commit_auth<T: Send + 'static>(
 
 struct PendingLogin {
     id: String,
-    state: OpenAiCodexLoginState,
+    state: ProviderLoginState,
     task: AbortOnDropHandle<()>,
 }
 
@@ -223,7 +223,7 @@ impl OpenAiCodexAuthController {
         })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<OpenAiCodexAuthStatus> {
+    pub fn subscribe(&self) -> broadcast::Receiver<ProviderAuthStatus> {
         self.inner.updates.subscribe()
     }
 
@@ -235,15 +235,15 @@ impl OpenAiCodexAuthController {
         .await
     }
 
-    pub async fn get_status(&self) -> OpenAiCodexAuthStatus {
+    pub async fn get_status(&self) -> ProviderAuthStatus {
         self.snapshot_status().await
     }
 
-    pub async fn status(&self) -> OpenAiCodexAuthStatus {
+    pub async fn status(&self) -> ProviderAuthStatus {
         self.get_status().await
     }
 
-    pub async fn start_browser_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
+    pub async fn start_browser_login(&self) -> io::Result<ProviderAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
 
@@ -267,7 +267,7 @@ impl OpenAiCodexAuthController {
         let client = self.inner.client.clone();
         let config = self.inner.config.clone();
         self.install_login_task(
-            OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
+            ProviderLoginState::BrowserPending(PendingBrowserLogin { auth_url }),
             async move {
                 login::run_browser_login(&client, &config, listener, redirect_uri, pkce, state)
                     .await
@@ -278,7 +278,7 @@ impl OpenAiCodexAuthController {
         self.emit_status().await
     }
 
-    pub async fn start_device_code_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
+    pub async fn start_device_code_login(&self) -> io::Result<ProviderAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
 
@@ -292,7 +292,7 @@ impl OpenAiCodexAuthController {
         let user_code = device_code.user_code.clone();
         let interval_seconds = device_code.interval_seconds;
         self.install_login_task(
-            OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+            ProviderLoginState::DeviceCodePending(PendingDeviceCodeLogin {
                 verification_url: format!("{}/codex/device", self.inner.config.issuer),
                 user_code: device_code.user_code,
             }),
@@ -313,7 +313,7 @@ impl OpenAiCodexAuthController {
         self.emit_status().await
     }
 
-    pub async fn cancel_login(&self) -> io::Result<OpenAiCodexAuthStatus> {
+    pub async fn cancel_login(&self) -> io::Result<ProviderAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
         {
@@ -324,7 +324,7 @@ impl OpenAiCodexAuthController {
         self.emit_status().await
     }
 
-    pub async fn logout(&self) -> io::Result<OpenAiCodexAuthStatus> {
+    pub async fn logout(&self) -> io::Result<ProviderAuthStatus> {
         let _login_guard = self.inner.login_gate.lock().await;
         self.cancel_pending_task_locked().await;
         let file_lock = self.acquire_file_lock().await?;
@@ -527,7 +527,7 @@ impl OpenAiCodexAuthController {
         Ok(())
     }
 
-    async fn install_login_task<F>(&self, state: OpenAiCodexLoginState, worker: F)
+    async fn install_login_task<F>(&self, state: ProviderLoginState, worker: F)
     where
         F: Future<Output = io::Result<StoredAuth>> + Send + 'static,
     {
@@ -617,12 +617,12 @@ impl OpenAiCodexAuthController {
         self.persist_auth_locked(auth, file_lock).await
     }
 
-    async fn snapshot_status(&self) -> OpenAiCodexAuthStatus {
+    async fn snapshot_status(&self) -> ProviderAuthStatus {
         let mut guard = self.inner.state.lock().await;
         status_from_state(&mut guard)
     }
 
-    async fn emit_status(&self) -> io::Result<OpenAiCodexAuthStatus> {
+    async fn emit_status(&self) -> io::Result<ProviderAuthStatus> {
         let mut guard = self.inner.state.lock().await;
         let status = status_from_state(&mut guard);
         let _ = self.inner.updates.send(status.clone());
@@ -642,52 +642,74 @@ impl OpenAiCodexAuthController {
     }
 }
 
-fn status_from_state(state: &mut ControllerState) -> OpenAiCodexAuthStatus {
+fn status_from_state(state: &mut ControllerState) -> ProviderAuthStatus {
     state.status_sequence = state.status_sequence.saturating_add(1);
-    let (login_state, email, plan_type, account_id, last_refresh_unix) =
-        if let Some(pending) = &state.pending {
-            (
-                pending.state.clone(),
-                state
-                    .auth
-                    .as_ref()
-                    .and_then(|auth| auth.claims.email.clone()),
-                state
-                    .auth
-                    .as_ref()
-                    .and_then(|auth| auth.claims.plan_type.clone()),
-                state
-                    .auth
-                    .as_ref()
-                    .map(|auth| auth.tokens.account_id.clone())
-                    .or_else(|| {
-                        state
-                            .auth
-                            .as_ref()
-                            .and_then(|auth| auth.claims.account_id.clone())
-                    }),
-                state.auth.as_ref().map(|auth| auth.last_refresh_unix),
-            )
-        } else if let Some(auth) = &state.auth {
-            (
-                OpenAiCodexLoginState::Authenticated,
-                auth.claims.email.clone(),
-                auth.claims.plan_type.clone(),
-                Some(auth.tokens.account_id.clone()),
-                Some(auth.last_refresh_unix),
-            )
-        } else {
-            (OpenAiCodexLoginState::SignedOut, None, None, None, None)
-        };
+    let (login_state, account, plan, last_refresh_unix) = if let Some(pending) = &state.pending {
+        (
+            pending.state.clone(),
+            state
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.claims.email.clone()),
+            state
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.claims.plan_type.clone()),
+            state.auth.as_ref().map(|auth| auth.last_refresh_unix),
+        )
+    } else if let Some(auth) = &state.auth {
+        (
+            ProviderLoginState::Authenticated,
+            auth.claims.email.clone(),
+            auth.claims.plan_type.clone(),
+            Some(auth.last_refresh_unix),
+        )
+    } else {
+        (ProviderLoginState::SignedOut, None, None, None)
+    };
 
-    OpenAiCodexAuthStatus {
+    ProviderAuthStatus {
+        provider_type: String::from(crate::OpenAiCodexFactory::TYPE_ID),
         sequence: state.status_sequence,
         state: login_state,
-        email,
-        plan_type,
-        account_id,
+        account,
+        plan,
         last_refresh_unix,
         error: state.error.clone(),
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderAuth for OpenAiCodexAuthController {
+    fn provider_type(&self) -> &'static str {
+        crate::OpenAiCodexFactory::TYPE_ID
+    }
+
+    fn login_methods(&self) -> &'static [LoginMethod] {
+        &[LoginMethod::Browser, LoginMethod::DeviceCode]
+    }
+
+    async fn status(&self) -> ProviderAuthStatus {
+        self.snapshot_status().await
+    }
+
+    async fn start_login(&self, method: LoginMethod) -> io::Result<ProviderAuthStatus> {
+        match method {
+            LoginMethod::Browser => self.start_browser_login().await,
+            LoginMethod::DeviceCode => self.start_device_code_login().await,
+        }
+    }
+
+    async fn cancel_login(&self) -> io::Result<ProviderAuthStatus> {
+        Self::cancel_login(self).await
+    }
+
+    async fn logout(&self) -> io::Result<ProviderAuthStatus> {
+        Self::logout(self).await
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<ProviderAuthStatus> {
+        Self::subscribe(self)
     }
 }
 

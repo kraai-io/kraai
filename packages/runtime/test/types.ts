@@ -1,4 +1,4 @@
-import { createRuntime, type MessageContent, type ModelSelection, type RuntimeResult, type SessionSnapshot, type SettingsDocument } from '..';
+import { createRuntime, type EventSubscription, type MessageContent, type ModelSelection, type RuntimeResult, type SessionId, type SessionSnapshot, type SettingsDocument } from '..';
 
 const runtime = createRuntime({ storage_root: '/tmp/kraai-client' });
 const snapshot: Promise<RuntimeResult<SessionSnapshot>> = runtime.getSessionSnapshot('session');
@@ -46,7 +46,7 @@ async function consume() {
 
 void consume;
 
-async function sendImage(bytes: number[]) {
+async function sendImage(bytes: Uint8Array) {
   const imported = await runtime.importImage(bytes);
   if ('Err' in imported) return;
   const content: MessageContent = [
@@ -56,6 +56,18 @@ async function sendImage(bytes: number[]) {
   await runtime.sendContent('session', content, 'model', 'provider', {});
   const restored: RuntimeResult<MessageContent | null> = await runtime.undoLastUserMessage('session');
   void restored;
+  const read = await runtime.readImage(imported.Ok);
+  if ('Ok' in read) {
+    const copy: Uint8Array = read.Ok;
+    void copy;
+  }
 }
 
 void sendImage;
+
+function sessionEvents(session: SessionId) {
+  const subscription: EventSubscription = runtime.subscribeSession(session);
+  subscription.close();
+}
+
+void sessionEvents;

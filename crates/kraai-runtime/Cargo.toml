@@ -14,8 +14,6 @@ kraai-mcp.workspace = true
 kraai-nushell-runtime.workspace = true
 kraai-persistence.workspace = true
 kraai-provider-core.workspace = true
-kraai-provider-openai-chat-completions.workspace = true
-kraai-provider-openai-codex.workspace = true
 kraai-sandbox.workspace = true
 kraai-script-protocol.workspace = true
 kraai-types.workspace = true
@@ -40,7 +38,6 @@ typescript = [
   "dep:ts-rs",
   "kraai-types/typescript",
   "kraai-provider-core/typescript",
-  "kraai-provider-openai-codex/typescript",
 ]
 
 [dependencies.ts-rs]
@@ -48,5 +45,6 @@ optional = true
 workspace = true
 
 [dev-dependencies]
+kraai-providers.workspace = true
 image.workspace = true
 rusqlite.workspace = true

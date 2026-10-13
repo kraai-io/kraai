@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
-use kraai_provider_openai_codex::OpenAiCodexAuthController;
 use kraai_types::SessionId;
 use tokio::sync::{Mutex, mpsc};
 
@@ -35,7 +34,7 @@ pub(crate) struct RuntimeCore {
     /// Serializes provider configuration reloads.
     pub(crate) config_reload: Arc<Mutex<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
-    pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
+    pub(crate) provider_auth: Arc<Vec<Arc<dyn kraai_provider_core::ProviderAuth>>>,
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     pub(crate) model_catalog_tx: tokio::sync::watch::Sender<tokio::sync::watch::Receiver<u64>>,
@@ -95,7 +94,7 @@ impl RuntimeCore {
 
         let background_tasks = [
             self.spawn_config_watcher(),
-            self.spawn_openai_auth_forwarder(),
+            self.spawn_provider_auth_forwarder(),
             self.spawn_model_catalog_forwarder(),
             self.spawn_mcp_auth_forwarder(),
             self.spawn_lease_heartbeat(),

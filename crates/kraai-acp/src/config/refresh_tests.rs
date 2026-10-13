@@ -71,7 +71,7 @@ provider_id = "mock"
             ),
         )
         .await?;
-        let runtime = RuntimeBuilder::new()
+        let runtime = RuntimeBuilder::new(kraai_providers::DefaultProviders)
             .storage_root(root.path().join("state"))
             .provider_config_path(config)
             .mcp_config_path(root.path().join("mcp.toml"))

@@ -11,6 +11,7 @@ name = "kraai"
 path = "src/main.rs"
 
 [dependencies]
+kraai-providers.workspace = true
 arboard = { workspace = true, features = [
   "image-data",
   "wayland-data-control",

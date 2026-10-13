@@ -12,7 +12,6 @@ use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
 use kraai_types::{AssistantPhase, ModelId, ProviderId, SessionId, TokenUsage};
 use tokio::sync::{broadcast, mpsc};
 
-use super::super::builder::build_provider_registry;
 use super::super::core::{RuntimeConfig, RuntimeCore};
 use crate::handle::RuntimeEventSender;
 use crate::{Event, EventCallback, RuntimeHandle};
@@ -403,18 +402,16 @@ path = \"inherit\"\n",
             data_dir.clone(),
         ));
 
-        let auth_root = kraai_persistence::agent_state_root().expect("locate application state");
-        let auth_path = auth_root.join("provider-state/openai-codex/auth.json");
-        let openai_codex_auth =
-            match kraai_provider_openai_codex::OpenAiCodexAuthController::new_with_options(
-                kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions::new(
-                    auth_root, auth_path,
-                ),
-            ) {
-                Ok(controller) => Arc::new(controller),
-                Err(error) if is_missing_system_ca_error(&error) => return None,
-                Err(error) => panic!("unexpected OpenAI auth controller init error: {error}"),
-            };
+        let setup = match kraai_provider_core::ProviderSet::load(
+            &kraai_providers::DefaultProviders,
+            &data_dir,
+        )
+        .await
+        {
+            Ok(setup) => setup,
+            Err(error) if is_missing_system_ca_error(error.as_ref()) => return None,
+            Err(error) => panic!("unexpected provider setup error: {error:?}"),
+        };
         let events = EventCollector::default();
         let (command_tx, command_rx) = mpsc::channel(32);
         let event_tx = RuntimeEventSender::new(1024);
@@ -436,12 +433,11 @@ path = \"inherit\"\n",
             agent_manager,
             execution_store,
             context_state_store,
-            provider_registry: build_provider_registry(openai_codex_auth.clone())
-                .expect("provider registry"),
+            provider_registry: setup.registry,
             stream_tasks: Default::default(),
             config_reload: Arc::default(),
             stopping: Arc::default(),
-            openai_codex_auth,
+            provider_auth: Arc::new(setup.auth),
             config: Arc::new(RuntimeConfig {
                 provider_config_path: data_dir.join("providers.toml"),
                 use_current_executable_as_nushell_host: false,

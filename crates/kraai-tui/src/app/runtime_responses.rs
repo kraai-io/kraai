@@ -132,17 +132,19 @@ impl App {
             RuntimeResponse::Settings(Err(err)) => {
                 self.set_error(format!("Failed loading settings: {err}"));
             }
-            RuntimeResponse::OpenAiCodexAuthStatus(result)
-            | RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
-            | RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result)
-            | RuntimeResponse::CancelOpenAiCodexLogin(result)
-            | RuntimeResponse::LogoutOpenAiCodexAuth(result) => match result {
+            RuntimeResponse::ProviderAuthStatuses(result) => match result {
+                Ok(statuses) => {
+                    for status in statuses {
+                        self.apply_provider_auth_status(status);
+                    }
+                }
+                Err(err) => self.set_error(format!("Provider sign-in failed: {err}")),
+            },
+            RuntimeResponse::ProviderAuthStatus(result) => match result {
                 Ok(status) => {
-                    self.apply_openai_codex_auth_status(status);
+                    self.apply_provider_auth_status(status);
                 }
-                Err(err) => {
-                    self.set_error(format!("OpenAI auth failed: {err}"));
-                }
+                Err(err) => self.set_error(format!("Provider sign-in failed: {err}")),
             },
             RuntimeResponse::McpAuthStatuses(result) => match result {
                 Ok(statuses) => {

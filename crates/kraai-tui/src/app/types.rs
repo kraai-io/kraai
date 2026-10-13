@@ -147,7 +147,7 @@ pub(super) enum RuntimeRequest {
     GetAgentProfileCatalog,
     ListProviderDefinitions,
     GetSettings,
-    GetOpenAiCodexAuthStatus,
+    GetProviderAuthStatuses,
     GetMcpAuthStatuses,
     StartMcpLogin {
         server: String,
@@ -159,10 +159,16 @@ pub(super) enum RuntimeRequest {
     LogoutMcp {
         server: String,
     },
-    StartOpenAiCodexBrowserLogin,
-    StartOpenAiCodexDeviceCodeLogin,
-    CancelOpenAiCodexLogin,
-    LogoutOpenAiCodexAuth,
+    StartProviderLogin {
+        provider_type: String,
+        method: kraai_runtime::LoginMethod,
+    },
+    CancelProviderLogin {
+        provider_type: String,
+    },
+    LogoutProvider {
+        provider_type: String,
+    },
     CreateSession {
         creation_id: u64,
         profile_id: Option<String>,
@@ -235,7 +241,7 @@ pub(super) enum RuntimeResponse {
     AgentProfileCatalog(RuntimeResult<AgentProfileCatalog>),
     ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),
     Settings(RuntimeResult<SettingsDocument>),
-    OpenAiCodexAuthStatus(RuntimeResult<ProviderAuthStatus>),
+    ProviderAuthStatuses(RuntimeResult<Vec<ProviderAuthStatus>>),
     McpAuthStatuses(RuntimeResult<Vec<kraai_runtime::McpAuthStatus>>),
     StartMcpLogin {
         server: String,
@@ -243,10 +249,7 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<kraai_runtime::McpAuthStatus>,
     },
     McpAuthStatus(RuntimeResult<kraai_runtime::McpAuthStatus>),
-    StartOpenAiCodexBrowserLogin(RuntimeResult<ProviderAuthStatus>),
-    StartOpenAiCodexDeviceCodeLogin(RuntimeResult<ProviderAuthStatus>),
-    CancelOpenAiCodexLogin(RuntimeResult<ProviderAuthStatus>),
-    LogoutOpenAiCodexAuth(RuntimeResult<ProviderAuthStatus>),
+    ProviderAuthStatus(RuntimeResult<ProviderAuthStatus>),
     CreateSession {
         creation_id: u64,
         result: RuntimeResult<SessionId>,

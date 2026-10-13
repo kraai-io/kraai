@@ -163,6 +163,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-providers" = rec {
+      packageId = "kraai-providers";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-providers";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-runtime" = rec {
       packageId = "kraai-runtime";
       build = internal.buildRustCrateWithFeatures {
@@ -9949,6 +9959,10 @@ rec {
             packageId = "kraai-mcp";
           }
           {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
+          {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
           }
@@ -11037,6 +11051,41 @@ rec {
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
+      "kraai-providers" = rec {
+        crateName = "kraai-providers";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/llm-providers/kraai-providers; };
+        libName = "kraai_providers";
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "kraai-provider-core";
+            packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-provider-openai-chat-completions";
+            packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
+            name = "kraai-provider-openai-codex";
+            packageId = "kraai-provider-openai-codex";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+        ];
+
+      };
       "kraai-runtime" = rec {
         crateName = "kraai-runtime";
         version = "0.1.0";
@@ -11084,14 +11133,6 @@ rec {
           {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
-          }
-          {
-            name = "kraai-provider-openai-chat-completions";
-            packageId = "kraai-provider-openai-chat-completions";
-          }
-          {
-            name = "kraai-provider-openai-codex";
-            packageId = "kraai-provider-openai-codex";
           }
           {
             name = "kraai-sandbox";
@@ -11164,13 +11205,17 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
+          {
             name = "rusqlite";
             packageId = "rusqlite";
             features = [ "bundled" ];
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" "kraai-provider-openai-codex/typescript" ];
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
@@ -11188,6 +11233,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-runtime-node; };
         libName = "kraai_runtime_node";type = [ "cdylib" "rlib" ];
         dependencies = [
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
           {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
@@ -11355,6 +11404,10 @@ rec {
           {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
           }
           {
             name = "kraai-runtime";

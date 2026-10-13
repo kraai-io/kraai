@@ -213,7 +213,7 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
     let root = tempfile::tempdir()?;
     let config = root.path().join("providers.toml");
     std::fs::write(&config, "")?;
-    let runtime = kraai_runtime::RuntimeBuilder::new()
+    let runtime = kraai_runtime::RuntimeBuilder::new(kraai_providers::DefaultProviders)
         .storage_root(root.path().to_path_buf())
         .provider_config_path(config)
         .build();
@@ -263,7 +263,7 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
     let root = tempfile::tempdir()?;
     let config = root.path().join("providers.toml");
     std::fs::write(&config, "")?;
-    let runtime = kraai_runtime::RuntimeBuilder::new()
+    let runtime = kraai_runtime::RuntimeBuilder::new(kraai_providers::DefaultProviders)
         .storage_root(root.path().to_path_buf())
         .provider_config_path(config)
         .build();
@@ -301,8 +301,8 @@ async fn failed_executor_preserves_response_ids_and_startup_marker()
             if session_id == SessionId::new("session") && execution_id == "invalid/execution" && result == Err(failure.clone())
     ));
     assert!(matches!(
-        bridge.dispatch(RuntimeRequest::GetOpenAiCodexAuthStatus),
-        RuntimeResponse::OpenAiCodexAuthStatus(Err(error)) if error == failure
+        bridge.dispatch(RuntimeRequest::GetProviderAuthStatuses),
+        RuntimeResponse::ProviderAuthStatuses(Err(error)) if error == failure
     ));
     assert!(matches!(
         bridge.dispatch(RuntimeRequest::LoadSession {

@@ -167,7 +167,7 @@ impl App {
                 self.state.status = String::from("Loading providers");
                 self.request(RuntimeRequest::ListProviderDefinitions);
                 self.request(RuntimeRequest::GetSettings);
-                self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
+                self.request(RuntimeRequest::GetProviderAuthStatuses);
             }
             "mcp" => self.handle_mcp_command(parts.collect()),
             "sessions" => {

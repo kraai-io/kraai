@@ -4,7 +4,7 @@ use kraai_types::SessionId;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
-use super::auth::map_openai_codex_auth_status;
+use super::auth::map_provider_auth_status;
 use super::{RuntimeRequest, RuntimeResponse};
 
 const HISTORY_PAGE: usize = 200;
@@ -208,11 +208,11 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.get_settings());
                 RuntimeResponse::Settings(result)
             }
-            RuntimeRequest::GetOpenAiCodexAuthStatus => {
+            RuntimeRequest::GetProviderAuthStatuses => {
                 let result = self
-                    .execute(|runtime| runtime.get_openai_codex_auth_status())
-                    .map(map_openai_codex_auth_status);
-                RuntimeResponse::OpenAiCodexAuthStatus(result)
+                    .execute(|runtime| runtime.get_provider_auth_statuses())
+                    .map(|statuses| statuses.into_iter().map(map_provider_auth_status).collect());
+                RuntimeResponse::ProviderAuthStatuses(result)
             }
             RuntimeRequest::GetMcpAuthStatuses => RuntimeResponse::McpAuthStatuses(
                 self.execute(|runtime| runtime.get_mcp_auth_statuses()),
@@ -231,41 +231,24 @@ impl RequestBridge {
             RuntimeRequest::LogoutMcp { server } => {
                 RuntimeResponse::McpAuthStatus(self.execute(|runtime| runtime.logout_mcp(server)))
             }
-            RuntimeRequest::StartOpenAiCodexBrowserLogin => {
-                let result = self
-                    .execute(|runtime| runtime.start_openai_codex_browser_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
+            RuntimeRequest::StartProviderLogin {
+                provider_type,
+                method,
+            } => RuntimeResponse::ProviderAuthStatus(
+                self.execute(|runtime| runtime.start_provider_login(provider_type, method))
+                    .map(map_provider_auth_status),
+            ),
+            RuntimeRequest::CancelProviderLogin { provider_type } => {
+                RuntimeResponse::ProviderAuthStatus(
+                    self.execute(|runtime| runtime.cancel_provider_login(provider_type))
+                        .map(map_provider_auth_status),
+                )
             }
-            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
-                let result = self
-                    .execute(|runtime| runtime.start_openai_codex_device_code_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result)
-            }
-            RuntimeRequest::CancelOpenAiCodexLogin => {
-                let result = self
-                    .execute(|runtime| runtime.cancel_openai_codex_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::CancelOpenAiCodexLogin(result)
-            }
-            RuntimeRequest::LogoutOpenAiCodexAuth => {
-                let result = self
-                    .execute(|runtime| runtime.logout_openai_codex_auth())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::LogoutOpenAiCodexAuth(result)
+            RuntimeRequest::LogoutProvider { provider_type } => {
+                RuntimeResponse::ProviderAuthStatus(
+                    self.execute(|runtime| runtime.logout_provider(provider_type))
+                        .map(map_provider_auth_status),
+                )
             }
             RuntimeRequest::SetSessionProfile {
                 session_id,

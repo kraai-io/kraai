@@ -331,13 +331,15 @@ impl App {
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
-            Event::OpenAiCodexAuthUpdated { status } => {
-                if self.apply_openai_codex_auth_status(map_openai_codex_auth_status(status))
+            Event::ProviderAuthUpdated { status } => {
+                let status = map_provider_auth_status(status);
+                let settled = pending_auth_target(&status).is_none();
+                if self.apply_provider_auth_status(status)
                     && self.state.mode == UiMode::ProvidersMenu
                     && matches!(self.state.providers_view, ProvidersView::Detail)
-                    && pending_auth_target(&self.state.openai_codex_auth).is_none()
+                    && settled
                 {
-                    self.state.status = String::from("OpenAI auth updated");
+                    self.state.status = String::from("Provider sign-in updated");
                 }
             }
             Event::McpAuthUpdated { status } => {

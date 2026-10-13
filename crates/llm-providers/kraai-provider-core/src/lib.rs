@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod auth;
+pub use auth::{
+    LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuth, ProviderAuthStatus,
+    ProviderLoginState, ProviderSet, ProviderSetup,
+};
 mod cache_warming;
 pub use cache_warming::{CacheWarmingPolicy, CacheWarmup};
 

@@ -3215,6 +3215,7 @@ dependencies = [
  "image",
  "kraai-mcp",
  "kraai-persistence",
+ "kraai-providers",
  "kraai-runtime",
  "kraai-types",
  "serde",
@@ -3486,6 +3487,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "kraai-provider-core",
+ "kraai-provider-openai-chat-completions",
+ "kraai-provider-openai-codex",
+ "tokio",
+]
+
+[[package]]
 name = "kraai-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3500,8 +3513,7 @@ dependencies = [
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
- "kraai-provider-openai-chat-completions",
- "kraai-provider-openai-codex",
+ "kraai-providers",
  "kraai-sandbox",
  "kraai-script-protocol",
  "kraai-types",
@@ -3523,6 +3535,7 @@ dependencies = [
 name = "kraai-runtime-node"
 version = "0.1.0"
 dependencies = [
+ "kraai-providers",
  "kraai-runtime",
  "kraai-types",
  "napi",
@@ -3568,6 +3581,7 @@ dependencies = [
  "image",
  "kraai-io",
  "kraai-persistence",
+ "kraai-providers",
  "kraai-runtime",
  "kraai-sandbox",
  "kraai-types",

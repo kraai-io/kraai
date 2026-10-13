@@ -252,3 +252,19 @@ test('storage roots must be absolute and may be created at startup', { timeout: 
   assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.listSessions()), []);
 });
+
+test('images cross the binding as raw bytes', async (t) => {
+  const { create } = fixture(t);
+  const runtime = create();
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const image = unwrap(await runtime.importImage(png));
+  assert.equal(image.byte_length, png.length);
+  const bytes = unwrap(await runtime.readImage(image));
+  assert.ok(Buffer.isBuffer(bytes));
+  assert.deepEqual(bytes, png);
+  assert.ok('Err' in (await runtime.readImage({ ...image, id: 'f'.repeat(64) })));
+});

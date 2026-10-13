@@ -38,7 +38,8 @@ impl Runtime {
                 "nushell_host_path must be an existing absolute path",
             ));
         }
-        let mut builder = RuntimeBuilder::new().nushell_host_path(path);
+        let mut builder =
+            RuntimeBuilder::new(kraai_providers::DefaultProviders).nushell_host_path(path);
         if let Some(roots) = options.script_runtime_roots {
             builder = builder.script_runtime_roots(roots.into_iter().map(Into::into).collect());
         }
@@ -62,6 +63,16 @@ impl Runtime {
     #[napi]
     pub fn subscribe(&self) -> EventSubscription {
         EventSubscription::new(self.handle.subscribe(), self.closed.child_token())
+    }
+
+    /// Events of one session plus runtime-wide service events.
+    #[napi(skip_typescript)]
+    pub fn subscribe_session(&self, session_id: String) -> EventSubscription {
+        EventSubscription::new(
+            self.handle
+                .subscribe_session(&kraai_types::SessionId::new(session_id)),
+            self.closed.child_token(),
+        )
     }
 
     #[napi(skip_typescript)]
@@ -93,7 +104,7 @@ pub fn export_types(directory: &std::path::Path) -> Result<(), Box<dyn std::erro
     let methods = methods::declarations(&cfg)?;
     let types = std::fs::read_to_string(directory.join("types.d.ts"))?;
     let declarations = format!(
-        "{types}\nexport type RuntimeResult<T> = {{ Ok: T }} | {{ Err: RuntimeError }};\nexport declare class Runtime {{\n  private constructor();\n  static create(options: RuntimeOptions): Runtime;\n  subscribe(): EventSubscription;\n  startupStatus(): RuntimeStartupState;\n  shutdown(): Promise<RuntimeResult<null>>;\n{methods}}}\nexport declare class EventSubscription {{\n  private constructor();\n  next(): Promise<EventRead>;\n  close(): void;\n}}\n"
+        "{types}\nexport type RuntimeResult<T> = {{ Ok: T }} | {{ Err: RuntimeError }};\nexport declare class Runtime {{\n  private constructor();\n  static create(options: RuntimeOptions): Runtime;\n  subscribe(): EventSubscription;\n  subscribeSession(sessionId: SessionId): EventSubscription;\n  startupStatus(): RuntimeStartupState;\n  shutdown(): Promise<RuntimeResult<null>>;\n{methods}}}\nexport declare class EventSubscription {{\n  private constructor();\n  next(): Promise<EventRead>;\n  close(): void;\n}}\n"
     );
     std::fs::write(directory.join("index.d.ts"), declarations)?;
     Ok(())

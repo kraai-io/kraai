@@ -19,6 +19,21 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 }
 
 impl RuntimeCore {
+    fn provider_auth(
+        &self,
+        provider_type: &str,
+    ) -> Result<std::sync::Arc<dyn kraai_provider_core::ProviderAuth>> {
+        self.provider_auth
+            .iter()
+            .find(|auth| auth.provider_type() == provider_type)
+            .cloned()
+            .ok_or_else(|| {
+                eyre!(kraai_types::DomainError::not_found(format!(
+                    "Provider type {provider_type} has no account sign-in"
+                )))
+            })
+    }
+
     /// Reads a page of history ending at `from`, or at the session's latest message.
     async fn history_page(
         &self,
@@ -425,8 +440,12 @@ impl RuntimeCore {
                         .await,
                 );
             }
-            Command::GetOpenAiCodexAuthStatus { response } => {
-                let _ = response.send(Ok(self.openai_codex_auth.get_status().await));
+            Command::GetProviderAuthStatuses { response } => {
+                let mut statuses = Vec::with_capacity(self.provider_auth.len());
+                for auth in self.provider_auth.iter() {
+                    statuses.push(auth.status().await);
+                }
+                let _ = response.send(Ok(statuses));
             }
             Command::GetMcpAuthStatuses { response } => {
                 let mcp = self.agent_manager.mcp();
@@ -444,21 +463,36 @@ impl RuntimeCore {
                 let mcp = self.agent_manager.mcp();
                 respond(response, mcp.logout(&server).await);
             }
-            Command::StartOpenAiCodexBrowserLogin { response } => {
-                let result = self.openai_codex_auth.start_browser_login().await;
-                respond(response, result.map(|_| ()).map_err(Into::into));
+            Command::StartProviderLogin {
+                provider_type,
+                method,
+                response,
+            } => {
+                let result = match self.provider_auth(&provider_type) {
+                    Ok(auth) => auth.start_login(method).await.map_err(Into::into),
+                    Err(error) => Err(error),
+                };
+                respond(response, result);
             }
-            Command::StartOpenAiCodexDeviceCodeLogin { response } => {
-                let result = self.openai_codex_auth.start_device_code_login().await;
-                respond(response, result.map(|_| ()).map_err(Into::into));
+            Command::CancelProviderLogin {
+                provider_type,
+                response,
+            } => {
+                let result = match self.provider_auth(&provider_type) {
+                    Ok(auth) => auth.cancel_login().await.map_err(Into::into),
+                    Err(error) => Err(error),
+                };
+                respond(response, result);
             }
-            Command::CancelOpenAiCodexLogin { response } => {
-                let result = self.openai_codex_auth.cancel_login().await;
-                respond(response, result.map(|_| ()).map_err(Into::into));
-            }
-            Command::LogoutOpenAiCodexAuth { response } => {
-                let result = self.openai_codex_auth.logout().await;
-                respond(response, result.map(|_| ()).map_err(Into::into));
+            Command::LogoutProvider {
+                provider_type,
+                response,
+            } => {
+                let result = match self.provider_auth(&provider_type) {
+                    Ok(auth) => auth.logout().await.map_err(Into::into),
+                    Err(error) => Err(error),
+                };
+                respond(response, result);
             }
             Command::Shutdown { .. }
             | Command::SendMessage { .. }

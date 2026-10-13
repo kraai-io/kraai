@@ -8,8 +8,9 @@ use ratatui::{
 };
 
 use super::super::{
-    ActiveSettingsEditor, AppState, ProviderAuthState, ProvidersAdvancedFocus, ProvidersView,
-    SettingsModelField, SettingsProviderField, field_value_display, provider_definition_rank,
+    ActiveSettingsEditor, AppState, ProviderAuthState, ProviderAuthStatus, ProvidersAdvancedFocus,
+    ProvidersView, SettingsModelField, SettingsProviderField, field_value_display,
+    provider_definition_rank,
 };
 use super::{centered_rect, menu_scroll_offset, selection_style};
 
@@ -252,11 +253,11 @@ fn render_provider_list_view(state: &AppState, area: Rect, buf: &mut Buffer) {
                 let selected = idx == state.settings_provider_index;
                 let marker = if selected { "⮞" } else { " " };
                 let display_name = provider_display_name(state, &provider.type_id);
-                let auth_badge = if provider.type_id == "openai-codex" {
-                    format!(" [{}]", openai_auth_badge(state))
-                } else {
-                    String::new()
-                };
+                let auth_badge = state
+                    .provider_auth
+                    .get(&provider.type_id)
+                    .map(|auth| format!(" [{}]", auth_badge(auth)))
+                    .unwrap_or_default();
                 let model_count = state
                     .models_by_provider
                     .get(&provider.id)
@@ -339,11 +340,13 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
         .and_then(|draft| draft.providers.get(state.settings_provider_index))
     {
         let display_name = provider_display_name(state, &provider.type_id);
-        let actions_height = if provider.type_id == "openai-codex"
-            && matches!(
-                state.openai_codex_auth.state,
+        let auth = state.provider_auth.get(&provider.type_id);
+        let actions_height = if auth.is_some_and(|auth| {
+            matches!(
+                auth.state,
                 ProviderAuthState::BrowserPending | ProviderAuthState::DeviceCodePending
-            ) {
+            )
+        }) {
             7
         } else {
             5
@@ -356,37 +359,29 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             .get(&provider.id)
             .map_or(0, Vec::len);
 
-        if provider.type_id == "openai-codex" {
+        if let Some(auth) = auth {
             let mut details_lines = vec![
-                Line::raw(format!("State: {}", openai_auth_badge(state))),
+                Line::raw(format!("State: {}", auth_badge(auth))),
                 Line::raw(format!(
                     "Plan: {}",
-                    state
-                        .openai_codex_auth
-                        .plan_type
-                        .as_deref()
-                        .unwrap_or("unknown")
+                    auth.plan_type.as_deref().unwrap_or("unknown")
                 )),
                 Line::raw(format!(
                     "Last refresh: {}",
-                    state
-                        .openai_codex_auth
-                        .last_refresh
-                        .as_deref()
-                        .unwrap_or("never")
+                    auth.last_refresh.as_deref().unwrap_or("never")
                 )),
                 Line::raw(format!("Models: {model_count}")),
             ];
-            if let Some(error) = &state.openai_codex_auth.error {
+            if let Some(error) = &auth.error {
                 details_lines.push(Line::styled(
                     format!("Error: {error}"),
                     Style::default().fg(Color::Yellow),
                 ));
             }
-            match state.openai_codex_auth.state {
+            match auth.state {
                 ProviderAuthState::BrowserPending => {}
                 ProviderAuthState::DeviceCodePending => {
-                    if let Some(code) = &state.openai_codex_auth.user_code {
+                    if let Some(code) = &auth.user_code {
                         details_lines.push(Line::raw(format!("Code: {code}")));
                     }
                 }
@@ -394,7 +389,7 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
             }
 
             Paragraph::new(Text::from(details_lines))
-                .block(super::menu_block().title("OpenAI auth"))
+                .block(super::menu_block().title("Sign-in"))
                 .wrap(Wrap { trim: false })
                 .render(details_area, buf);
         } else {
@@ -410,13 +405,13 @@ fn render_provider_detail_view(state: &AppState, area: Rect, buf: &mut Buffer) {
                 .render(details_area, buf);
         }
 
-        let shortcut_lines = if provider.type_id == "openai-codex" {
+        let shortcut_lines = if let Some(auth) = auth {
             let mut lines = vec![
                 Line::styled("Shortcuts", Style::default().add_modifier(Modifier::BOLD)),
                 Line::raw("b browser sign-in  c device code  x cancel  l logout"),
                 Line::raw("e advanced config  r refresh models"),
             ];
-            match state.openai_codex_auth.state {
+            match auth.state {
                 ProviderAuthState::BrowserPending => {
                     lines.push(Line::raw("Browser should open automatically."));
                     lines.push(Line::raw(
@@ -644,13 +639,12 @@ fn provider_display_name(state: &AppState, type_id: &str) -> String {
         .unwrap_or_else(|| type_id.to_string())
 }
 
-fn openai_auth_badge(state: &AppState) -> String {
-    match state.openai_codex_auth.state {
+fn auth_badge(auth: &ProviderAuthStatus) -> String {
+    match auth.state {
         ProviderAuthState::SignedOut => String::from("Signed out"),
         ProviderAuthState::BrowserPending => String::from("Signing in"),
         ProviderAuthState::DeviceCodePending => String::from("Awaiting code"),
-        ProviderAuthState::Authenticated => state
-            .openai_codex_auth
+        ProviderAuthState::Authenticated => auth
             .plan_type
             .clone()
             .unwrap_or_else(|| String::from("Signed in")),

@@ -111,7 +111,8 @@ pub(super) struct AppState {
     pub(super) providers_advanced_focus: ProvidersAdvancedFocus,
     pub(super) connect_provider_search: String,
     pub(super) connect_provider_index: usize,
-    pub(super) openai_codex_auth: ProviderAuthStatus,
+    /// Sign-in state of each provider type that signs in with an account.
+    pub(super) provider_auth: HashMap<String, ProviderAuthStatus>,
     pub(super) mcp_auth: BTreeMap<String, kraai_runtime::McpAuthStatus>,
     pub(super) mcp_browser_intent: BTreeMap<String, super::mcp_auth::BrowserIntent>,
     pub(super) next_mcp_login_request: u64,
@@ -228,7 +229,7 @@ impl Default for AppState {
             providers_advanced_focus: ProvidersAdvancedFocus::ProviderFields,
             connect_provider_search: String::new(),
             connect_provider_index: 0,
-            openai_codex_auth: ProviderAuthStatus::default(),
+            provider_auth: HashMap::new(),
             mcp_auth: BTreeMap::new(),
             mcp_browser_intent: Default::default(),
             next_mcp_login_request: 0,

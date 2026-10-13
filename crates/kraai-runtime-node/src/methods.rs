@@ -1,12 +1,14 @@
 use crate::{Runtime, wire};
 use kraai_runtime::*;
-use kraai_types::{MessageId, SessionId};
+use napi::bindgen_prelude::{Buffer, Either};
 use napi_derive::napi;
 use serde_json::Value;
-use std::collections::HashMap;
 
-macro_rules! runtime_methods {
-    ($($name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty;)*) => {
+macro_rules! node_methods {
+    (
+        json { $($name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty;)* }
+        binary { $($bname:ident($($barg:ident: $bty:ty),*) -> $bout:ty;)* }
+    ) => {
         #[napi]
         impl Runtime {
             $(#[napi(skip_typescript)]
@@ -32,7 +34,13 @@ macro_rules! runtime_methods {
                 output.push_str(&format!("  {}({}): Promise<RuntimeResult<{}>>;\n",
                     camel_case(stringify!($name)), args.join(", "), <$out>::name(cfg)));
             )*
+            output.push_str(BINARY_DECLARATIONS);
             Ok(output)
+        }
+
+        #[expect(dead_code, reason = "fails to compile when a listed binary method is missing")]
+        fn binary_methods_exist() {
+            $(let _ = Runtime::$bname;)*
         }
     };
 }
@@ -80,45 +88,33 @@ fn camel_case(name: &str) -> String {
         .collect()
 }
 
-runtime_methods! {
-    wait_for_startup() -> RuntimeStartupState;
-    list_models() -> HashMap<String, Vec<Model>>;
-    list_provider_definitions() -> Vec<ProviderDefinition>;
-    get_settings() -> SettingsDocument;
-    list_agent_profiles(session_id: SessionId) -> AgentProfilesState;
-    get_agent_profile_catalog(workspace_dir: Option<String>) -> AgentProfileCatalog;
-    set_session_profile(session_id: SessionId, profile_id: String) -> ();
-    get_session_model(session_id: SessionId) -> Option<kraai_types::ModelSelection>;
-    set_session_model(session_id: SessionId, selection: kraai_types::ModelSelection) -> ();
-    save_settings(settings: SettingsDocument) -> ();
-    create_session() -> SessionId;
-    create_session_with(request: CreateSessionRequest) -> SessionId;
-    import_image(bytes: Vec<u8>) -> kraai_types::ImageAttachment;
-    send_content(session_id: SessionId, message: kraai_types::MessageContent, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
-    send_message(session_id: SessionId, message: String, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
-    get_history_page(session_id: SessionId, from: Option<MessageId>, limit: usize) -> HistoryPage;
-    get_session_snapshot(session_id: SessionId) -> SessionSnapshot;
-    get_session_context_usage(session_id: SessionId) -> Option<SessionContextUsage>;
-    load_session(session_id: SessionId) -> bool;
-    list_sessions() -> Vec<Session>;
-    list_user_input_history(limit: usize) -> Vec<String>;
-    delete_session(session_id: SessionId) -> ();
-    get_workspace_state(session_id: SessionId) -> Option<WorkspaceState>;
-    set_workspace_dir(session_id: SessionId, workspace_dir: String) -> ();
-    get_tip(session_id: SessionId) -> Option<String>;
-    undo_last_user_message(session_id: SessionId) -> Option<kraai_types::MessageContent>;
-    get_pending_script(session_id: SessionId) -> Option<PendingScriptInfo>;
-    approve_script(session_id: SessionId, execution_id: String) -> ();
-    deny_script(session_id: SessionId, execution_id: String) -> ();
-    cancel_stream(session_id: SessionId) -> bool;
-    continue_session(session_id: SessionId, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> ContinueSessionOutcome;
-    get_openai_codex_auth_status() -> OpenAiCodexAuthStatus;
-    get_mcp_auth_statuses() -> Vec<McpAuthStatus>;
-    start_mcp_login(server: String) -> McpAuthStatus;
-    cancel_mcp_login(server: String) -> McpAuthStatus;
-    logout_mcp(server: String) -> McpAuthStatus;
-    start_openai_codex_browser_login() -> ();
-    start_openai_codex_device_code_login() -> ();
-    cancel_openai_codex_login() -> ();
-    logout_openai_codex_auth() -> ();
+kraai_runtime::runtime_methods!(node_methods);
+
+const BINARY_DECLARATIONS: &str = "  importImage(bytes: Uint8Array): Promise<RuntimeResult<ImageAttachment>>;\n  readImage(image: ImageAttachment): Promise<RuntimeResult<Uint8Array>>;\n";
+
+/// A successful result whose value is raw bytes, shaped like `RuntimeResult`.
+#[napi(object)]
+pub struct BytesOk {
+    #[napi(js_name = "Ok")]
+    pub ok: Buffer,
+}
+
+#[napi]
+impl Runtime {
+    #[napi(skip_typescript)]
+    pub async fn import_image(&self, bytes: Buffer) -> napi::Result<Value> {
+        wire::encode(self.handle.import_image(bytes.to_vec()).await)
+    }
+
+    #[napi(skip_typescript)]
+    pub async fn read_image(&self, image: Value) -> napi::Result<Either<BytesOk, Value>> {
+        let result = match wire::decode(image) {
+            Ok(image) => self.handle.read_image(image).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(bytes) => Ok(Either::A(BytesOk { ok: bytes.into() })),
+            Err(error) => wire::encode::<()>(Err(error)).map(Either::B),
+        }
+    }
 }

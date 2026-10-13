@@ -10,6 +10,7 @@ version = "0.1.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+kraai-providers.workspace = true
 kraai-runtime = { workspace = true, features = ["typescript"] }
 kraai-types = { workspace = true, features = ["typescript"] }
 napi.workspace = true
