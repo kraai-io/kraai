@@ -338,6 +338,7 @@ impl RuntimeBuilder {
                 script_runtime_roots: host_options.script_runtime_roots,
                 use_current_executable_as_nushell_host: host_options
                     .use_current_executable_as_nushell_host,
+                script_output_root: storage_root.join("script-output"),
             }),
             startup_tx,
             model_catalog_tx,

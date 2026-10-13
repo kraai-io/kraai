@@ -121,7 +121,7 @@ async fn cancellation_during_continuation_preparation_cancels_the_started_stream
             completed.record.result_message_id.clone(),
             completed.record.profile.id.clone(),
             completed.record.call_id.clone(),
-            completed.render_result()?,
+            harness.runtime.render_script_result(&completed).await?,
             completed.record.outcome()?,
         )
         .await?;

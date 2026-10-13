@@ -47,6 +47,14 @@ pub(crate) struct RuntimeConfig {
     pub(crate) nushell_host_path: Option<PathBuf>,
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
+    /// Holds full script output that the model saw only part of, one directory per session.
+    pub(crate) script_output_root: PathBuf,
+}
+
+impl RuntimeConfig {
+    pub(crate) fn script_output_dir(&self, session_id: &kraai_types::SessionId) -> PathBuf {
+        self.script_output_root.join(session_id.as_str())
+    }
 }
 
 impl RuntimeCore {

@@ -133,6 +133,9 @@ impl SessionActor {
             .clone()
             .unwrap_or_else(configured_runtime_roots);
         runtime_roots.extend(skill_roots);
+        let output_dir = self.runtime.config.script_output_dir(&self.session_id);
+        kraai_io::fs::create_dir_all_async(&output_dir).await?;
+        runtime_roots.push(output_dir);
         let request = EffectiveScriptRequest {
             id: ScriptExecutionId::new(Ulid::generate()),
             session_id: self.session_id.clone(),
@@ -262,7 +265,7 @@ impl SessionActor {
         let outcome = completed.record.outcome()?;
         let status = outcome.status;
         let execution_id = completed.record.id.to_string();
-        let result = completed.render_result()?;
+        let result = self.runtime.render_script_result(&completed).await?;
         self.runtime
             .agent_manager
             .add_script_result_to_history(

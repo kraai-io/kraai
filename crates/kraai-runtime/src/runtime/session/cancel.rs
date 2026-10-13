@@ -97,6 +97,8 @@ impl SessionActor {
                 stdout: &[],
                 stderr: &[],
                 diagnostic: Some("Script was cancelled before execution"),
+                stdout_file: None,
+                stderr_file: None,
             },
         );
         let cancelled = match self
@@ -190,6 +192,13 @@ impl SessionActor {
                 .await
                 .remove(&self.session_id);
             self.runtime.event_tx.remove_timer(&self.session_id);
+            let output_dir = self.runtime.config.script_output_dir(&self.session_id);
+            if let Err(error) = kraai_io::fs::remove_dir_all_durable_async(&output_dir).await {
+                tracing::warn!(
+                    "Failed to remove script output of session {}: {error}",
+                    self.session_id
+                );
+            }
         }
         let _ = response.send(result.map_err(RuntimeError::from_report));
         deleted

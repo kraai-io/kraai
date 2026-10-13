@@ -120,7 +120,7 @@ pub(super) async fn completed_script_with_image(
                 completed.record.result_message_id.clone(),
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
-                completed.render_result()?,
+                harness.runtime.render_script_result(&completed).await?,
                 completed.record.outcome()?,
             )
             .await?;

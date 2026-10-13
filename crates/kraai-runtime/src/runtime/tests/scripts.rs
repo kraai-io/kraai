@@ -682,3 +682,103 @@ async fn transient_pre_boundary_failure_reissues_the_request() -> Result<()> {
     harness.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
+        )],
+        vec![ScriptedChunk::plain("done")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "change it".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("script approval", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let output_dir = harness.runtime.config.script_output_dir(&session_id);
+    let stdout: String = (0..5000).map(|line| format!("line {line}\n")).collect();
+    let full_output = stdout.clone();
+    let request = harness
+        .runtime
+        .with_session_actor(&session_id, move |actor| {
+            Box::pin(async move {
+                let pending = actor.take_pending_approval().expect("pending script");
+                let store = actor.runtime.execution_store.clone();
+                store
+                    .mark_running(&pending.request.id)
+                    .await
+                    .expect("start execution");
+                let record = store
+                    .finish(
+                        &pending.request.id,
+                        kraai_persistence::ScriptExecutionCompletion {
+                            status: ScriptExecutionStatus::Completed,
+                            exit_code: Some(0),
+                            sandbox_denied: false,
+                            error: None,
+                            stdout: stdout.into_bytes(),
+                            stderr: Vec::new(),
+                        },
+                    )
+                    .await
+                    .expect("finish execution");
+                let output = store.read_output(&record.id).await.expect("read output");
+                actor
+                    .finish_script(super::super::script_execution::CompletedScriptExecution {
+                        record,
+                        output,
+                    })
+                    .await
+                    .expect("finish script");
+                pending.request
+            })
+        })
+        .await;
+    assert!(request.runtime_roots.contains(&output_dir));
+
+    let events = harness
+        .events
+        .wait_for("script result", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptResultReady { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let rendered = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ScriptResultReady { output, .. } => output.as_text().map(str::to_string),
+            _ => None,
+        })
+        .expect("rendered result");
+    let saved = output_dir.join(format!("{}.stdout", request.id));
+    assert!(rendered.len() < full_output.len() / 2);
+    assert!(rendered.contains(&format!("full_output=\"{}\"", saved.display())));
+    assert!(rendered.contains("bytes omitted]"));
+    assert_eq!(tokio::fs::read_to_string(&saved).await?, full_output);
+
+    harness
+        .events
+        .wait_for("turn completed", |events| {
+            events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id))
+        })
+        .await;
+    harness.handle.delete_session(session_id).await?;
+    assert!(!tokio::fs::try_exists(&output_dir).await?);
+    harness.shutdown().await;
+    Ok(())
+}

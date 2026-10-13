@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +9,9 @@ use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
 };
 use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
-use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
+use kraai_script_protocol::{
+    ToolCallResultView, channel_needs_output_file, render_tool_call_result,
+};
 use kraai_types::{
     MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
     ScriptOutputStream, ScriptProfileSnapshot, SessionId, ToolCallId,
@@ -49,7 +51,11 @@ pub(crate) struct PendingScriptApproval {
 }
 
 impl CompletedScriptExecution {
-    pub(crate) fn render_result(&self) -> Result<kraai_types::MessageContent> {
+    fn render_result(
+        &self,
+        stdout_file: Option<&Path>,
+        stderr_file: Option<&Path>,
+    ) -> Result<kraai_types::MessageContent> {
         let outcome = self.record.outcome()?;
         let text = render_tool_call_result(ToolCallResultView {
             status: outcome.status,
@@ -58,6 +64,8 @@ impl CompletedScriptExecution {
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,
             diagnostic: self.record.error.as_deref(),
+            stdout_file,
+            stderr_file,
         });
         let mut content = kraai_types::MessageContent::from(text);
         content.0.extend(
@@ -72,6 +80,21 @@ impl CompletedScriptExecution {
 }
 
 impl RuntimeCore {
+    /// Renders a script result for the model, saving each channel it sees only part of to
+    /// the session's output directory.
+    pub(crate) async fn render_script_result(
+        &self,
+        completed: &CompletedScriptExecution,
+    ) -> Result<kraai_types::MessageContent> {
+        let directory = self.config.script_output_dir(&completed.record.session_id);
+        let id = &completed.record.id;
+        let (stdout_file, stderr_file) = tokio::join!(
+            save_output_channel(&directory, id, "stdout", &completed.output.stdout),
+            save_output_channel(&directory, id, "stderr", &completed.output.stderr),
+        );
+        completed.render_result(stdout_file.as_deref(), stderr_file.as_deref())
+    }
+
     pub(crate) async fn prepare_script_execution(
         &self,
         request: &EffectiveScriptRequest,
@@ -227,6 +250,39 @@ async fn persist_output_events(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// Saves `bytes` when the model sees only part of them; the result omits the path on failure.
+async fn save_output_channel(
+    directory: &Path,
+    id: &ScriptExecutionId,
+    channel: &str,
+    bytes: &[u8],
+) -> Option<PathBuf> {
+    if !channel_needs_output_file(bytes) {
+        return None;
+    }
+    let path = directory.join(format!("{id}.{channel}"));
+    let write = {
+        let directory = directory.to_path_buf();
+        let path = path.clone();
+        let bytes = bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            kraai_io::fs::create_dir_all(&directory)?;
+            kraai_io::fs::atomic_replace_private_unsynced(&path, &bytes)
+        })
+    };
+    match write.await {
+        Ok(Ok(())) => Some(path),
+        Ok(Err(error)) => {
+            tracing::warn!("Failed to save {channel} of script execution {id}: {error}");
+            None
+        }
+        Err(error) => {
+            tracing::warn!("Saving {channel} of script execution {id} stopped: {error}");
+            None
+        }
+    }
 }
 
 fn completion_from_output(

@@ -72,7 +72,7 @@ impl RuntimeCore {
                 CompletedScriptExecution { record, output }
             };
 
-            let result = completed.render_result()?;
+            let result = self.render_script_result(&completed).await?;
             let result_message_id = completed.record.result_message_id.clone();
             let session_id = completed.record.session_id.clone();
             self.agent_manager
