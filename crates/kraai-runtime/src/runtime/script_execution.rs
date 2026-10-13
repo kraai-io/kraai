@@ -235,15 +235,21 @@ async fn persist_output_events(
     execution_id: ScriptExecutionId,
     mut events: UnboundedReceiver<OutputEvent>,
 ) -> std::result::Result<(), String> {
-    let mut first_error = None;
-    while let Some(event) = events.recv().await {
+    let chunk = |event: OutputEvent| {
         let stream = match event.stream {
             OutputStream::Stdout => ScriptOutputStream::Stdout,
             OutputStream::Stderr => ScriptOutputStream::Stderr,
         };
-        if let Err(error) = store
-            .append_output(&execution_id, stream, event.bytes)
-            .await
+        (stream, event.bytes)
+    };
+    let mut first_error = None;
+    while let Some(event) = events.recv().await {
+        // Everything that arrived while the previous batch was being written goes in one write.
+        let mut batch = vec![chunk(event)];
+        while let Ok(event) = events.try_recv() {
+            batch.push(chunk(event));
+        }
+        if let Err(error) = store.append_output(&execution_id, batch).await
             && first_error.is_none()
         {
             first_error = Some(error.to_string());

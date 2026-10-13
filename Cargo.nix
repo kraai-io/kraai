@@ -83,6 +83,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-headless" = rec {
+      packageId = "kraai-headless";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-headless";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-io" = rec {
       packageId = "kraai-io";
       build = internal.buildRustCrateWithFeatures {
@@ -10068,6 +10078,10 @@ rec {
             packageId = "kraai-provider-core";
           }
           {
+            name = "kraai-script-protocol";
+            packageId = "kraai-script-protocol";
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -10234,6 +10248,11 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-headless";
+            packageId = "kraai-headless";
+            usesDefaultFeatures = false;
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
@@ -10307,6 +10326,97 @@ rec {
           }
         ];
 
+      };
+      "kraai-headless" = rec {
+        crateName = "kraai-headless";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "kraai-headless";
+            path = "src/main.rs";
+            requiredFeatures = [ "runner" ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-headless; };
+        libName = "kraai_headless";
+        dependencies = [
+          {
+            name = "clap";
+            packageId = "clap";
+            optional = true;
+            features = [ "derive" ];
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+            optional = true;
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+            optional = true;
+          }
+          {
+            name = "kraai-runtime";
+            packageId = "kraai-runtime";
+            optional = true;
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "full" ];
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+            optional = true;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "axum";
+            packageId = "axum";
+            usesDefaultFeatures = false;
+            features = [ "http1" "json" "tokio" ];
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+        ];
+        features = {
+          "default" = [ "runner" ];
+          "runner" = [ "dep:clap" "dep:color-eyre" "dep:kraai-providers" "dep:kraai-runtime" "dep:serde_json" "dep:tokio" "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" "runner" ];
       };
       "kraai-io" = rec {
         crateName = "kraai-io";

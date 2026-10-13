@@ -2,7 +2,6 @@ use super::*;
 
 fn submit_first(harness: &mut TestHarness) -> color_eyre::Result<(u64, ModelSelection)> {
     super::super::model_options::configure(harness)?;
-    harness.app.startup_options.ci = true;
     let submitted = ModelSelection {
         provider_id: kraai_types::ProviderId::new("provider"),
         model_id: kraai_types::ModelId::new("model"),

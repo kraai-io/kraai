@@ -64,29 +64,20 @@ impl App {
             }
             Event::ServiceError { error } => {
                 self.set_error(format!("Runtime error: {error}"));
-                self.fail_ci(format!("Runtime error: {error}"));
             }
             Event::SessionError { session_id, error } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.set_error(format!("Session error: {error}"));
                     self.request_sync_for_session(&session_id);
-                    self.fail_ci(format!("Session error: {error}"));
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
-            Event::StreamStart {
-                session_id,
-                message_id,
-            } => {
+            Event::StreamStart { session_id, .. } => {
                 self.mark_session_model_active(&session_id);
                 self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
-                }
-                if self.is_ci_mode() {
-                    self.ci_output_needs_newline = false;
-                    self.ci_turn_completion_pending = false;
                 }
                 if !apply_state {
                     return;
@@ -98,7 +89,6 @@ impl App {
                 self.state.profile_lock_stale_after_terminal_event = false;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
-                self.ci_shown_items.remove(&message_id);
             }
             Event::ItemStarted {
                 session_id,
@@ -108,25 +98,6 @@ impl App {
             } => {
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
-                }
-                if self.is_ci_mode() {
-                    let output = match &item {
-                        AssistantItem::Text { text, .. } => {
-                            self.ci_text(&message_id, item_index, text)
-                        }
-                        AssistantItem::ScriptCall { input, .. } => {
-                            self.ci_shown_items
-                                .entry(message_id.clone())
-                                .or_default()
-                                .insert(item_index);
-                            format!("\n\n```nu\n{input}\n```\n")
-                        }
-                        AssistantItem::Reasoning { .. } => String::new(),
-                    };
-                    self.write_ci_output(&output);
-                    if self.state.exit {
-                        return;
-                    }
                 }
                 if apply_state && !self.apply_item_started(&message_id, item_index, item) {
                     self.request_sync_for_session(&session_id);
@@ -140,13 +111,6 @@ impl App {
             } => {
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
-                }
-                if self.is_ci_mode() {
-                    let output = self.ci_text(&message_id, item_index, &delta);
-                    self.write_ci_output(&output);
-                    if self.state.exit {
-                        return;
-                    }
                 }
                 if apply_state && !self.apply_item_delta(&message_id, item_index, &delta) {
                     self.request_sync_for_session(&session_id);
@@ -204,12 +168,6 @@ impl App {
                         self.last_statusline_animation_tick = None;
                     }
                     self.request_sync_for_session(&session_id);
-                    if self.is_ci_mode() {
-                        self.finish_ci_output_line();
-                        self.ci_turn_completion_pending = true;
-                        self.ci_metrics_history_pending = true;
-                        self.ci_metrics_context_pending = true;
-                    }
                 }
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request_sync_for_session(&session_id);
@@ -231,7 +189,6 @@ impl App {
                     self.set_error(format!("Stream error: {error}"));
                     self.request_sync_for_session(&session_id);
                 }
-                self.fail_ci(format!("Stream error: {error}"));
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request_sync_for_session(&session_id);
                 }
@@ -261,9 +218,6 @@ impl App {
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
-                if self.is_ci_mode() {
-                    self.write_ci_output("\n\n[provider stream failed; retrying the response]\n\n");
-                }
                 if apply_state {
                     self.discard_streamed_content(&message_id);
                     self.state.status =
@@ -287,16 +241,6 @@ impl App {
                 session_id,
                 notifications,
             } => {
-                if self.is_ci_mode() {
-                    for notification in &notifications {
-                        if let Err(error) = std::io::Write::write_fmt(
-                            &mut std::io::stderr(),
-                            format_args!("{notification}\n"),
-                        ) {
-                            tracing::warn!(%error, "Unable to write context notification");
-                        }
-                    }
-                }
                 if self.state.current_session_id.as_ref() == Some(&session_id)
                     && !notifications.is_empty()
                 {
@@ -318,7 +262,6 @@ impl App {
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
-                self.fail_ci(format!("Continuation failed: {error}"));
             }
             Event::HistoryUpdated { session_id } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
@@ -348,12 +291,6 @@ impl App {
             Event::ScriptApprovalRequested { session_id, script } => {
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request(RuntimeRequest::ListSessions);
-                    return;
-                }
-                if self.is_ci_mode() {
-                    self.fail_ci(String::from(
-                        "CI mode cannot answer a script capability escalation prompt",
-                    ));
                     return;
                 }
                 if !apply_state {

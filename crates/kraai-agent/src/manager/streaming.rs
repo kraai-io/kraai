@@ -1,5 +1,7 @@
 use super::*;
 
+const SKIPPED_CALL_DIAGNOSTIC: &str = "Not executed: only the first script call of a response runs. Send this script again in its own response if it is still needed.";
+
 impl AgentManager {
     #[cfg(test)]
     pub(super) async fn add_message(
@@ -47,6 +49,8 @@ impl AgentManager {
         if append.linked_now {
             self.history_upserted(session_id, &append.message);
         }
+        self.answer_skipped_calls(session_id, &append.message)
+            .await?;
         Ok(append.linked_now)
     }
 
@@ -269,15 +273,16 @@ impl AgentManager {
         name: String,
         input: String,
     ) -> Option<StreamedItem> {
+        let id = call_id.clone();
         let call = AssistantItem::ScriptCall {
             call_id,
             name,
             input,
         };
         self.append_item(message_id, call, |items| {
-            !items
-                .iter()
-                .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+            !items.iter().any(
+                |item| matches!(item, AssistantItem::ScriptCall { call_id, .. } if *call_id == id),
+            )
         })
         .await
     }
@@ -301,6 +306,84 @@ impl AgentManager {
             .ok()?;
         drop(streaming);
         Some(StreamedItem::Started { index, item })
+    }
+
+    /// Gives every other script call of the response that `result` answers a result saying it
+    /// did not run, since only the first call of a response runs. Providers require a result for
+    /// every call. Safe to repeat.
+    pub(super) async fn answer_skipped_calls(
+        &self,
+        session_id: &SessionId,
+        result: &Message,
+    ) -> Result<()> {
+        let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
+            return Ok(());
+        };
+        let mut parent = result.parent_id.clone();
+        let assistant = loop {
+            let Some(id) = parent else {
+                return Ok(());
+            };
+            let Some(message) = self.message_store.get(&id).await? else {
+                return Ok(());
+            };
+            match &message.content {
+                ConversationItem::ScriptResult { .. } => parent = message.parent_id.clone(),
+                ConversationItem::Assistant { .. } => break message,
+                _ => return Ok(()),
+            }
+        };
+        let Some(items) = assistant.content.assistant_items() else {
+            return Ok(());
+        };
+        let output = kraai_script_protocol::render_tool_call_result(
+            kraai_script_protocol::ToolCallResultView {
+                status: kraai_types::ScriptExecutionStatus::Cancelled,
+                exit_code: None,
+                elapsed_millis: None,
+                stdout: &[],
+                stderr: &[],
+                diagnostic: Some(SKIPPED_CALL_DIAGNOSTIC),
+                stdout_file: None,
+                stderr_file: None,
+            },
+        );
+        for (index, item) in items.iter().enumerate() {
+            let AssistantItem::ScriptCall {
+                call_id: skipped, ..
+            } = item
+            else {
+                continue;
+            };
+            if skipped == call_id {
+                continue;
+            }
+            let append = self
+                .conversation_store
+                .append_message_idempotent(
+                    MessageId::new(format!("{}-skipped-{index}", result.id)),
+                    AppendMessageRequest {
+                        session_id: session_id.clone(),
+                        content: ConversationItem::ScriptResult {
+                            call_id: skipped.clone(),
+                            output: output.clone().into(),
+                            outcome: kraai_types::ScriptExecutionOutcome {
+                                status: kraai_types::ScriptExecutionStatus::Cancelled,
+                                exit_code: None,
+                            },
+                        },
+                        status: MessageStatus::Complete,
+                        agent_profile_id: result.agent_profile_id.clone(),
+                        generation: None,
+                        title_if_first_message: None,
+                    },
+                )
+                .await?;
+            if append.linked_now {
+                self.history_upserted(session_id, &append.message);
+            }
+        }
+        Ok(())
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<SessionId>> {
@@ -410,6 +493,8 @@ impl AgentManager {
                     if result.linked_now {
                         self.history_upserted(&state.session_id, &result.message);
                     }
+                    self.answer_skipped_calls(&state.session_id, &result.message)
+                        .await?;
                 }
                 state.message.status = MessageStatus::Complete;
                 self.message_store.save(&state.message).await

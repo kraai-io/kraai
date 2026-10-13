@@ -14,3 +14,4 @@ pub use auth::{
     OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexRequestAuth,
 };
 pub use provider::OpenAiCodexFactory;
+pub use streaming::usage_from_json;

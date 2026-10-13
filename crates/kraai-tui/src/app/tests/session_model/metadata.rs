@@ -2,8 +2,6 @@ use super::*;
 
 fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
     configure(harness)?;
-    harness.app.startup_options.provider_id = Some("provider".into());
-    harness.app.startup_options.model_id = Some("model".into());
     Ok(())
 }
 

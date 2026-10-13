@@ -13,7 +13,6 @@ fn model(id: &str) -> kraai_runtime::Model {
 fn default_selection_skips_empty_providers_and_is_deterministic() {
     for reverse in [false, true] {
         let mut harness = test_harness();
-        harness.app.startup_options.ci = true;
         let mut providers = [
             ("empty", Vec::new()),
             ("alpha", vec![model("first"), model("second")]),
@@ -45,7 +44,6 @@ fn default_selection_skips_empty_providers_and_is_deterministic() {
 #[test]
 fn fallback_keeps_matching_model_and_prefers_existing_provider() {
     let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
     harness.app.state.models_by_provider = HashMap::from([
         ("empty".into(), Vec::new()),
         ("alpha".into(), vec![model("first"), model("shared")]),
@@ -69,7 +67,6 @@ fn fallback_keeps_matching_model_and_prefers_existing_provider() {
 #[test]
 fn empty_discovery_preserves_selection_for_recovery() {
     let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
     harness.app.state.selected_provider_id = Some("provider".into());
     harness.app.state.selected_model_id = Some("model".into());
     harness.app.state.models_by_provider = HashMap::from([("provider".into(), Vec::new())]);

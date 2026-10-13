@@ -30,7 +30,6 @@ impl App {
         if raw_input.trim().is_empty() && self.state.draft_images.len() == 0 {
             let message = String::from("Message cannot be empty");
             self.state.status = message.clone();
-            self.fail_ci(message);
             return;
         }
 
@@ -121,7 +120,6 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("; ");
             self.set_error(format!("Choose model options using /option: {message}"));
-            self.fail_ci(self.state.status.clone());
             return None;
         }
         Some((model_id, provider_id))
@@ -310,36 +308,10 @@ impl App {
         self.submit_message(message);
     }
 
-    pub(super) fn validate_ci_model_selection(&self) -> std::result::Result<(), String> {
-        let provider_id = self
-            .startup_options
-            .provider_id
-            .as_ref()
-            .ok_or_else(|| String::from("CI mode requires --provider"))?;
-        let model_id = self
-            .startup_options
-            .model_id
-            .as_ref()
-            .ok_or_else(|| String::from("CI mode requires --model"))?;
-
-        let Some(models) = self.state.models_by_provider.get(provider_id) else {
-            return Err(format!("Unknown provider for --ci: {provider_id}"));
-        };
-
-        if models.iter().any(|model| &model.id == model_id) {
-            Ok(())
-        } else {
-            Err(format!(
-                "Unknown model for provider {provider_id}: {model_id}"
-            ))
-        }
-    }
-
     pub(super) fn save_workspace_preferences(&mut self) {
-        if self.is_ci_mode() {
+        if !self.persist_workspace_preferences {
             return;
         }
-
         let preferences = WorkspacePreferences {
             provider_id: self.state.selected_provider_id.clone(),
             model_id: self.state.selected_model_id.clone(),
@@ -363,105 +335,6 @@ impl App {
         {
             self.save_model_selection();
         }
-    }
-
-    pub(super) fn is_ci_mode(&self) -> bool {
-        self.startup_options.ci
-    }
-
-    pub(super) fn fail_ci(&mut self, message: impl Into<String>) {
-        if !self.is_ci_mode() || self.state.exit {
-            return;
-        }
-
-        let message = message.into();
-        self.finish_ci_output_line();
-        if self.ci_error.is_some() {
-            return;
-        }
-        self.ci_turn_completion_pending = false;
-        self.ci_error = Some(message.clone());
-        self.state.status = message;
-        self.state.is_streaming = false;
-        self.state.exit = true;
-    }
-
-    pub(super) fn maybe_finish_ci_run(&mut self) {
-        if !self.is_ci_mode() || !self.ci_turn_completion_pending || self.state.exit {
-            return;
-        }
-
-        if self.state.is_streaming
-            || self.state.pending_script.is_some()
-            || self.state.script_phase != ScriptPhase::Idle
-            || self.state.profile_locked
-            || self.ci_metrics_history_pending
-            || self.ci_metrics_context_pending
-            || self
-                .state
-                .current_session_id
-                .as_ref()
-                .is_some_and(|session_id| {
-                    self.session_snapshot_sequences
-                        .get(session_id)
-                        .is_some_and(|sequence| self.last_runtime_event_sequence < *sequence)
-                })
-        {
-            return;
-        }
-
-        self.ci_turn_completion_pending = false;
-        self.state.status = String::from("CI run completed");
-        self.state.exit = true;
-    }
-
-    pub(super) fn write_ci_output(&mut self, chunk: &str) {
-        if chunk.is_empty() || self.ci_error.is_some() {
-            return;
-        }
-
-        if let Err(error) = self
-            .ci_output
-            .write_all(chunk.as_bytes())
-            .and_then(|()| self.ci_output.flush())
-        {
-            self.fail_ci_output(error);
-            return;
-        }
-        self.ci_output_needs_newline = !chunk.ends_with('\n');
-    }
-
-    pub(super) fn finish_ci_output_line(&mut self) {
-        if !self.ci_output_needs_newline {
-            return;
-        }
-
-        if let Err(error) = self
-            .ci_output
-            .write_all(b"\n")
-            .and_then(|()| self.ci_output.flush())
-        {
-            self.fail_ci_output(error);
-            return;
-        }
-        self.ci_output_needs_newline = false;
-    }
-
-    fn fail_ci_output(&mut self, error: std::io::Error) {
-        if self.ci_error.is_some() {
-            return;
-        }
-        let message = format!("Failed writing CI output: {error}");
-        self.ci_turn_completion_pending = false;
-        self.ci_error = Some(message.clone());
-        self.state.status = message;
-        if self.state.is_streaming
-            && let Some(session_id) = self.state.current_session_id.clone()
-        {
-            self.request(RuntimeRequest::CancelStream { session_id });
-        }
-        self.state.is_streaming = false;
-        self.state.exit = true;
     }
 
     pub(super) fn apply_agent_profiles_state(&mut self, state: AgentProfilesState) {

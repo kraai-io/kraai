@@ -319,7 +319,6 @@ impl App {
         self.state.context_usage = None;
         self.restore_session_cost();
         self.state.optimistic_messages.clear();
-        self.ci_shown_items.clear();
         self.state.pending_script = None;
         if has_session {
             self.state.agent_profiles.clear();
@@ -487,7 +486,6 @@ impl App {
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
-        self.ci_shown_items.clear();
         self.state.is_streaming = false;
         self.state.retry_waiting = false;
         self.state.profile_locked = false;
@@ -503,10 +501,6 @@ impl App {
         self.invalidate_chat_cache();
         self.state.status = message.clone();
         self.state.exit = true;
-        if self.is_ci_mode() && self.ci_error.is_none() {
-            self.ci_turn_completion_pending = false;
-            self.ci_error = Some(message);
-        }
     }
 
     pub(super) fn invalidate_chat_cache(&mut self) {

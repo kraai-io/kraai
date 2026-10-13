@@ -3,8 +3,6 @@ use kraai_types::SessionId;
 
 fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
     configure_optional(harness)?;
-    harness.app.startup_options.provider_id = Some("provider".into());
-    harness.app.startup_options.model_id = Some("model".into());
     Ok(())
 }
 

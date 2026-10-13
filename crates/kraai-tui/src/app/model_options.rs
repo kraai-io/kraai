@@ -44,23 +44,6 @@ impl AppState {
 }
 
 impl App {
-    pub(super) fn apply_startup_model_options(&mut self) -> Result<(), String> {
-        if self.state.startup_model_options_applied {
-            return Ok(());
-        }
-        let Some(model) = self.state.selected_model() else {
-            return Ok(());
-        };
-        let values = kraai_types::parse_model_option_assignments(
-            &model.options,
-            &self.startup_options.options,
-            self.state.selected_model_options.clone(),
-        )?;
-        self.state.selected_model_options = values;
-        self.state.startup_model_options_applied = true;
-        Ok(())
-    }
-
     pub(super) fn reconcile_model_options(&mut self) {
         if let (Some(provider_id), Some(model_id)) = (
             &self.state.selected_provider_id,

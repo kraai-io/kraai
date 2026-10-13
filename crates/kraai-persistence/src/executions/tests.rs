@@ -97,7 +97,7 @@ async fn output_is_written_before_terminal_record_is_exposed() {
     store.create(execution(&id)).await.unwrap();
     store.mark_running(&id).await.unwrap();
     store
-        .append_output(&id, ScriptOutputStream::Stdout, b"partial".to_vec())
+        .append_output(&id, vec![(ScriptOutputStream::Stdout, b"partial".to_vec())])
         .await
         .unwrap();
     let prefix = store.read_output(&id).await.unwrap();
@@ -149,7 +149,10 @@ async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
     other.id = "b".repeat(64);
     assert!(store.append_image(&id, 1, other).await.is_err());
     store
-        .append_output(&id, ScriptOutputStream::Stdout, b"later output".to_vec())
+        .append_output(
+            &id,
+            vec![(ScriptOutputStream::Stdout, b"later output".to_vec())],
+        )
         .await
         .unwrap();
     let finished = store
@@ -174,4 +177,43 @@ async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
     );
     assert!(reopened.append_image(&id, 2, image).await.is_err());
     fs::remove_dir_all(data_dir).await.unwrap();
+}
+
+#[tokio::test]
+async fn batched_output_keeps_each_stream_in_order() {
+    let data_dir = test_dir("batched-output");
+    let id = ScriptExecutionId::new(Ulid::generate());
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    store.create(execution(&id)).await.unwrap();
+    store.mark_running(&id).await.unwrap();
+    store
+        .append_output(
+            &id,
+            vec![
+                (ScriptOutputStream::Stdout, b"a".to_vec()),
+                (ScriptOutputStream::Stdout, b"b".to_vec()),
+                (ScriptOutputStream::Stderr, Vec::new()),
+                (ScriptOutputStream::Stderr, b"x".to_vec()),
+                (ScriptOutputStream::Stdout, b"c".to_vec()),
+            ],
+        )
+        .await
+        .unwrap();
+    store
+        .append_output(&id, vec![(ScriptOutputStream::Stderr, b"y".to_vec())])
+        .await
+        .unwrap();
+    let output = store.read_output(&id).await.unwrap();
+    assert_eq!(output.stdout, b"abc");
+    assert_eq!(output.stderr, b"xy");
+    assert_eq!(
+        super::coalesce_output(vec![
+            (ScriptOutputStream::Stdout, b"a".to_vec()),
+            (ScriptOutputStream::Stdout, b"b".to_vec()),
+            (ScriptOutputStream::Stderr, Vec::new()),
+            (ScriptOutputStream::Stdout, b"c".to_vec()),
+        ]),
+        vec![(ScriptOutputStream::Stdout, b"abc".to_vec())]
+    );
+    let _ = fs::remove_dir_all(data_dir).await;
 }

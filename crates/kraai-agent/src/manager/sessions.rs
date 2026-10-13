@@ -218,17 +218,15 @@ impl AgentManager {
             return Ok(session);
         };
         if tip.status == MessageStatus::Complete
-            && let ConversationItem::ScriptResult { call_id, .. } = &tip.content
-            && let Some(parent_id) = &tip.parent_id
-            && let Some(mut parent) = self.message_store.get(parent_id).await?
-            && matches!(parent.status, MessageStatus::Streaming { .. })
-            && matches!(&parent.content, ConversationItem::Assistant { items }
-                if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: parent_call, .. }
-                    if parent_call == call_id)))
+            && let Some((first_result, mut parent)) = self.answered_response(&tip).await?
         {
-            parent.status = MessageStatus::Complete;
-            self.message_store.save(&parent).await?;
-            self.history_upserted(&session.id, &parent);
+            if matches!(parent.status, MessageStatus::Streaming { .. }) {
+                parent.status = MessageStatus::Complete;
+                self.message_store.save(&parent).await?;
+                self.history_upserted(&session.id, &parent);
+            }
+            self.answer_skipped_calls(&session.id, &first_result)
+                .await?;
         }
         if !matches!(tip.status, MessageStatus::Streaming { .. }) {
             return Ok(session);
@@ -245,6 +243,32 @@ impl AgentManager {
         self.history_removed(&session.id, vec![tip_id]);
         session.tip_id = tip.parent_id.clone();
         Ok(session)
+    }
+
+    /// For a script result at the tip, the first result of its response and the assistant
+    /// message that made the call it answers.
+    async fn answered_response(&self, tip: &Message) -> Result<Option<(Message, Message)>> {
+        let mut result = tip.clone();
+        loop {
+            let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
+                return Ok(None);
+            };
+            let Some(parent) = result.parent_id.as_ref() else {
+                return Ok(None);
+            };
+            let Some(parent) = self.message_store.get(parent).await? else {
+                return Ok(None);
+            };
+            match &parent.content {
+                ConversationItem::Assistant { items }
+                    if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: called, .. } if called == call_id)) =>
+                {
+                    return Ok(Some((result, parent)));
+                }
+                ConversationItem::ScriptResult { .. } => result = parent,
+                _ => return Ok(None),
+            }
+        }
     }
 
     pub(super) async fn validate_history_for_session(&self, session: &SessionMeta) -> Result<()> {

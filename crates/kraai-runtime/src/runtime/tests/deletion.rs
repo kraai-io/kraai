@@ -256,10 +256,9 @@ impl ScriptExecutionStore for PausedExecutionStore {
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
-        stream: ScriptOutputStream,
-        bytes: Vec<u8>,
+        chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
     ) -> Result<()> {
-        self.inner.append_output(id, stream, bytes).await
+        self.inner.append_output(id, chunks).await
     }
 
     async fn finish(

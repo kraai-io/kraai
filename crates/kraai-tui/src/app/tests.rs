@@ -47,8 +47,6 @@ fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     assert_eq!(harness.app.state.scroll, 0);
 }
 
-use std::io;
-
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
     AgentProfilesState, Event, PendingScriptInfo, RuntimeEvent, Session, SessionActivity,
@@ -95,16 +93,10 @@ fn test_harness() -> TestHarness {
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            ci_output: Box::new(io::sink()),
-            ci_output_needs_newline: false,
-            ci_turn_completion_pending: false,
-            ci_metrics_history_pending: false,
-            ci_metrics_context_pending: false,
             startup_options: StartupOptions::default(),
+            persist_workspace_preferences: false,
             startup_message_sent: false,
             startup_sync: super::StartupSync::Complete,
-            ci_error: None,
-            ci_shown_items: HashMap::new(),
             state: AppState::default(),
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
@@ -286,26 +278,6 @@ fn script_approval_event_enters_single_script_decision_state() {
 }
 
 #[test]
-fn ci_script_approval_fails_closed() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-
-    harness
-        .app
-        .handle_runtime_event(Event::ScriptApprovalRequested {
-            session_id: SessionId::new("session"),
-            script: pending_script("execution"),
-        });
-
-    assert_eq!(
-        harness.app.ci_error.as_deref(),
-        Some("CI mode cannot answer a script capability escalation prompt")
-    );
-    assert!(harness.drain_requests().is_empty());
-}
-
-#[test]
 fn foreground_context_state_changes_are_reported_to_the_user() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
@@ -474,33 +446,6 @@ fn execution_phase_counts_as_active_and_blocks_commands() {
     state.script_phase = ScriptPhase::AwaitingApproval;
     assert!(!state.runtime_is_active());
     assert!(state.turn_blocks_user_commands());
-}
-
-#[test]
-fn evaluation_metrics_count_script_results() {
-    let mut harness = test_harness();
-    harness.app.state.chat_history.insert(
-        MessageId::new("result"),
-        Message {
-            id: MessageId::new("result"),
-            parent_id: None,
-            content: kraai_types::ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
-                    exit_code: Some(0),
-                },
-                call_id: kraai_types::ToolCallId::new("call-1"),
-                output: String::from("<tool_call_result status=\"completed\" />").into(),
-            },
-            status: MessageStatus::Complete,
-            agent_profile_id: Some(String::from("coding")),
-            generation: None,
-        },
-    );
-
-    let metrics = harness.app.evaluation_metrics();
-    assert_eq!(metrics["script_executions"], 1);
-    assert!(metrics.get("tool_calls").is_none());
 }
 
 #[test]

@@ -370,8 +370,6 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
             .collect();
         assert_eq!(actual, expected, "query: {query}");
     }
-
-    harness.app.startup_options.ci = true;
     harness.app.state.mode = UiMode::ModelMenu;
     harness.app.state.menu_search = String::from("Β ÉLAN");
     harness

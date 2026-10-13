@@ -12,7 +12,6 @@ mod metadata;
 
 fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
     super::model_options::configure(harness)?;
-    harness.app.startup_options.ci = true;
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")), "loaded");

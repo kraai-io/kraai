@@ -108,17 +108,12 @@ pub struct App {
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
     clipboard: Option<arboard::Clipboard>,
-    ci_output: Box<dyn Write + Send>,
-    ci_output_needs_newline: bool,
-    ci_turn_completion_pending: bool,
-    ci_metrics_history_pending: bool,
-    ci_metrics_context_pending: bool,
     startup_options: StartupOptions,
+    /// Whether model choices are remembered for the workspace; off in tests.
+    persist_workspace_preferences: bool,
     startup_message_sent: bool,
     startup_sync: StartupSync,
-    ci_error: Option<String>,
     /// Items of each message that CI output already showed.
-    ci_shown_items: HashMap<String, std::collections::HashSet<usize>>,
     state: AppState,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
@@ -134,10 +129,6 @@ const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
 const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[cfg(test)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "TUI tests use direct assertions for buffered output and request ordering"
-)]
 mod tests;
 
 impl App {
@@ -203,7 +194,6 @@ impl App {
     }
 
     pub(super) fn discard_streamed_content(&mut self, message_id: &str) {
-        self.ci_shown_items.remove(message_id);
         if let Some(message) = self.state.chat_history.get_mut(&MessageId::new(message_id))
             && matches!(message.status, MessageStatus::Streaming { .. })
         {
@@ -263,28 +253,6 @@ impl App {
         match &mut message.content {
             ConversationItem::Assistant { items } => Some(items),
             _ => None,
-        }
-    }
-
-    /// CI output for streamed text of the item at `index`, starting a paragraph when an earlier
-    /// item of the message already showed.
-    pub(super) fn ci_text(&mut self, message_id: &str, index: usize, text: &str) -> String {
-        if text.is_empty() {
-            return String::new();
-        }
-        let earlier = self
-            .ci_shown_items
-            .get(message_id)
-            .is_some_and(|items| items.iter().any(|shown| *shown != index));
-        let first = self
-            .ci_shown_items
-            .entry(message_id.to_string())
-            .or_default()
-            .insert(index);
-        if first && earlier {
-            format!("\n\n{text}")
-        } else {
-            text.to_string()
         }
     }
 

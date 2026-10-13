@@ -11,12 +11,8 @@ type RuntimeResult<T> = Result<T, kraai_runtime::RuntimeError>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
-    pub ci: bool,
-    pub provider_id: Option<String>,
-    pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub message: Option<String>,
-    pub options: Vec<String>,
 }
 
 pub(super) enum SubmissionSource {

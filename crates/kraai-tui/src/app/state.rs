@@ -77,7 +77,6 @@ pub(super) struct AppState {
     pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
-    pub(super) startup_model_options_applied: bool,
     pub(super) option_menu_index: usize,
     pub(super) option_choice_index: usize,
     pub(super) option_editor: Option<super::model_options::ModelOptionEditor>,
@@ -195,7 +194,6 @@ impl Default for AppState {
             session_model_saves: HashMap::new(),
             next_model_save_id: 0,
             selected_model_options: Default::default(),
-            startup_model_options_applied: false,
             option_menu_index: 0,
             option_choice_index: 0,
             option_editor: None,
@@ -256,21 +254,9 @@ impl AppState {
             });
 
         Self {
-            selected_provider_id: startup_options
-                .provider_id
-                .clone()
-                .or(workspace_preferences.provider_id),
-            selected_model_id: startup_options
-                .model_id
-                .clone()
-                .or(workspace_preferences.model_id),
-            selected_model_options: if startup_options.provider_id.is_none()
-                && startup_options.model_id.is_none()
-            {
-                workspace_preferences.options
-            } else {
-                Default::default()
-            },
+            selected_provider_id: workspace_preferences.provider_id,
+            selected_model_id: workspace_preferences.model_id,
+            selected_model_options: workspace_preferences.options,
             selected_profile_id: startup_options
                 .agent_profile_id
                 .clone()

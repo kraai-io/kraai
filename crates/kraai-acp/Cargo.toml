@@ -7,7 +7,6 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-kraai-providers.workspace = true
 agent-client-protocol.workspace = true
 base64.workspace = true
 blocking.workspace = true
@@ -15,6 +14,7 @@ clap.workspace = true
 color-eyre.workspace = true
 futures.workspace = true
 kraai-mcp.workspace = true
+kraai-providers.workspace = true
 kraai-runtime.workspace = true
 kraai-types.workspace = true
 serde.workspace = true

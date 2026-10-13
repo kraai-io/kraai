@@ -1,79 +1,26 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UsageMetrics {
-    pub total_tokens: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_read_tokens: u64,
-    #[serde(default)]
-    pub cache_write_tokens: u64,
-}
+pub use kraai_headless::{HarnessMetrics, UsageMetrics};
 
-impl UsageMetrics {
-    pub fn used_context_tokens(&self) -> u64 {
-        self.input_tokens
-            .saturating_add(self.output_tokens)
-            .saturating_add(self.reasoning_tokens)
-            .saturating_add(self.cache_read_tokens)
-            .saturating_add(self.cache_write_tokens)
+pub(crate) fn load_harness_metrics(path: &Path) -> Result<Option<HarnessMetrics>> {
+    let contents =
+        fs::read(path).wrap_err_with(|| format!("read harness metrics {}", path.display()))?;
+    if contents.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
     }
-
-    pub(crate) fn accumulate(&mut self, other: &Self) {
-        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
-        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
-        self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
-        self.cache_write_tokens = self
-            .cache_write_tokens
-            .saturating_add(other.cache_write_tokens);
-        self.cache_read_tokens = self
-            .cache_read_tokens
-            .saturating_add(other.cache_read_tokens);
+    let metrics: HarnessMetrics = serde_json::from_slice(&contents)
+        .wrap_err_with(|| format!("parse harness metrics {}", path.display()))?;
+    if metrics.schema_version != kraai_headless::HARNESS_METRICS_SCHEMA_VERSION {
+        bail!(
+            "unsupported harness metrics schema version {}",
+            metrics.schema_version
+        );
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HarnessMetrics {
-    pub schema_version: u32,
-    #[serde(default)]
-    pub turns: Option<u64>,
-    #[serde(default)]
-    pub script_executions: Option<u64>,
-    #[serde(default)]
-    pub final_context_tokens: Option<u64>,
-    #[serde(default)]
-    pub usage: Option<UsageMetrics>,
-    #[serde(default)]
-    pub request_costs: BTreeMap<kraai_types::MessageId, kraai_types::RequestUsage>,
-    #[serde(default)]
-    pub request_costs_complete: bool,
-}
-
-impl HarnessMetrics {
-    pub(crate) fn load(path: &Path) -> Result<Option<Self>> {
-        let contents =
-            fs::read(path).wrap_err_with(|| format!("read harness metrics {}", path.display()))?;
-        if contents.iter().all(u8::is_ascii_whitespace) {
-            return Ok(None);
-        }
-        let metrics: Self = serde_json::from_slice(&contents)
-            .wrap_err_with(|| format!("parse harness metrics {}", path.display()))?;
-        if metrics.schema_version != 1 {
-            bail!(
-                "unsupported harness metrics schema version {}",
-                metrics.schema_version
-            );
-        }
-        Ok(Some(metrics))
-    }
+    Ok(Some(metrics))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -146,7 +93,7 @@ mod tests {
                 ..ProxyMetrics::default()
             }),
             harness: Some(HarnessMetrics {
-                request_costs: BTreeMap::new(),
+                request_costs: std::collections::BTreeMap::new(),
                 request_costs_complete: false,
                 schema_version: 1,
                 turns: None,
@@ -208,7 +155,7 @@ mod tests {
             "request_costs_complete": true
         });
         fs::write(&path, serde_json::to_vec(&emitted)?)?;
-        let metrics = HarnessMetrics::load(&path)?
+        let metrics = load_harness_metrics(&path)?
             .ok_or_else(|| color_eyre::eyre::eyre!("native metrics were discarded"))?;
         color_eyre::eyre::ensure!(metrics.request_costs.len() == 1);
         color_eyre::eyre::ensure!(metrics.request_costs_complete);

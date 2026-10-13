@@ -102,12 +102,12 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn mark_running(&self, id: &ScriptExecutionId) -> Result<ScriptExecutionRecord>;
 
-    /// Append and sync an output prefix while the execution remains active.
+    /// Append and sync output chunks, in order, in one transaction while the execution remains
+    /// active.
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
-        stream: ScriptOutputStream,
-        bytes: Vec<u8>,
+        chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
     ) -> Result<()>;
 
     async fn finish(
@@ -170,6 +170,23 @@ impl SqliteScriptExecutionStore {
         })
         .await
     }
+}
+
+/// Joins adjacent chunks of the same stream and drops empty ones, keeping their order.
+fn coalesce_output(
+    chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
+) -> Vec<(ScriptOutputStream, Vec<u8>)> {
+    let mut coalesced: Vec<(ScriptOutputStream, Vec<u8>)> = Vec::with_capacity(chunks.len());
+    for (stream, bytes) in chunks {
+        if bytes.is_empty() {
+            continue;
+        }
+        match coalesced.last_mut() {
+            Some((last, joined)) if *last == stream => joined.extend_from_slice(&bytes),
+            _ => coalesced.push((stream, bytes)),
+        }
+    }
+    coalesced
 }
 
 #[async_trait::async_trait]
@@ -331,22 +348,24 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
-        stream: ScriptOutputStream,
-        bytes: Vec<u8>,
+        chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
     ) -> Result<()> {
-        if bytes.is_empty() {
+        let chunks = coalesce_output(chunks);
+        if chunks.is_empty() {
             return Ok(());
         }
-        let stream = match stream {
-            ScriptOutputStream::Stdout => "stdout",
-            ScriptOutputStream::Stderr => "stderr",
-        };
         self.update(id, move |connection, record| {
             require_phase(record, &[ScriptExecutionPhase::Running])?;
-            connection.execute(
+            let mut insert = connection.prepare_cached(
                 "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)",
-                params![record.id.as_str(), stream, bytes],
             )?;
+            for (stream, bytes) in chunks {
+                let stream = match stream {
+                    ScriptOutputStream::Stdout => "stdout",
+                    ScriptOutputStream::Stderr => "stderr",
+                };
+                insert.execute(params![record.id.as_str(), stream, bytes])?;
+            }
             Ok(())
         })
         .await

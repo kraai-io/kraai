@@ -23,39 +23,18 @@ fn usage_from_json(value: &serde_json::Value) -> Option<UsageMetrics> {
         .get("response")
         .and_then(|response| response.get("usage"))
         .or_else(|| value.get("usage"))?;
-    let cached = nested_u64(usage, "input_tokens_details", "cached_tokens")
-        .or_else(|| nested_u64(usage, "prompt_tokens_details", "cached_tokens"))
-        .unwrap_or_default();
-    let reasoning = nested_u64(usage, "output_tokens_details", "reasoning_tokens")
-        .or_else(|| nested_u64(usage, "completion_tokens_details", "reasoning_tokens"))
-        .unwrap_or_default();
-    let raw_input = usage
-        .get("input_tokens")
-        .or_else(|| usage.get("prompt_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_default();
-    let raw_output = usage
-        .get("output_tokens")
-        .or_else(|| usage.get("completion_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_default();
-    let total = usage
-        .get("total_tokens")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| raw_input.saturating_add(raw_output));
-    (total != 0 || raw_input != 0 || raw_output != 0).then_some(UsageMetrics {
-        total_tokens: total,
-        input_tokens: raw_input.saturating_sub(cached),
-        output_tokens: raw_output.saturating_sub(reasoning),
-        reasoning_tokens: reasoning,
-        cache_read_tokens: cached,
-        cache_write_tokens: 0,
+    let usage = if usage.get("prompt_tokens").is_some() {
+        kraai_provider_openai_chat_completions::usage_from_json(usage, false)
+    } else {
+        kraai_provider_openai_codex::usage_from_json(usage)
+    }?;
+    let count = |tokens: usize| u64::try_from(tokens).unwrap_or(u64::MAX);
+    Some(UsageMetrics {
+        total_tokens: count(usage.total_tokens),
+        input_tokens: count(usage.input_tokens),
+        output_tokens: count(usage.output_tokens),
+        reasoning_tokens: count(usage.reasoning_tokens),
+        cache_read_tokens: count(usage.cache_read_tokens),
+        cache_write_tokens: count(usage.cache_write_tokens),
     })
-}
-
-fn nested_u64(value: &serde_json::Value, object: &str, field: &str) -> Option<u64> {
-    value
-        .get(object)
-        .and_then(|details| details.get(field))
-        .and_then(serde_json::Value::as_u64)
 }

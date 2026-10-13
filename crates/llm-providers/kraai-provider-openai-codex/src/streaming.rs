@@ -219,6 +219,13 @@ fn format_response_error(error: ResponsesError) -> String {
     }
 }
 
+/// Reads token usage from a Responses API `usage` object.
+pub fn usage_from_json(usage: &serde_json::Value) -> Option<kraai_types::TokenUsage> {
+    serde_json::from_value::<ResponsesUsage>(usage.clone())
+        .ok()
+        .and_then(normalize_usage)
+}
+
 fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
     let cache_read_tokens = usage
         .input_tokens_details

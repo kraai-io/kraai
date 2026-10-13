@@ -333,7 +333,10 @@ async fn expired_script_lease_allows_takeover_and_rejects_old_execution_writes()
     );
     ensure!(
         a.executions()
-            .append_output(&record.id, ScriptOutputStream::Stdout, b"stale".to_vec())
+            .append_output(
+                &record.id,
+                vec![(ScriptOutputStream::Stdout, b"stale".to_vec())]
+            )
             .await
             .is_err()
     );
@@ -358,10 +361,16 @@ async fn execution_sources_output_and_terminal_outcomes_survive_reopen() -> Resu
     let record = a.executions().create(execution("session")).await?;
     a.executions().mark_running(&record.id).await?;
     a.executions()
-        .append_output(&record.id, ScriptOutputStream::Stdout, b"prefix".to_vec())
+        .append_output(
+            &record.id,
+            vec![(ScriptOutputStream::Stdout, b"prefix".to_vec())],
+        )
         .await?;
     a.executions()
-        .append_output(&record.id, ScriptOutputStream::Stderr, b"error".to_vec())
+        .append_output(
+            &record.id,
+            vec![(ScriptOutputStream::Stderr, b"error".to_vec())],
+        )
         .await?;
     let b = Persistence::open(directory.path()).await?;
     ensure!(b.executions().read_output(&record.id).await?.stdout == b"prefix");

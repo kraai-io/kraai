@@ -45,6 +45,6 @@ optional = true
 workspace = true
 
 [dev-dependencies]
-kraai-providers.workspace = true
 image.workspace = true
+kraai-providers.workspace = true
 rusqlite.workspace = true

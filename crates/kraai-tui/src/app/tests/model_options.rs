@@ -36,7 +36,6 @@ pub(super) fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
 
 pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Result<()> {
     configure(harness)?;
-    harness.app.startup_options.ci = true;
     let model = harness
         .app
         .state
@@ -276,7 +275,6 @@ fn missing_options_block_submission_without_selecting_defaults() -> color_eyre::
 fn typed_options_validate_and_hide_inactive_budget() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure(&mut harness)?;
-    harness.app.startup_options.ci = true;
     assert!(harness.app.set_model_option("effort", "high").is_ok());
     assert!(harness.app.set_model_option("thinking", "true").is_ok());
     assert!(harness.app.set_model_option("budget", "101").is_err());
@@ -368,37 +366,6 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
             session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
-    assert_eq!(
-        harness.app.state.selected_model_options.get("effort"),
-        Some(&ModelOptionValue::Choice("low".into()))
-    );
-    Ok(())
-}
-
-#[test]
-fn startup_flags_parse_discovered_types_once() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    configure(&mut harness)?;
-    harness.app.startup_options.options = vec![
-        "effort=high".into(),
-        "thinking=true".into(),
-        "budget=50".into(),
-    ];
-    assert!(harness.app.apply_startup_model_options().is_ok());
-    assert_eq!(
-        harness.app.state.selected_model_options.get("thinking"),
-        Some(&ModelOptionValue::Boolean(true))
-    );
-    assert_eq!(
-        harness.app.state.selected_model_options.get("budget"),
-        Some(&ModelOptionValue::Integer(50))
-    );
-    harness
-        .app
-        .state
-        .selected_model_options
-        .insert("effort".into(), ModelOptionValue::Choice("low".into()));
-    assert!(harness.app.apply_startup_model_options().is_ok());
     assert_eq!(
         harness.app.state.selected_model_options.get("effort"),
         Some(&ModelOptionValue::Choice("low".into()))

@@ -58,16 +58,10 @@ impl App {
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            ci_output: Box::new(io::stdout()),
-            ci_output_needs_newline: false,
-            ci_turn_completion_pending: false,
-            ci_metrics_history_pending: false,
-            ci_metrics_context_pending: false,
             startup_options,
+            persist_workspace_preferences: true,
             startup_message_sent: false,
             startup_sync: StartupSync::WaitingForRuntime,
-            ci_error: None,
-            ci_shown_items: HashMap::new(),
             state,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
@@ -77,28 +71,6 @@ impl App {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
-        }
-    }
-
-    pub fn run_ci(&mut self) -> Result<()> {
-        while !self.state.exit {
-            crossbeam_channel::select! {
-                recv(self.event_rx) -> event => match event {
-                    Ok(message) => self.handle_runtime_event_bridge_message(message),
-                    Err(_) => self.fail_ci("event channel closed"),
-                },
-                recv(self.runtime_rx) -> response => match response {
-                    Ok(response) => self.handle_runtime_response(response),
-                    Err(_) => self.fail_ci("runtime response channel closed"),
-                },
-                default(Duration::from_millis(100)) => {}
-            }
-        }
-
-        if let Some(error) = self.ci_error.take() {
-            Err(color_eyre::eyre::eyre!(error))
-        } else {
-            Ok(())
         }
     }
 
@@ -222,44 +194,6 @@ impl App {
         Some(lines.join("\n"))
     }
 
-    pub fn evaluation_metrics(&self) -> serde_json::Value {
-        let mut usage = kraai_runtime::TokenUsage::default();
-        for model_usage in self.state.exit_usage_totals.usage_by_model.values() {
-            accumulate_token_usage(&mut usage, model_usage);
-        }
-        let script_executions = self
-            .state
-            .chat_history
-            .values()
-            .filter(|message| message.role() == kraai_types::ChatRole::ToolCallResult)
-            .count();
-        let usage = (usage.total_tokens != 0
-            || usage.input_tokens != 0
-            || usage.output_tokens != 0
-            || usage.reasoning_tokens != 0
-            || usage.cache_read_tokens != 0
-            || usage.cache_write_tokens != 0)
-            .then(|| {
-                serde_json::json!({
-                    "total_tokens": usage.total_tokens,
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "reasoning_tokens": usage.reasoning_tokens,
-                    "cache_read_tokens": usage.cache_read_tokens,
-                    "cache_write_tokens": usage.cache_write_tokens,
-                })
-            });
-        serde_json::json!({
-            "schema_version": 1,
-            "turns": self.state.exit_usage_totals.completed_message_ids.len(),
-            "script_executions": script_executions,
-            "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
-            "usage": usage,
-            "request_costs": self.state.launch_requests,
-            "request_costs_complete": !self.costs_incomplete(),
-        })
-    }
-
     pub(super) fn process_events(
         &mut self,
         mut input_pending: impl FnMut() -> std::io::Result<bool>,
@@ -317,7 +251,6 @@ impl App {
                 };
                 if let Some(error) = error {
                     self.set_error(format!("Runtime error: {error}"));
-                    self.fail_ci(format!("Runtime error: {error}"));
                 }
                 self.request_sync();
                 self.request(RuntimeRequest::FinishStartupSync);
@@ -341,14 +274,12 @@ impl App {
                 } else {
                     self.handle_runtime_event(event.event);
                 }
-                self.maybe_finish_ci_run();
             }
             RuntimeEventBridgeMessage::Lagged(skipped) => {
                 self.state.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
-                self.ci_shown_items.clear();
                 self.state.status =
                     format!("Missed {skipped} runtime event(s); resynchronizing session state");
                 if self.startup_sync != StartupSync::WaitingForRuntime {

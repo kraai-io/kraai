@@ -15,8 +15,8 @@ use crate::workspace::{
     self, capture_submission, commit_fixture, materialize_base, replay_submission,
 };
 use crate::{
-    EvaluationMetrics, ExperimentIdentity, HarnessMetrics, NetworkPolicy, RunRequest, RunResult,
-    RunStatus, SandboxRecord, TaskManifest, cargo_dependencies, manifest, proxy,
+    EvaluationMetrics, ExperimentIdentity, NetworkPolicy, RunRequest, RunResult, RunStatus,
+    SandboxRecord, TaskManifest, cargo_dependencies, manifest, proxy,
 };
 
 pub(crate) struct Execution<'a> {
@@ -168,7 +168,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
     })?;
     let proxy_record = proxy.as_ref().map(proxy::ModelProxy::record);
     let proxy_metrics = proxy.map(proxy::ModelProxy::finish).transpose()?;
-    let harness_metrics = match HarnessMetrics::load(&harness_metrics_path) {
+    let harness_metrics = match crate::metrics::load_harness_metrics(&harness_metrics_path) {
         Ok(metrics) => metrics,
         Err(error) => {
             events.write(

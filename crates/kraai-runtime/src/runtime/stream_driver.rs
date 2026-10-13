@@ -442,9 +442,17 @@ impl StreamReader {
                     input,
                 }) => {
                     if draining {
-                        return ResponseEnd::Failed(String::from(
-                            "provider emitted more than one script call in one response",
-                        ));
+                        // Only the first call runs; later ones stay in the response and get a
+                        // result saying they did not run.
+                        tracing::debug!(%call_id, "Keeping a script call after the first without running it");
+                        if !self.forward(StreamEvent::ScriptCall {
+                            call_id,
+                            name,
+                            input,
+                        }) {
+                            return ResponseEnd::Stopped;
+                        }
+                        continue;
                     }
                     if name != ScriptToolDefinition::NAME {
                         return ResponseEnd::Failed(format!(

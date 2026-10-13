@@ -3242,6 +3242,7 @@ dependencies = [
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
+ "kraai-script-protocol",
  "kraai-types",
  "kraai-workspace-fs",
  "rusqlite",
@@ -3280,6 +3281,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "futures",
+ "kraai-headless",
  "kraai-io",
  "kraai-persistence",
  "kraai-provider-core",
@@ -3297,6 +3299,25 @@ dependencies = [
  "ulid",
  "unicode-width 0.2.2",
  "webbrowser",
+]
+
+[[package]]
+name = "kraai-headless"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "color-eyre",
+ "futures",
+ "kraai-providers",
+ "kraai-runtime",
+ "kraai-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ kraai-io = { workspace = true, features = ["async"] }
 kraai-mcp.workspace = true
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
+kraai-script-protocol = { workspace = true }
 kraai-types = { workspace = true }
 kraai-workspace-fs = { workspace = true }
 serde = { workspace = true }

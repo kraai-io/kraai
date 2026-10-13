@@ -11,6 +11,7 @@ use crate::usage::normalize_usage;
 use crate::wire::{ChatCompletionChunk, ScriptArguments, ToolCallDelta};
 
 const MAX_TOOL_BYTES: usize = 1024 * 1024;
+const MAX_TOOL_CALLS: usize = 16;
 
 #[derive(Default)]
 struct PendingCall {
@@ -21,7 +22,8 @@ struct PendingCall {
 
 #[derive(Default)]
 struct Completion {
-    call: Option<PendingCall>,
+    /// Calls by their stream index; models that ignore `parallel_tool_calls` can send several.
+    calls: Vec<PendingCall>,
     reasoning: crate::reasoning::Reasoning,
     finish_reason: Option<String>,
 }
@@ -32,12 +34,21 @@ impl Completion {
             tool_name.is_some(),
             "Provider called a tool when tools were disabled"
         );
-        ensure!(delta.index == 0, "Provider emitted more than one tool call");
+        ensure!(
+            delta.index < MAX_TOOL_CALLS,
+            "Provider emitted more than {MAX_TOOL_CALLS} tool calls"
+        );
         ensure!(
             delta.kind.as_deref().is_none_or(|kind| kind == "function"),
             "Unsupported tool call type"
         );
-        let call = self.call.get_or_insert_with(PendingCall::default);
+        if self.calls.len() <= delta.index {
+            self.calls
+                .resize_with(delta.index + 1, PendingCall::default);
+        }
+        let Some(call) = self.calls.get_mut(delta.index) else {
+            return Err(eyre!("Tool call index is out of range"));
+        };
         if let Some(id) = delta.id {
             ensure!(
                 id.len() <= MAX_TOOL_BYTES,
@@ -123,9 +134,12 @@ impl Completion {
                 });
             }
             let tool_calls = choice.delta.tool_calls.unwrap_or_default();
+            let mut indexes: Vec<_> = tool_calls.iter().map(|delta| delta.index).collect();
+            indexes.sort_unstable();
+            indexes.dedup();
             ensure!(
-                tool_calls.len() <= 1,
-                "Provider emitted more than one tool call"
+                indexes.len() == tool_calls.len(),
+                "Provider sent two fragments for one tool call in a single chunk"
             );
             for delta in tool_calls {
                 self.append_call(delta, tool_name)?;
@@ -142,23 +156,21 @@ impl Completion {
                     }
                 };
                 if stop_reason == StopReason::MaxOutputTokens {
-                    self.call = None;
+                    self.calls.clear();
                 }
                 ensure!(
-                    (stop_reason == StopReason::ToolCall) == self.call.is_some(),
+                    (stop_reason == StopReason::ToolCall) == !self.calls.is_empty(),
                     "Completion finish reason does not match its tool calls"
                 );
                 self.finish_reason = Some(reason);
-                let call = self.finish_call(tool_name)?;
+                let calls = self.finish_calls(tool_name)?;
                 let reasoning = std::mem::take(&mut self.reasoning);
                 if !reasoning.is_empty() {
                     pending.push_back(ProviderStreamEvent::Reasoning {
                         payload: serde_json::to_value(reasoning)?,
                     });
                 }
-                if let Some(call) = call {
-                    pending.push_back(call);
-                }
+                pending.extend(calls);
                 pending.push_back(ProviderStreamEvent::Finished { stop_reason });
             }
         }
@@ -171,24 +183,39 @@ impl Completion {
         Ok(())
     }
 
-    fn finish_call(&mut self, tool_name: Option<&str>) -> Result<Option<ProviderStreamEvent>> {
-        let Some(call) = self.call.take() else {
-            return Ok(None);
-        };
-        ensure!(
-            Some(call.name.as_str()) == tool_name,
-            "Provider called unexpected tool '{}'",
-            call.name
-        );
-        let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
-        let call_id = ToolCallId::try_new(id).map_err(|error| eyre!(error))?;
-        let arguments: ScriptArguments = serde_json::from_str(&call.arguments)?;
-        Ok(Some(ProviderStreamEvent::ScriptCall {
-            call_id,
-            name: call.name,
-            input: arguments.input,
-        }))
+    fn finish_calls(&mut self, tool_name: Option<&str>) -> Result<Vec<ProviderStreamEvent>> {
+        let calls: Vec<_> = std::mem::take(&mut self.calls)
+            .into_iter()
+            .map(|call| finish_call(call, tool_name))
+            .collect::<Result<_>>()?;
+        let mut ids: Vec<_> = calls
+            .iter()
+            .filter_map(|call| match call {
+                ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ensure!(ids.len() == calls.len(), "Provider reused a tool call ID");
+        Ok(calls)
     }
+}
+
+fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStreamEvent> {
+    ensure!(
+        Some(call.name.as_str()) == tool_name,
+        "Provider called unexpected tool '{}'",
+        call.name
+    );
+    let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
+    let call_id = ToolCallId::try_new(id).map_err(|error| eyre!(error))?;
+    let arguments: ScriptArguments = serde_json::from_str(&call.arguments)?;
+    Ok(ProviderStreamEvent::ScriptCall {
+        call_id,
+        name: call.name,
+        input: arguments.input,
+    })
 }
 
 pub(super) fn adapt_chat_completion_stream(

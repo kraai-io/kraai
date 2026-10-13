@@ -11,7 +11,6 @@ name = "kraai"
 path = "src/main.rs"
 
 [dependencies]
-kraai-providers.workspace = true
 arboard = { workspace = true, features = [
   "image-data",
   "wayland-data-control",
@@ -23,6 +22,7 @@ crossbeam-channel = { workspace = true }
 image.workspace = true
 kraai-io = { workspace = true, features = ["async"] }
 kraai-persistence = { workspace = true }
+kraai-providers.workspace = true
 kraai-runtime = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }

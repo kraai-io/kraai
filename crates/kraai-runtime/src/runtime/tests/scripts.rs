@@ -794,3 +794,79 @@ async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -
     harness.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answered() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::native_call(
+                "call-1",
+                "# timeout=30sec permissions=workspace-write\n^cargo test",
+            ),
+            ScriptedChunk::native_call("call-2", "# timeout=30sec\nls"),
+        ],
+        vec![ScriptedChunk::plain("Both calls are answered.")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "test it".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("approval of the first call", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let pending = harness
+        .handle
+        .get_pending_script(session_id.clone())
+        .await?
+        .expect("pending script");
+    assert_eq!(pending.call_id, "call-1");
+    harness
+        .handle
+        .deny_script(session_id.clone(), pending.execution_id)
+        .await?;
+    harness
+        .events
+        .wait_for("continuation", |events| {
+            events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id))
+        })
+        .await;
+
+    let history = harness
+        .runtime
+        .agent_manager
+        .get_chat_history(&session_id)
+        .await?;
+    let results: Vec<_> = history
+        .values()
+        .filter_map(|message| match &message.content {
+            kraai_types::ConversationItem::ScriptResult {
+                call_id, outcome, ..
+            } => Some((call_id.as_str().to_string(), outcome.status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results.contains(&("call-1".into(), ScriptExecutionStatus::Denied)));
+    assert!(results.contains(&("call-2".into(), ScriptExecutionStatus::Cancelled)));
+    let calls = history
+        .values()
+        .filter_map(|message| message.content.assistant_items())
+        .flatten()
+        .filter(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+        .count();
+    assert_eq!(calls, 2);
+    harness.shutdown().await;
+    Ok(())
+}

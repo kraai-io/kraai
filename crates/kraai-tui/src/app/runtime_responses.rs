@@ -40,20 +40,8 @@ impl App {
                         .unwrap_or(0)
                 });
                 self.state.model_menu_index = index.min(filtered.len().saturating_sub(1));
-                if self.is_ci_mode() {
-                    if let Err(err) = self.validate_ci_model_selection() {
-                        self.fail_ci(err);
-                        return;
-                    }
-                } else {
-                    self.ensure_selected_model();
-                }
+                self.ensure_selected_model();
                 self.reconcile_model_options();
-                if let Err(error) = self.apply_startup_model_options() {
-                    self.set_error(format!("Invalid --option: {error}"));
-                    self.fail_ci(format!("Invalid --option: {error}"));
-                    return;
-                }
                 if self.state.selected_model_options != previous_options {
                     self.save_model_selection();
                 }
@@ -62,7 +50,6 @@ impl App {
             }
             RuntimeResponse::Models(Err(err)) => {
                 self.set_error(format!("Failed loading models: {err}"));
-                self.fail_ci(format!("Failed loading models: {err}"));
             }
             RuntimeResponse::AgentProfileCatalog(result) => match result {
                 Ok(catalog) => {
@@ -99,7 +86,6 @@ impl App {
                 }
                 Err(error) => {
                     self.set_error(format!("Failed loading agent profiles: {error}"));
-                    self.fail_ci(format!("Failed loading agent profiles: {error}"));
                 }
             },
             RuntimeResponse::ProviderDefinitions(Ok(definitions)) => {
@@ -243,7 +229,6 @@ impl App {
                     self.recover_session_message(pending.session_id, pending.message);
                 }
                 self.set_error(format!("Failed creating session: {err}"));
-                self.fail_ci(format!("Failed creating session: {err}"));
             }
             RuntimeResponse::SetSessionProfile {
                 session_id,
@@ -308,7 +293,6 @@ impl App {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.profile_lock_stale_after_terminal_event = false;
                     self.set_error(format!("Failed changing agent: {err}"));
-                    self.fail_ci(format!("Failed changing agent: {err}"));
                 }
             }
             RuntimeResponse::PasteImage { request_id, result } => {
@@ -342,7 +326,6 @@ impl App {
                     self.state.is_streaming = false;
                     self.state.profile_lock_stale_after_terminal_event = false;
                     self.set_error(format!("Send failed: {err}"));
-                    self.fail_ci(format!("Send failed: {err}"));
                 }
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
@@ -374,97 +357,83 @@ impl App {
                 session_id,
                 model_save_id,
                 result,
-            } => {
-                match *result {
-                    Ok(snapshot) => {
+            } => match *result {
+                Ok(snapshot) => {
+                    if self
+                        .last_session_event_sequences
+                        .get(&session_id)
+                        .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
+                    {
+                        return;
+                    }
+                    self.session_snapshot_sequences
+                        .insert(session_id.clone(), snapshot.event_sequence);
+                    self.accumulate_exit_usage_from_history(&snapshot.history);
+                    self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
+                    self.update_costs(&session_id, snapshot.requests);
+                    self.state.cost_recovery_sessions.remove(&session_id);
+                    if self.state.current_session_id.as_ref() == Some(&session_id) {
+                        self.state.turn_timer = snapshot.turn_timer;
+                        self.state.current_tip_id = snapshot.session.tip_id.clone();
+                        self.install_latest_history(
+                            &session_id,
+                            snapshot.history,
+                            snapshot.older_history,
+                        );
+                        self.state.context_usage = snapshot.context_usage;
                         if self
-                            .last_session_event_sequences
-                            .get(&session_id)
-                            .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
-                        {
-                            if self.state.current_session_id.as_ref() == Some(&session_id) {
-                                self.ci_metrics_history_pending = false;
-                                self.ci_metrics_context_pending = false;
-                                self.maybe_finish_ci_run();
-                            }
-                            return;
-                        }
-                        self.session_snapshot_sequences
-                            .insert(session_id.clone(), snapshot.event_sequence);
-                        self.accumulate_exit_usage_from_history(&snapshot.history);
-                        self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
-                        self.update_costs(&session_id, snapshot.requests);
-                        self.state.cost_recovery_sessions.remove(&session_id);
-                        if self.state.current_session_id.as_ref() == Some(&session_id) {
-                            self.state.turn_timer = snapshot.turn_timer;
-                            self.state.current_tip_id = snapshot.session.tip_id.clone();
-                            self.install_latest_history(
-                                &session_id,
-                                snapshot.history,
-                                snapshot.older_history,
-                            );
-                            self.state.context_usage = snapshot.context_usage;
-                            if self
-                                .state
+                            .state
+                            .pending_script
+                            .as_ref()
+                            .map(|script| &script.execution_id)
+                            != snapshot
                                 .pending_script
                                 .as_ref()
                                 .map(|script| &script.execution_id)
-                                != snapshot
-                                    .pending_script
-                                    .as_ref()
-                                    .map(|script| &script.execution_id)
-                            {
-                                self.state.approval_scroll.set(0);
-                                self.state.approval_expanded = false;
-                            }
-                            self.state.pending_script = snapshot.pending_script;
-                            self.apply_agent_profiles_state(snapshot.profiles);
-                            self.state.is_streaming = matches!(
-                                snapshot.activity,
-                                kraai_runtime::SessionActivity::Streaming
-                            );
-                            self.state.script_phase = match snapshot.activity {
-                                kraai_runtime::SessionActivity::AwaitingApproval => {
-                                    ScriptPhase::AwaitingApproval
-                                }
-                                kraai_runtime::SessionActivity::ExecutingScript => {
-                                    ScriptPhase::Executing
-                                }
-                                kraai_runtime::SessionActivity::Idle
-                                | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
-                            };
-                            if self.state.mode == UiMode::Executions
-                                && self.state.has_local_script_approval()
-                            {
-                                self.close_executions();
-                            }
-                            self.state.profile_locked = snapshot.session.profile_locked;
-                            if let Some(existing) = self
-                                .state
-                                .sessions
-                                .iter_mut()
-                                .find(|session| session.id == snapshot.session.id)
-                            {
-                                *existing = snapshot.session;
-                            }
-                            self.invalidate_chat_cache();
-                            self.reconcile_optimistic_messages();
-                            self.clamp_chat_scroll();
+                        {
+                            self.state.approval_scroll.set(0);
+                            self.state.approval_expanded = false;
                         }
-                        self.flush_session_model_save(&session_id);
+                        self.state.pending_script = snapshot.pending_script;
+                        self.apply_agent_profiles_state(snapshot.profiles);
+                        self.state.is_streaming =
+                            matches!(snapshot.activity, kraai_runtime::SessionActivity::Streaming);
+                        self.state.script_phase = match snapshot.activity {
+                            kraai_runtime::SessionActivity::AwaitingApproval => {
+                                ScriptPhase::AwaitingApproval
+                            }
+                            kraai_runtime::SessionActivity::ExecutingScript => {
+                                ScriptPhase::Executing
+                            }
+                            kraai_runtime::SessionActivity::Idle
+                            | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
+                        };
+                        if self.state.mode == UiMode::Executions
+                            && self.state.has_local_script_approval()
+                        {
+                            self.close_executions();
+                        }
+                        self.state.profile_locked = snapshot.session.profile_locked;
+                        if let Some(existing) = self
+                            .state
+                            .sessions
+                            .iter_mut()
+                            .find(|session| session.id == snapshot.session.id)
+                        {
+                            *existing = snapshot.session;
+                        }
+                        self.invalidate_chat_cache();
+                        self.reconcile_optimistic_messages();
+                        self.clamp_chat_scroll();
                     }
-                    Err(error) => {
-                        if self.state.current_session_id.as_ref() == Some(&session_id) {
-                            self.set_error(format!("Failed loading session: {error}"));
-                        }
+                    self.flush_session_model_save(&session_id);
+                }
+                Err(error) => {
+                    if self.state.current_session_id.as_ref() == Some(&session_id) {
+                        self.set_error(format!("Failed loading session: {error}"));
                     }
                 }
-                if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.ci_metrics_history_pending = false;
-                    self.ci_metrics_context_pending = false;
-                    self.maybe_finish_ci_run();
-                }
-            }
+            },
             RuntimeResponse::UndoLastUserMessage { session_id, result } => {
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
@@ -548,7 +517,6 @@ impl App {
                         self.request_sync_for_session(&session_id);
                     }
                 }
-                self.maybe_finish_ci_run();
             }
             RuntimeResponse::Sessions(Err(err)) => {
                 self.set_error(format!("Failed loading sessions: {err}"));

@@ -307,7 +307,7 @@ async fn failed_execution_finish_preserves_both_output_streams_and_running_phase
     for stream in [ScriptOutputStream::Stdout, ScriptOutputStream::Stderr] {
         persistence
             .executions()
-            .append_output(&record.id, stream, b"prefix".to_vec())
+            .append_output(&record.id, vec![(stream, b"prefix".to_vec())])
             .await?;
     }
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;

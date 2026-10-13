@@ -409,3 +409,31 @@ async fn length_finish_keeps_text_and_drops_the_truncated_call() -> Result<()> {
     assert_eq!(events.len(), 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn several_indexed_calls_are_emitted_in_order() -> Result<()> {
+    let mut second = call(r##"{"input":"# timeout=1sec\npwd"}"##);
+    second["choices"][0]["delta"]["tool_calls"][0]["index"] = json!(1);
+    second["choices"][0]["delta"]["tool_calls"][0]["id"] = json!("call-2");
+    let events = collect(
+        vec![
+            data(call(r##"{"input":"# timeout=1sec\nls"}"##)),
+            data(second),
+            data(finish("tool_calls")),
+            Ok(SseEvent::Done),
+        ],
+        true,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    let calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, ["call-1", "call-2"]);
+    Ok(())
+}

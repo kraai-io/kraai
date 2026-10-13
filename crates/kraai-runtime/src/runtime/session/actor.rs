@@ -213,7 +213,7 @@ pub(in crate::runtime) struct SessionActor {
     pub(super) stopping: bool,
     stopped: Vec<oneshot::Sender<()>>,
     /// The state clients last heard about.
-    published: (ActivityKind, bool),
+    published: (SessionActivity, bool),
 }
 
 pub(super) fn spawn(
@@ -231,7 +231,7 @@ pub(super) fn spawn(
         deferred: VecDeque::new(),
         stopping: false,
         stopped: Vec::new(),
-        published: (ActivityKind::Idle, false),
+        published: (SessionActivity::Idle, false),
     };
     tasks.spawn(actor.run(receiver));
     sender
@@ -352,17 +352,16 @@ impl SessionActor {
         self.runtime
             .sessions
             .publish_activity(&self.session_id, activity);
-        let state = (
-            activity,
-            self.runtime.agent_manager.is_turn_active(&self.session_id),
-        );
+        let running = activity != ActivityKind::Idle
+            || self.runtime.agent_manager.is_turn_active(&self.session_id);
+        let state = (SessionActivity::from(activity), running);
         if state == self.published {
             return;
         }
         self.published = state;
         self.runtime.send_event(Event::SessionStateChanged {
             session_id: self.session_id.clone(),
-            activity: activity.into(),
+            activity: state.0,
             is_running: state.1,
         });
     }
